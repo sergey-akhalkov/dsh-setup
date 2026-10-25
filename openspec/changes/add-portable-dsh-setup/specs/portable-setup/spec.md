@@ -34,6 +34,11 @@ The setup bundle MUST declare as package dependencies every plugin package whose
 - **WHEN** a plugin row is present in the setup patch but its package is absent from the setup bundle's dependencies
 - **THEN** release validation fails before publication.
 
+#### Scenario: Self-contained git installation
+
+- **WHEN** the setup bundle is installed from its commit-pinned git spec
+- **THEN** every declared plugin package's code arrives with that single installation, without a registry lookup or an additional install step.
+
 ### Requirement: Generated composition patch
 
 The setup bundle's patch MUST be generated from per-plugin composition fragments. The committed patch MUST be reproducible from those fragments, and validation MUST fail when the committed patch differs from the generated result.

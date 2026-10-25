@@ -30,11 +30,15 @@ See `proposal.md` — Why. Constraints discovered while inspecting the running D
 
 ## Decisions
 
-### D1. One setup bundle with dependency plugins and a generated patch
+### D1. One setup bundle with vendored plugin packages and a generated patch
 
-`packages/setup` is the only bundle a full-install user selects. Its `package.json` declares every plugin package as a dependency; its `cordis.patch.yml` is generated and contains the plugin row inserts, preset declarations, and default overrides. `packages/plugin-*` remain ordinary plugin packages that also declare `dsh.bundle` so they can be installed individually.
+`packages/setup` is the only bundle a full-install user selects. Its `package.json` declares every plugin package as an exact dependency and lists it in `bundleDependencies`; the generator materializes each plugin's publishable files under `packages/setup/node_modules/`, so a single git install delivers all plugin code without a registry or a second fetch. Its `cordis.patch.yml` is generated and contains the plugin row inserts, preset declarations, and default overrides. `packages/plugin-*` remain ordinary plugin packages that also declare `dsh.bundle` so they can be installed individually.
+
+Vendoring is forced by pnpm behavior, verified experimentally: transitive dependencies resolved through git are refused by pnpm's `blockExoticSubdeps`, and `file:../plugin-x` dependencies do not survive a git install because pnpm materializes only the package directory. `bundleDependencies` with physically present copies is the supported self-contained mechanism.
 
 Alternative considered: a meta-bundle depending on other bundles. Rejected — DSH deliberately does not auto-apply transitive bundle layers, so the meta-bundle would have to re-export their patches anyway, and bundle selection would still list only the meta-bundle. Re-exporting at the row level into one generated patch is the explicitly supported pattern.
+
+Alternative considered: npm-published plugin packages. It would let the setup bundle use ordinary registry dependencies, but adds a second public release channel and an npm account; deferred until a plugin has external consumers (D2).
 
 Alternative considered: a bootstrap script that writes the profile's `package.json` and patch. Rejected as the primary mechanism — it mutates the Electron-owned profile, duplicates DSH's own installer, and breaks the additive/removable property.
 
@@ -92,7 +96,8 @@ dsh-setup/
     cordis.fragment.yml       # composition fragment consumed by the generator
     locale/, icon.svg
     package.json              # dsh.bundle, dsh.client, engines.dsh, peers, exports
-  packages/setup/             # package.json (exact plugin deps) + generated cordis.patch.yml
+  packages/setup/             # generated manifest + patch + defaults +
+                              #   node_modules/@dsh-setup/* vendored plugin copies (tracked)
   market/                     # generated index.json + icons/ (Pages artifact)
   scripts/                    # build, generate patch, generate index, validate
   .github/workflows/          # validate on PR, release on tag
@@ -116,6 +121,7 @@ The index is unsigned and its metadata is a market claim; the README states that
 ## Risks / Trade-offs
 
 - **Generated patch drifts from plugin fragments** → regeneration check in CI fails the pull request.
+- **Vendored plugin copies drift from their packages** → the same regeneration check compares the whole `packages/setup/node_modules` tree, reports missing, changed, and unexpected files, and CI runs it on every pull request.
 - **Committed runtime drifts from TypeScript sources** → the validation workflow rebuilds and fails on any byte difference; generated directories are marked as artifacts in the repository metadata.
 - **DSH release candidates change type declarations** → DSH type packages are pinned as dev dependencies, the supported-version matrix type-checks on every pull request, and a bump is a deliberate, reviewed change.
 - **Plugin and setup dependency versions diverge** → release pins exact versions and validates the composed profile for the tag.

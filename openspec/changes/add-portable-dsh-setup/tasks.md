@@ -2,33 +2,33 @@
 
 ## 1. Workspace and toolchain
 
-- [ ] 1.1 Create the pnpm workspace root (`package.json`, `pnpm-workspace.yaml`), `packages/`, `market/`, `scripts/`, and `docs/` directories; verify `pnpm -r list` resolves the workspace packages.
-- [ ] 1.2 Add the toolchain: `tsconfig.base.json` with strict settings, per-package TypeScript configs, `biome.json`, `vitest.config.ts`, and the esbuild build script; verify `pnpm check` runs type-check, lint, tests, and build on the empty workspace and exits zero.
-- [ ] 1.3 Pin Node and pnpm (`engines`, `packageManager`), ignore generated `node_modules/`, and keep committed build output out of `.gitignore`; verify a clean `pnpm install --frozen-lockfile` succeeds.
+- [x] 1.1 Create the pnpm workspace root (`package.json`, `pnpm-workspace.yaml`), `packages/`, `market/`, `scripts/`, and `docs/` directories; verify `pnpm -r list` resolves the workspace packages.
+- [x] 1.2 Add the toolchain: `tsconfig.base.json` with strict settings, per-package TypeScript configs, `biome.json`, `vitest.config.ts`, and the esbuild build script; verify `pnpm check` runs type-check, lint, tests, and build on the empty workspace and exits zero.
+- [x] 1.3 Pin Node and pnpm (`engines`, `packageManager`), ignore generated `node_modules/`, and keep committed build output out of `.gitignore`; verify a clean `pnpm install --frozen-lockfile` succeeds.
 - [ ] 1.4 Add a minimal `README.md` naming the repository purpose and pointing to `docs/install.md`; verify every link resolves to an existing file after task 5.3.
 
 ## 2. Plugin package template and first plugin
 
-- [ ] 2.1 Author the first plugin package under `packages/plugin-*` in TypeScript: a Host entry exporting the plugin object, a Client entry, `dsh.bundle`, `dsh.client`, `engines.dsh`, DSH peer dependencies, locale entries, and an icon; verify `pnpm build` emits `lib/index.js` and `client.js` and a build test confirms the client bundle registers a factory whose id equals the package name.
-- [ ] 2.2 Implement the client build wrapper around esbuild's CommonJS output; verify a unit test runs the bundle with a fake `window.__ModuleLoader__` and module table, asserts `require('react')` resolves from that table, and asserts the factory returns the plugin object with `apply`.
-- [ ] 2.3 Define the composition-fragment format (rows, defaults, ordering) and implement its reader; verify a unit test rejects a row with a non-namespaced id and an unknown fragment field.
-- [ ] 2.4 Add a manifest validator that rejects a missing `engines.dsh`, a missing `dsh.bundle`, an undeclared client export, and any `prepare` or install-time script; verify one failing fixture per condition and a passing run on the real package.
-- [ ] 2.5 Document how to add a plugin package, its fragment, and its tests in `docs/plugins.md`; verify the documented commands produce a package that passes `pnpm check`.
+- [x] 2.1 Author the first plugin package under `packages/plugin-*` in TypeScript: a Host entry exporting the plugin object, a Client entry, `dsh.bundle`, `dsh.client`, `engines.dsh`, DSH peer dependencies, locale entries, and an icon; verify `pnpm build` emits `lib/index.js` and `client.js` and a build test confirms the client bundle registers a factory whose id equals the package name.
+- [x] 2.2 Implement the client build wrapper around esbuild's CommonJS output; verify a unit test runs the bundle with a fake `window.__ModuleLoader__` and module table, asserts `require('react')` resolves from that table, and asserts the factory returns the plugin object with `apply`.
+- [x] 2.3 Define the composition-fragment format (rows, defaults, ordering) and implement its reader; verify a unit test rejects a row with a non-namespaced id and an unknown fragment field.
+- [x] 2.4 Add a manifest validator that rejects a missing `engines.dsh`, a missing `dsh.bundle`, an undeclared client export, and any `prepare` or install-time script; verify one failing fixture per condition and a passing run on the real package.
+- [x] 2.5 Document how to add a plugin package, its fragment, and its tests in `docs/plugins.md`; verify the documented commands produce a package that passes `pnpm check`.
 - [ ] 2.6 Verify the local development loop: install the workspace package with a `link:` spec into a `dev` profile, run the watch build, change Host and Client code, and record whether each half reloads through HMR or requires a profile restart; verify `docs/plugins.md` states the observed behavior rather than the assumed one.
 
 ## 3. Setup bundle and generated patch
 
-- [ ] 3.1 Implement `scripts/gen-setup-patch.mjs` to merge fragments in a fixed order, append the owner-defaults block, and write `packages/setup/cordis.patch.yml`; verify a snapshot test pins the generated output.
-- [ ] 3.2 Author the owner-defaults fragment (default model and reasoning effort, theme, UI settings, preset selection) that restates each targeted shipped row's complete config; verify the generated patch contains every required field for those rows.
-- [ ] 3.3 Make the setup manifest declare every `packages/plugin-*` package as an exact dependency; verify a test fails when the dependency set differs from the workspace plugin list.
-- [ ] 3.4 Add the drift check: regenerate into memory, compare with the committed patch, and exit non-zero on a difference; verify a hand-edited patch fails and a regenerated patch passes.
-- [ ] 3.5 Document the generation and defaults workflow in `docs/setup-composition.md`; verify the documented regeneration command clears a deliberately introduced drift.
+- [x] 3.1 Implement `scripts/gen-setup-patch.mjs` to merge fragments in a fixed order, append the owner-defaults block, and write `packages/setup/cordis.patch.yml`; verify a snapshot test pins the generated output.
+- [x] 3.2 Author the owner-defaults fragment (default model and reasoning effort, theme, UI settings, preset selection) that restates each targeted shipped row's complete config; verify the generated patch contains every required field for those rows.
+- [x] 3.3 Make the setup manifest declare every `packages/plugin-*` package as an exact dependency; verify a test fails when the dependency set differs from the workspace plugin list.
+- [x] 3.4 Add the drift check: regenerate into memory, compare with the committed patch, and exit non-zero on a difference; verify a hand-edited patch fails and a regenerated patch passes.
+- [x] 3.5 Document the generation and defaults workflow in `docs/setup-composition.md`; verify the documented regeneration command clears a deliberately introduced drift.
 
 ## 4. Local composition validation
 
-- [ ] 4.1 Implement `scripts/validate-composition.mjs` to create a throwaway `DSH_HOME`, initialize a `ci` profile from the `web` template with the published DSH CLI, install `packages/setup` by absolute path, and run `--dump-config`; verify the exit code is zero and the dump contains the setup rows.
-- [ ] 4.2 Assert in the composition check that the setup patch changes the profile bundle selection only by appending the setup bundle, and that no source, manifest, or patch file contains an absolute machine path; verify one fixture per violation fails the check.
-- [ ] 4.3 Add `.github/workflows/validate.yml` that runs frozen install, build, type-check, lint, unit tests, generated-patch drift, committed-runtime drift, manifest checks, repository scan, and composition validation against each supported DSH version on pull requests; verify the same command sequence passes locally after the workflow is added.
+- [x] 4.1 Implement `scripts/validate-composition.mjs` to create a throwaway `DSH_HOME`, initialize a `ci` profile from the `web` template with the published DSH CLI, install `packages/setup` by absolute path, and run `--dump-config`; verify the exit code is zero and the dump contains the setup rows.
+- [x] 4.2 Assert in the composition check that the setup patch changes the profile bundle selection only by appending the setup bundle, and that no source, manifest, or patch file contains an absolute machine path; verify one fixture per violation fails the check.
+- [x] 4.3 Add `.github/workflows/validate.yml` that runs frozen install, build, type-check, lint, unit tests, generated-patch drift, committed-runtime drift, manifest checks, repository scan, and composition validation against each supported DSH version on pull requests; verify the same command sequence passes locally after the workflow is added.
 
 ## 5. Market index generation
 
