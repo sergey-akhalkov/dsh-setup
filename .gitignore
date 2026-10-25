@@ -13,6 +13,9 @@ node_modules/
 .tmp/
 coverage/
 
+# Workspace-local Harness state (skills installed into this checkout)
+.dsh/
+
 # Generated market publication artifact (produced by the release workflow)
 market/
 

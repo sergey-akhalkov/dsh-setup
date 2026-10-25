@@ -82,18 +82,25 @@ function main(): number {
   const tmpRoot = join(rootDir, '.tmp')
   mkdirSync(tmpRoot, { recursive: true })
   const home = mkdtempSync(join(tmpRoot, 'installer-home-'))
-  // Outside the repository workspace: pnpm must treat the profile as a
-  // standalone directory, not as a member of this checkout's workspace.
+  // The setup spec is a commit-pinned git spec when CI supplies one — that is
+  // the release path users take and it keeps the install out of this checkout.
+  // Otherwise install a copy outside the repository workspace: the throwaway
+  // home lives below `rootDir`, so a checkout path there would make pnpm resolve
+  // the profile against the repository's workspace instead of treating it as the
+  // standalone directory a user installs.
+  const gitSpec = process.env.DSH_SETUP_SPEC?.trim()
   const setupSource = mkdtempSync(join(tmpdir(), 'dsh-setup-package-'))
-  cpSync(setupDir, join(setupSource, 'setup'), { recursive: true })
-  const setupSpec = join(setupSource, 'setup')
+  let setupSpec: string
+  if (gitSpec !== undefined && gitSpec !== '') {
+    setupSpec = gitSpec
+  } else {
+    cpSync(setupDir, join(setupSource, 'setup'), { recursive: true })
+    setupSpec = join(setupSource, 'setup')
+  }
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DSH_HOME: home,
     DSH_TELEMETRY_DISABLED: '1',
-    // The package-manager child inherits this. CI stalls silently at one
-    // install step, so its debug transcript is the only way to see the wait.
-    npm_config_loglevel: 'debug',
   }
   for (const key of [
     'DSH_PROFILE',
