@@ -33,7 +33,7 @@ jobs:
   # previously deployed index in place.
   validate:
     needs: versions
-    runs-on: windows-2022
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +100,7 @@ jobs:
 
   publish:
     needs: validate
-    runs-on: windows-2022
+    runs-on: windows-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

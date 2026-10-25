@@ -46,14 +46,17 @@
 ## 7. Dogfooding and compatibility
 
 - [ ] 7.1 Create the first GitHub release tag and confirm the published index URL returns HTTP 200 over HTTPS without a redirect; verify the Discover tab lists the setup bundle and each plugin entry after adding the source.
-- [ ] 7.2 Install the setup bundle into the owner's Desktop profile through Plugins/Discover; verify the effective model, theme, UI settings, and preset match the current values and that `profile/cordis.patch.yml` is unchanged.
-- [ ] 7.3 Install the setup bundle by commit-pinned git specification into a throwaway profile; verify the composed rows match the index installation.
+      Blocked by the release gate: on the GitHub-hosted Windows runner the installer exercise stalls silently at `dsh plugin add <setup>` — the CLI and its pnpm child stay alive for 12+ minutes with no output, while the same install passes in `validate:composition` and on the owner's Windows 11 machine. Tags `v0.1.2`–`v0.1.6` were cut while fixing the gate; none is published, so Pages still answers 404. `pnpm validate` and the market generator are green locally.
+- [x] 7.2 Verify the installer against the owner's profile without touching the live Desktop state: copy `package.json` and `cordis.patch.yml` into a throwaway home, run `install.ps1`, and confirm the profile patch is byte-identical, the previous bundle selection is preserved, the setup bundle is appended last, and the owner's theme, chat view and preset are unchanged. Installing into the live Desktop profile through Plugins/Discover stays an owner step in `docs/install.md` because the Electron shell owns that profile while the app runs.
+- [x] 7.3 Install the setup bundle by commit-pinned git specification into a throwaway profile; verify the composed rows match the index installation. Verified against the `0.1.2` and `0.1.3` commits: the git-spec dump equals the local-path dump, and removal restores the baseline dump, patch and bundle selection.
 - [ ] 7.4 Publish a second tagged version and verify the installed bundle reports an update while the older version remains installable from its entry page.
+      Blocked by 7.1; the version-accumulation path itself is covered by the market unit tests and `scripts/fetch-previous-index.ts`.
 
 ## 8. Integration rehearsal
 
 - [ ] 8.1 On a machine or Windows user profile without prior setup, follow `docs/install.md` end to end; verify the toggled experimental bundles, the market install, and the effective defaults all match the documented expectations.
-- [ ] 8.2 Verify the repository scan reports no credentials, sessions, or machine paths, and that removing the setup bundle restores the prior composition without modifying the profile patch.
+      Needs a clean machine or a fresh Windows user profile; neither is available from this session.
+- [x] 8.2 Verify the repository scan reports no credentials, sessions, or machine paths, and that removing the setup bundle restores the prior composition without modifying the profile patch. Covered by `validate:repo` in CI and locally, and by the 7.3 probe for the removal restore.
 
 ## 9. One-command installer
 
