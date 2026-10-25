@@ -45,17 +45,17 @@ A configuration-only MCP adapter omits `src/`, `lib/`, `test/`, and `tsconfig.js
 
 ## Composition fragment
 
-The fragment names the row ids the package mounts. A normal row mounts the package itself; a
-configuration-only adapter bundle (no Host or Client entry) may instead name the approved
-Harness-provided adapter package, currently only `@deepseek-ai/dsh-mcp-client`. Generation rejects
-any other foreign name, so a fragment cannot mount arbitrary package code.
+The fragment names the row ids the package mounts. A row mounts the package itself, or names the
+approved Harness-provided adapter package, currently only `@deepseek-ai/dsh-mcp-client`. One fragment
+may do both: an adapter bundle can also mount its own Host module. Generation rejects any other
+foreign name, so a fragment cannot mount arbitrary package code.
 
 ```yaml
 rows:
   - id: dsh-setup-<name>
 ```
 
-A configuration-only adapter uses the one approved exception:
+An adapter row names the approved package instead of the owning one:
 
 ```yaml
 rows:
@@ -67,8 +67,8 @@ Rules:
 
 - Row ids start with `dsh-setup-` and are globally unique across the repository.
 - Unknown fragment or row fields are errors, not warnings.
-- Optional `name` is allowed only on a configuration-only package and only with the approved
-  adapter target; omit it for a normal plugin.
+- Optional `name` is allowed only with the approved adapter target; omit it for a row that mounts
+  the package itself.
 - Optional `config` on a row maps to the Loader row configuration.
 
 `pnpm gen` writes both this package's `cordis.patch.yml` and the aggregated
@@ -87,21 +87,21 @@ come from the browser module table and are never bundled.
 Verify the slot name and props against the running Harness (`cordis_inspect_query` with the Client
 `Slots` provider) before relying on them, and route visible text through the Client locale service.
 
-## Configuration-only MCP adapter
+## MCP adapter bundle
 
-A bundle that only connects an external MCP server has no Host or Client module: the package contains
-`package.json`, `cordis.fragment.yml`, `locale/en.json`, and `icon.svg`, and nothing else handwritten.
-The fragment mounts the Harness-provided `@deepseek-ai/dsh-mcp-client` row, so the loader never imports
-the package itself; the generated `cordis.patch.yml` is the only build artifact.
-[`packages/plugin-serena`](../packages/plugin-serena) is the working example, and
-[`packages/plugin-nuphus-mcp`](../packages/plugin-nuphus-mcp) is the second adapter, which launches a
-user-installed executable from the PATH.
+A bundle that exposes an external MCP server mounts the Harness-provided `@deepseek-ai/dsh-mcp-client`
+row, so the loader never imports the package for that row. In its smallest form the package contains
+`package.json`, `cordis.fragment.yml`, `locale/en.json`, and `icon.svg` and nothing else handwritten:
+the manifest omits `main`, `types`, `dsh.client`, and the `./client` export, lists only those four
+files plus the generated patch in `files`, and keeps the usual `engines.dsh` and `dsh.bundle.patch`.
+The generated `cordis.patch.yml` is the only build artifact.
 
-The manifest omits `main`, `types`, `dsh.client`, and the `./client` export, lists only the four
-handwritten files plus the generated patch in `files`, and keeps the usual `engines.dsh` and
-`dsh.bundle.patch`. The fragment names the approved adapter package (see
-[Composition fragment](#composition-fragment)); generation rejects a foreign row on a package with a
-Host or Client entry, so this shape cannot mount another package's code from a code-bearing plugin.
+A bundle may also ship a Host module that contributes guidance for the server it connects to. It then
+keeps `main`, `types`, and a TypeScript project like any other plugin, and its fragment carries two
+rows. The rows are independent, so the adapter keeps working when the guidance row is disabled.
+[`packages/plugin-serena`](../packages/plugin-serena) and
+[`packages/plugin-nuphus-mcp`](../packages/plugin-nuphus-mcp) have this shape: an adapter row naming
+the approved package, and a guidance row mounting their own module.
 
 The adapter's configuration is static and machine-independent: it names the executable and arguments,
 not a project path. Project activation happens at runtime, and the shared MCP client instance serves
@@ -124,9 +124,10 @@ Do not install both the setup bundle and the individual adapter bundle: the row 
 
 ## Adding a package
 
-1. Copy the shape of `packages/plugin-composer-clock` and rename the package. For a
-   configuration-only MCP adapter, copy `packages/plugin-serena` instead and skip the TypeScript
-   project, build, and package-test steps; `pnpm gen` and the repository validation still apply.
+1. Copy the shape of `packages/plugin-composer-clock` and rename the package. For an MCP adapter
+   without a Host module, keep only `package.json`, `cordis.fragment.yml`, `locale/en.json`, and
+   `icon.svg` and skip the TypeScript project, build, and package-test steps; `pnpm gen` and the
+   repository validation still apply.
 2. Update `package.json` (`name`, `description`, `icon`, fragment, Client manifest) and
    `locale/en.json`.
 3. Add the package to the root `tsconfig.json` references.

@@ -86,7 +86,7 @@ The contract is adapted from `global/principles-of-work.md` and the `.agents/ski
 is guidance for Codex, and roughly a third of it describes tools this Harness does not have, so the
 text is edited rather than copied. Both repositories share one owner, so the reuse carries no upstream
 license obligation and no provenance pin; the full cut list with a reason per section lives in
-`openspec/changes/add-working-ruleset-plugins/design.md`.
+`openspec/changes/archive/2026-10-26-add-working-ruleset-plugins/design.md`.
 
 Not shipped, and why:
 

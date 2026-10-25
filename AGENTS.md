@@ -25,7 +25,7 @@ workflow generates the static format-1 market index pinned to the tagged commit 
 GitHub Pages.
 
 Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
-Repo package version (all packages move together): **0.1.7**.
+Repo package version (all packages move together): **0.2.0**.
 
 ## 2. First commands
 
@@ -116,10 +116,11 @@ Useful environment variables: `DSH_CLI` (CLI command to use instead of `pnpm dlx
 ## 5. Create a new plugin package (the main task)
 
 Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; copy
-`packages/plugin-composer-clock` as the template. A configuration-only MCP adapter
-(`packages/plugin-serena`) has no Host/Client module: copy its manifest/fragment shape instead and
-skip `main`/`types`/`dsh.client`, `src/`, `lib/`, `tsconfig.json`, and the Client test; see
-[docs/plugins.md](docs/plugins.md). Checklist:
+`packages/plugin-composer-clock` as the template. A bundle that only connects an external MCP server
+can skip the TypeScript project entirely: keep `package.json`, `cordis.fragment.yml`, `locale/en.json`,
+and `icon.svg`, and skip `main`/`types`/`dsh.client`, `src/`, `lib/`, `tsconfig.json`, and the Client
+test. That shape may add a Host module later (as `packages/plugin-serena` did for its guidance skill);
+see [docs/plugins.md](docs/plugins.md). Checklist:
 
 1. **Manifest** `packages/plugin-<name>/package.json`
    - `name`, `version` (equal to the repo version), `description`, `icon: "./icon.svg"`,
@@ -153,10 +154,9 @@ skip `main`/`types`/`dsh.client`, `src/`, `lib/`, `tsconfig.json`, and the Clien
 
    Only `rows` at top level, only `id`/optional `name`/optional `config` per row. `id` must match
    `^dsh-setup-[a-z0-9]+(?:-[a-z0-9]+)*$` and be globally unique. Omit `name` — the module specifier
-   is derived from the owning package. The only exception is a configuration-only adapter bundle
-   (no `main`, no `dsh.client`), whose rows may name the approved Harness adapter
-   `@deepseek-ai/dsh-mcp-client`; generation rejects any other foreign name and rejects a foreign row
-   on a code-bearing package.
+   is derived from the owning package. A row may instead name the approved Harness adapter
+   `@deepseek-ai/dsh-mcp-client`, on a configuration-only adapter or beside a code-bearing package's
+   own row; generation rejects any other foreign name.
 3. **Host half** `src/host/index.ts`: export `name` (equal to the package name) and
    `apply(ctx: Context)`; no module-scope side effects. An inert `apply` is correct when all behavior
    is Client-side.
@@ -317,9 +317,11 @@ specs `portable-setup` and `plugin-market`, tasks). The main specs under `opensp
 accepted requirements: `portable-setup` and `plugin-market` were synced from the parent change on
 2026-10-25, the archived `2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus
 its `portable-setup` amendment, the archived `2026-10-26-add-serena-mcp-plugin` change added
-`mcp-adapters` and amended `portable-setup`'s dependency-containment requirement, and the archived
-`2026-10-26-add-nuphus-mcp-plugin` change added the strict-confirmation requirement to
-`mcp-adapters`. Cite
+`mcp-adapters` and amended `portable-setup`'s dependency-containment requirement, the archived
+`2026-10-26-add-nuphus-mcp-plugin` change added the strict-confirmation requirement to `mcp-adapters`,
+and the archived `2026-10-26-add-working-ruleset-plugins` change added `session-guidance` and relaxed
+`mcp-adapters`' approved-adapter-target rule so a code-bearing bundle may mount the approved adapter
+row. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -385,7 +387,7 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   enforced by `validate:repo` for every plugin.
 - **Row ids are global** and match `^dsh-setup-...$`; defaults must not use the prefix or collide with
   row ids. Plugin fragments cannot mount another package's code, except the approved
-  `@deepseek-ai/dsh-mcp-client` adapter row in a configuration-only bundle.
+  `@deepseek-ai/dsh-mcp-client` adapter row, which a code-bearing package may declare beside its own.
 - **A patch replaces the entire `config` object.** Every `defaults.yml` entry must restate the full
   config for its row.
 - **The setup bundle stays pure**: it does not select shipped bundles or duplicate shipped rows.

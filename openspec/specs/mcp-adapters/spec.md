@@ -3,8 +3,9 @@
 ## Purpose
 
 Lets one installable bundle expose an external MCP server's tools to the Harness through the
-Harness-provided MCP client, without shipping a Host or Client module and without hard-coding
-machine-local configuration.
+Harness-provided MCP client, without hard-coding machine-local configuration. A bundle stays
+configuration-only or ships a Host module that also contributes guidance for that server; the adapter
+row mounts either way.
 
 ## Requirements
 
@@ -26,9 +27,9 @@ the bundle patch from that fragment exactly as for a code-bearing plugin.
 
 ### Requirement: Approved adapter targets
 
-A fragment row SHALL name an adapter package from the repository's approved set, which currently
-contains only `@deepseek-ai/dsh-mcp-client`. A package that declares any other foreign row name, or
-that declares a Host or Client entry alongside a foreign row, MUST be rejected by generation.
+A fragment row SHALL name either its owning package or an adapter package from the repository's
+approved set, which currently contains only `@deepseek-ai/dsh-mcp-client`. Generation MUST reject any
+other row name, whether or not the owning package also declares a Host or Client entry.
 
 #### Scenario: Unapproved package
 
@@ -37,8 +38,8 @@ that declares a Host or Client entry alongside a foreign row, MUST be rejected b
 
 #### Scenario: Code-bearing package
 
-- **WHEN** a package with a Host or Client entry declares a foreign adapter row
-- **THEN** generation fails instead of mounting another package's code.
+- **WHEN** a package with a Host or Client entry declares a foreign adapter row from the approved set
+- **THEN** generation succeeds instead of rejecting the combination.
 
 ### Requirement: External runtime prerequisites
 
@@ -94,3 +95,20 @@ relax the shipped default without amending this requirement.
 
 - **WHEN** a user changes the confirmation mode from the profile's own patch
 - **THEN** the documented override restates the complete row configuration, and the bundle's shipped configuration is unchanged.
+
+### Requirement: Guidance module beside an adapter row
+
+A bundle that configures an external MCP server MAY additionally ship a Host module that registers
+guidance for that server's contract. Such a module SHALL NOT be required for the adapter row to
+mount: if it fails or the row is disabled, the server's tools MUST remain available exactly as for a
+bundle without a Host module, and the module MUST NOT change the server's configuration.
+
+#### Scenario: Skill registered beside the adapter
+
+- **WHEN** a bundle ships a Host module that registers a guidance skill and keeps its adapter row
+- **THEN** the catalog lists that skill and the adapter row still mounts the MCP client
+
+#### Scenario: Adapter row alone
+
+- **WHEN** the same bundle's Host module is removed or disabled
+- **THEN** the server's tools remain available as `mcp__<serverName>__<tool>` and its configuration is unchanged
