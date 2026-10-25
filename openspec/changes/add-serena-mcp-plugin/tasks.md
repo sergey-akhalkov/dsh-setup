@@ -8,8 +8,8 @@
 
 ## 2. Serena adapter bundle
 
-- [ ] 2.1 Scaffold `packages/plugin-serena` with a configuration-only `package.json`, `cordis.fragment.yml`, `locale/en.json`, and an original `icon.svg`; the fragment carries the pinned `uvx --from serena-agent==1.7.0` command, the IDE tool context, the disabled dashboard, the raised tool-call timeout, and boot-safe startup behavior. Verify the manifest declares `dsh.bundle.patch` with no `main`, `types`, or `dsh.client`, and that `pnpm gen` parses the fragment without an error.
-- [ ] 2.2 Document the bundle in `docs/install.md` (the `uv` prerequisite, first-run download, activation) and `docs/plugins.md` (the configuration-only adapter pattern, the profile-level override, the one-instance-per-profile limit). Verify the documented commands and paths match the shipped fragment, and `pnpm lint` passes.
+- [x] 2.1 Scaffold `packages/plugin-serena` with a configuration-only `package.json`, `cordis.fragment.yml`, `locale/en.json`, and an original `icon.svg`; the fragment carries the pinned `uvx --from serena-agent==1.7.0` command, the IDE tool context, the disabled dashboard, the raised tool-call timeout, and boot-safe startup behavior. Verify the manifest declares `dsh.bundle.patch` with no `main`, `types`, or `dsh.client`, and that `pnpm gen` parses the fragment without an error.
+- [x] 2.2 Document the bundle in `docs/install.md` (the `uv` prerequisite, first-run download, activation) and `docs/plugins.md` (the configuration-only adapter pattern, the profile-level override, the one-instance-per-profile limit). Verify the documented commands and paths match the shipped fragment, and `pnpm lint` passes.
 
 ## 3. Generated setup composition
 
