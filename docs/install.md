@@ -177,11 +177,74 @@ To disable the adapter, add this to the profile's own `cordis.patch.yml`:
   disabled: true
 ```
 
+## Nuphus MCP
+
+The setup also ships the Nuphus adapter bundle, which adds `nuphus-mcp` desktop automation through the
+Harness MCP client: screen and window control, mouse and keyboard, accessibility-driven UI actions,
+local OCR plus BYOK vision, and a Chrome/Edge session over CDP. The tools register as
+`mcp__nuphus-mcp__*`. It is optional and can be disabled (see below).
+
+Prerequisite: install the server yourself and keep its command on the PATH of the Harness process:
+
+```sh
+npm install -g @nuphus/nuphus-mcp
+nuphus-mcp   # prints nothing and exits on stdin EOF — that is the expected smoke test
+```
+
+Without the binary, the Harness still starts and logs the failed connection; no desktop tools are
+added. The adapter does not install, pin, or update the server: it launches whichever `nuphus-mcp`
+the PATH resolves (tested with 0.2.2), so a server upgrade changes the tool set.
+
+The tools act on the machine that runs the Harness, in its interactive session: a remote `dsh web`
+and a Desktop window control the machine hosting the Host process, not the viewer's. Browser tools
+need Chrome or Edge. Platform support follows the server: full desktop control on Windows,
+accessibility plus mouse and keyboard on macOS (grant Accessibility permission), partial on Linux.
+The first `desktop_perceive` call downloads the local OCR models, so it can exceed the adapter's
+two-minute tool-call timeout — retry once the download finishes. One server instance serves the whole
+profile, so concurrent sessions share the same browser and input state.
+
+Write tools confirm by default: the adapter passes `--confirm-write`, so a machine-mutating tool call
+needs the call's explicit confirmation argument and is rejected otherwise. To relax that, override the
+row in the profile's own `cordis.patch.yml` and restate the complete configuration — a patch replaces
+the `config` object rather than merging it:
+
+```yaml
+- id: dsh-setup-nuphus-mcp
+  config:
+    serverName: nuphus-mcp
+    transport: stdio
+    command: nuphus-mcp
+    args: []
+    toolCallTimeoutMs: 120000
+    failOnStartupError: false
+```
+
+The BYOK vision key is not inherited from the Harness environment, because the MCP client scrubs
+credential-shaped variables before it spawns the server. Pass it explicitly in the same override:
+
+```yaml
+- id: dsh-setup-nuphus-mcp
+  config:
+    # … the complete row configuration from above …
+    env:
+      NUPHUS_MCP_VISION_API_KEY: !!js process.env.NUPHUS_MCP_VISION_API_KEY
+```
+
+To disable the adapter entirely:
+
+```yaml
+- id: dsh-setup-nuphus-mcp
+  disabled: true
+```
+
+Do not install the upstream `dsh-nuphus-mcp` plugin together with the setup: both would mount a row
+that spawns the same server.
+
 ## What is not included
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
-- Runtime prerequisites such as `uv` for the Serena adapter: install them yourself; the setup does not
-  run system installers.
+- Runtime prerequisites such as `uv` for the Serena adapter or `@nuphus/nuphus-mcp` for the Nuphus
+  adapter: install them yourself; the setup does not run system installers.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship one packaged third-party prompt, Ponytail, whose vendored bytes and upstream pin

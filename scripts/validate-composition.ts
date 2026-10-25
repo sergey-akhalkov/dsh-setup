@@ -152,6 +152,7 @@ function main(): number {
           'dsh-setup-composer-clock',
           '@dsh-setup/plugin-composer-clock',
           'dsh-setup-serena',
+          'dsh-setup-nuphus-mcp',
           '@deepseek-ai/dsh-mcp-client',
           'reasoningEffort: high',
           'preference: dark',

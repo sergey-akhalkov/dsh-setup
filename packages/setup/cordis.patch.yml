@@ -7,6 +7,16 @@
 - insert:
     - id: dsh-setup-composer-clock
       name: "@dsh-setup/plugin-composer-clock"
+    - id: dsh-setup-nuphus-mcp
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args:
+          - --confirm-write
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
     - id: dsh-setup-serena

@@ -316,8 +316,10 @@ SHALL/MUST keywords in English. There is no active change; the parent change was
 specs `portable-setup` and `plugin-market`, tasks). The main specs under `openspec/specs/` hold the
 accepted requirements: `portable-setup` and `plugin-market` were synced from the parent change on
 2026-10-25, the archived `2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus
-its `portable-setup` amendment, and the archived `2026-10-26-add-serena-mcp-plugin` change added
-`mcp-adapters` and amended `portable-setup`'s dependency-containment requirement. Cite
+its `portable-setup` amendment, the archived `2026-10-26-add-serena-mcp-plugin` change added
+`mcp-adapters` and amended `portable-setup`'s dependency-containment requirement, and the archived
+`2026-10-26-add-nuphus-mcp-plugin` change added the strict-confirmation requirement to
+`mcp-adapters`. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine

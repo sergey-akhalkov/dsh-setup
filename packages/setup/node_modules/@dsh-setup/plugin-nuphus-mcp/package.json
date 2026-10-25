@@ -1,0 +1,28 @@
+{
+  "name": "@dsh-setup/plugin-nuphus-mcp",
+  "version": "0.1.7",
+  "description": "Nuphus MCP: desktop automation (screen, windows, mouse and keyboard, Chrome) through the DeepSeek Harness MCP client",
+  "icon": "./icon.svg",
+  "type": "module",
+  "exports": {
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./cordis.fragment.yml": "./cordis.fragment.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "cordis.patch.yml",
+    "cordis.fragment.yml"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

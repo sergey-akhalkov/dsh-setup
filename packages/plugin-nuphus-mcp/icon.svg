@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Nuphus MCP desktop automation">
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="#c2410c" opacity="0.14"/>
+  <rect x="13" y="16" width="30" height="21" rx="3" fill="none" stroke="#c2410c" stroke-width="3.4"/>
+  <path d="M21 45h14" stroke="#c2410c" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M28 37v8" stroke="#c2410c" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M35.5 27.5l15.5 6.5-6.4 2.6-2.6 6.4z" fill="#c2410c"/>
+</svg>

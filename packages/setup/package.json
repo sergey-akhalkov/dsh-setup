@@ -14,11 +14,13 @@
   },
   "dependencies": {
     "@dsh-setup/plugin-composer-clock": "0.1.7",
+    "@dsh-setup/plugin-nuphus-mcp": "0.1.7",
     "@dsh-setup/plugin-ponytail": "0.1.7",
     "@dsh-setup/plugin-serena": "0.1.7"
   },
   "bundleDependencies": [
     "@dsh-setup/plugin-composer-clock",
+    "@dsh-setup/plugin-nuphus-mcp",
     "@dsh-setup/plugin-ponytail",
     "@dsh-setup/plugin-serena"
   ],

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Nuphus MCP",
+    "description": "Adds nuphus-mcp desktop automation (screen, windows, mouse and keyboard, Chrome) through the DeepSeek Harness MCP client; requires the nuphus-mcp binary on the PATH and confirms machine writes by default"
+  }
+}

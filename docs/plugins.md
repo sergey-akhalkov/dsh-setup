@@ -93,7 +93,9 @@ A bundle that only connects an external MCP server has no Host or Client module:
 `package.json`, `cordis.fragment.yml`, `locale/en.json`, and `icon.svg`, and nothing else handwritten.
 The fragment mounts the Harness-provided `@deepseek-ai/dsh-mcp-client` row, so the loader never imports
 the package itself; the generated `cordis.patch.yml` is the only build artifact.
-[`packages/plugin-serena`](../packages/plugin-serena) is the working example.
+[`packages/plugin-serena`](../packages/plugin-serena) is the working example, and
+[`packages/plugin-nuphus-mcp`](../packages/plugin-nuphus-mcp) is the second adapter, which launches a
+user-installed executable from the PATH.
 
 The manifest omits `main`, `types`, `dsh.client`, and the `./client` export, lists only the four
 handwritten files plus the generated patch in `files`, and keeps the usual `engines.dsh` and
