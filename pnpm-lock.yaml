@@ -75,6 +75,8 @@ importers:
         specifier: 0.2.1-rc.3
         version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
 
+  packages/plugin-serena: {}
+
 packages:
 
   '@biomejs/biome@2.6.3':

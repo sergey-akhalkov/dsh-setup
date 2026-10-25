@@ -1,0 +1,31 @@
+# Composition fragment for @dsh-setup/plugin-serena.
+#
+# A configuration-only adapter: the row mounts the Harness-provided MCP client
+# instead of this package, because the package has no Host or Client module.
+# `dsh-setup/scripts/generate.ts` rejects a foreign row on a code-bearing
+# package, and the row id must stay globally unique.
+rows:
+  - id: dsh-setup-serena
+    name: "@deepseek-ai/dsh-mcp-client"
+    config:
+      serverName: serena
+      transport: stdio
+      command: uvx
+      # Pin the tested release: its built-in context and prompt are part of the
+      # adapter behavior, so bump both together.
+      args:
+        - "--from"
+        - "serena-agent==1.7.0"
+        - serena
+        - start-mcp-server
+        # The vscode context keeps the same basic-tool exclusions as `ide`
+        # (no Serena read/write/shell/list tools) and tells the agent to
+        # activate the working directory and read the initial instructions.
+        - "--context=vscode"
+        # No dashboard server and no browser window inside the Harness process.
+        - "--enable-web-dashboard=false"
+      # The first symbolic call may wait for a language server to start.
+      toolCallTimeoutMs: 120000
+      # A missing uv or a slow first download must not reject the row; the
+      # Harness starts without Serena tools and logs the failed connection.
+      failOnStartupError: false

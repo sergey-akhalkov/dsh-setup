@@ -152,9 +152,36 @@ The market has no in-place upgrade action. To update, install the newer version 
 `-SetupVersion`. The previous version is replaced; older listed versions remain installable if you
 need to pin back.
 
+## Serena MCP
+
+The setup also ships the Serena adapter bundle, which adds Serena's symbol-level code tools through
+the Harness MCP client. It is optional and can be disabled (see below).
+
+Prerequisite: `uv`/`uvx` must be on the PATH of the Harness process. The adapter runs
+`uvx --from serena-agent==1.7.0 serena start-mcp-server ...`; the first start downloads that pinned
+release, so the first connection can be slow. If the tools do not appear after the first start,
+restart DeepSeek Harness once, or pre-warm the download with
+`uvx --from serena-agent==1.7.0 serena --version`. Without `uv`, the Harness still starts and logs the
+failed connection; no Serena tools are added.
+
+Serena works with a project: on first use, ask the agent to activate the current project with Serena
+(the adapter's built-in instructions point it at `activate_project`). One Serena instance serves the
+whole profile, so switching the active project in one session changes it for all sessions. Serena's
+tools run in its own process and edit the activated project directly; the MCP tool call is the
+approval gate.
+
+To disable the adapter, add this to the profile's own `cordis.patch.yml`:
+
+```yaml
+- id: dsh-setup-serena
+  disabled: true
+```
+
 ## What is not included
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
+- Runtime prerequisites such as `uv` for the Serena adapter: install them yourself; the setup does not
+  run system installers.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship one packaged third-party prompt, Ponytail, whose vendored bytes and upstream pin

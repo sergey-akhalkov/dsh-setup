@@ -1,0 +1,18 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @deepseek-ai/dsh-mcp-client.
+- insert:
+    - id: dsh-setup-serena
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - --from
+          - serena-agent==1.7.0
+          - serena
+          - start-mcp-server
+          - --context=vscode
+          - --enable-web-dashboard=false
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false

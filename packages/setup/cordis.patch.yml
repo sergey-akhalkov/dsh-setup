@@ -9,6 +9,21 @@
       name: "@dsh-setup/plugin-composer-clock"
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
+    - id: dsh-setup-serena
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - --from
+          - serena-agent==1.7.0
+          - serena
+          - start-mcp-server
+          - --context=vscode
+          - --enable-web-dashboard=false
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
 - id: agent-default-model
   config:
     provider: deepseek-account

@@ -4,14 +4,16 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildSetupManifest,
+  computeGenerated,
   diffGenerated,
   parseDefaults,
   renderBundlePatch,
   renderSetupPatch,
+  SETUP_PATCH_FILE,
   validateSetupManifest,
 } from '../lib/generate.ts'
 import { validatePackageManifest } from '../lib/manifest.ts'
-import type { DshVersions, PackageManifest } from '../lib/workspace.ts'
+import type { DshVersions, PackageManifest, WorkspacePackage } from '../lib/workspace.ts'
 
 const VERSIONS: DshVersions = {
   runtime: '0.2.1-rc.3',
@@ -41,6 +43,27 @@ function plugin(name: string, version = '0.1.0'): PackageManifest {
     dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web' } },
   }
 }
+
+/** One synthetic workspace package for the adapter-row generation cases. */
+function workspacePackage(
+  name: string,
+  overrides: Partial<PackageManifest> = {},
+): WorkspacePackage {
+  const slug = name.replace('@dsh-setup/', '')
+  return {
+    dir: `packages/${slug}`,
+    relativeDir: `packages/${slug}`,
+    manifest: {
+      name,
+      version: '0.1.0',
+      engines: { dsh: VERSIONS.enginesDsh },
+      ...overrides,
+      dsh: { bundle: { patch: './cordis.patch.yml' }, ...(overrides.dsh ?? {}) },
+    },
+  }
+}
+
+const ADAPTER_ROWS = [{ id: 'dsh-setup-adapter', name: '@deepseek-ai/dsh-mcp-client' }]
 
 describe('defaults', () => {
   it('parses id and complete config pairs', () => {
@@ -97,6 +120,91 @@ describe('patch rendering', () => {
     for (const row of ['dsh-setup-a', 'dsh-setup-b', 'agent-default-model', 'ui-theme']) {
       expect(patch).toContain(row)
     }
+  })
+})
+
+describe('adapter rows', () => {
+  it('generates an approved adapter row for a configuration-only package', () => {
+    const files = computeGenerated(
+      [{ pkg: workspacePackage('@dsh-setup/plugin-a'), rows: ADAPTER_ROWS }],
+      [],
+      '0.1.0',
+      VERSIONS,
+    )
+    expect(files.get(SETUP_PATCH_FILE)?.toString()).toContain('@deepseek-ai/dsh-mcp-client')
+    expect(files.get(join('packages', 'plugin-a', 'cordis.patch.yml'))?.toString()).toContain(
+      '@deepseek-ai/dsh-mcp-client',
+    )
+  })
+
+  it('rejects an unapproved adapter target', () => {
+    expect(() =>
+      computeGenerated(
+        [
+          {
+            pkg: workspacePackage('@dsh-setup/plugin-a'),
+            rows: [{ id: 'dsh-setup-a', name: '@deepseek-ai/dsh-tools' }],
+          },
+        ],
+        [],
+        '0.1.0',
+        VERSIONS,
+      ),
+    ).toThrow(/not an approved adapter target/)
+  })
+
+  it('rejects an adapter row on a package with a Host entry', () => {
+    expect(() =>
+      computeGenerated(
+        [
+          {
+            pkg: workspacePackage('@dsh-setup/plugin-a', { main: 'lib/index.js' }),
+            rows: ADAPTER_ROWS,
+          },
+        ],
+        [],
+        '0.1.0',
+        VERSIONS,
+      ),
+    ).toThrow(/Host or Client entry/)
+  })
+
+  it('rejects an adapter row on a package with a Client entry', () => {
+    expect(() =>
+      computeGenerated(
+        [
+          {
+            pkg: workspacePackage('@dsh-setup/plugin-a', {
+              dsh: {
+                bundle: { patch: './cordis.patch.yml' },
+                client: { platform: 'web' },
+              },
+            }),
+            rows: ADAPTER_ROWS,
+          },
+        ],
+        [],
+        '0.1.0',
+        VERSIONS,
+      ),
+    ).toThrow(/Host or Client entry/)
+  })
+
+  it('still generates a self-named row for a code-bearing package', () => {
+    const files = computeGenerated(
+      [
+        {
+          pkg: workspacePackage('@dsh-setup/plugin-a', { main: 'lib/index.js' }),
+          rows: [{ id: 'dsh-setup-a', name: '@dsh-setup/plugin-a' }],
+        },
+      ],
+      [],
+      '0.1.0',
+      VERSIONS,
+    )
+    expect(files.get(join('packages', 'plugin-a', 'cordis.patch.yml'))?.toString()).toContain(
+      '@dsh-setup/plugin-a',
+    )
   })
 })
 

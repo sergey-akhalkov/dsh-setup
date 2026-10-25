@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
-import type { FragmentRow } from './fragments.ts'
+import { ADAPTER_ROW_NAMES, type FragmentRow } from './fragments.ts'
 import type { DshVersions, PackageManifest, WorkspacePackage } from './workspace.ts'
 import { SETUP_PACKAGE_NAME, setupDir } from './workspace.ts'
 
@@ -200,6 +200,23 @@ export function computeGenerated(
   const rowIds = new Set<string>()
 
   for (const { pkg, rows } of pluginRows) {
+    for (const row of rows) {
+      if (row.name === pkg.manifest.name) continue
+      if (!ADAPTER_ROW_NAMES.has(row.name)) {
+        throw new Error(
+          `${pkg.relativeDir}: adapter row "${row.id}" names "${row.name}", which is not an approved adapter target`,
+        )
+      }
+      if (
+        pkg.manifest.main !== undefined ||
+        pkg.manifest.types !== undefined ||
+        pkg.manifest.dsh?.client !== undefined
+      ) {
+        throw new Error(
+          `${pkg.relativeDir}: adapter row "${row.id}" names "${row.name}", but a package with a Host or Client entry may only mount its own code`,
+        )
+      }
+    }
     files.set(join(pkg.dir, 'cordis.patch.yml'), Buffer.from(renderBundlePatch(rows), 'utf8'))
     for (const row of rows) {
       if (rowIds.has(row.id)) throw new Error(`duplicate row id "${row.id}" in ${pkg.relativeDir}`)

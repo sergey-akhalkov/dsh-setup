@@ -116,7 +116,10 @@ Useful environment variables: `DSH_CLI` (CLI command to use instead of `pnpm dlx
 ## 5. Create a new plugin package (the main task)
 
 Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; copy
-`packages/plugin-composer-clock` as the template. Checklist:
+`packages/plugin-composer-clock` as the template. A configuration-only MCP adapter
+(`packages/plugin-serena`) has no Host/Client module: copy its manifest/fragment shape instead and
+skip `main`/`types`/`dsh.client`, `src/`, `lib/`, `tsconfig.json`, and the Client test; see
+[docs/plugins.md](docs/plugins.md). Checklist:
 
 1. **Manifest** `packages/plugin-<name>/package.json`
    - `name`, `version` (equal to the repo version), `description`, `icon: "./icon.svg"`,
@@ -148,9 +151,12 @@ Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; copy
      - id: dsh-setup-<slug>
    ```
 
-   Only `rows` at top level, only `id`/optional `config` per row. `id` must match
-   `^dsh-setup-[a-z0-9]+(?:-[a-z0-9]+)*$` and be globally unique. Never write `name:` — the module
-   specifier is derived from the owning package.
+   Only `rows` at top level, only `id`/optional `name`/optional `config` per row. `id` must match
+   `^dsh-setup-[a-z0-9]+(?:-[a-z0-9]+)*$` and be globally unique. Omit `name` — the module specifier
+   is derived from the owning package. The only exception is a configuration-only adapter bundle
+   (no `main`, no `dsh.client`), whose rows may name the approved Harness adapter
+   `@deepseek-ai/dsh-mcp-client`; generation rejects any other foreign name and rejects a foreign row
+   on a code-bearing package.
 3. **Host half** `src/host/index.ts`: export `name` (equal to the package name) and
    `apply(ctx: Context)`; no module-scope side effects. An inert `apply` is correct when all behavior
    is Client-side.
@@ -375,7 +381,8 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - **`engines.dsh` must equal `dsh.json` -> `enginesDsh` exactly** (not merely cover it); that rule is
   enforced by `validate:repo` for every plugin.
 - **Row ids are global** and match `^dsh-setup-...$`; defaults must not use the prefix or collide with
-  row ids. Plugin fragments cannot mount another package's code.
+  row ids. Plugin fragments cannot mount another package's code, except the approved
+  `@deepseek-ai/dsh-mcp-client` adapter row in a configuration-only bundle.
 - **A patch replaces the entire `config` object.** Every `defaults.yml` entry must restate the full
   config for its row.
 - **The setup bundle stays pure**: it does not select shipped bundles or duplicate shipped rows.
