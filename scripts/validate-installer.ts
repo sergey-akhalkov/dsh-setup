@@ -61,7 +61,7 @@ function shell(command: string, args: string[], env: NodeJS.ProcessEnv, timeout 
 }
 
 function fail(result: { status: number | null; stdout: string; stderr: string; command?: string }) {
-  const tail = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-25).join('\n')
+  const tail = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-120).join('\n')
   return new Error(`${result.command ?? ''} exited ${String(result.status)}\n${tail}`.trim())
 }
 
@@ -91,6 +91,9 @@ function main(): number {
     ...process.env,
     DSH_HOME: home,
     DSH_TELEMETRY_DISABLED: '1',
+    // The package-manager child inherits this. CI stalls silently at one
+    // install step, so its debug transcript is the only way to see the wait.
+    npm_config_loglevel: 'debug',
   }
   for (const key of [
     'DSH_PROFILE',
