@@ -18,9 +18,9 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Run the full local gate: `pnpm build`, `git diff --exit-code`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, and `pnpm validate:composition`. Verify every step passes and no generated file is left uncommitted.
-- [ ] 4.2 Smoke-test the real integration in a throwaway profile: install `packages/plugin-serena`, start the Harness, call `mcp__serena__get_current_config`, activate the test workspace with `mcp__serena__activate_project`, and call `mcp__serena__get_symbols_overview` on a source file. Verify the tools appear and the project activates; record the observed startup time and the first-run download step.
-- [ ] 4.3 Run the market dry run with `node scripts/generate-market.ts --output .tmp/market-serena`; verify the index lists `@dsh-setup/plugin-serena` with its English title, description, relative icon, version, `engines.dsh`, and git path, then remove `.tmp/market-serena`.
+- [x] 4.1 Run the full local gate: `pnpm build`, `git diff --exit-code`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, and `pnpm validate:composition`. Verify every step passes and no generated file is left uncommitted.
+- [x] 4.2 Smoke-test the real integration in a throwaway profile: install `packages/plugin-serena`, start the Harness, call `mcp__serena__get_current_config`, activate the test workspace with `mcp__serena__activate_project`, and call `mcp__serena__get_symbols_overview` on a source file. Verify the tools appear and the project activates; record the observed startup time and the first-run download step. See `verification.md` for the headless credential limitation and the direct MCP result.
+- [x] 4.3 Run the market dry run with `node scripts/generate-market.ts --output .tmp/market-serena`; verify the index lists `@dsh-setup/plugin-serena` with its English title, description, relative icon, version, `engines.dsh`, and git path, then remove `.tmp/market-serena`.
 
 ## 5. Release readiness
 
