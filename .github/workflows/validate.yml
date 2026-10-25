@@ -39,10 +39,12 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      # 11.28.5: pnpm 11.9.0 can leave an install process alive after printing
+      # "Done in ..." (pnpm#13617), which hung the installer exercise on CI.
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11.9.0
+          version: 11.28.5
 
       - name: Install Node.js
         uses: actions/setup-node@v4

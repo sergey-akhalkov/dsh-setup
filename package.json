@@ -5,10 +5,10 @@
   "type": "module",
   "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
   "license": "UNLICENSED",
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@11.28.5",
   "engines": {
     "node": ">=24.18.0 <25",
-    "pnpm": ">=11.9.0 <12"
+    "pnpm": ">=11.28.5 <12"
   },
   "scripts": {
     "build": "node scripts/build.ts",
