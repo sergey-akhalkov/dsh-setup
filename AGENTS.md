@@ -69,6 +69,7 @@ Scripts under `scripts/` are TypeScript executed directly by Node 24: relative i
 | `packages/plugin-*/cordis.patch.yml`                        | Generated bundle patch                                                        | **no** (`pnpm gen`)                                     |
 | `packages/plugin-*/lib/index.js`, `lib/index.d.ts`          | Generated Host runtime (tsc)                                                  | **no** (`pnpm build`)                                   |
 | `packages/plugin-*/lib/client.js`                           | Generated Client bundle (esbuild + loader wrapper)                            | **no** (`pnpm build`)                                   |
+| `packages/plugin-ponytail/assets/**`, `ponytail.lock.json`  | Vendored upstream prompt, license, and provenance lock                        | **no** (`pnpm ponytail:update`)                         |
 | `packages/setup/defaults.yml`, `locale/en.json`, `icon.svg` | Owner defaults and setup card metadata                                        | yes                                                     |
 | `packages/setup/package.json`                               | Generated setup manifest (deps, `bundleDependencies`)                         | **no** (`pnpm gen`; version only via `release:prepare`) |
 | `packages/setup/cordis.patch.yml`                           | Generated aggregated setup patch                                              | **no** (`pnpm gen`)                                     |
@@ -91,6 +92,7 @@ rebuild (`git diff --exit-code` after `pnpm build`, plus `pnpm gen:check`).
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `pnpm gen`                                    | Rewrites per-plugin `cordis.patch.yml`, `packages/setup/{package.json,cordis.patch.yml}`, vendored tree; removes stale vendored files | fragment, plugin manifest/`files`, `defaults.yml`, or `dsh.json` engines change |
 | `pnpm gen:check`                              | Byte-compares generated files and reports missing/changed/unexpected; exits 1 on drift                                                | before committing                                                               |
+| `pnpm ponytail:update --version X.Y.Z`        | Refreshes the vendored Ponytail prompt and lock from a pinned upstream release                                                        | updating the vendored prompt                                                    |
 | `pnpm build`                                  | `tsc -b` Host output + esbuild Client bundles                                                                                         | any `src/**` change                                                             |
 | `pnpm build:watch`                            | Rebuild Host (tsc watch) and Client bundles on change                                                                                 | plugin development loop                                                         |
 | `pnpm typecheck`                              | `tsc -p tsconfig.check.json` (packages src+test, scripts, DOM/react libs)                                                             | any TS change                                                                   |
@@ -122,7 +124,8 @@ Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; copy
      `"./package.json"`.
    - `files`: must list `icon.svg`, `locale/*.json`, `lib/index.js`, `lib/index.d.ts`,
      `lib/client.js`, `cordis.patch.yml`, `cordis.fragment.yml`. This list is exactly what the setup
-     bundle vendors; a declared file that does not exist fails generation.
+     bundle vendors; a declared file that does not exist fails generation. Additional exact asset
+     paths (for example a vendored upstream prompt) are allowed and vendored the same way.
    - `engines.dsh` must be **byte-identical** to `dsh.json` -> `enginesDsh`
      (`>=0.2.1-rc.3 <0.3.0` today). `validate:repo` rejects any mismatch.
    - `peerDependencies` pin shared DSH packages (`@deepseek-ai/cordis: "~4.0.5"`); repeat the same
@@ -341,6 +344,9 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   `packages/setup/package.json`, `packages/setup/cordis.patch.yml`,
   `packages/setup/node_modules/**`). Run `pnpm gen` and/or `pnpm build`, then commit the result.
   `pnpm check` alone does not run `gen:check`; use `pnpm validate` or run `gen:check` explicitly.
+- **Vendored Ponytail assets are generated** (`packages/plugin-ponytail/assets/**`,
+  `ponytail.lock.json`). Refresh them with `pnpm ponytail:update` and never by hand; the offline
+  provenance test pins their sizes and SHA-256, and Biome ignores them so hashes stay stable.
 - **`packages/setup` is deliberately outside the pnpm workspace** (`pnpm-workspace.yaml` lists only
   `packages/plugin-*`). Do not add it and do not run installs inside it: pnpm would prune the tracked
   vendored `node_modules` tree. `.gitignore` deliberately re-includes

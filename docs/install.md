@@ -91,8 +91,13 @@ Use this path when you cannot run the installer, for example on a CLI-only machi
 4. Confirm the version and its source. The bundle is added to the running profile, its patch applies,
    and the composer-clock plugin appears in the conversation composer dock.
 
+The full setup also ships the packaged Ponytail prompt: its compact ruleset is always on by default
+and its skill is available on demand. See [ponytail.md](ponytail.md) for the prompt cost, the
+`alwaysOn: false` opt-out, and removal.
+
 Individual plugins are listed as their own entries. Installing one mounts only that plugin; use either
-the full setup or individual plugins for a given plugin, not both.
+the full setup or individual plugins for a given plugin, not both. The Ponytail entry behaves the same
+way whether it arrives with the setup or on its own.
 
 ## Install without the market
 
@@ -117,4 +122,6 @@ need to pin back.
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
 - Your profile's local overrides: these stay in the profile's own patch file.
-- Agent skills and instructions: they live in `~/.agents` and are consumed independently.
+- Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
+  The setup does ship one packaged third-party prompt, Ponytail, whose vendored bytes and upstream pin
+  are documented in [ponytail.md](ponytail.md).

@@ -35,7 +35,9 @@ install-time build. CI rebuilds and rejects a commit whose generated files do no
 - `exports["./client"]` must exist whenever `dsh.client` exists.
 - `peerDependencies` pin the shared DSH packages (`@deepseek-ai/cordis`); the same versions appear
   in `devDependencies` for type checking.
-- `files` must include `lib/`, both YAML files, `locale/`, and the icon.
+- `files` must include `lib/`, both YAML files, `locale/`, and the icon. A package may also list exact
+  asset paths (for example a vendored upstream prompt); the setup generator vendors those files the
+  same way.
 - No `prepare`, `preinstall`, `install`, or `postinstall` scripts: git installs cannot run them.
 
 ## Composition fragment

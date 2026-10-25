@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-ponytail.
+- insert:
+    - id: dsh-setup-ponytail
+      name: "@dsh-setup/plugin-ponytail"

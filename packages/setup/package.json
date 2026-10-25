@@ -13,10 +13,12 @@
     "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "dependencies": {
-    "@dsh-setup/plugin-composer-clock": "0.1.6"
+    "@dsh-setup/plugin-composer-clock": "0.1.6",
+    "@dsh-setup/plugin-ponytail": "0.1.6"
   },
   "bundleDependencies": [
-    "@dsh-setup/plugin-composer-clock"
+    "@dsh-setup/plugin-composer-clock",
+    "@dsh-setup/plugin-ponytail"
   ],
   "dsh": {
     "manifestVersion": 1,

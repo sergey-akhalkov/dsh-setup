@@ -7,6 +7,8 @@
 - insert:
     - id: dsh-setup-composer-clock
       name: "@dsh-setup/plugin-composer-clock"
+    - id: dsh-setup-ponytail
+      name: "@dsh-setup/plugin-ponytail"
 - id: agent-default-model
   config:
     provider: deepseek-account

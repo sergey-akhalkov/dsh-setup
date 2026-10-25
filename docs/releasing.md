@@ -67,6 +67,38 @@ per-release edit. Its standalone copy of the supported versions and bundle list 
 
    Then add the URL in Discover and confirm the entries and their source commits.
 
+## Refreshing the vendored Ponytail prompt
+
+`packages/plugin-ponytail` vendors the upstream prompt (skill, rules file, license) from one pinned
+Ponytail release. Refreshing it is a deliberate step before a normal release, never a runtime fetch:
+
+1. Run the update script for the upstream version:
+
+   ```sh
+   pnpm ponytail:update --version X.Y.Z
+   ```
+
+   It resolves the `vX.Y.Z` tag to a commit (the GitHub tag API, falling back to the npm release
+   `gitHead` when an unauthenticated GitHub lookup is rate-limited), downloads the three files from
+   that commit, validates their shape and line endings, and rewrites
+   `packages/plugin-ponytail/assets/ponytail/` plus `ponytail.lock.json`. A failed fetch or validation
+   leaves the previous pin untouched, and running the same version again is byte-identical.
+
+2. Review the diff of all three vendored files and the lock together. The lock's SHA-256 values must
+   change exactly with the files.
+
+3. Regenerate, rebuild, and validate before starting the release procedure above:
+
+   ```sh
+   pnpm gen
+   pnpm build
+   pnpm check
+   ```
+
+   The refresh belongs in the release commit, so a newer upstream prompt ships as a new set version.
+   `pnpm gen:check` keeps the setup bundle's vendored copy in step, and the provenance test fails if
+   the assets and the lock disagree.
+
 ## Version accumulation
 
 The index is regenerated from the tagged commit, so the previously deployed document is the only
