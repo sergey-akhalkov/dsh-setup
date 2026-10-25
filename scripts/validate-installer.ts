@@ -23,7 +23,7 @@ interface ProfileManifest {
   dsh?: { profile?: { bundles?: string[] } }
 }
 
-function shell(command: string, args: string[], env: NodeJS.ProcessEnv, timeout = 600_000) {
+function shell(command: string, args: string[], env: NodeJS.ProcessEnv, timeout = 720_000) {
   // A shell resolves the Windows .cmd shims (pnpm, pwsh), matching how the
   // composition check runs the CLI.
   const line = [command, ...args.map((arg) => `"${arg.replaceAll('"', '\\"')}"`)].join(' ')
@@ -37,7 +37,7 @@ function shell(command: string, args: string[], env: NodeJS.ProcessEnv, timeout 
 }
 
 function fail(result: { status: number | null; stdout: string; stderr: string; command?: string }) {
-  const tail = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-8).join('\n')
+  const tail = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-25).join('\n')
   return new Error(`${result.command ?? ''} exited ${String(result.status)}\n${tail}`.trim())
 }
 
@@ -73,13 +73,18 @@ function main(): number {
     delete env[key]
   }
 
+  const cliOverride = process.env.DSH_CLI?.trim()
+  const cliBase =
+    cliOverride === undefined || cliOverride === ''
+      ? `pnpm dlx @deepseek-ai/dsh@${dshVersion}`
+      : cliOverride
   let cli: string | undefined
-  const cliOverride = process.env.DSH_CLI
-  if (cliOverride !== undefined && cliOverride.trim() !== '') {
+  if (cliOverride !== undefined && cliOverride !== '') {
     const wrapper = join(home, 'dsh-cli.cmd')
     writeFileSync(wrapper, `@echo off\r\n${cliOverride} %*\r\n`)
     cli = wrapper
   }
+  console.log(`validate-installer: DSH ${dshVersion}, CLI ${cliBase}`)
 
   const profileDir = join(home, 'profiles', 'ci')
   const manifestPath = join(profileDir, 'package.json')
@@ -87,32 +92,25 @@ function main(): number {
   const failures: string[] = []
 
   const step = (name: string, body: () => void): void => {
+    const startedAt = Date.now()
     try {
       body()
-      console.log(`  ok   ${name}`)
+      console.log(`  ok   ${name} (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`)
     } catch (error) {
       failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`)
-      console.error(`  FAIL ${name}`)
+      console.error(`  FAIL ${name} (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`)
     }
   }
 
   try {
     // Compose a fresh profile with the published CLI exactly like a new machine.
-    const cliResult = shell(
-      'pnpm',
-      [
-        'dlx',
-        `@deepseek-ai/dsh@${dshVersion}`,
-        '--profile',
-        'ci',
-        '--from-default-profile',
-        'web',
-        '--dump-config',
-      ],
-      env,
-      600_000,
-    )
     step('initialize a throwaway ci profile', () => {
+      const cliResult = shell(
+        cliBase,
+        ['--profile', 'ci', '--from-default-profile', 'web', '--dump-config'],
+        env,
+        600_000,
+      )
       if (cliResult.status !== 0) throw fail(cliResult)
       if (!existsSync(manifestPath)) throw new Error('profile package.json was not created')
     })
@@ -132,8 +130,8 @@ function main(): number {
     ]
     if (cli !== undefined) installerArgs.push('-DshCli', cli)
 
-    const first = shell(pwsh, installerArgs, env)
     step('run install.ps1', () => {
+      const first = shell(pwsh, installerArgs, env)
       if (first.status !== 0) throw fail(first)
     })
 
@@ -144,13 +142,8 @@ function main(): number {
 
     // Compose the installed profile directly: every shipped bundle header and the
     // setup row/defaults must appear in the dumped tree.
-    const composed = shell(
-      'pnpm',
-      ['dlx', `@deepseek-ai/dsh@${dshVersion}`, '--profile', 'ci', '--dump-config'],
-      env,
-      600_000,
-    )
     step('the composed profile contains every installer bundle and the setup rows', () => {
+      const composed = shell(cliBase, ['--profile', 'ci', '--dump-config'], env, 600_000)
       if (composed.status !== 0) throw fail(composed)
       const markers = [
         ...versions.installBundles.shipped,
@@ -166,8 +159,8 @@ function main(): number {
     })
 
     const bundlesBefore = readBundles(manifestPath)
-    const second = shell(pwsh, installerArgs, env)
     step('a second installer run is a no-op', () => {
+      const second = shell(pwsh, installerArgs, env)
       if (second.status !== 0) throw fail(second)
       const bundlesAfter = readBundles(manifestPath)
       if (JSON.stringify(bundlesAfter) !== JSON.stringify(bundlesBefore)) {
@@ -178,10 +171,18 @@ function main(): number {
   } catch (error) {
     console.error(`validate-installer: ${error instanceof Error ? error.message : String(error)}`)
   } finally {
-    if (process.env.DSH_KEEP === '1') {
-      console.log(`validate-installer: kept ${relative(rootDir, home)}`)
-    } else {
-      rmSync(home, { recursive: true, force: true })
+    try {
+      if (process.env.DSH_KEEP === '1') {
+        console.log(`validate-installer: kept ${relative(rootDir, home)}`)
+      } else {
+        rmSync(home, { recursive: true, force: true })
+      }
+    } catch (error) {
+      // A leftover process from a timed-out installer run can still hold the
+      // throwaway home; the run's verdict must not be replaced by that EPERM.
+      console.warn(
+        `validate-installer: could not remove ${relative(rootDir, home)}: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
   }
 

@@ -53,6 +53,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # One global install keeps every CLI call in the checks below off the
+      # `pnpm dlx` cache path, so a slow registry cannot stall a single step.
+      - name: Install the published DSH CLI under test
+        run: pnpm add -g @deepseek-ai/dsh@${{ matrix.dsh }}
+
       - name: Build committed runtime from sources
         run: pnpm build
 
@@ -76,11 +81,11 @@ jobs:
 
       - name: Validate the composed profile with the published DSH CLI
         env:
-          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
+          DSH_CLI: dsh
         run: pnpm validate:composition
 
       - name: Exercise the one-command installer on a throwaway profile
         env:
-          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
+          DSH_CLI: dsh
           DSH_VERSION: ${{ matrix.dsh }}
         run: pnpm validate:installer
