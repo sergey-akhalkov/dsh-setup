@@ -24,7 +24,7 @@
 
 ## 5. Release readiness
 
-- [ ] 5.1 Bump the set version with `pnpm release:prepare --version X.Y.Z`, run `pnpm gen`, `pnpm build`, and the full gate; verify `git diff --exit-code` and `pnpm gen:check` pass with the version bump and regenerated setup manifest/vendored files committed.
+- [x] 5.1 Bump the set version with `pnpm release:prepare --version X.Y.Z`, run `pnpm gen`, `pnpm build`, and the full gate; verify `git diff --exit-code` and `pnpm gen:check` pass with the version bump and regenerated setup manifest/vendored files committed.
 
 ## Workflow follow-up
 
