@@ -39,9 +39,18 @@ interface ProfileManifest {
 
 function shell(command: string, args: string[], env: NodeJS.ProcessEnv, timeout = 720_000) {
   // A shell resolves the Windows .cmd shims (pnpm, pwsh), matching how the
-  // composition check runs the CLI.
+  // composition check runs the CLI. The child's stdin is the null device: a
+  // CI runner has no interactive terminal, so a package-manager or plugin
+  // prompt must fail fast there instead of waiting on an open pipe.
   const line = [command, ...args.map((arg) => `"${arg.replaceAll('"', '\\"')}"`)].join(' ')
-  const result = spawnSync(line, { shell: true, cwd: rootDir, env, encoding: 'utf8', timeout })
+  const result = spawnSync(line, {
+    shell: true,
+    cwd: rootDir,
+    env,
+    encoding: 'utf8',
+    timeout,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
   return {
     status: result.status,
     stdout: result.stdout ?? '',
@@ -91,6 +100,9 @@ function main(): number {
   ]) {
     delete env[key]
   }
+  // The action-installed pnpm points PNPM_HOME into its own bin directory;
+  // plain project operations must not inherit that arrangement.
+  delete env.PNPM_HOME
 
   const cliOverride = process.env.DSH_CLI?.trim()
   const cliBase =
