@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -163,10 +164,55 @@ function main(): number {
     ]
     if (cli !== undefined) installerArgs.push('-DshCli', cli)
 
+    let first: ReturnType<typeof shell> | undefined
     step('run install.ps1', () => {
-      const first = shell(pwsh, installerArgs, env)
+      first = shell(pwsh, installerArgs, env, 240_000)
       if (first.status !== 0) throw fail(first)
     })
+    if (first?.status === null) {
+      // A timed-out installer leaves its process tree behind; the command lines
+      // show which operation is stuck, which the captured output cannot.
+      const snapshot = shell(
+        pwsh,
+        [
+          '-NoProfile',
+          '-Command',
+          "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'dsh|pnpm' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List",
+        ],
+        env,
+        60_000,
+      )
+      console.error('validate-installer: processes alive after the installer timed out:')
+      console.error(snapshot.stdout.trim() || '(none)')
+      const managerDir = join(profileDir, '.plugin-manager')
+      try {
+        const lockPath = join(profileDir, 'package.json.lock')
+        if (existsSync(lockPath)) {
+          console.error(
+            `validate-installer: lock file holds ${readFileSync(lockPath, 'utf8').trim()}`,
+          )
+        }
+        const runPath = join(managerDir, 'run.json')
+        if (existsSync(runPath)) {
+          console.error(`validate-installer: run record: ${readFileSync(runPath, 'utf8').trim()}`)
+        }
+        const logsDir = join(managerDir, 'logs')
+        if (existsSync(logsDir)) {
+          for (const operation of readdirSync(logsDir, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .slice(-2)) {
+            const logPath = join(logsDir, operation.name, 'pnpm.log')
+            if (!existsSync(logPath)) continue
+            const tail = readFileSync(logPath, 'utf8').trim().split('\n').slice(-30).join('\n')
+            console.error(`validate-installer: ${operation.name}/pnpm.log tail:\n${tail}`)
+          }
+        }
+      } catch (error) {
+        console.error(
+          `validate-installer: could not read the profile diagnostics: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
 
     stageManifestChecks(manifestPath, versions, failures)
     step('the installer leaves the profile patch untouched', () => {
