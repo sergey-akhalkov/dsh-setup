@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/setup",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "The full portable DeepSeek Harness setup: every plugin bundle plus owner defaults, installed as one bundle",
   "icon": "./icon.svg",
   "files": [
@@ -13,9 +13,9 @@
     "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "dependencies": {
-    "@dsh-setup/plugin-composer-clock": "0.1.6",
-    "@dsh-setup/plugin-ponytail": "0.1.6",
-    "@dsh-setup/plugin-serena": "0.1.6"
+    "@dsh-setup/plugin-composer-clock": "0.1.7",
+    "@dsh-setup/plugin-ponytail": "0.1.7",
+    "@dsh-setup/plugin-serena": "0.1.7"
   },
   "bundleDependencies": [
     "@dsh-setup/plugin-composer-clock",
