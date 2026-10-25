@@ -14,7 +14,7 @@
 - [x] 2.3 Define the composition-fragment format (rows, defaults, ordering) and implement its reader; verify a unit test rejects a row with a non-namespaced id and an unknown fragment field.
 - [x] 2.4 Add a manifest validator that rejects a missing `engines.dsh`, a missing `dsh.bundle`, an undeclared client export, and any `prepare` or install-time script; verify one failing fixture per condition and a passing run on the real package.
 - [x] 2.5 Document how to add a plugin package, its fragment, and its tests in `docs/plugins.md`; verify the documented commands produce a package that passes `pnpm check`.
-- [ ] 2.6 Verify the local development loop: install the workspace package with a `link:` spec into a `dev` profile, run the watch build, change Host and Client code, and record whether each half reloads through HMR or requires a profile restart; verify `docs/plugins.md` states the observed behavior rather than the assumed one.
+- [x] 2.6 Verify the local development loop: install the workspace package with a `link:` spec into a `dev` profile, run the watch build, change Host and Client code, and record whether each half reloads through HMR or requires a profile restart; verify `docs/plugins.md` states the observed behavior rather than the assumed one.
 
 ## 3. Setup bundle and generated patch
 

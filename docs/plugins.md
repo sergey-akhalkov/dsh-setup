@@ -91,7 +91,21 @@ dsh plugin --profile dev add link:<absolute path to packages/plugin-<name>>
 pnpm build --watch
 ```
 
-Observed behavior on the supported Harness version:
+Observed behavior on the supported Harness version (0.2.1-rc.3, Web boot of a throwaway `dev`
+profile with the plugin installed as a `link:`):
 
-- _Recorded by the development-loop verification task; replace this line with the observed
-  Host/Client reload behavior instead of assuming HMR covers both halves._
+- **The Client half reloads without a page reload or Host restart.** Editing
+  `src/client/index.tsx` makes `pnpm build --watch` rewrite `lib/client.js`; the client-HMR transport
+  then reports the new bundle revision on `/plugins/events` (a `rebuilt` frame naming the package and
+  its new revision). An open Web page swaps the rebuilt bundle and remounts the plugin with fresh
+  state; the page is not reloaded.
+- **The Host half applies on the next profile recomposition, not when its file is written.** Editing
+  `src/host/index.ts` makes the TypeScript watch rewrite `lib/index.js`, but the running Host keeps
+  the loaded module. Changing the profile's `cordis.patch.yml` recomposes the profile, replaces the
+  linked package's module, and runs `apply` again; restarting the Harness also applies the new code.
+- **The Desktop app uses neither of these paths for the Client half.** The `rebuilt` frame is
+  delivered over the Web transport; a Desktop window picks up rebuilt Client bundles only after it is
+  reopened or the app is restarted.
+
+So the Client half is the half with true hot replacement; treat Host changes as requiring a profile
+recomposition (or a restart) rather than assuming both halves reload.
