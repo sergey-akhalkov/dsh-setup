@@ -24,7 +24,7 @@ the shipped-bundle selections a third-party bundle cannot do and installs the se
 workflow generates the static format-1 market index pinned to the tagged commit and deploys it to
 GitHub Pages.
 
-Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.9.0**.
+Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
 Repo package version (all packages move together): **0.1.6**.
 
 ## 2. First commands
@@ -336,8 +336,11 @@ Trust the code and `docs/plugins.md`.
 ## 12. CI gate (what blocks a merge)
 
 `.github/workflows/validate.yml` (pull requests, pushes to `main`, manual) runs on `windows-latest`
-with Node 24, pnpm 11.9.0, and one matrix entry per `dsh.json` -> `supportedVersions` (installs the
-published DSH CLI once outside the repo and exports `DSH_CLI`). Steps, in order:
+with Node 24, pnpm 11.28.5, and one matrix entry per `dsh.json` -> `supportedVersions` (installs the
+published DSH CLI once outside the repo and exports `DSH_CLI`). The pnpm version is pinned (not just
+ranged) because pnpm 11.9.0 can leave an install process alive after printing `Done in ...`
+([pnpm#13617](https://github.com/pnpm/pnpm/issues/13617)), which hung the installer exercise on CI;
+11.28.5 is also the version DSH `0.2.1-rc.3` bundles. Steps, in order:
 
 ```sh
 pnpm install --frozen-lockfile
