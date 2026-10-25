@@ -1,0 +1,6 @@
+{
+  "runtime": "0.2.1-rc.3",
+  "enginesDsh": ">=0.2.1-rc.3 <0.3.0",
+  "supportedVersions": ["0.2.1-rc.3"],
+  "repository": "https://github.com/sergey-akhalkov/dsh-setup"
+}

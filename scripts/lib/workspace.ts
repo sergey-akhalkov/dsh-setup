@@ -1,0 +1,103 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/** Repository root, resolved from this file's location. */
+export const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+export interface ClientManifest {
+  platform?: string
+  immediately?: boolean
+  inject?: string[]
+  external?: string[]
+}
+
+export interface BundleManifest {
+  patch?: string | string[]
+}
+
+export interface DshManifest {
+  manifestVersion?: number
+  bundle?: BundleManifest
+  client?: ClientManifest
+}
+
+export interface PackageManifest {
+  name: string
+  version: string
+  description?: string
+  icon?: string
+  type?: string
+  main?: string
+  types?: string
+  bin?: Record<string, string>
+  exports?: Record<string, unknown>
+  files?: string[]
+  scripts?: Record<string, string>
+  engines?: Record<string, string>
+  dependencies?: Record<string, string>
+  bundleDependencies?: string[]
+  peerDependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+  dsh?: DshManifest
+}
+
+export interface WorkspacePackage {
+  dir: string
+  relativeDir: string
+  manifest: PackageManifest
+}
+
+export interface DshVersions {
+  runtime: string
+  enginesDsh: string
+  supportedVersions: string[]
+  repository: string
+}
+
+/** Read and parse one JSON file with a helpful error message. */
+export function readJson<T>(file: string): T {
+  return JSON.parse(readFileSync(file, 'utf8')) as T
+}
+
+/** The DSH versions this repository supports. */
+export function readDshVersions(): DshVersions {
+  return readJson<DshVersions>(join(rootDir, 'dsh.json'))
+}
+
+/** List workspace packages in a stable order. Missing package.json files are ignored. */
+export function listPackages(): WorkspacePackage[] {
+  const packagesDir = join(rootDir, 'packages')
+  if (!existsSync(packagesDir)) return []
+  const packages: WorkspacePackage[] = []
+  for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const dir = join(packagesDir, entry.name)
+    const manifestPath = join(dir, 'package.json')
+    if (!existsSync(manifestPath)) continue
+    packages.push({
+      dir,
+      relativeDir: `packages/${entry.name}`,
+      manifest: readJson<PackageManifest>(manifestPath),
+    })
+  }
+  return packages.sort((left, right) => left.relativeDir.localeCompare(right.relativeDir))
+}
+
+/** Absolute path of a workspace package's package.json. */
+export function packageJsonFile(pkg: WorkspacePackage): string {
+  return join(pkg.dir, 'package.json')
+}
+
+/** Name of the generated setup bundle package. */
+export const SETUP_PACKAGE_NAME = '@dsh-setup/setup'
+
+/** Directory of the setup bundle package. */
+export const setupDir = join(rootDir, 'packages', 'setup')
+
+/** Plugin packages: every package except the setup bundle itself. */
+export function listPluginPackages(): WorkspacePackage[] {
+  return listPackages().filter(
+    (pkg) => pkg.dir !== setupDir && pkg.manifest.dsh?.bundle !== undefined,
+  )
+}

@@ -1,0 +1,11 @@
+packages:
+  # Only plugin packages are pnpm workspace projects. The setup bundle is a
+  # publishable package with vendored plugin copies under its own node_modules;
+  # a workspace install would prune those copies, so it stays outside the workspace.
+  - packages/plugin-*
+
+autoInstallPeers: false
+linkWorkspacePackages: true
+
+allowBuilds:
+  esbuild: true

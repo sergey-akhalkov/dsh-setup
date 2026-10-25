@@ -1,0 +1,45 @@
+{
+  "name": "dsh-setup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=24.18.0 <25",
+    "pnpm": ">=11.9.0 <12"
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "build:watch": "node scripts/build.ts --watch",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm typecheck && pnpm lint && pnpm build && pnpm test",
+    "gen": "node scripts/generate.ts",
+    "gen:check": "node scripts/generate.ts --check",
+    "validate:repo": "node scripts/validate-repo.ts",
+    "validate:composition": "node scripts/validate-composition.ts",
+    "validate": "pnpm check && pnpm gen:check && pnpm validate:repo && pnpm validate:composition",
+    "generate:market": "node scripts/generate-market.ts",
+    "release:prepare": "node scripts/release-prepare.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.3",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-plugin-market-index": "0.2.1-rc.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/semver": "7.8.0",
+    "esbuild": "0.28.2",
+    "semver": "7.8.5",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5",
+    "yaml": "2.9.1"
+  }
+}

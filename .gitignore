@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# The setup bundle vendors its plugin packages as bundled dependencies, so this
+# one node_modules tree is generated source and must stay tracked.
+!packages/setup/node_modules/
+!packages/setup/node_modules/**
+
+# Build metadata
+*.tsbuildinfo
+
+# Local validation state
+.tmp/
+coverage/
+
+# Generated market publication artifact (produced by the release workflow)
+market/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
