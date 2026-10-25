@@ -25,7 +25,7 @@ workflow generates the static format-1 market index pinned to the tagged commit 
 GitHub Pages.
 
 Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.9.0**.
-Repo package version (all packages move together): **0.1.6**.
+Repo package version (all packages move together): **0.1.7**.
 
 ## 2. First commands
 
@@ -314,10 +314,11 @@ compose them at runtime so `validate:repo` does not flag the test file.
 SHALL/MUST keywords in English. The active change is
 `openspec/changes/add-portable-dsh-setup/` (proposal, design, delta specs `portable-setup` and
 `plugin-market`, tasks). The main specs under `openspec/specs/` now hold the accepted requirements:
-`portable-setup` and `plugin-market` were synced from the parent change on 2026-10-25, and the
-archived `2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus its
-`portable-setup` amendment. Cite `openspec/specs/` for accepted requirements and a change's delta
-specs for pending ones.
+`portable-setup` and `plugin-market` were synced from the parent change on 2026-10-25, the archived
+`2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus its `portable-setup`
+amendment, and the archived `2026-10-26-add-serena-mcp-plugin` change added `mcp-adapters` and
+amended `portable-setup`'s dependency-containment requirement. Cite `openspec/specs/` for accepted
+requirements and a change's delta specs for pending ones.
 
 The parent deltas were synced before it was archived so the ponytail change's MODIFIED
 `portable-setup` delta could apply. Its `No secrets or machine data` requirement therefore already
