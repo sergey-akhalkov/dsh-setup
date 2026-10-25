@@ -1,8 +1,17 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
-import { readDshVersions, readJson, rootDir } from './lib/workspace.ts'
+import { readDshVersions, readJson, rootDir, setupDir } from './lib/workspace.ts'
 
 /**
  * Exercise `install.ps1` against a throwaway Harness home.
@@ -12,6 +21,11 @@ import { readDshVersions, readJson, rootDir } from './lib/workspace.ts'
  * new machine would, and the composed tree proves every documented bundle and
  * the setup rows mount. A second run must change nothing and leave the profile
  * patch byte-identical.
+ *
+ * The setup package is installed from a copy outside the repository workspace:
+ * the throwaway home lives below `rootDir`, so a checkout path there would make
+ * pnpm resolve the profile against the repository's workspace instead of
+ * treating it as the standalone directory a user installs.
  *
  * DSH_CLI overrides the CLI command line exactly as written (a value with
  * arguments is wrapped in a temporary .cmd so the installer can execute it).
@@ -58,6 +72,11 @@ function main(): number {
   const tmpRoot = join(rootDir, '.tmp')
   mkdirSync(tmpRoot, { recursive: true })
   const home = mkdtempSync(join(tmpRoot, 'installer-home-'))
+  // Outside the repository workspace: pnpm must treat the profile as a
+  // standalone directory, not as a member of this checkout's workspace.
+  const setupSource = mkdtempSync(join(tmpdir(), 'dsh-setup-package-'))
+  cpSync(setupDir, join(setupSource, 'setup'), { recursive: true })
+  const setupSpec = join(setupSource, 'setup')
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DSH_HOME: home,
@@ -127,6 +146,8 @@ function main(): number {
       home,
       '-NoStopApp',
       '-NoRestart',
+      '-SetupSpec',
+      setupSpec,
     ]
     if (cli !== undefined) installerArgs.push('-DshCli', cli)
 
@@ -182,6 +203,13 @@ function main(): number {
       // throwaway home; the run's verdict must not be replaced by that EPERM.
       console.warn(
         `validate-installer: could not remove ${relative(rootDir, home)}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    try {
+      rmSync(setupSource, { recursive: true, force: true })
+    } catch (error) {
+      console.warn(
+        `validate-installer: could not remove ${setupSource}: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }
