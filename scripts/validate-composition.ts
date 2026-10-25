@@ -151,6 +151,8 @@ function main(): number {
         for (const marker of [
           'dsh-setup-composer-clock',
           '@dsh-setup/plugin-composer-clock',
+          'dsh-setup-serena',
+          '@deepseek-ai/dsh-mcp-client',
           'reasoningEffort: high',
           'preference: dark',
           'selectedDefault: cordis',

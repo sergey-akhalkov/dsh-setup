@@ -13,8 +13,8 @@
 
 ## 3. Generated setup composition
 
-- [ ] 3.1 Run `pnpm gen` and commit the generated `packages/plugin-serena/cordis.patch.yml`, the updated `packages/setup/package.json` and `packages/setup/cordis.patch.yml`, and the vendored `packages/setup/node_modules/@dsh-setup/plugin-serena/**` tree. Verify `pnpm gen:check` passes and the setup patch contains the `dsh-setup-serena` row with the adapter package name.
-- [ ] 3.2 Add `dsh-setup-serena` and `@deepseek-ai/dsh-mcp-client` to the composition markers in `scripts/validate-composition.ts`. Verify `pnpm validate:composition` composes the setup into a throwaway profile and reports the row.
+- [x] 3.1 Run `pnpm gen` and commit the generated `packages/plugin-serena/cordis.patch.yml`, the updated `packages/setup/package.json` and `packages/setup/cordis.patch.yml`, and the vendored `packages/setup/node_modules/@dsh-setup/plugin-serena/**` tree. Verify `pnpm gen:check` passes and the setup patch contains the `dsh-setup-serena` row with the adapter package name.
+- [x] 3.2 Add `dsh-setup-serena` and `@deepseek-ai/dsh-mcp-client` to the composition markers in `scripts/validate-composition.ts`. Verify `pnpm validate:composition` composes the setup into a throwaway profile and reports the row.
 
 ## 4. Verification
 
