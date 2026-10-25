@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-composer-clock",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shows the current local time in the conversation composer dock",
   "icon": "./icon.svg",
   "type": "module",
