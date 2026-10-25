@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { extname, join, relative, resolve } from 'node:path'
 import { parseMarketIndex } from '@deepseek-ai/dsh-plugin-market-index'
 import {
@@ -9,6 +17,7 @@ import {
   githubPagesIndexUrl,
   type MarketPackage,
   type MarketPlugin,
+  mergeMarketVersions,
   type PackageMeta,
 } from './lib/market.ts'
 import {
@@ -67,6 +76,29 @@ function parseOutputDir(): string {
   const value = process.argv[index + 1]
   if (value === undefined) throw new Error('--output needs a directory')
   return resolve(rootDir, value)
+}
+
+function parsePreviousPath(): string | undefined {
+  const index = process.argv.indexOf('--previous')
+  if (index === -1) return undefined
+  const value = process.argv[index + 1]
+  if (value === undefined) throw new Error('--previous needs a file path')
+  return resolve(rootDir, value)
+}
+
+/**
+ * Read the index this release replaces. Older versions survive only here,
+ * because the generator starts from the tagged commit; a corrupt previous
+ * document blocks publication instead of silently dropping pinned versions.
+ */
+function readPreviousPlugins(
+  path: string | undefined,
+  indexUrl: string,
+): MarketPlugin[] | undefined {
+  if (path === undefined || !existsSync(path)) return undefined
+  const document: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  const validated = parseMarketIndex(document, indexUrl)
+  return validated.plugins as unknown as MarketPlugin[]
 }
 
 function assertSafeOutput(outputDir: string): void {
@@ -141,10 +173,18 @@ function main(): number {
     plugins.push(entry)
   }
 
-  const index = buildMarketIndex(plugins, MARKET_TITLE, setupMeta.description)
   const indexUrl = githubPagesIndexUrl(versions.repository)
-  const validated = parseMarketIndex(index, indexUrl)
-  writeFileSync(join(outputDir, 'index.json'), JSON.stringify(validated, null, 2) + '\n')
+  const previous = readPreviousPlugins(parsePreviousPath(), indexUrl)
+  const index = buildMarketIndex(
+    mergeMarketVersions(plugins, previous),
+    MARKET_TITLE,
+    setupMeta.description,
+  )
+  // Validate the exact document that is published. Icon references stay
+  // relative to the index so the artifact is portable across hosts, which the
+  // format resolves beside the index URL.
+  parseMarketIndex(index, indexUrl)
+  writeFileSync(join(outputDir, 'index.json'), JSON.stringify(index, null, 2) + '\n')
 
   // The publication artifact is exactly the index and its icons directory; the
   // Pages workflow uploads this directory as-is.
@@ -157,7 +197,10 @@ function main(): number {
   }
 
   console.log(
-    `generate-market: ${validated.plugins.length} plugin(s), commit ${commit.slice(0, 12)}, index ${indexUrl}`,
+    `generate-market: ${index.plugins.length} plugin(s), ${index.plugins.reduce(
+      (count, plugin) => count + plugin.versions.length,
+      0,
+    )} listed version(s), commit ${commit.slice(0, 12)}, index ${indexUrl}`,
   )
   return 0
 }

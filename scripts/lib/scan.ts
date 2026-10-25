@@ -15,6 +15,7 @@ const TEXT_EXTENSIONS = new Set([
   '.md',
   '.svg',
   '.toml',
+  '.ps1',
 ])
 
 /** Directories with no reviewed source: VCS, dependencies, transient state, generated publication. */

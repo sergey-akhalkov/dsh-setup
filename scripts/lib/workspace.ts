@@ -48,11 +48,20 @@ export interface WorkspacePackage {
   manifest: PackageManifest
 }
 
+/** Bundles the one-command installer enables besides the setup bundle itself. */
+export interface InstallBundles {
+  /** Shipped optional bundles: enabled by adding their names to the profile selection. */
+  shipped: string[]
+  /** Bundles published to the registry: installed as a dependency, then selected. */
+  registry: string[]
+}
+
 export interface DshVersions {
   runtime: string
   enginesDsh: string
   supportedVersions: string[]
   repository: string
+  installBundles: InstallBundles
 }
 
 /** Read and parse one JSON file with a helpful error message. */

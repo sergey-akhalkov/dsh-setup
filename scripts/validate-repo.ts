@@ -10,8 +10,61 @@ import {
   type PackageManifest,
   readDshVersions,
   readJson,
+  rootDir,
   setupDir,
 } from './lib/workspace.ts'
+
+/** The standalone installer duplicates release metadata; this check keeps it honest. */
+const INSTALLER_FILE = join(rootDir, 'install.ps1')
+
+function readInstallerArray(text: string, name: string): string[] {
+  const block = new RegExp(`\\$${name}\\s*=\\s*@\\(([\\s\\S]*?)\\)`, 'u').exec(text)
+  if (block === null) throw new Error(`install.ps1: array ${name} is missing`)
+  return [...(block[1] ?? '').matchAll(/'([^']+)'/gu)].map((match) => match[1] ?? '')
+}
+
+function compareInstallerList(
+  problems: string[],
+  label: string,
+  actual: string[],
+  expected: string[],
+): void {
+  if (JSON.stringify(actual) === JSON.stringify(expected)) return
+  problems.push(
+    `install.ps1: ${label} is [${actual.join(', ')}], expected [${expected.join(', ')}]`,
+  )
+}
+
+function checkInstaller(problems: string[]): void {
+  if (!existsSync(INSTALLER_FILE)) {
+    problems.push('install.ps1 is missing from the repository root')
+    return
+  }
+  const text = readFileSync(INSTALLER_FILE, 'utf8')
+  const versions = readDshVersions()
+  try {
+    compareInstallerList(
+      problems,
+      'SupportedDshVersions',
+      readInstallerArray(text, 'SupportedDshVersions'),
+      versions.supportedVersions,
+    )
+    compareInstallerList(
+      problems,
+      'ShippedBundles',
+      readInstallerArray(text, 'ShippedBundles'),
+      versions.installBundles.shipped,
+    )
+    compareInstallerList(
+      problems,
+      'RegistryBundles',
+      readInstallerArray(text, 'RegistryBundles'),
+      versions.installBundles.registry,
+    )
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error))
+  }
+}
 
 function checkManifests(problems: string[]): void {
   const versions = readDshVersions()
@@ -95,6 +148,7 @@ function main(): number {
   const problems: string[] = []
   checkManifests(problems)
   checkComposition(problems)
+  checkInstaller(problems)
 
   const files = readRepositoryFiles()
   for (const problem of scanMachinePaths(files)) {

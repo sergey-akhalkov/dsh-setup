@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how a single installable bundle reproduces a complete personal DeepSeek Harness setup on another machine or for another developer, without hand-editing profiles and without swallowing machine-local ownership.
+Defines how a single installable bundle and one installer command reproduce a complete personal DeepSeek Harness setup on another machine or for another developer, without hand-editing profiles, without a routine of manual toggles, and without swallowing machine-local ownership.
 
 ## ADDED Requirements
 
@@ -19,6 +19,44 @@ The repository SHALL publish one setup bundle that, when installed through the n
 
 - **WHEN** a user installs the setup bundle by a commit-pinned git spec without any market index
 - **THEN** DSH produces the same composed profile rows as the index installation.
+
+#### Scenario: Install with the one-command installer
+
+- **WHEN** a user runs the documented installer command on a new machine
+- **THEN** the installer enables the documented shipped bundles, installs the setup bundle, and the composed profile contains the setup rows and owner defaults.
+
+### Requirement: One-command installation
+
+The repository SHALL ship a single installer command that reproduces the complete setup on a prepared machine: enable the documented shipped bundles through the profile's native bundle selection, install the registry bundle through the native plugin manager, install the setup bundle at a pinned release, verify the result, and restart DeepSeek Harness.
+
+#### Scenario: Fresh machine
+
+- **WHEN** a user runs the installer on a machine where DeepSeek Harness has been started once and quit
+- **THEN** the profile selects every documented bundle and the setup bundle, the setup bundle is last in the selection, and the composed profile contains every plugin row and owner default.
+
+#### Scenario: Running application
+
+- **WHEN** the installer starts while DeepSeek Harness is running
+- **THEN** it closes the application before writing the profile and starts it again after installation, unless the user passed the option that forbids stopping it.
+
+#### Scenario: Missing profile
+
+- **WHEN** the target profile does not exist
+- **THEN** the installer stops with an instruction to start DeepSeek Harness once so that the profile is created.
+
+### Requirement: Installer leaves user-owned state untouched
+
+The installer MUST NOT modify the profile's own patch file or its non-bundle settings. It MUST keep a profile-manifest backup before changing anything and MUST be safe to rerun.
+
+#### Scenario: Rerun
+
+- **WHEN** the installer runs again on an already configured profile
+- **THEN** the bundle selection and the profile patch are unchanged and no package is installed twice.
+
+#### Scenario: Profile patch is user-owned
+
+- **WHEN** the installer enables bundles and installs the setup
+- **THEN** the profile's `cordis.patch.yml` is byte-identical to before the run.
 
 ### Requirement: Dependency-contained plugins
 
@@ -78,12 +116,22 @@ The setup patch SHALL carry owner defaults: default model and reasoning effort, 
 
 ### Requirement: Experimental bundle prerequisites documented
 
-The installation guide SHALL list every shipped experimental bundle the setup expects and name the Plugins toggle that enables it. The setup MUST NOT duplicate shipped experimental rows or select those bundles programmatically.
+The installation guide SHALL list every shipped optional bundle the setup expects and name the Plugins toggle that enables it. The setup bundle's patch MUST NOT duplicate shipped experimental rows. The one-command installer SHALL select exactly the documented bundle names, using the same profile selection the toggles update, and MUST NOT rewrite those bundles' rows.
 
 #### Scenario: New machine guidance
 
 - **WHEN** a user sets up a new machine by following the installation guide
-- **THEN** the documented toggles, index source, and install step produce the expected capability set.
+- **THEN** the documented installer command or the listed toggles, index source, and install step produce the expected capability set.
+
+#### Scenario: Manual and installer paths agree
+
+- **WHEN** a user compares the bundles selected by the installer with the toggles the guide lists
+- **THEN** both name the same bundles in the same configuration.
+
+#### Scenario: Setup alone stays pure
+
+- **WHEN** the setup bundle is installed without the installer
+- **THEN** it adds no shipped bundle to the profile selection and duplicates no shipped row.
 
 ### Requirement: Prebuilt distribution
 
@@ -116,7 +164,12 @@ Every published package SHALL declare an `engines.dsh` range covering the suppor
 #### Scenario: Composition validation
 
 - **WHEN** a release candidate is validated
-- **THEN** the DSH CLI composes a temporary profile with the setup bundle installed, and the check passes for every supported DSH version before publication.
+- **THEN** the DSH CLI composes a temporary profile with the setup bundle installed, and the check passes for every supported DSH version before publication, and the installer passes its throwaway-profile exercise on every supported DSH version.
+
+#### Scenario: Installer preflight
+
+- **WHEN** the installer runs on an unsupported DSH version
+- **THEN** it reports the supported versions and changes nothing.
 
 ### Requirement: No secrets or machine data
 

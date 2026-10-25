@@ -34,6 +34,20 @@ Every listed version MUST reference an immutable source: a 40-hex-digit git comm
 - **WHEN** a generated version lacks a commit SHA or package path
 - **THEN** the generator fails instead of publishing a mutable reference.
 
+### Requirement: Version accumulation
+
+A release SHALL preserve every installable version of a package that the previously published index lists, in addition to the version being released. Regeneration MUST read the previous published document instead of dropping older versions, and MUST fail rather than publish when that document cannot be read or fails validation.
+
+#### Scenario: Second release
+
+- **WHEN** a newer release is published
+- **THEN** the index lists the new version and the previous versions, each with its original commit, publish time, and engine range.
+
+#### Scenario: Unreadable previous index
+
+- **WHEN** the previously published document cannot be read or fails format validation
+- **THEN** publication stops and the previously deployed index remains in place.
+
 ### Requirement: Compatibility annotation
 
 Every listed version MUST copy the package manifest's `engines.dsh` range unchanged. A version whose range is missing, blank, or invalid MUST NOT be listed.

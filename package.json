@@ -24,7 +24,8 @@
     "gen:check": "node scripts/generate.ts --check",
     "validate:repo": "node scripts/validate-repo.ts",
     "validate:composition": "node scripts/validate-composition.ts",
-    "validate": "pnpm check && pnpm gen:check && pnpm validate:repo && pnpm validate:composition",
+    "validate:installer": "node scripts/validate-installer.ts",
+    "validate": "pnpm check && pnpm gen:check && pnpm validate:repo && pnpm validate:composition && pnpm validate:installer",
     "generate:market": "node scripts/generate-market.ts",
     "release:prepare": "node scripts/release-prepare.ts"
   },

@@ -3,7 +3,6 @@ name: release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 concurrency:
   group: release-pages
@@ -15,7 +14,82 @@ permissions:
   id-token: write
 
 jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.read.outputs.versions }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Read the supported DSH versions
+        id: read
+        run: |
+          versions=$(node -p "JSON.stringify(require('./dsh.json').supportedVersions)")
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+
+  # The release gate: the same full check runs against every supported DSH
+  # version. Publication depends on this job, so any failure leaves the
+  # previously deployed index in place.
+  validate:
+    needs: versions
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh: ${{ fromJSON(needs.versions.outputs.versions) }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build committed runtime from sources
+        run: pnpm build
+
+      - name: Reject committed runtime that differs from a fresh build
+        run: git diff --exit-code
+
+      - name: Reject generated files that differ from their sources
+        run: pnpm gen:check
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Lint and format
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Validate repository manifests and scans
+        run: pnpm validate:repo
+
+      - name: Validate the composed profile with the published DSH CLI
+        env:
+          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
+        run: pnpm validate:composition
+
+      - name: Exercise the one-command installer on a throwaway profile
+        env:
+          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
+          DSH_VERSION: ${{ matrix.dsh }}
+        run: pnpm validate:installer
+
   publish:
+    needs: validate
     runs-on: windows-latest
     environment:
       name: github-pages
@@ -54,28 +128,11 @@ jobs:
       - name: Reject committed runtime that differs from a fresh build
         run: git diff --exit-code
 
-      - name: Reject generated files that differ from their sources
-        run: pnpm gen:check
-
-      - name: Type-check
-        run: pnpm typecheck
-
-      - name: Lint and format
-        run: pnpm lint
-
-      - name: Unit tests
-        run: pnpm test
-
-      - name: Validate repository manifests and scans
-        run: pnpm validate:repo
-
-      - name: Validate the composed profile
-        env:
-          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ vars.DSH_RUNTIME_VERSION || '0.2.1-rc.3' }}
-        run: pnpm validate:composition
+      - name: Fetch the previously published index
+        run: node scripts/fetch-previous-index.ts .tmp/previous-index.json
 
       - name: Generate the market publication artifact
-        run: pnpm generate:market
+        run: node scripts/generate-market.ts --previous .tmp/previous-index.json
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

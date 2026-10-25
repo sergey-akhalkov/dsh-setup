@@ -1,0 +1,16 @@
+# Keep every tracked text file byte-identical on every platform: generated
+# runtime files are compared byte-for-byte by the generator drift check, so a
+# CRLF checkout on Windows would make a clean run fail.
+* text=auto eol=lf
+
+# The vendored plugin copies are generated text and must stay LF as well.
+packages/setup/node_modules/** text eol=lf
+
+# Binary artifacts that must never be normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

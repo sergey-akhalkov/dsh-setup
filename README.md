@@ -1,10 +1,12 @@
 # dsh-setup
 
 A portable, installable DeepSeek Harness setup. The repository is the source of truth for one
-installable setup bundle, the individual plugin bundles it contains, and the static plugin market
-index that makes them discoverable from the Harness Web UI.
+installable setup bundle, the individual plugin bundles it contains, the static plugin market index
+that makes them discoverable from the Harness Web UI, and the one-command installer that reproduces
+the setup on another machine.
 
-- **Install:** see [docs/install.md](docs/install.md).
+- **Install:** run [`install.ps1`](install.ps1) (see [docs/install.md](docs/install.md)). It enables
+  the shipped bundles the setup expects and installs the setup bundle in one command.
 - **Add a plugin package:** see [docs/plugins.md](docs/plugins.md).
 - **Understand the generated setup patch:** see [docs/setup-composition.md](docs/setup-composition.md).
 - **Cut a release:** see [docs/releasing.md](docs/releasing.md).
@@ -24,5 +26,7 @@ sources; CI rejects a commit whose generated files do not match their sources.
 ## Security
 
 Installing a bundle runs its code with the permissions of the Harness process. Market entries pin
-an exact git commit so the reviewed source and the running code are the same revision. This
-repository contains no credentials, sessions, or machine-specific paths.
+an exact git commit so the reviewed source and the running code are the same revision. The installer
+closes DeepSeek Harness while it writes the profile, saves a manifest backup, and changes only the
+bundle selection and installed packages — never the profile's own patch. This repository contains no
+credentials, sessions, or machine-specific paths.

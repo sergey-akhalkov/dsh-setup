@@ -14,13 +14,27 @@ permissions:
   contents: read
 
 jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.read.outputs.versions }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Read the supported DSH versions
+        id: read
+        run: |
+          versions=$(node -p "JSON.stringify(require('./dsh.json').supportedVersions)")
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+
   validate:
+    needs: versions
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - dsh: "0.2.1-rc.3"
+        dsh: ${{ fromJSON(needs.versions.outputs.versions) }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -60,15 +74,13 @@ jobs:
       - name: Validate repository manifests and scans
         run: pnpm validate:repo
 
-      - name: Confirm the matrix version is a supported DSH version
-        run: >-
-          node -e "const v = require('./dsh.json');
-          if (!v.supportedVersions.includes(process.env.DSH_VERSION)) {
-          console.error('unsupported DSH version in matrix: ' + process.env.DSH_VERSION); process.exit(1) }"
-        env:
-          DSH_VERSION: ${{ matrix.dsh }}
-
       - name: Validate the composed profile with the published DSH CLI
         env:
           DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
         run: pnpm validate:composition
+
+      - name: Exercise the one-command installer on a throwaway profile
+        env:
+          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
+          DSH_VERSION: ${{ matrix.dsh }}
+        run: pnpm validate:installer

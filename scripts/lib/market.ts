@@ -1,4 +1,4 @@
-import { validRange } from 'semver'
+import { rcompare, validRange } from 'semver'
 import type { PackageManifest } from './workspace.ts'
 
 /** Git directory path rules from the format-1 market index specification. */
@@ -13,7 +13,7 @@ export interface MarketVersion {
   version: string
   publishTimestamp: number
   source: { type: 'git'; url: string; commit: string; path?: string }
-  engines: { dsh: string }
+  engines: { dsh?: string }
 }
 
 export interface MarketPlugin {
@@ -59,10 +59,10 @@ export function assertImmutableCommit(commit: string): void {
 
 /** Convert a workspace package directory to the market's repository-relative path. */
 export function packageSourcePath(relativeDir: string): string {
-  const match = /^packages\/(.+)$/.exec(relativeDir)
-  if (match === null)
+  const path = relativeDir.replaceAll('\\', '/').replace(/\/+$/u, '')
+  if (!path.startsWith('packages/')) {
     throw new Error(`market source path must live under packages/, got "${relativeDir}"`)
-  const path = match[1] ?? ''
+  }
   const segments = path.split('/')
   if (
     !PACKAGE_PATH_PATTERN.test(path) ||
@@ -144,4 +144,38 @@ export function buildMarketIndex(
     index.description = { en: description }
   }
   return index
+}
+
+/** A listed version is installable only while its DSH range stays declared and valid. */
+function hasEligibleEngines(version: MarketVersion): boolean {
+  const range = version.engines?.dsh
+  return typeof range === 'string' && validRange(range, { includePrerelease: true }) !== null
+}
+
+/**
+ * Keep every version this index already listed for a package, then add the
+ * version being released. The index is regenerated from one tagged commit, so
+ * the previously published document is the only record of older releases;
+ * without this merge a newer tag would silently delist every older version,
+ * breaking the pinned-install contract. Versions with a missing or invalid
+ * `engines.dsh` are dropped rather than published as uninstallable.
+ */
+export function mergeMarketVersions(
+  current: MarketPlugin[],
+  previous?: readonly MarketPlugin[],
+): MarketPlugin[] {
+  const prior = new Map((previous ?? []).map((plugin) => [plugin.name, plugin]))
+  return current.map((plugin) => {
+    const currentVersions = new Set(plugin.versions.map((version) => version.version))
+    const kept = (prior.get(plugin.name)?.versions ?? []).filter(
+      (version) => !currentVersions.has(version.version) && hasEligibleEngines(version),
+    )
+    if (kept.length === 0) return plugin
+    return {
+      ...plugin,
+      versions: [...plugin.versions, ...kept].sort((left, right) =>
+        rcompare(left.version, right.version),
+      ),
+    }
+  })
 }

@@ -2,5 +2,16 @@
   "runtime": "0.2.1-rc.3",
   "enginesDsh": ">=0.2.1-rc.3 <0.3.0",
   "supportedVersions": ["0.2.1-rc.3"],
-  "repository": "https://github.com/sergey-akhalkov/dsh-setup"
+  "repository": "https://github.com/sergey-akhalkov/dsh-setup",
+  "installBundles": {
+    "shipped": [
+      "@deepseek-ai/dsh-experimental-agent-team-profile",
+      "@deepseek-ai/dsh-experimental-tool-worktree",
+      "@deepseek-ai/dsh-experimental-ralph-bundle",
+      "@deepseek-ai/dsh-experimental-plugin-market-bundle",
+      "@deepseek-ai/dsh-experimental-session-search",
+      "@deepseek-ai/dsh-experimental-terminal-bundle"
+    ],
+    "registry": ["@deepseek-ai/dsh-subagent-codex"]
+  }
 }

@@ -9,15 +9,16 @@ See `proposal.md` — Why. Constraints discovered while inspecting the running D
 - `plugin_manager.installBundle` and `dsh plugin --profile <name> add <spec>` perform both steps. The Desktop profile is owned by the Electron shell: the CLI refuses to boot or dump it, but permits plugin package operations after the app is fully quit.
 - The plugin market is a static format-1 JSON document fetched over HTTPS (no redirects) by the Host; the same document is read by the Discover tab and the `plugin_market` tool. Versions install from npm or from a commit-pinned git source with `&path:/...` for a monorepo package directory.
 - Git-installed packages build through their `prepare` script, which pnpm blocks until `allowBuilds` approval. Registry and tarball installs of prebuilt packages need no approval.
-- Shipped experimental capabilities (`agent-team`, `ralph`, `worktree`, `session-search`, `subagent-codex`, the market bundle) are profile-level bundle selections; a third-party bundle cannot add them to `dsh.profile.bundles`.
+- Shipped experimental capabilities (`agent-team`, `ralph`, `worktree`, `session-search`, `terminal`, `subagent-codex`, the market bundle) are profile-level bundle selections; a third-party bundle cannot add them to `dsh.profile.bundles`. The Plugins page enables a shipped optional bundle by appending its package name to `dsh.profile.bundles` (no dependency, because the DSH installation supplies the package); `@deepseek-ai/dsh-subagent-codex` is not shipped and is installed as a profile dependency from the registry. Repeating that selection is safe: an existing entry is left in place and the CLI installs a missing dependency for an already-selected name.
+- The Desktop CLI refuses to boot or dump the `desktop` profile, so an installer cannot verify that profile by composing it; it verifies the manifest, the installed package, the patch hash, and uses a throwaway profile for composition checks. Profile writes require the app to be fully quit; the installer closes it and starts it again.
 - User-global skills and instructions live in `~/.agents` and are read by DSH directly; credentials live in `~/.dsh/.credentials.yaml`. Neither belongs to this repository.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Reproduce the owner's DSH composition, plugins, presets, and defaults with one install action on another Desktop machine.
-- Keep the setup source of truth reviewable in one public repository: package sources, generated patch, static index.
+- Reproduce the owner's DSH composition, plugins, presets, and defaults with one install command on another Desktop machine, including the shipped bundles the owner enables.
+- Keep the setup source of truth reviewable in one public repository: package sources, generated patch, static index, installer.
 - Make individual plugins independently discoverable and installable without a second distribution channel.
 - Keep the machine-local layer (profile patch, credentials, skills) user-owned and untouched by installation.
 - Provide strict typing and reproducible builds so plugin code survives DSH release-candidate upgrades and reviewers can trust the committed runtime.
@@ -70,15 +71,28 @@ Owner defaults (default model and reasoning effort, theme, UI settings, preset r
 
 Trade-off: values changed through the Desktop UI land in the profile patch and shadow the setup defaults, so the repository is the baseline rather than a live mirror. A future snapshot helper could promote local deviations back into the repository; it is not part of this change.
 
-### D6. Shipped experimental bundles stay user toggles
+### D6. The setup bundle stays pure; `install.ps1` performs the bundle selections
 
-The installation documentation lists each experimental bundle the setup expects and the Plugins toggle that enables it. The setup neither duplicates those bundles' rows nor calls `pluginManager.setBundle`.
+The setup bundle's patch neither duplicates shipped experimental rows nor selects shipped bundles. Those rows belong to the shipped bundles' own layers, and a third-party bundle cannot add names to `dsh.profile.bundles`.
 
-Alternatives considered: duplicating shipped rows in the setup patch (fragile across DSH releases) and a bootstrap script that edits `dsh.profile.bundles` (mutates the Electron-owned profile, applies only with the app closed). Both are deferred; the toggle route is deterministic and upgrade-safe.
+Because the manual toggle routine is long and easy to get wrong, the repository ships `install.ps1`, which performs the same operations as the Plugins page against the selected profile:
+
+1. Append the documented shipped optional bundle names (`dsh.json` → `installBundles.shipped`) to `dsh.profile.bundles`, preserving existing entries and order.
+2. Install the one registry bundle (`installBundles.registry`) with `dsh plugin --profile <name> add <name>@<running DSH version>`, which records the dependency and selects it.
+3. Install the setup bundle with the native plugin manager, so it lands last in the selection and its defaults outrank the shipped layers.
+4. Verify selection, dependency, installed setup version, and that `cordis.patch.yml` is byte-identical; restore nothing silently, but keep a manifest backup.
+
+The Desktop profile is Electron-owned: the CLI permits these package operations only while the app is fully quit, so the installer closes and restarts the app by default, and aborts instead under `-NoStopApp`. A dry run prints the plan without changing anything. The installer duplicates the bundle and version lists for standalone use; `scripts/validate-repo.ts` compares them with `dsh.json` so drift fails validation.
+
+Alternative considered: a shipped profile template or bundle selection inside the setup patch. Rejected — DSH applies no transitive bundle layers, and rows duplicated from shipped bundles break on DSH upgrades.
+
+Alternative considered: keeping the toggles manual. Rejected by the installation requirement: one command must reproduce the owner's enabled set.
 
 ### D7. CI validates the composition with the published DSH CLI
 
-Validation installs `@deepseek-ai/dsh` at each supported version, creates a throwaway profile with `--from-default-profile web`, installs the setup bundle from the workspace package path, and runs `--dump-config` to assert the composed rows and effective defaults. It also runs type-check, lint, unit tests, the generator drift check, the committed-runtime reproducibility check, manifest checks (`engines.dsh`, no install scripts), and the secrets/machine-path scan. The Desktop profile is never touched by CI.
+Validation installs `@deepseek-ai/dsh` at each supported version, creates a throwaway profile with `--from-default-profile web`, installs the setup bundle from the workspace package path, and runs `--dump-config` to assert the composed rows and effective defaults. It also runs type-check, lint, unit tests, the generator drift check, the committed-runtime reproducibility check, manifest checks (`engines.dsh`, no install scripts), the installer-metadata check against `dsh.json`, and the secrets/machine-path scan. The Desktop profile is never touched by CI.
+
+The installer is exercised on a throwaway profile in the same way: a fresh Harness home gets a `web`-template profile, `install.ps1` enables the documented bundles and installs the local setup directory, and `--dump-config` must show the shipped bundle rows, the setup row, and the owner defaults. A second run must be a no-op and leave the profile patch byte-identical.
 
 Release runs the same validation against the tagged commit, then generates and deploys the index; failure leaves the previous deployment in place.
 
@@ -99,12 +113,13 @@ dsh-setup/
   packages/setup/             # generated manifest + patch + defaults +
                               #   node_modules/@dsh-setup/* vendored plugin copies (tracked)
   market/                     # generated index.json + icons/ (Pages artifact)
-  scripts/                    # build, generate patch, generate index, validate
+  scripts/                    # build, generate patch, generate index, validate, installer check
+  install.ps1                 # one-command installer (standalone metadata checked against dsh.json)
   .github/workflows/          # validate on PR, release on tag
   docs/install.md
 ```
 
-One release tag identifies a coherent set: package versions are bumped together for the first iteration, and the setup bundle's dependency ranges are pinned to those exact versions. The index lists every package version from its manifest, so older tags remain installable.
+One release tag identifies a coherent set: package versions are bumped together for the first iteration, and the setup bundle's dependency ranges are pinned to those exact versions. The generated index lists the current package version from its manifest and keeps the versions of the previously published index, so older tags remain installable while a newer release reports as an update.
 
 ### D10. TypeScript with an explicit, committed build pipeline
 
@@ -131,14 +146,17 @@ The index is unsigned and its metadata is a market claim; the README states that
 - **UI edits shadow setup defaults** → documented as an accepted baseline-vs-live-mirror trade-off; snapshot promotion is deferred.
 - **Index staleness between releases** → version list is generated per release, and Pages deploys the tagged artifact; no build-time lookups.
 - **Installing setup and an individual plugin bundle together** → documented as unsupported; row ids are namespaced but duplicate mounts are still refused by review of the installation guide.
+- **The installer writes the Electron-owned Desktop profile** → it appends only bundle names, delegates every package change to `dsh plugin`, saves a manifest backup, refuses to run while the app is open unless it may close and restart it, and verifies the profile patch is unchanged.
+- **Standalone installer metadata drifts from the repository** → `dsh.json` is the source, `install.ps1` carries a copy for standalone use, and repository validation compares the supported versions and both bundle lists.
 
 ## Migration Plan
 
 1. Scaffold the monorepo, the TypeScript/Biome/Vitest toolchain, and the first plugin package with its composition fragment.
 2. Generate the setup patch and validate the composition in a throwaway profile with the DSH CLI; do not touch the Desktop profile.
-3. Install the setup bundle into the owner's Desktop profile as a dogfood step; verify effective model, theme, UI, and presets against the current values, then reduce the profile patch to genuinely machine-local entries.
-4. Enable Pages, publish `v0.1.0`, add the index source in Discover, and verify install on a second profile or machine.
-5. Rollback: remove the setup bundle through Plugins (the profile patch was never modified, so previous behavior returns), and revert the Pages deployment to the prior artifact if an index is faulty.
+3. Add the one-command installer and exercise it on a throwaway profile: bundle selection, setup install, idempotent rerun, unchanged patch.
+4. Install the setup bundle into the owner's Desktop profile as a dogfood step; verify effective model, theme, UI, presets, and the enabled bundle set against the current values, then reduce the profile patch to genuinely machine-local entries.
+5. Enable Pages, publish the first release, add the index source in Discover, and verify install on a second profile or machine.
+6. Rollback: remove the setup bundle through Plugins (the profile patch was never modified, so previous behavior returns), and revert the Pages deployment to the prior artifact if an index is faulty.
 
 ## Open Questions
 
