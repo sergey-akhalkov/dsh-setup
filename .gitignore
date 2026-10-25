@@ -16,6 +16,9 @@ coverage/
 # Workspace-local Harness state (skills installed into this checkout)
 .dsh/
 
+# Local Serena project state (generated project.yml, caches, memories)
+.serena/
+
 # Generated market publication artifact (produced by the release workflow)
 market/
 
