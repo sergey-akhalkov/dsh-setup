@@ -168,9 +168,10 @@ function Get-DshCli {
 }
 
 function Invoke-DshPlugin([string[]]$Arguments) {
-  $output = & $DshCli plugin --profile $Profile @Arguments 2>&1
+  # Stream the manager's own output: a slow or stalled package operation must
+  # show where it is, not disappear into a buffer until the call returns.
+  $output = & $DshCli plugin --profile $Profile @Arguments 2>&1 | Tee-Object -Variable output
   $code = $LASTEXITCODE
-  foreach ($line in @($output)) { Write-Host "    $line" }
   if ($code -ne 0) { throw "dsh plugin --profile $Profile $($Arguments -join ' ') failed with exit code $code" }
 }
 
