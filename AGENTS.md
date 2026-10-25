@@ -35,6 +35,7 @@ pnpm install
 pnpm check        # typecheck -> lint -> build -> test
 pnpm gen:check    # generated YAML/manifest/vendored tree matches its sources
 pnpm validate:repo
+pnpm dogfood      # Windows: verify install.ps1 against a copy of the live desktop profile
 ```
 
 Full local gate (closest to CI; takes longer, needs network and the DSH CLI):
@@ -103,12 +104,14 @@ rebuild (`git diff --exit-code` after `pnpm build`, plus `pnpm gen:check`).
 | `pnpm validate:repo`                          | Static manifests, fragments, defaults, installer metadata copy, machine-path/secret scan                                              | before commit                                                                   |
 | `pnpm validate:composition`                   | Installs `packages/setup` into a throwaway `ci` profile with the published DSH CLI and checks the composed `--dump-config`            | setup/plugin composition change                                                 |
 | `pnpm validate:installer`                     | Runs `install.ps1` against a throwaway profile (Windows only; skipped elsewhere)                                                      | installer or composition change                                                 |
+| `pnpm dogfood`                                | Runs `install.ps1` against a throwaway copy of the live `desktop` profile and proves the live profile is unchanged (Windows only)     | installer/composition change; before installing live on the owner machine       |
 | `pnpm generate:market`                        | Builds the gitignored `market/` artifact from HEAD (or `--commit`/`--timestamp`); needs a git commit                                  | verifying release output                                                        |
 | `pnpm release:prepare --version X.Y.Z`        | Sets one version in root, every plugin, setup, then runs `pnpm gen`                                                                   | starting a release                                                              |
 
 Useful environment variables: `DSH_CLI` (CLI command to use instead of `pnpm dlx @deepseek-ai/dsh@<runtime>`),
 `DSH_KEEP=1` (keep throwaway Harness homes), `DSH_VERSION` (`validate:installer` DSH version),
-`PWSH` (PowerShell executable for `validate:installer`), `MARKET_INDEX_URL` (`fetch-previous-index.ts`).
+`DSH_HOME`/`DSH_PROFILE` (owner profile `pnpm dogfood` copies), `PWSH` (PowerShell executable for
+`validate:installer` and `dogfood`), `MARKET_INDEX_URL` (`fetch-previous-index.ts`).
 
 ## 5. Create a new plugin package (the main task)
 
@@ -222,6 +225,14 @@ dsh plugin --profile desktop add "git+https://github.com/sergey-akhalkov/dsh-set
 Use either the full setup bundle or an individual plugin for the same plugin, never both (duplicate
 row mounts).
 
+Do not install the setup into the live `desktop` profile from a shell hosted by the running Harness
+(an agent tool shell or the in-app terminal): the installer must close and restart the app for a
+desktop-profile write, which kills the shell's process tree and aborts the turn. A Harness-home reset
+while the app runs is worse: it can remove the running session's own file, which surfaces as
+`This turn failed ENOENT`. Use `pnpm dogfood` to verify this checkout against a copy of that profile;
+a real install is a command the owner runs from an external PowerShell window. `install.ps1` refuses
+the hosted-shell desktop case itself, so a stray attempt fails before changing anything.
+
 ## 7. Change owner defaults
 
 Edit `packages/setup/defaults.yml` (only `id` + `config`; the id must target a shipped row, must not
@@ -307,9 +318,9 @@ tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skil
 touch a documented requirement should update the corresponding delta spec and design rationale in the
 same change.
 
-`tasks.md` is 28/34 done. Open: 7.1 first published release/tag verification, 7.2 dogfood install
-into the owner's Desktop profile, 7.3 commit-pinned throwaway-profile install, 7.4 second release
-update visibility, 8.1 clean-machine rehearsal, 8.2 removal/scan restoration. Archive only after
+`tasks.md` is 32/35 done. Open: 7.1 first published release/tag verification, 7.4 second release
+update visibility, 8.1 clean-machine rehearsal. (7.2 dogfood verification, 7.3 commit-pinned
+throwaway-profile install, and 9.4 the committed `pnpm dogfood` command are done.) Archive only after
 those review requirements are satisfied. Keep `docs/` consistent with spec changes; the design's D8
 layout is stale about the Client bundle path (actual: `lib/client.js`, not package-root `client.js`).
 Trust the code and `docs/plugins.md`.
@@ -384,7 +395,9 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   `icons/` with `.svg` files only.
 - **Desktop profile is Electron-owned**: the CLI cannot boot or dump it. CI and the installer exercise
   use throwaway `ci` profiles from the `web` template; the installer's Desktop steps require the app
-  to be closed (it restarts it in `finally`).
+  to be closed (it restarts it in `finally`). **Never run a desktop-profile install from a shell the
+  running app hosts** — it would kill the session and can leave the machine looking reset; use
+  `pnpm dogfood` (copy of the profile) instead. `install.ps1` refuses that combination.
 - **Do not combine** the setup bundle with an individual plugin bundle for the same plugin.
 - On Windows the DSH CLI is usually a `.cmd` shim; the validation scripts spawn through a shell and
   expect `DSH_CLI` to be a command line (quote paths with spaces). Package-manager prompts fail fast
@@ -397,6 +410,7 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 | Add/change a plugin, Client slots, HMR behavior        | [docs/plugins.md](docs/plugins.md), `packages/plugin-composer-clock/**`                                                      |
 | How the setup patch/manifest/vendor tree are generated | [docs/setup-composition.md](docs/setup-composition.md), `scripts/lib/generate.ts`, `scripts/lib/fragments.ts`                |
 | Installer behavior, options, manual install            | [docs/install.md](docs/install.md), `install.ps1`                                                                            |
+| Owner-profile dogfood without touching the live state  | [docs/install.md](docs/install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`            |
 | Release, Pages, version accumulation, DSH bump         | [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml`                                                      |
 | Requirements and invariants                            | `openspec/changes/add-portable-dsh-setup/{proposal,design}.md`, `specs/*/spec.md`                                            |
 | Supported versions and installer bundle lists          | `dsh.json`, `install.ps1`                                                                                                    |
@@ -407,15 +421,17 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 
 ## 15. Troubleshooting
 
-| Symptom                                                  | Cause / fix                                                                                                                        |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `gen:check` reports `missing`/`changed`/`unexpected`     | Run `pnpm gen` and commit the regenerated files; `unexpected` means a stale vendored file or a plugin removed without regenerating |
-| `git diff --exit-code` after `pnpm build` shows changes  | Committed `lib/**`/`lib/client.js` is stale; build and commit it                                                                   |
-| `pnpm test` fails with `run pnpm build before this test` | The Client-bundle test reads `lib/client.js`; run `pnpm build` or use `pnpm check`                                                 |
-| A new plugin emits nothing                               | Add it to root `tsconfig.json` `references`; confirm it has `dsh.bundle` and a `cordis.fragment.yml`                               |
-| `validate:repo`: machine path or secret                  | Remove the absolute path/credential from the tracked file; tests build such fixtures at runtime                                    |
-| `validate:composition` fails on network/DSH CLI          | It defaults to `pnpm dlx @deepseek-ai/dsh@<dsh.json.runtime>`; set `DSH_CLI` to an installed CLI                                   |
-| `validate:installer` skipped                             | It runs only on Windows; use CI or a Windows machine                                                                               |
-| Clean tree suddenly fails `gen:check`                    | Line endings: ensure LF (`.gitattributes`/`core.autocrlf`), regenerate if needed                                                   |
-| Installer reports unsupported DSH                        | The gate is exact `supportedVersions`; update `dsh.json` + `install.ps1` together and release                                      |
-| Market artifact looks wrong                              | Regenerate with `pnpm generate:market`; never edit `market/` or trust a pre-existing local copy                                    |
+| Symptom                                                        | Cause / fix                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gen:check` reports `missing`/`changed`/`unexpected`           | Run `pnpm gen` and commit the regenerated files; `unexpected` means a stale vendored file or a plugin removed without regenerating                                                                                                                                                                                                                                                                                                 |
+| `git diff --exit-code` after `pnpm build` shows changes        | Committed `lib/**`/`lib/client.js` is stale; build and commit it                                                                                                                                                                                                                                                                                                                                                                   |
+| `pnpm test` fails with `run pnpm build before this test`       | The Client-bundle test reads `lib/client.js`; run `pnpm build` or use `pnpm check`                                                                                                                                                                                                                                                                                                                                                 |
+| A new plugin emits nothing                                     | Add it to root `tsconfig.json` `references`; confirm it has `dsh.bundle` and a `cordis.fragment.yml`                                                                                                                                                                                                                                                                                                                               |
+| `validate:repo`: machine path or secret                        | Remove the absolute path/credential from the tracked file; tests build such fixtures at runtime                                                                                                                                                                                                                                                                                                                                    |
+| `validate:composition` fails on network/DSH CLI                | It defaults to `pnpm dlx @deepseek-ai/dsh@<dsh.json.runtime>`; set `DSH_CLI` to an installed CLI                                                                                                                                                                                                                                                                                                                                   |
+| `validate:installer` skipped                                   | It runs only on Windows; use CI or a Windows machine                                                                                                                                                                                                                                                                                                                                                                               |
+| Clean tree suddenly fails `gen:check`                          | Line endings: ensure LF (`.gitattributes`/`core.autocrlf`), regenerate if needed                                                                                                                                                                                                                                                                                                                                                   |
+| Installer reports unsupported DSH                              | The gate is exact `supportedVersions`; update `dsh.json` + `install.ps1` together and release                                                                                                                                                                                                                                                                                                                                      |
+| Dogfood fails with `This turn failed ENOENT` on a session file | ENOENT means the session directory was removed while the app still pointed at it (the Harness has no deletion API; a clean-home/reset step or external removal did it). Never run a live `desktop` install from a shell hosted by the app either: the installer's stop/restart kills the runner under the turn. Use `pnpm dogfood`; install live only from an external PowerShell; `install.ps1` now refuses the hosted-shell case |
+| `pnpm dogfood` reports a changed owner row                     | The setup layer would override a profile-patch value; inspect the failing row in the composed dump and keep the owner value in `cordis.patch.yml`                                                                                                                                                                                                                                                                                  |
+| Market artifact looks wrong                                    | Regenerate with `pnpm generate:market`; never edit `market/` or trust a pre-existing local copy                                                                                                                                                                                                                                                                                                                                    |

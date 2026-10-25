@@ -80,9 +80,11 @@ Because the manual toggle routine is long and easy to get wrong, the repository 
 1. Append the documented shipped optional bundle names (`dsh.json` → `installBundles.shipped`) to `dsh.profile.bundles`, preserving existing entries and order.
 2. Install the one registry bundle (`installBundles.registry`) with `dsh plugin --profile <name> add <name>@<running DSH version>`, which records the dependency and selects it.
 3. Install the setup bundle with the native plugin manager, so it lands last in the selection and its defaults outrank the shipped layers.
-4. Verify selection, dependency, installed setup version, and that `cordis.patch.yml` is byte-identical; restore nothing silently, but keep a manifest backup.
+4. Verify selection, dependency, installed setup version, and that `cordis.patch.yml` is byte-identical; restore nothing silently, but back up the manifest, profile patch, and composed root before stopping anything.
 
 The Desktop profile is Electron-owned: the CLI permits these package operations only while the app is fully quit, so the installer closes and restarts the app by default, and aborts instead under `-NoStopApp`. A dry run prints the plan without changing anything. The installer duplicates the bundle and version lists for standalone use; `scripts/validate-repo.ts` compares them with `dsh.json` so drift fails validation.
+
+Because closing the app terminates any shell hosted inside it, the installer refuses a `desktop` target when the calling shell runs under the Harness process tree (an agent tool shell or the in-app terminal). A live install is an owner action from an external PowerShell window; repository-side verification uses `pnpm dogfood`, which copies the owner's profile into a throwaway home and runs the installer there with `-NoStopApp -NoRestart` (D7).
 
 Alternative considered: a shipped profile template or bundle selection inside the setup patch. Rejected — DSH applies no transitive bundle layers, and rows duplicated from shipped bundles break on DSH upgrades.
 
@@ -92,7 +94,9 @@ Alternative considered: keeping the toggles manual. Rejected by the installation
 
 Validation installs `@deepseek-ai/dsh` at each supported version, creates a throwaway profile with `--from-default-profile web`, installs the setup bundle from the workspace package path, and runs `--dump-config` to assert the composed rows and effective defaults. It also runs type-check, lint, unit tests, the generator drift check, the committed-runtime reproducibility check, manifest checks (`engines.dsh`, no install scripts), the installer-metadata check against `dsh.json`, and the secrets/machine-path scan. The Desktop profile is never touched by CI.
 
-The installer is exercised on a throwaway profile in the same way: a fresh Harness home gets a `web`-template profile, `install.ps1` enables the documented bundles and installs the local setup directory, and `--dump-config` must show the shipped bundle rows, the setup row, and the owner defaults. A second run must be a no-op and leave the profile patch byte-identical.
+The installer is exercised on a throwaway profile in the same way: a fresh Harness home gets a `web`-template profile, `install.ps1` enables the documented bundles and installs the local setup directory, and `--dump-config` must show the shipped bundle rows, the setup row, and the owner defaults. A second run must be a no-op and leave the profile patch byte-identical. The exercise also proves the installer refuses a `desktop` target from a shell the running app hosts, before changing any file.
+
+`pnpm dogfood` covers the owner's real profile without touching it: the live `desktop` files are snapshotted and hashed, copied to a throwaway home as an `owner-copy` profile, installed by the same `install.ps1`, and composed with the installed CLI. The check requires the setup bundle appended last, the copied patch byte-identical, the installed setup version equal to the checkout, the setup rows and defaults effective, every owner-patched row unchanged, and the live files byte-identical afterwards. It never stops the app, which makes it safe from an agent session or in-app terminal on the owner's machine.
 
 Release runs the same validation against the tagged commit, then generates and deploys the index; failure leaves the previous deployment in place.
 
@@ -113,7 +117,7 @@ dsh-setup/
   packages/setup/             # generated manifest + patch + defaults +
                               #   node_modules/@dsh-setup/* vendored plugin copies (tracked)
   market/                     # generated index.json + icons/ (Pages artifact)
-  scripts/                    # build, generate patch, generate index, validate, installer check
+  scripts/                    # build, generate patch, generate index, validate, dogfood, installer check
   install.ps1                 # one-command installer (standalone metadata checked against dsh.json)
   .github/workflows/          # validate on PR, release on tag
   docs/install.md
@@ -140,13 +144,13 @@ The index is unsigned and its metadata is a market claim; the README states that
 - **Committed runtime drifts from TypeScript sources** → the validation workflow rebuilds and fails on any byte difference; generated directories are marked as artifacts in the repository metadata.
 - **DSH release candidates change type declarations** → DSH type packages are pinned as dev dependencies, the supported-version matrix type-checks on every pull request, and a bump is a deliberate, reviewed change.
 - **Plugin and setup dependency versions diverge** → release pins exact versions and validates the composed profile for the tag.
-- **Desktop profile is Electron-owned** → install through the in-app Plugins/Discover surfaces; CLI instructions are only documented for non-Desktop profiles.
+- **Desktop profile is Electron-owned** → install through the in-app Plugins/Discover surfaces; CLI instructions are only documented for non-Desktop profiles. Repository verification of the owner's profile runs against a copy (`pnpm dogfood`), never the live state.
 - **Market has no upgrade action** → documentation states update = install the newer version, and old versions remain listed.
 - **DSH release candidates change row ids or config schemas** → setup keeps `engines.dsh` narrow, overrides are few and complete, and CI runs against each supported version before publication.
 - **UI edits shadow setup defaults** → documented as an accepted baseline-vs-live-mirror trade-off; snapshot promotion is deferred.
 - **Index staleness between releases** → version list is generated per release, and Pages deploys the tagged artifact; no build-time lookups.
 - **Installing setup and an individual plugin bundle together** → documented as unsupported; row ids are namespaced but duplicate mounts are still refused by review of the installation guide.
-- **The installer writes the Electron-owned Desktop profile** → it appends only bundle names, delegates every package change to `dsh plugin`, saves a manifest backup, refuses to run while the app is open unless it may close and restart it, and verifies the profile patch is unchanged.
+- **The installer writes the Electron-owned Desktop profile** → it appends only bundle names, delegates every package change to `dsh plugin`, backs up the manifest, patch, and composed root before stopping anything, refuses a desktop target from a shell the running Harness hosts, and verifies the profile patch is unchanged.
 - **Standalone installer metadata drifts from the repository** → `dsh.json` is the source, `install.ps1` carries a copy for standalone use, and repository validation compares the supported versions and both bundle lists.
 
 ## Migration Plan
@@ -154,7 +158,7 @@ The index is unsigned and its metadata is a market claim; the README states that
 1. Scaffold the monorepo, the TypeScript/Biome/Vitest toolchain, and the first plugin package with its composition fragment.
 2. Generate the setup patch and validate the composition in a throwaway profile with the DSH CLI; do not touch the Desktop profile.
 3. Add the one-command installer and exercise it on a throwaway profile: bundle selection, setup install, idempotent rerun, unchanged patch.
-4. Install the setup bundle into the owner's Desktop profile as a dogfood step; verify effective model, theme, UI, presets, and the enabled bundle set against the current values, then reduce the profile patch to genuinely machine-local entries.
+4. Verify the installer against a copy of the owner's Desktop profile as a dogfood step (`pnpm dogfood`): confirm the owner's effective model, theme, UI, presets, and enabled bundle set survive the installation, then reduce the profile patch to genuinely machine-local entries. Installing into the live profile stays an owner action from an external PowerShell window because the Electron shell owns that profile while the app runs.
 5. Enable Pages, publish the first release, add the index source in Discover, and verify install on a second profile or machine.
 6. Rollback: remove the setup bundle through Plugins (the profile patch was never modified, so previous behavior returns), and revert the Pages deployment to the prior artifact if an index is faulty.
 

@@ -16,6 +16,7 @@ the setup on another machine.
 ```sh
 pnpm install
 pnpm check        # type-check, lint, unit tests, build
+pnpm dogfood      # Windows: verify install.ps1 against a copy of this machine's profile
 ```
 
 Committing is part of the workflow: the setup patch, `lib/` output, and `client.js` bundles are

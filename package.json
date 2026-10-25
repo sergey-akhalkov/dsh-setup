@@ -22,6 +22,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm build && pnpm test",
     "gen": "node scripts/generate.ts",
     "gen:check": "node scripts/generate.ts --check",
+    "dogfood": "node scripts/dogfood.ts",
     "ponytail:update": "node scripts/update-ponytail.ts",
     "validate:repo": "node scripts/validate-repo.ts",
     "validate:composition": "node scripts/validate-composition.ts",

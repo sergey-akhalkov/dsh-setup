@@ -16,6 +16,12 @@ DeepSeek Harness must be closed while the profile is written. By default the
 script closes it, waits, installs, and starts it again; pass -NoStopApp to abort
 instead when it is running, or -NoRestart to leave it closed.
 
+The script refuses to install into the `desktop` profile when it runs inside a
+shell hosted by the running Harness (the desktop profile is the one the app owns):
+closing the app would terminate that shell and the session behind it. Run the
+installer from an external PowerShell window instead, or run `pnpm dogfood` to
+verify this checkout against a copy of the profile without touching the live one.
+
 .PARAMETER Profile
 Profile name under `$DshHome/profiles`. Default: desktop.
 
@@ -124,7 +130,48 @@ function Read-JsonFile([string]$Path) {
 function Save-JsonFile([string]$Path, $Object) {
   $json = ($Object | ConvertTo-Json -Depth 32) + "`n"
   $utf8 = New-Object System.Text.UTF8Encoding($false)
-  [System.IO.File]::WriteAllText($Path, $json, $utf8)
+  # Write a sibling first and swap it in: a process killed between the two steps
+  # (for example by an app restart racing the installer) must never leave a
+  # partially-written profile manifest behind.
+  $temporary = "$Path.tmp-$([guid]::NewGuid().ToString('N'))"
+  try {
+    [System.IO.File]::WriteAllText($temporary, $json, $utf8)
+    if (Test-Path -LiteralPath $Path) {
+      [System.IO.File]::Replace($temporary, $Path, $null)
+    } else {
+      Move-Item -LiteralPath $temporary -Destination $Path
+    }
+  } catch {
+    [System.IO.File]::Copy($temporary, $Path, $true)
+    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Test-HarnessHosted {
+  # Tool shells started by a running Harness export these variables; an external
+  # PowerShell window started by the user does not.
+  if ($env:DSH_SESSION_ID -or $env:DSH_SHELL) { return $true }
+  # Fall back to the process tree: the interactive tools run below a
+  # "DeepSeek Harness.exe" runner even when the environment was filtered.
+  try {
+    $processId = $PID
+    for ($depth = 0; $depth -lt 16; $depth++) {
+      $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction Stop
+      if ($null -eq $process) { break }
+      $parentId = [int]$process.ParentProcessId
+      if ($parentId -le 0) { break }
+      $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $parentId" -ErrorAction Stop
+      if ($null -eq $parent) { break }
+      $parentPath = [string]$parent.ExecutablePath
+      if ($parent.Name -eq 'DeepSeek Harness.exe' -or $parentPath -like '*DeepSeek Harness*') {
+        return $true
+      }
+      $processId = $parentId
+    }
+  } catch {
+    return $false
+  }
+  return $false
 }
 
 function Get-ProfileBundles($Manifest) {
@@ -236,6 +283,8 @@ function Test-PatchUnchanged([string]$Path, [string]$Hash) {
 $stoppedApp = $false
 $appPath = $null
 $backupPath = $null
+$patchBackupPath = $null
+$cordisBackupPath = $null
 
 try {
   Write-Step "Reading the DeepSeek Harness installation"
@@ -281,6 +330,31 @@ try {
     exit 0
   }
 
+  if ($Profile -eq 'desktop' -and (Test-HarnessHosted)) {
+    throw "Refusing to install into the 'desktop' profile from a shell run by DeepSeek Harness: closing the app would terminate this session. Run install.ps1 from an external PowerShell window, or run 'pnpm dogfood' to verify this checkout against a copy of the profile without touching the live profile."
+  }
+
+  # Back up the profile's own files before anything is stopped or changed: the
+  # run stays reviewable even if a later step fails, and the patch is the
+  # user-owned file the installer must never modify.
+  $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $backupDirectory = Join-Path $DshHome '.dsh-setup-backups'
+  New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
+  $backupPath = Join-Path $backupDirectory "package.json.$timestamp.$Profile.bak"
+  Copy-Item -LiteralPath $profileManifestPath -Destination $backupPath -Force
+  Write-Skip "backup: $backupPath"
+  $cordisPath = Join-Path $profileDirectory 'cordis.yml'
+  if (Test-Path -LiteralPath $patchPath) {
+    $patchBackupPath = Join-Path $backupDirectory "cordis.patch.yml.$timestamp.$Profile.bak"
+    Copy-Item -LiteralPath $patchPath -Destination $patchBackupPath -Force
+    Write-Skip "backup: $patchBackupPath"
+  }
+  if (Test-Path -LiteralPath $cordisPath) {
+    $cordisBackupPath = Join-Path $backupDirectory "cordis.yml.$timestamp.$Profile.bak"
+    Copy-Item -LiteralPath $cordisPath -Destination $cordisBackupPath -Force
+    Write-Skip "backup: $cordisBackupPath"
+  }
+
   if ($Profile -eq 'desktop') {
     $processes = @(Get-HarnessProcesses)
     if ($processes.Count -gt 0) {
@@ -320,14 +394,6 @@ try {
       Write-Ok "DeepSeek Harness is closed"
     }
   }
-
-  # A standalone backup keeps the change reviewable even if a later step fails.
-  $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-  $backupDirectory = Join-Path $DshHome '.dsh-setup-backups'
-  New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
-  $backupPath = Join-Path $backupDirectory "package.json.$timestamp.$Profile.bak"
-  Copy-Item -LiteralPath $profileManifestPath -Destination $backupPath -Force
-  Write-Skip "backup: $backupPath"
 
   Write-Step "Enabling the bundles the setup expects"
 
@@ -406,12 +472,16 @@ try {
   }
 
   if ($problems.Count -gt 0) {
+    $backupSummary = @()
+    if ($backupPath) { $backupSummary += "manifest: $backupPath" }
+    if ($patchBackupPath) { $backupSummary += "patch: $patchBackupPath" }
+    if ($cordisBackupPath) { $backupSummary += "root: $cordisBackupPath" }
     foreach ($problem in $problems) { Write-Warn $problem }
-    throw "$($problems.Count) verification problem(s); the profile manifest backup is at $backupPath"
+    throw "$($problems.Count) verification problem(s). Backups: $($backupSummary -join '; ')"
   }
 
   if ($installedVersion) { Write-Ok "setup version $installedVersion in $Profile" }
-  if ($backupPath) { Write-Ok "manifest backup: $backupPath" }
+  if ($backupPath) { Write-Ok "profile backups: $backupDirectory" }
   Write-Host ''
   Write-Host "Installed. Start DeepSeek Harness and the setup bundle is active."
   exit 0
@@ -419,6 +489,8 @@ try {
   Write-Host ''
   Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
   if ($backupPath) { Write-Host "The profile manifest backup is at $backupPath" }
+  if ($patchBackupPath) { Write-Host "The profile patch backup is at $patchBackupPath" }
+  if ($cordisBackupPath) { Write-Host "The profile root backup is at $cordisBackupPath" }
   exit 1
 } finally {
   if ($stoppedApp -and -not $NoRestart) {

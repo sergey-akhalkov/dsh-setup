@@ -35,11 +35,13 @@ per-release edit. Its standalone copy of the supported versions and bundle list 
    ```
 
 3. Build and validate, then confirm the working tree is clean after the build (CI enforces the same
-   two checks):
+   two checks). On a Windows machine with a Desktop profile, also dogfood the installer against a copy
+   of that profile:
 
    ```sh
    pnpm build
    pnpm validate
+   pnpm dogfood
    git diff --exit-code
    pnpm gen:check
    ```

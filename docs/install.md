@@ -6,6 +6,14 @@ mechanism as the Plugins page, installs the setup bundle at the latest release, 
 Harness. It never edits your profile's own `cordis.patch.yml`, so machine-local preferences keep
 winning.
 
+Run the installer from an ordinary PowerShell window, not from a terminal hosted inside DeepSeek
+Harness (an agent turn or the in-app terminal). Installing into the `desktop` profile closes and
+restarts the app, which kills the process tree behind that terminal and aborts the turn; a reset of
+the Harness home while the app runs is worse still, because the running session's file can be removed
+from under it (`This turn failed ENOENT`). The installer refuses a `desktop` target when the calling
+shell lives inside the app. To verify this checkout on the current machine without touching the live
+profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead.
+
 ## Prerequisites
 
 - Windows with DeepSeek Harness Desktop installed. Start it once and quit: the first launch creates
@@ -28,8 +36,8 @@ Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/ma
 The script:
 
 1. Reads the running CLI and DSH version and refuses an unsupported one.
-2. Closes DeepSeek Harness (profile writes need the app fully quit) and saves a copy of the profile
-   manifest under `$DSH_HOME/.dsh-setup-backups/`.
+2. Closes DeepSeek Harness (profile writes need the app fully quit) and saves copies of the profile
+   manifest, patch, and composed root under `$DSH_HOME/.dsh-setup-backups/` before anything changes.
 3. Enables the shipped bundles the setup expects by appending their names to `dsh.profile.bundles` —
    exactly the operation behind the **Plugins** toggles. The profile patch is not touched.
 4. Installs `@deepseek-ai/dsh-subagent-codex` at the running DSH version with
@@ -110,6 +118,32 @@ dsh plugin --profile desktop add "git+https://github.com/sergey-akhalkov/dsh-set
 
 Quit DeepSeek Harness completely before running that command, then start it again. The commit and
 package directory are the same values the market index lists for the release.
+
+## Dogfood on the current machine
+
+From a checkout, `pnpm dogfood` verifies the installer against this machine's own profile **without
+changing it**:
+
+1. snapshots the live `desktop` profile's manifest, patch, composed root, and workspace file under
+   `.tmp/dogfood-snapshot-*` and hashes the live files it checks;
+2. copies `package.json`, `cordis.patch.yml`, `cordis.yml`, `pnpm-workspace.yaml`, and, when present,
+   the lockfile and `.npmrc` into a throwaway Harness home as a profile named `owner-copy` (`desktop`
+   is never a dogfood target, so the installer cannot take its stop/restart path);
+3. runs `install.ps1 -Profile owner-copy -NoStopApp -NoRestart` against this checkout's setup bundle;
+4. composes the copy with the installed CLI and checks that the installer appended only the setup
+   bundle and kept it last, the profile patch copy is byte-identical, the installed setup version
+   matches the checkout, the setup rows and defaults compose, and every row the owner patched keeps
+   its effective config;
+5. proves the live profile files are byte-identical afterwards.
+
+The running app is never stopped or restarted and the live profile is never written, so the command is
+safe from an agent session or the in-app terminal. It exits non-zero on a failed check, keeps the live
+snapshot for recovery, and keeps the throwaway home with `DSH_KEEP=1` for inspection. The owner home
+and profile default to the running ones; `DSH_HOME`, `DSH_PROFILE`, and `DSH_CLI` override them.
+
+To install on this machine for real, run the one-command installer from an external PowerShell window:
+it closes and restarts DeepSeek Harness itself, after the dogfood run has shown the checkout installs
+cleanly against the current profile.
 
 ## Update
 

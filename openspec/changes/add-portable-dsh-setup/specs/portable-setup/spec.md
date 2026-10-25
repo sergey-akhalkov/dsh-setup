@@ -58,6 +58,20 @@ The installer MUST NOT modify the profile's own patch file or its non-bundle set
 - **WHEN** the installer enables bundles and installs the setup
 - **THEN** the profile's `cordis.patch.yml` is byte-identical to before the run.
 
+### Requirement: Non-destructive owner-profile verification
+
+The repository SHALL provide a dogfood command that verifies the installer against a copy of the current machine's Desktop profile. The command MUST NOT write that profile, stop or restart the running Harness, or disturb any Harness home outside the throwaway copy. The installer MUST refuse to close the Harness whose process tree hosts the calling shell.
+
+#### Scenario: Dogfood on the owner's machine
+
+- **WHEN** a developer runs the documented dogfood command from a shell hosted by the running Harness
+- **THEN** the installer runs against a throwaway copy of the profile, the composed copy shows the setup rows and defaults effective with every owner-patched row keeping its effective config, and the live profile's files are byte-identical afterwards.
+
+#### Scenario: Live install from a hosted shell
+
+- **WHEN** the installer is asked to target the `desktop` profile from a shell hosted by the running Harness
+- **THEN** it stops before changing anything and points to the external-PowerShell and dogfood alternatives.
+
 ### Requirement: Dependency-contained plugins
 
 The setup bundle MUST declare as package dependencies every plugin package whose rows its patch mounts, so that one installation provides all plugin code.

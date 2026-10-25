@@ -158,6 +158,50 @@ function main(): number {
     })
     if (failures.length > 0) throw new Error(failures.join('; '))
 
+    // A shell run by the running Harness must never let the installer close the
+    // app that hosts it; the refusal has to happen before the profile is read or
+    // changed. The fake desktop profile makes the guard the only possible reason
+    // for the non-zero exit.
+    step('the installer refuses to restart the Harness hosting it', () => {
+      const desktopDir = join(home, 'profiles', 'desktop')
+      mkdirSync(desktopDir, { recursive: true })
+      cpSync(manifestPath, join(desktopDir, 'package.json'))
+      if (existsSync(patchPath)) cpSync(patchPath, join(desktopDir, 'cordis.patch.yml'))
+      const desktopManifest = join(desktopDir, 'package.json')
+      const manifestBefore = hashFile(desktopManifest)
+      const guardArgs = [
+        '-NoProfile',
+        '-File',
+        join(rootDir, 'install.ps1'),
+        '-Profile',
+        'desktop',
+        '-DshHome',
+        home,
+        '-NoStopApp',
+        '-NoRestart',
+        '-SetupSpec',
+        setupSpec,
+      ]
+      if (cli !== undefined) guardArgs.push('-DshCli', cli)
+      const guardEnv: NodeJS.ProcessEnv = {
+        ...env,
+        DSH_SESSION_ID: 'session-installer-guard-check',
+      }
+      const guarded = shell(pwsh, guardArgs, guardEnv, 120_000)
+      if (guarded.status === 0) {
+        throw new Error('the installer accepted a desktop install from a shell hosted by the app')
+      }
+      const output = `${guarded.stdout}\n${guarded.stderr}`
+      if (!output.includes('would terminate this session')) {
+        throw new Error(
+          `the refusal lacks the hosted-shell explanation\n${output.trim().split('\n').slice(-20).join('\n')}`,
+        )
+      }
+      if (hashFile(desktopManifest) !== manifestBefore) {
+        throw new Error('the guard changed the profile before refusing')
+      }
+    })
+
     const patchBefore = hashFile(patchPath)
     const installerArgs = [
       '-NoProfile',
