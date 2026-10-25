@@ -25,7 +25,7 @@ workflow generates the static format-1 market index pinned to the tagged commit 
 GitHub Pages.
 
 Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.9.0**.
-Repo package version (all packages move together): **0.1.5**.
+Repo package version (all packages move together): **0.1.6**.
 
 ## 2. First commands
 
@@ -307,9 +307,17 @@ compose them at runtime so `validate:repo` does not flag the test file.
 `openspec/config.yaml` requires **English** for all artifacts and keeps structural headings and
 SHALL/MUST keywords in English. The active change is
 `openspec/changes/add-portable-dsh-setup/` (proposal, design, delta specs `portable-setup` and
-`plugin-market`, tasks). `openspec/specs/` and `openspec/changes/archive/` currently contain only
-`.gitkeep`: **nothing is synced or archived yet**, so cite the change's delta specs, not
-`openspec/specs/`.
+`plugin-market`, tasks). The main specs under `openspec/specs/` now hold the accepted requirements:
+`portable-setup` and `plugin-market` were synced from the parent change on 2026-10-25, and the
+archived `2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus its
+`portable-setup` amendment. Cite `openspec/specs/` for accepted requirements and a change's delta
+specs for pending ones.
+
+The parent deltas were synced before it was archived so the ponytail change's MODIFIED
+`portable-setup` delta could apply. Its `No secrets or machine data` requirement therefore already
+exists in the main spec (with the ponytail amendment), and `openspec validate --all` reports that its
+ADDED delta would refuse to archive until that requirement is reconciled (for example, restated as
+MODIFIED with the current text) when the parent change is archived.
 
 Flow: **propose** (proposal -> design -> delta specs -> tasks) -> **apply** (implement and tick
 tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skills are installed

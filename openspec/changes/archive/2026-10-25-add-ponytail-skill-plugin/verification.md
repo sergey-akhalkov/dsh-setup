@@ -101,29 +101,17 @@ Observed facts (`.tmp/ponytail-43-evidence.json`):
 | 4. Full `packages/setup` instead | 5,808 B; footer exactly once | `ponytail` listed exactly once | body + adapter note exactly once |
 
 The v4 session-log format was also decoded for a real desktop-app session, so the same inspection
-works for the owner step below.
+works for the live dogfood recorded here.
 
-Status of the literal owner dogfood step (install into the running Desktop profile, restart, GUI
-Discover, real model-driven skill call): not executed in this session, by owner decision. Installing
-into the Electron-owned desktop profile from a shell hosted by the running app is forbidden by the
-repository rules (it would stop/restart the Harness and abort the session), and the design's migration
-plan (step 4) describes the desktop-profile dogfood as optional. The off-desktop runtime checks above
-cover every observable behavior required by the `packaged-skills` scenarios (assembled ruleset,
-catalog entry, loaded body plus note, `alwaysOn: false` opt-out, row removal, and exactly one catalog
-entry for the full setup), so task 4.3 is recorded against them and the live desktop install remains
-an optional owner step for the next release. The owner procedure, if it is ever wanted, is:
-
-```powershell
-$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-# Quit DeepSeek Harness first; run from an external PowerShell.
-Copy-Item "$env:USERPROFILE\.dsh\profiles\desktop\cordis.patch.yml" "$env:USERPROFILE\.dsh\profiles\desktop\cordis.patch.yml.bak"
-& $dsh plugin --profile desktop add '<checkout>\packages\plugin-ponytail'
-# Start the app, open a NEW session, send: /ponytail reply with exactly PONG; then quit the app.
-node .tmp\inspect-session.mjs (newest session.v4.jsonl.zstd) check
-# Expect the same facts as scenario 1. Repeat with the documented profile-patch overrides
-# (alwaysOn: false, then disabled: true) and finally with '<checkout>\packages\setup'
-# (exactly one catalog entry / footer). Restore cordis.patch.yml and remove the installed bundle.
-```
+The literal owner dogfood step (install into the running Desktop profile, restart, GUI Discover, real
+model-driven skill call) was then executed by the owner: `install.ps1` from this checkout installed the
+local setup bundle into the live desktop profile, the app restarted, and the profile now ends its
+bundle selection with `@dsh-setup/setup` with the profile dependency present, installer backups under
+`%USERPROFILE%\.dsh\.dsh-setup-backups\`, and the profile's own patch untouched. Decoding the
+restarted app's session log with the same helper shows the packaged ruleset and its footer in the
+assembled system prompt (`systemRules`/`systemFooter` true, footer once) and one `ponytail` line in
+the catalog. The two profile-patch opt-outs (`alwaysOn: false` and `disabled: true`) remain recorded
+from the off-desktop runs above, because the live profile patch was deliberately not edited for them.
 
 ## 4.4 Release dry-run
 

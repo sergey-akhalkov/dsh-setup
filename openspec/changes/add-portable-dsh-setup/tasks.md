@@ -69,3 +69,7 @@
 
 - Archive the change after the release and clean-machine rehearsal satisfy the review requirements.
 - Verify the archived `portable-setup` and `plugin-market` specs contain the accepted requirements.
+- The deltas were synced on 2026-10-25 before this change was archived. Its `portable-setup` delta
+  still lists `No secrets or machine data` as ADDED, but that requirement now exists in the main spec
+  with the archived ponytail amendment, so `openspec validate --all` reports that archiving would
+  refuse it: restate that requirement as MODIFIED with the current text before archiving.
