@@ -23,7 +23,7 @@
 
 ## 5. Integration and acceptance
 
-- [ ] 5.1 Run the full package and repository gate: `pnpm build`, `git diff --exit-code`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, and `pnpm validate:composition`. Verify every command exits 0 and the composed `--dump-config` contains the `dsh-setup-rtk` row exactly once.
+- [x] 5.1 Run the full package and repository gate: `pnpm build`, `git diff --exit-code`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, and `pnpm validate:composition`. Verify every command exits 0 and the composed `--dump-config` contains the `dsh-setup-rtk` row exactly once.
 - [ ] 5.2 Exercise the change in a throwaway `dev` profile, never in the live desktop profile: verify the assembled prompt contains the RTK rule, the catalog lists `rtk`, and the body is absent until invoked; run a large `git diff`/`git log`/repo search through rtk and confirm `rtk gain --history` records it and the DSH token meter reflects the smaller result; verify a failing test still shows its failure and exit code; verify `alwaysOn: false` removes only the section; verify a profile started with rtk removed from PATH still boots and the guidance names the native fallback.
 - [x] 5.3 Bump the set version with `pnpm release:prepare --version X.Y.Z`, then run `pnpm gen` and `pnpm build`. Verify the one version appears in the root, every plugin, and the generated setup manifest, and `pnpm gen:check` exits 0. Do not tag or publish without the owner's release decision.
 
