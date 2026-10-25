@@ -7,7 +7,7 @@ static plugin-market index, and the one-command installer.
 This file is the fast path: read it before touching the repo. For user-facing detail, the docs are
 authoritative: [docs/plugins.md](docs/plugins.md), [docs/setup-composition.md](docs/setup-composition.md),
 [docs/install.md](docs/install.md), [docs/releasing.md](docs/releasing.md). The OpenSpec artifacts are
-the requirements source of truth: [openspec/changes/add-portable-dsh-setup](openspec/changes/add-portable-dsh-setup).
+the requirements source of truth: [openspec/changes/archive/2026-10-26-add-portable-dsh-setup](openspec/changes/archive/2026-10-26-add-portable-dsh-setup).
 
 ## 1. One-paragraph mental model
 
@@ -311,20 +311,18 @@ compose them at runtime so `validate:repo` does not flag the test file.
 ## 11. OpenSpec workflow (requirements are spec-driven)
 
 `openspec/config.yaml` requires **English** for all artifacts and keeps structural headings and
-SHALL/MUST keywords in English. The active change is
-`openspec/changes/add-portable-dsh-setup/` (proposal, design, delta specs `portable-setup` and
-`plugin-market`, tasks). The main specs under `openspec/specs/` now hold the accepted requirements:
-`portable-setup` and `plugin-market` were synced from the parent change on 2026-10-25, the archived
-`2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus its `portable-setup`
-amendment, and the archived `2026-10-26-add-serena-mcp-plugin` change added `mcp-adapters` and
-amended `portable-setup`'s dependency-containment requirement. Cite `openspec/specs/` for accepted
-requirements and a change's delta specs for pending ones.
+SHALL/MUST keywords in English. There is no active change; the parent change was archived on
+2026-10-26 as `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/` (proposal, design, delta
+specs `portable-setup` and `plugin-market`, tasks). The main specs under `openspec/specs/` hold the
+accepted requirements: `portable-setup` and `plugin-market` were synced from the parent change on
+2026-10-25, the archived `2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus
+its `portable-setup` amendment, and the archived `2026-10-26-add-serena-mcp-plugin` change added
+`mcp-adapters` and amended `portable-setup`'s dependency-containment requirement. Cite
+`openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
-The parent deltas were synced before it was archived so the ponytail change's MODIFIED
-`portable-setup` delta could apply. Its `No secrets or machine data` requirement therefore already
-exists in the main spec (with the ponytail amendment), and `openspec validate --all` reports that its
-ADDED delta would refuse to archive until that requirement is reconciled (for example, restated as
-MODIFIED with the current text) when the parent change is archived.
+Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
+data` as MODIFIED with the current main-spec text (the Serena and Ponytail amendments), so the
+archive applied without spec changes.
 
 Flow: **propose** (proposal -> design -> delta specs -> tasks) -> **apply** (implement and tick
 tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skills are installed
@@ -333,12 +331,11 @@ tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skil
 touch a documented requirement should update the corresponding delta spec and design rationale in the
 same change.
 
-`tasks.md` is 32/35 done. Open: 7.1 first published release/tag verification, 7.4 second release
-update visibility, 8.1 clean-machine rehearsal. (7.2 dogfood verification, 7.3 commit-pinned
-throwaway-profile install, and 9.4 the committed `pnpm dogfood` command are done.) Archive only after
-those review requirements are satisfied. Keep `docs/` consistent with spec changes; the design's D8
-layout is stale about the Client bundle path (actual: `lib/client.js`, not package-root `client.js`).
-Trust the code and `docs/plugins.md`.
+The archived tasks record 32/35. Open owner follow-ups: 7.1 first published release/tag verification,
+7.4 second release update visibility, 8.1 clean-machine rehearsal. (7.2 dogfood verification, 7.3
+commit-pinned throwaway-profile install, and 9.4 the committed `pnpm dogfood` command are done.) Keep
+`docs/` consistent with spec changes; the design's D8 layout is stale about the Client bundle path
+(actual: `lib/client.js`, not package-root `client.js`). Trust the code and `docs/plugins.md`.
 
 ## 12. CI gate (what blocks a merge)
 
@@ -431,7 +428,7 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 | Installer behavior, options, manual install            | [docs/install.md](docs/install.md), `install.ps1`                                                                            |
 | Owner-profile dogfood without touching the live state  | [docs/install.md](docs/install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`            |
 | Release, Pages, version accumulation, DSH bump         | [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml`                                                      |
-| Requirements and invariants                            | `openspec/changes/add-portable-dsh-setup/{proposal,design}.md`, `specs/*/spec.md`                                            |
+| Requirements and invariants                            | `openspec/specs/*/spec.md`, `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/{proposal,design}.md`                |
 | Supported versions and installer bundle lists          | `dsh.json`, `install.ps1`                                                                                                    |
 | Build wrapper and client loader contract               | `scripts/build.ts`                                                                                                           |
 | Market schema/pinning/merge                            | `scripts/lib/market.ts`, `scripts/generate-market.ts`                                                                        |

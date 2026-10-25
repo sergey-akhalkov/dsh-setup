@@ -46,7 +46,7 @@
 ## 7. Dogfooding and compatibility
 
 - [ ] 7.1 Create the first GitHub release tag and confirm the published index URL returns HTTP 200 over HTTPS without a redirect; verify the Discover tab lists the setup bundle and each plugin entry after adding the source.
-      Blocked by the release gate: on the GitHub-hosted Windows runner the installer exercise stalls silently at `dsh plugin add <setup>` — the CLI and its pnpm child stay alive for 12+ minutes with no output, while the same install passes in `validate:composition` and on the owner's Windows 11 machine. Tags `v0.1.2`–`v0.1.6` were cut while fixing the gate; none is published, so Pages still answers 404. `pnpm validate` and the market generator are green locally.
+      Pending owner step: the pnpm 11.28.5 pin merged from `main` addresses the CI installer stall, but no release tag has been published yet (tags `v0.1.2`–`v0.1.6` were cut while fixing the gate; Pages still answers 404). `pnpm validate` and the market generator are green locally.
 - [x] 7.2 Verify the installer against the owner's profile without touching the live Desktop state: copy `package.json` and `cordis.patch.yml` into a throwaway home, run `install.ps1`, and confirm the profile patch is byte-identical, the previous bundle selection is preserved, the setup bundle is appended last, and the owner's theme, chat view and preset are unchanged. Installing into the live Desktop profile through Plugins/Discover stays an owner step in `docs/install.md` because the Electron shell owns that profile while the app runs. Committed as `pnpm dogfood` (`scripts/dogfood.ts`), which also snapshots the live files, proves every owner-patched row keeps its effective config, and never stops the running app.
 - [x] 7.3 Install the setup bundle by commit-pinned git specification into a throwaway profile; verify the composed rows match the index installation. Verified against the `0.1.2` and `0.1.3` commits: the git-spec dump equals the local-path dump, and removal restores the baseline dump, patch and bundle selection.
 - [ ] 7.4 Publish a second tagged version and verify the installed bundle reports an update while the older version remains installable from its entry page.
@@ -67,9 +67,10 @@
 
 ## Workflow follow-up
 
-- Archive the change after the release and clean-machine rehearsal satisfy the review requirements.
+- Archived on 2026-10-26 at the owner's request. The release and clean-machine verification tasks
+  (7.1, 7.4, 8.1) remain owner follow-ups and are left unchecked: no release has been published yet
+  (Pages answers 404) and no clean machine was available.
 - Verify the archived `portable-setup` and `plugin-market` specs contain the accepted requirements.
-- The deltas were synced on 2026-10-25 before this change was archived. Its `portable-setup` delta
-  still lists `No secrets or machine data` as ADDED, but that requirement now exists in the main spec
-  with the archived ponytail amendment, so `openspec validate --all` reports that archiving would
-  refuse it: restate that requirement as MODIFIED with the current text before archiving.
+- The `portable-setup` delta restates `Dependency-contained plugins` and `No secrets or machine data`
+  as MODIFIED with the current main-spec text (the Serena and Ponytail amendments), so archive
+  applies without conflict.

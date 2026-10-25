@@ -72,25 +72,6 @@ The repository SHALL provide a dogfood command that verifies the installer again
 - **WHEN** the installer is asked to target the `desktop` profile from a shell hosted by the running Harness
 - **THEN** it stops before changing anything and points to the external-PowerShell and dogfood alternatives.
 
-### Requirement: Dependency-contained plugins
-
-The setup bundle MUST declare as package dependencies every plugin package whose rows its patch mounts, so that one installation provides all plugin code.
-
-#### Scenario: Fresh profile
-
-- **WHEN** the setup bundle is installed into a profile that declares none of the plugin packages
-- **THEN** every plugin module referenced by the setup patch resolves and mounts.
-
-#### Scenario: Missing dependency detection
-
-- **WHEN** a plugin row is present in the setup patch but its package is absent from the setup bundle's dependencies
-- **THEN** release validation fails before publication.
-
-#### Scenario: Self-contained git installation
-
-- **WHEN** the setup bundle is installed from its commit-pinned git spec
-- **THEN** every declared plugin package's code arrives with that single installation, without a registry lookup or an additional install step.
-
 ### Requirement: Generated composition patch
 
 The setup bundle's patch MUST be generated from per-plugin composition fragments. The committed patch MUST be reproducible from those fragments, and validation MUST fail when the committed patch differs from the generated result.
@@ -185,11 +166,42 @@ Every published package SHALL declare an `engines.dsh` range covering the suppor
 - **WHEN** the installer runs on an unsupported DSH version
 - **THEN** it reports the supported versions and changes nothing.
 
+## MODIFIED Requirements
+
+### Requirement: Dependency-contained plugins
+
+The setup bundle MUST declare as package dependencies every repository plugin package whose rows its patch mounts, so that one installation provides all plugin code. A configuration-only adapter row MAY mount a package that the Harness installation provides; that package MUST NOT be duplicated as a setup dependency.
+
+#### Scenario: Fresh profile
+
+- **WHEN** the setup bundle is installed into a profile that declares none of the plugin packages
+- **THEN** every plugin module referenced by the setup patch resolves and mounts.
+
+#### Scenario: Missing dependency detection
+
+- **WHEN** a plugin row is present in the setup patch but its repository package is absent from the setup bundle's dependencies
+- **THEN** release validation fails before publication.
+
+#### Scenario: Self-contained git installation
+
+- **WHEN** the setup bundle is installed from its commit-pinned git spec
+- **THEN** every declared plugin package's code arrives with that single installation, without a registry lookup or an additional install step.
+
+#### Scenario: Harness-provided adapter target
+
+- **WHEN** the setup patch contains a configuration-only adapter row that names a package shipped with the Harness
+- **THEN** the setup manifest does not declare that package as a dependency, and the row resolves from the Harness installation without a second copy.
+
 ### Requirement: No secrets or machine data
 
-The repository MUST NOT contain credentials, session data, machine-specific absolute paths, or copies of shared agent skills and instructions.
+The repository MUST NOT contain credentials, session data, machine-specific absolute paths, or copies of shared agent skills and instructions. Provenance-pinned third-party skill content shipped inside a plugin bundle is permitted: it arrives with the bundle, carries its upstream license, and is verified against a committed pin; user-owned skills and instructions under `~/.agents` and the workspace remain machine-local and are not shipped.
 
 #### Scenario: Repository validation
 
 - **WHEN** the validation workflow inspects repository content
 - **THEN** it fails on credential files, session artifacts, or absolute machine paths in manifests and patches.
+
+#### Scenario: Packaged third-party content
+
+- **WHEN** the validation workflow inspects a vendored upstream skill and license that match their committed provenance record
+- **THEN** it accepts them and does not treat them as user-owned machine data.
