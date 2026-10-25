@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-rtk.
+- insert:
+    - id: dsh-setup-rtk
+      name: "@dsh-setup/plugin-rtk"

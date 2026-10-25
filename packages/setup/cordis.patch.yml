@@ -21,6 +21,8 @@
       name: "@dsh-setup/plugin-nuphus-mcp"
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
+    - id: dsh-setup-rtk
+      name: "@dsh-setup/plugin-rtk"
     - id: dsh-setup-rust
       name: "@dsh-setup/plugin-rust"
     - id: dsh-setup-serena

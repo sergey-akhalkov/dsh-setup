@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "RTK token workflow",
+    "description": "Default-on rule for running supported bulky shell commands through the rtk CLI, plus an on-demand rtk skill; requires rtk on PATH and can be turned off with alwaysOn: false"
+  }
+}

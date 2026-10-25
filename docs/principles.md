@@ -24,7 +24,11 @@ one prompt section and one skill provider over the Markdown files that ship insi
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
 | This working contract                | 4,424 bytes | ~1.1k tokens        |
-| **Both, active**                     |             | **~1.8k tokens**    |
+| **Both, active (this page)**         |             | **~1.8k tokens**    |
+
+The setup also ships the [RTK token workflow](rtk.md) routing rule, which adds about 0.2k tokens per
+step; with it active the combined cost is about 2.0k. The table above counts only the two contributions
+this page owns.
 
 The contract is a hard budget, not a preference: `packages/plugin-working-principles/test/budget.test.ts`
 fails when the section exceeds 1500 estimated tokens, where a token is estimated as one quarter of the

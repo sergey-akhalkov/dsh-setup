@@ -1,8 +1,8 @@
 # session-guidance Specification
 
 ## Purpose
-Defines the first-party guidance the setup delivers to sessions: a bounded always-on ruleset, the
-on-demand skill bodies beside it, independently installable domain packs, and the adaptation and
+Defines the first-party guidance the setup delivers to sessions: bounded always-on contributions, the
+on-demand skill bodies beside them, independently installable domain packs, and the adaptation and
 freshness rules that keep that content honest.
 
 ## Requirements
