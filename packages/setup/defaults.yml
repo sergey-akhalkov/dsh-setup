@@ -1,0 +1,25 @@
+# Owner defaults for the setup bundle.
+#
+# Each entry targets a shipped composition row by id and restates that row's
+# complete configuration: a patch replaces the whole `config` object rather than
+# merging into it. These values are the baseline every machine receives when it
+# installs the setup bundle; a profile's own cordis.patch.yml still wins over
+# them, so machine-local preferences remain the user's.
+#
+# Order is precedence within this layer: keep rows independent.
+- id: agent-default-model
+  config:
+    provider: deepseek-account
+    model: deepseek-flash
+    reasoningEffort: high
+- id: ui-theme
+  config:
+    preference: dark
+- id: ui-chat
+  config:
+    transcriptView: detailed
+    performanceUsage: detailed
+- id: agent-preset-registry
+  config:
+    default: standard
+    selectedDefault: cordis

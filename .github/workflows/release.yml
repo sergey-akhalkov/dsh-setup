@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Confirm the tag names the setup version
+        run: >-
+          node -e "const v = require('./packages/setup/package.json').version;
+          if (process.env.GITHUB_REF_NAME !== 'v' + v) {
+          console.error('tag ' + process.env.GITHUB_REF_NAME + ' does not match setup version v' + v); process.exit(1) }"
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Build committed runtime from sources
+        run: pnpm build
+
+      - name: Reject committed runtime that differs from a fresh build
+        run: git diff --exit-code
+
+      - name: Reject generated files that differ from their sources
+        run: pnpm gen:check
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Lint and format
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Validate repository manifests and scans
+        run: pnpm validate:repo
+
+      - name: Validate the composed profile
+        env:
+          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ vars.DSH_RUNTIME_VERSION || '0.2.1-rc.3' }}
+        run: pnpm validate:composition
+
+      - name: Generate the market publication artifact
+        run: pnpm generate:market
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: market
+
+      # Deployment is the last step: any earlier failure leaves the previously
+      # published index in place.
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,74 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dsh: "0.2.1-rc.3"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build committed runtime from sources
+        run: pnpm build
+
+      - name: Reject committed runtime that differs from a fresh build
+        run: git diff --exit-code
+
+      - name: Reject generated files that differ from their sources
+        run: pnpm gen:check
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Lint and format
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Validate repository manifests and scans
+        run: pnpm validate:repo
+
+      - name: Confirm the matrix version is a supported DSH version
+        run: >-
+          node -e "const v = require('./dsh.json');
+          if (!v.supportedVersions.includes(process.env.DSH_VERSION)) {
+          console.error('unsupported DSH version in matrix: ' + process.env.DSH_VERSION); process.exit(1) }"
+        env:
+          DSH_VERSION: ${{ matrix.dsh }}
+
+      - name: Validate the composed profile with the published DSH CLI
+        env:
+          DSH_CLI: pnpm dlx @deepseek-ai/dsh@${{ matrix.dsh }}
+        run: pnpm validate:composition

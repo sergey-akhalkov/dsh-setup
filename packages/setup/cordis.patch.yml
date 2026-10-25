@@ -1,0 +1,25 @@
+# Generated from every package cordis.fragment.yml and defaults.yml by
+# scripts/generate.ts; do not edit. Run `pnpm gen` after changing a fragment
+# or a default.
+#
+# Layer order: all plugin rows mount first, then owner defaults override the
+# shipped rows they name. A profile cordis.patch.yml still outranks this layer.
+- insert:
+    - id: dsh-setup-composer-clock
+      name: "@dsh-setup/plugin-composer-clock"
+- id: agent-default-model
+  config:
+    provider: deepseek-account
+    model: deepseek-flash
+    reasoningEffort: high
+- id: ui-theme
+  config:
+    preference: dark
+- id: ui-chat
+  config:
+    transcriptView: detailed
+    performanceUsage: detailed
+- id: agent-preset-registry
+  config:
+    default: standard
+    selectedDefault: cordis

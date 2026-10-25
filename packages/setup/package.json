@@ -1,0 +1,27 @@
+{
+  "name": "@dsh-setup/setup",
+  "version": "0.1.0",
+  "description": "The full portable DeepSeek Harness setup: every plugin bundle plus owner defaults, installed as one bundle",
+  "icon": "./icon.svg",
+  "files": [
+    "cordis.patch.yml",
+    "defaults.yml",
+    "icon.svg",
+    "locale/*.json"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "dependencies": {
+    "@dsh-setup/plugin-composer-clock": "0.1.0"
+  },
+  "bundleDependencies": [
+    "@dsh-setup/plugin-composer-clock"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

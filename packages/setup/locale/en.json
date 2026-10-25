@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-setup",
+    "description": "A portable DeepSeek Harness setup: plugin bundles, owner defaults, and the composition that mounts them"
+  }
+}
