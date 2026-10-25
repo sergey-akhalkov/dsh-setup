@@ -201,19 +201,9 @@ export function computeGenerated(
 
   for (const { pkg, rows } of pluginRows) {
     for (const row of rows) {
-      if (row.name === pkg.manifest.name) continue
-      if (!ADAPTER_ROW_NAMES.has(row.name)) {
+      if (row.name !== pkg.manifest.name && !ADAPTER_ROW_NAMES.has(row.name)) {
         throw new Error(
           `${pkg.relativeDir}: adapter row "${row.id}" names "${row.name}", which is not an approved adapter target`,
-        )
-      }
-      if (
-        pkg.manifest.main !== undefined ||
-        pkg.manifest.types !== undefined ||
-        pkg.manifest.dsh?.client !== undefined
-      ) {
-        throw new Error(
-          `${pkg.relativeDir}: adapter row "${row.id}" names "${row.name}", but a package with a Host or Client entry may only mount its own code`,
         )
       }
     }

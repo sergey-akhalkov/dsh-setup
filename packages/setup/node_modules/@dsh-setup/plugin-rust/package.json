@@ -1,0 +1,46 @@
+{
+  "name": "@dsh-setup/plugin-rust",
+  "version": "0.2.0",
+  "description": "Rust and Cargo guidance: MSRV-gated standard features, the narrowest check/test/clippy command, build-test-disk diagnosis, profile and target-directory hygiene",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./cordis.fragment.yml": "./cordis.fragment.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml",
+    "cordis.fragment.yml",
+    "assets/rust/SKILL.md",
+    "assets/rust/references/cargo-workflows.md",
+    "assets/rust/references/std-replacements.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

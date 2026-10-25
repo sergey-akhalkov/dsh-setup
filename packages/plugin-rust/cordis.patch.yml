@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-rust.
+- insert:
+    - id: dsh-setup-rust
+      name: "@dsh-setup/plugin-rust"

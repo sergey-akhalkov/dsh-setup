@@ -99,9 +99,10 @@ Use this path when you cannot run the installer, for example on a CLI-only machi
 4. Confirm the version and its source. The bundle is added to the running profile, its patch applies,
    and the composer-clock plugin appears in the conversation composer dock.
 
-The full setup also ships the packaged Ponytail prompt: its compact ruleset is always on by default
-and its skill is available on demand. See [ponytail.md](ponytail.md) for the prompt cost, the
-`alwaysOn: false` opt-out, and removal.
+The full setup also ships two guidance bundles. The packaged Ponytail prompt is always on by default
+with its skill available on demand, and the first-party working contract is always on by default with
+two skills on demand. See [ponytail.md](ponytail.md) and [principles.md](principles.md) for the prompt
+cost, the `alwaysOn: false` opt-outs, and removal.
 
 Individual plugins are listed as their own entries. Installing one mounts only that plugin; use either
 the full setup or individual plugins for a given plugin, not both. The Ponytail entry behaves the same
@@ -155,7 +156,8 @@ need to pin back.
 ## Serena MCP
 
 The setup also ships the Serena adapter bundle, which adds Serena's symbol-level code tools through
-the Harness MCP client. It is optional and can be disabled (see below).
+the Harness MCP client. It is optional and can be disabled (see below). The bundle also ships a
+`serena-discipline` skill in the catalog; the adapter row works without it.
 
 Prerequisite: `uv`/`uvx` must be on the PATH of the Harness process. The adapter runs
 `uvx --from serena-agent==1.7.0 serena start-mcp-server ...`; the first start downloads that pinned
@@ -182,7 +184,8 @@ To disable the adapter, add this to the profile's own `cordis.patch.yml`:
 The setup also ships the Nuphus adapter bundle, which adds `nuphus-mcp` desktop automation through the
 Harness MCP client: screen and window control, mouse and keyboard, accessibility-driven UI actions,
 local OCR plus BYOK vision, and a Chrome/Edge session over CDP. The tools register as
-`mcp__nuphus-mcp__*`. It is optional and can be disabled (see below).
+`mcp__nuphus-mcp__*`. It is optional and can be disabled (see below). The bundle also ships a
+`nuphus-discipline` skill in the catalog; the adapter row works without it.
 
 Prerequisite: install the server yourself and keep its command on the PATH of the Harness process:
 

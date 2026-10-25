@@ -1,10 +1,16 @@
 {
   "name": "@dsh-setup/plugin-nuphus-mcp",
-  "version": "0.1.7",
-  "description": "Nuphus MCP: desktop automation (screen, windows, mouse and keyboard, Chrome) through the DeepSeek Harness MCP client",
+  "version": "0.2.0",
+  "description": "Nuphus MCP: desktop automation (screen, windows, mouse and keyboard, Chrome) through the DeepSeek Harness MCP client, plus the nuphus-discipline skill",
   "icon": "./icon.svg",
   "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./cordis.fragment.yml": "./cordis.fragment.yml",
     "./locale/*.json": "./locale/*.json",
@@ -14,11 +20,21 @@
   "files": [
     "icon.svg",
     "locale/*.json",
+    "lib/index.js",
+    "lib/index.d.ts",
     "cordis.patch.yml",
-    "cordis.fragment.yml"
+    "cordis.fragment.yml",
+    "assets/nuphus-discipline/SKILL.md"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.3"
   },
   "dsh": {
     "bundle": {

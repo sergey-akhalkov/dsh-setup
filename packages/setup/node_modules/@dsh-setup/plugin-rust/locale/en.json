@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rust",
+    "description": "On-demand Rust and Cargo skill: MSRV-gated standard features, the narrowest check/test/clippy command, build-test-disk cost diagnosis, profile and target-directory hygiene"
+  }
+}

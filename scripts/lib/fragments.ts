@@ -11,9 +11,9 @@ export interface FragmentRow {
 }
 
 /**
- * Harness-provided packages a configuration-only adapter row may mount instead
- * of its owning package. The set is deliberately narrow: a fragment must not be
- * able to mount arbitrary Harness services.
+ * Harness-provided packages a row may mount instead of its owning package. The
+ * set is deliberately narrow: a fragment must not be able to mount arbitrary
+ * Harness services.
  */
 export const ADAPTER_ROW_NAMES = new Set(['@deepseek-ai/dsh-mcp-client'])
 
@@ -40,10 +40,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Parse and validate one package's composition fragment.
  *
  * The fragment is intentionally tiny: it names the row ids a package mounts.
- * The row `name` is derived from the owning package; only a configuration-only
- * adapter may name an approved Harness adapter package instead. Unknown fields
- * fail loudly so a typo does not silently produce a patch that omits a
- * contribution.
+ * The row `name` is derived from the owning package; a row may name an approved
+ * Harness adapter package instead, whether or not the owner also ships code.
+ * Unknown fields fail loudly so a typo does not silently produce a patch that
+ * omits a contribution.
  */
 export function parseCompositionFragment(text: string, packageName: string): CompositionFragment {
   const document: unknown = parse(text)

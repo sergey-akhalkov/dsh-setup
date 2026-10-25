@@ -16,3 +16,5 @@
           - --enable-web-dashboard=false
         toolCallTimeoutMs: 120000
         failOnStartupError: false
+    - id: dsh-setup-serena-guidance
+      name: "@dsh-setup/plugin-serena"

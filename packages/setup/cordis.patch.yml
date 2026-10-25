@@ -17,8 +17,12 @@
           - --confirm-write
         toolCallTimeoutMs: 120000
         failOnStartupError: false
+    - id: dsh-setup-nuphus-guidance
+      name: "@dsh-setup/plugin-nuphus-mcp"
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
+    - id: dsh-setup-rust
+      name: "@dsh-setup/plugin-rust"
     - id: dsh-setup-serena
       name: "@deepseek-ai/dsh-mcp-client"
       config:
@@ -34,6 +38,10 @@
           - --enable-web-dashboard=false
         toolCallTimeoutMs: 120000
         failOnStartupError: false
+    - id: dsh-setup-serena-guidance
+      name: "@dsh-setup/plugin-serena"
+    - id: dsh-setup-working-principles
+      name: "@dsh-setup/plugin-working-principles"
 - id: agent-default-model
   config:
     provider: deepseek-account

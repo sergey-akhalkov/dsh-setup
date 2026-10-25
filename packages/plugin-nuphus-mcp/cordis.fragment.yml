@@ -1,9 +1,9 @@
 # Composition fragment for @dsh-setup/plugin-nuphus-mcp.
 #
-# A configuration-only adapter: the row mounts the Harness-provided MCP client
-# instead of this package, because the package has no Host or Client module.
-# `dsh-setup/scripts/generate.ts` rejects a foreign row on a code-bearing
-# package, and the row id must stay globally unique.
+# Two rows: the adapter row mounts the Harness-provided MCP client instead of
+# this package, and the guidance row mounts this package's own Host module,
+# which registers the `nuphus-discipline` skill. The rows are independent, so
+# the adapter keeps working when the guidance row is disabled.
 rows:
   - id: dsh-setup-nuphus-mcp
     name: "@deepseek-ai/dsh-mcp-client"
@@ -22,3 +22,4 @@ rows:
       # A missing binary must not reject the row; the Harness starts without the
       # desktop tools and logs the failed connection.
       failOnStartupError: false
+  - id: dsh-setup-nuphus-guidance

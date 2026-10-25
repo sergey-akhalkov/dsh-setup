@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Working principles">
+  <rect x="12" y="8" width="40" height="48" rx="4" fill="#2f7d4f" opacity="0.14"/>
+  <path d="M12 12a4 4 0 0 1 4-4h40a4 4 0 0 1 4 4v40a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4z" fill="none" stroke="#2f7d4f" stroke-width="3"/>
+  <path d="M21 24l4 4 7-8M21 36l4 4 7-8M21 48l4 4 7-8" fill="none" stroke="#2f7d4f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M38 24h8M38 36h8M38 48h8" fill="none" stroke="#2f7d4f" stroke-width="3" stroke-linecap="round"/>
+</svg>

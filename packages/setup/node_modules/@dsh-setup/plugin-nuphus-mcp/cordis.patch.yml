@@ -11,3 +11,5 @@
           - --confirm-write
         toolCallTimeoutMs: 120000
         failOnStartupError: false
+    - id: dsh-setup-nuphus-guidance
+      name: "@dsh-setup/plugin-nuphus-mcp"

@@ -153,41 +153,41 @@ describe('adapter rows', () => {
     ).toThrow(/not an approved adapter target/)
   })
 
-  it('rejects an adapter row on a package with a Host entry', () => {
-    expect(() =>
-      computeGenerated(
-        [
-          {
-            pkg: workspacePackage('@dsh-setup/plugin-a', { main: 'lib/index.js' }),
-            rows: ADAPTER_ROWS,
-          },
-        ],
-        [],
-        '0.1.0',
-        VERSIONS,
-      ),
-    ).toThrow(/Host or Client entry/)
+  it('generates an adapter row beside an owned row on a package with a Host entry', () => {
+    const files = computeGenerated(
+      [
+        {
+          pkg: workspacePackage('@dsh-setup/plugin-a', { main: 'lib/index.js' }),
+          rows: [{ id: 'dsh-setup-a', name: '@dsh-setup/plugin-a' }, ...ADAPTER_ROWS],
+        },
+      ],
+      [],
+      '0.1.0',
+      VERSIONS,
+    )
+    const patch = files.get(join('packages', 'plugin-a', 'cordis.patch.yml'))?.toString() ?? ''
+    expect(patch).toContain('@dsh-setup/plugin-a')
+    expect(patch).toContain('@deepseek-ai/dsh-mcp-client')
   })
 
-  it('rejects an adapter row on a package with a Client entry', () => {
-    expect(() =>
-      computeGenerated(
-        [
-          {
-            pkg: workspacePackage('@dsh-setup/plugin-a', {
-              dsh: {
-                bundle: { patch: './cordis.patch.yml' },
-                client: { platform: 'web' },
-              },
-            }),
-            rows: ADAPTER_ROWS,
-          },
-        ],
-        [],
-        '0.1.0',
-        VERSIONS,
-      ),
-    ).toThrow(/Host or Client entry/)
+  it('generates an adapter row on a package with a Client entry', () => {
+    const files = computeGenerated(
+      [
+        {
+          pkg: workspacePackage('@dsh-setup/plugin-a', {
+            dsh: {
+              bundle: { patch: './cordis.patch.yml' },
+              client: { platform: 'web' },
+            },
+          }),
+          rows: ADAPTER_ROWS,
+        },
+      ],
+      [],
+      '0.1.0',
+      VERSIONS,
+    )
+    expect(files.get(SETUP_PATCH_FILE)?.toString()).toContain('@deepseek-ai/dsh-mcp-client')
   })
 
   it('still generates a self-named row for a code-bearing package', () => {

@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-working-principles.
+- insert:
+    - id: dsh-setup-working-principles
+      name: "@dsh-setup/plugin-working-principles"
