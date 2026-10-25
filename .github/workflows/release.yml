@@ -56,10 +56,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # One global install keeps every CLI call in the checks below off the
-      # `pnpm dlx` cache path, so a slow registry cannot stall a single step.
+      # Install the published CLI once, outside the repository, so the checks
+      # below reuse one installation instead of a `pnpm dlx` resolution per call.
       - name: Install the published DSH CLI under test
-        run: pnpm add -g @deepseek-ai/dsh@${{ matrix.dsh }}
+        shell: pwsh
+        run: |
+          $cliDir = Join-Path $env:RUNNER_TEMP "dsh-cli-${{ matrix.dsh }}"
+          New-Item -ItemType Directory -Force $cliDir | Out-Null
+          Set-Content -Path (Join-Path $cliDir 'package.json') -Value '{"name":"dsh-cli","private":true}'
+          pnpm --dir $cliDir add --config.strict-dep-builds=false "@deepseek-ai/dsh@${{ matrix.dsh }}"
+          $bin = Join-Path $cliDir 'node_modules/.bin/dsh.CMD'
+          if (-not (Test-Path -LiteralPath $bin)) { throw "The DSH CLI shim was not created at $bin" }
+          "DSH_CLI=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build committed runtime from sources
         run: pnpm build
@@ -83,13 +91,10 @@ jobs:
         run: pnpm validate:repo
 
       - name: Validate the composed profile with the published DSH CLI
-        env:
-          DSH_CLI: dsh
         run: pnpm validate:composition
 
       - name: Exercise the one-command installer on a throwaway profile
         env:
-          DSH_CLI: dsh
           DSH_VERSION: ${{ matrix.dsh }}
         run: pnpm validate:installer
 
