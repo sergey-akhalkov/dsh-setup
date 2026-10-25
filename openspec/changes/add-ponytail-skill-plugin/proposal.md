@@ -14,7 +14,7 @@ DeepSeek Harness `0.2.1-rc.3` provides both required seams: a documented Host sk
   The plugin has no Client half and no runtime network access.
 - Make the always-on mode switchable without losing the skill: the row applies a schema-less configuration where `alwaysOn: false` (set through a profile-patch row override) suppresses the system-prompt contribution while the on-demand skill remains registered. Disabling or uninstalling the row removes both contributions.
 - Vendor upstream Ponytail from an immutable pin: `skills/ponytail/SKILL.md`, `AGENTS.md`, and `LICENSE` at tag `v5.3.2` / commit `16352ac2…`, byte-identical, plus a committed `ponytail.lock.json` recording repository, version, tag, commit, per-file size and SHA-256, and the normalized skill description.
-- Add `scripts/update-ponytail.ts` (and pure helpers under `scripts/lib/`) that resolve a requested upstream tag to a commit, fetch the three files at that commit, validate them (skill frontmatter, rules-file heading, non-empty content, LF-only, size ceilings), and atomically rewrite the assets and lock. Re-running with the same version is byte-identical; a fetch or validation failure writes nothing.
+- Add `scripts/update-ponytail.ts` (and pure helpers under `scripts/lib/`) that resolve a requested upstream tag to a commit, fetch the three files at that commit, validate them (skill frontmatter, rules-file heading, non-empty content, LF-only, size ceilings), and only then write the assets and lock (staged and renamed into place, so a failed fetch or validation leaves the previous pin untouched). Re-running with the same version is byte-identical.
 - Validate provenance offline: a unit test checks the lock against the assets (size, SHA-256, license copyright line, skill name, rules heading) and a plugin test checks the skill catalog entry, the always-on section registration, the config opt-out, and the loaded skill body. `pnpm gen:check` keeps the vendored setup copy in step; Biome must ignore the vendored assets so their bytes stay stable.
 - Include the plugin in the generated setup bundle like every other plugin, so a full setup install makes both the always-on ruleset and the on-demand skill available, and let individual installs work through the market or a commit-pinned git spec. Update flow = update the pin, regenerate, release a new set version; older versions stay installable.
 - Amend the pending `portable-setup` requirement that forbids shipping copies of agent skills: machine-local skills and instructions stay user-owned and unshipped, while provenance-pinned third-party prompt content MAY ship inside a plugin bundle.
@@ -29,7 +29,7 @@ DeepSeek Harness `0.2.1-rc.3` provides both required seams: a documented Host sk
 
 ### Modified Capabilities
 
-- `portable-setup`: The "No secrets or machine data" requirement changes so that provenance-pinned third-party skill content is permitted in a plugin bundle, while machine-local skills, instructions, credentials, and session data remain excluded. The single-bundle installation requirement is clarified to cover packaged prompt rows.
+- `portable-setup`: The "No secrets or machine data" requirement changes so that provenance-pinned third-party skill content is permitted in a plugin bundle, while machine-local skills, instructions, credentials, and session data remain excluded. Packaged prompt rows arrive through the generated setup patch, so the single-bundle installation requirement itself needs no delta; the new `packaged-skills` capability specifies their distribution.
 
 ## Impact
 

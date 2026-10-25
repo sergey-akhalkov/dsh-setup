@@ -92,7 +92,7 @@ describe('vendored ponytail provenance', () => {
 
     const license = readFileSync(assetPath(PONYTAIL_LICENSE_FILE), 'utf8')
     expect(license).toContain('MIT License')
-    expect(license).toMatch(/Copyright \(c\) \d{4} DietrichGebert/)
+    expect(license).toContain('Copyright (c) 2026 DietrichGebert')
 
     for (const name of [PONYTAIL_SKILL_FILE, PONYTAIL_RULES_FILE, PONYTAIL_LICENSE_FILE]) {
       const bytes = readFileSync(assetPath(name))

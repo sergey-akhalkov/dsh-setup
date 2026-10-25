@@ -163,7 +163,7 @@ describe('ponytail plugin', () => {
     expect(providers).toHaveLength(1)
   })
 
-  it('loads the vendored skill body and appends the adapter note', async () => {
+  it('loads the vendored skill body followed exactly by the adapter note', async () => {
     const plugin = await loadPlugin()
     const { ctx, providers } = createContext()
     plugin.apply(ctx)
@@ -174,11 +174,14 @@ describe('ponytail plugin', () => {
 
     const definition = await provider.get(candidate, {})
     expect(definition?.name).toBe('ponytail')
-    expect(definition?.content.startsWith(skillAsset)).toBe(true)
-    const note = definition?.content.slice(skillAsset.length) ?? ''
-    expect(note).toContain(lock.upstream.tag)
-    expect(note).toContain('no /ponytail command')
-    expect(note).toContain('lite')
+    const expectedNote = [
+      '',
+      '',
+      '---',
+      '',
+      `DeepSeek Harness adapter: this skill was loaded from the packaged Ponytail prompt pinned at ${lock.upstream.tag} (${lock.upstream.repository}, MIT). Request a level in words ("ponytail lite", "ponytail ultra"); there is no /ponytail command in DeepSeek Harness.`,
+    ].join('\n')
+    expect(definition?.content).toBe(`${skillAsset}${expectedNote}`)
   })
 
   it('never touches the network while listing or loading the skill', async () => {

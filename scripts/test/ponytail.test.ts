@@ -7,6 +7,7 @@ import {
   assertUpstream,
   buildPonytailLock,
   normalizeDescription,
+  PONYTAIL_MAX_LICENSE_BYTES,
   PONYTAIL_MAX_RULES_BYTES,
   PONYTAIL_MAX_SKILL_BYTES,
   type PonytailAsset,
@@ -64,6 +65,11 @@ describe('skill frontmatter', () => {
 
   it('rejects a body without YAML frontmatter', () => {
     expect(() => parseSkillFrontmatter('# Ponytail\n\nbody\n')).toThrow(/missing YAML frontmatter/)
+  })
+
+  it('rejects a missing skill name', () => {
+    const body = VALID_SKILL.replace('name: ponytail\n', '')
+    expect(() => parseSkillFrontmatter(body)).toThrow(/frontmatter name must match/)
   })
 
   it('rejects an invalid skill name', () => {
@@ -136,6 +142,17 @@ describe('license file', () => {
     expect(() => assertLicenseText('MIT License\n\nSomeone else.\n')).toThrow(
       /upstream copyright line/,
     )
+  })
+
+  it('rejects CRLF content', () => {
+    expect(() => assertLicenseText(VALID_LICENSE.replaceAll('\n', '\r\n'))).toThrow(
+      /must use LF line endings/,
+    )
+  })
+
+  it('rejects content above the size ceiling', () => {
+    const toolarge = `${VALID_LICENSE}${'x'.repeat(PONYTAIL_MAX_LICENSE_BYTES)}`
+    expect(() => assertLicenseText(toolarge)).toThrow(/above the .* ceiling/)
   })
 })
 
