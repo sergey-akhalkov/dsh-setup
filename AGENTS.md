@@ -25,7 +25,7 @@ workflow generates the static format-1 market index pinned to the tagged commit 
 GitHub Pages.
 
 Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
-Repo package version (all packages move together): **0.2.0**.
+Repo package version (all packages move together): **0.3.0**.
 
 ## 2. First commands
 
@@ -70,6 +70,7 @@ Scripts under `scripts/` are TypeScript executed directly by Node 24: relative i
 | `packages/plugin-*/cordis.patch.yml`                        | Generated bundle patch                                                        | **no** (`pnpm gen`)                                     |
 | `packages/plugin-*/lib/index.js`, `lib/index.d.ts`          | Generated Host runtime (tsc)                                                  | **no** (`pnpm build`)                                   |
 | `packages/plugin-*/lib/client.js`                           | Generated Client bundle (esbuild + loader wrapper)                            | **no** (`pnpm build`)                                   |
+| `packages/plugin-codex-subagent/lib/**`                     | Vendored forked provider runtime (upstream MIT + local patch)                 | only via the fork README patch/rebase; not `pnpm build` |
 | `packages/plugin-ponytail/assets/**`, `ponytail.lock.json`  | Vendored upstream prompt, license, and provenance lock                        | **no** (`pnpm ponytail:update`)                         |
 | `packages/plugin-openspec/assets/**`, `openspec.lock.json`  | Generated OpenSpec core skills, license, and provenance lock                  | **no** (`pnpm openspec:update`)                         |
 | `packages/setup/defaults.yml`, `locale/en.json`, `icon.svg` | Owner defaults and setup card metadata                                        | yes                                                     |
@@ -324,7 +325,8 @@ its `portable-setup` amendment, the archived `2026-10-26-add-serena-mcp-plugin` 
 the archived `2026-10-26-add-working-ruleset-plugins` change added `session-guidance` and relaxed
 `mcp-adapters`' approved-adapter-target rule so a code-bearing bundle may mount the approved adapter
 row, and the archived `2026-10-26-add-openspec-skills-plugin` change added `openspec-skills` and the
-packaged `@dsh-setup/plugin-openspec` bundle. Cite
+packaged `@dsh-setup/plugin-openspec` bundle, and the archived `2026-10-26-add-delegation-rules`
+change added `delegation-rules` and `codex-subagent`. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -339,11 +341,20 @@ tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skil
 changes that touch a documented requirement should update the corresponding delta spec and design
 rationale in the same change.
 
+When the delegation-rules bundle is active, the apply flow is task-by-task: mark a task `[x]` only
+when it is complete and immediately run its task-scoped delegation review before starting the next
+task; if a turn stops mid-task, call `task_progress` with the reason instead of ticking. Do not batch
+the checkboxes at the end; the delegation gate refuses a code-changing turn without a ticked-and-
+reviewed task or a fresh progress note. The detailed contract is `docs/delegation-rules.md`.
+
 The archived tasks record 32/35. Open owner follow-ups: 7.1 first published release/tag verification,
 7.4 second release update visibility, 8.1 clean-machine rehearsal. (7.2 dogfood verification, 7.3
 commit-pinned throwaway-profile install, and 9.4 the committed `pnpm dogfood` command are done.) Keep
 `docs/` consistent with spec changes; the design's D8 layout is stale about the Client bundle path
 (actual: `lib/client.js`, not package-root `client.js`). Trust the code and `docs/plugins.md`.
+
+The archived `2026-10-26-add-delegation-rules` tasks record 50/61; the open 8.x tasks are the live
+acceptance (Codex sign-in, real review/patch/gate/non-Codex target) and need the owner's live profile.
 
 ## 12. CI gate (what blocks a merge)
 
@@ -378,6 +389,9 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   `packages/setup/package.json`, `packages/setup/cordis.patch.yml`,
   `packages/setup/node_modules/**`). Run `pnpm gen` and/or `pnpm build`, then commit the result.
   `pnpm check` alone does not run `gen:check`; use `pnpm validate` or run `gen:check` explicitly.
+  The one vendored exception is `packages/plugin-codex-subagent/lib/**`: it is the upstream MIT
+  provider plus the documented local patch. Change it only through the fork README patch/rebase
+  procedure, not with `pnpm gen`/`pnpm build`.
 - **Vendored Ponytail assets are generated** (`packages/plugin-ponytail/assets/**`,
   `ponytail.lock.json`). Refresh them with `pnpm ponytail:update` and never by hand; the offline
   provenance test pins their sizes and SHA-256, and Biome ignores them so hashes stay stable.
@@ -432,19 +446,20 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 
 ## 14. Where to look
 
-| Need                                                   | File                                                                                                                         |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Add/change a plugin, Client slots, HMR behavior        | [docs/plugins.md](docs/plugins.md), `packages/plugin-composer-clock/**`                                                      |
-| How the setup patch/manifest/vendor tree are generated | [docs/setup-composition.md](docs/setup-composition.md), `scripts/lib/generate.ts`, `scripts/lib/fragments.ts`                |
-| Installer behavior, options, manual install            | [docs/install.md](docs/install.md), `install.ps1`                                                                            |
-| Owner-profile dogfood without touching the live state  | [docs/install.md](docs/install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`            |
-| Release, Pages, version accumulation, DSH bump         | [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml`                                                      |
-| Requirements and invariants                            | `openspec/specs/*/spec.md`, `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/{proposal,design}.md`                |
-| Supported versions and installer bundle lists          | `dsh.json`, `install.ps1`                                                                                                    |
-| Build wrapper and client loader contract               | `scripts/build.ts`                                                                                                           |
-| Market schema/pinning/merge                            | `scripts/lib/market.ts`, `scripts/generate-market.ts`                                                                        |
-| Validation assertions                                  | `scripts/validate-repo.ts`, `scripts/validate-composition.ts`, `scripts/validate-installer.ts`                               |
-| DSH API types                                          | `node_modules/@deepseek-ai/cordis`, `node_modules/@deepseek-ai/dsh-client-ui-*` (pinned in `packages/plugin-*/package.json`) |
+| Need                                                   | File                                                                                                                                                                               |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add/change a plugin, Client slots, HMR behavior        | [docs/plugins.md](docs/plugins.md), `packages/plugin-composer-clock/**`                                                                                                            |
+| How the setup patch/manifest/vendor tree are generated | [docs/setup-composition.md](docs/setup-composition.md), `scripts/lib/generate.ts`, `scripts/lib/fragments.ts`                                                                      |
+| Installer behavior, options, manual install            | [docs/install.md](docs/install.md), `install.ps1`                                                                                                                                  |
+| Owner-profile dogfood without touching the live state  | [docs/install.md](docs/install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`                                                                  |
+| Release, Pages, version accumulation, DSH bump         | [docs/releasing.md](docs/releasing.md), `.github/workflows/release.yml`                                                                                                            |
+| Requirements and invariants                            | `openspec/specs/*/spec.md`, `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/{proposal,design}.md`                                                                      |
+| Supported versions and installer bundle lists          | `dsh.json`, `install.ps1`                                                                                                                                                          |
+| Build wrapper and client loader contract               | `scripts/build.ts`                                                                                                                                                                 |
+| Market schema/pinning/merge                            | `scripts/lib/market.ts`, `scripts/generate-market.ts`                                                                                                                              |
+| Delegate tasks to another model / installed-Codex fork | [docs/delegation-rules.md](docs/delegation-rules.md), [docs/codex-subagent.md](docs/codex-subagent.md), `packages/plugin-delegation-rules/**`, `packages/plugin-codex-subagent/**` |
+| Validation assertions                                  | `scripts/validate-repo.ts`, `scripts/validate-composition.ts`, `scripts/validate-installer.ts`                                                                                     |
+| DSH API types                                          | `node_modules/@deepseek-ai/cordis`, `node_modules/@deepseek-ai/dsh-client-ui-*` (pinned in `packages/plugin-*/package.json`)                                                       |
 
 ## 15. Troubleshooting
 

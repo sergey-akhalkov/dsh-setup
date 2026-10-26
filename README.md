@@ -10,6 +10,8 @@ the setup on another machine.
 - **Add a plugin package:** see [docs/plugins.md](docs/plugins.md).
 - **Understand the generated setup patch:** see [docs/setup-composition.md](docs/setup-composition.md).
 - **Cut a release:** see [docs/releasing.md](docs/releasing.md).
+- **Delegate tasks to another model:** see [docs/delegation-rules.md](docs/delegation-rules.md); the
+  installed-Codex target is [docs/codex-subagent.md](docs/codex-subagent.md).
 
 ## Development
 

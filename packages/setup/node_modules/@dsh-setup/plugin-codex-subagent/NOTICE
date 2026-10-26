@@ -1,0 +1,25 @@
+# NOTICE
+
+`@dsh-setup/plugin-codex-subagent` is a modified fork of the MIT-licensed
+DeepSeek Harness provider `@deepseek-ai/dsh-subagent-codex`, version
+`0.2.1-rc.3`, from the DeepSeek Harness project
+(https://github.com/deepseek-ai/deepseek-harness, `packages/subagent/subagent-codex`).
+
+Copyright (c) 2026 DeepSeek. Licensed under the MIT License; the complete
+upstream license text is the `LICENSE` file beside this notice.
+
+Vendored upstream files and their local changes:
+
+- `lib/index.js` — the upstream Host module with the package-local binary
+  resolution replaced by installed-CLI discovery (`codexPath`, then `codex` on
+  `PATH`), `codex --version` validation, Windows `ComSpec` handling for
+  `.cmd`/`.bat` shims, the two provider instances, and the
+  `codex_subagent_status` tool. The app-server protocol adapter, subprocess
+  lifecycle, cancellation, and teardown code are retained from upstream.
+- `lib/types/index.d.ts`, `lib/types/run.d.ts`, `lib/types/wire.d.ts` — upstream
+  declarations, updated for the local config and path/import changes.
+- `lib/index.d.ts` — local re-export of the vendored declarations.
+
+The fork does not depend on the official provider package at runtime and ships
+no Codex binary. It runs the Codex CLI installed on the user's machine and uses
+that user's Codex configuration and authentication.

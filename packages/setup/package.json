@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/setup",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "The full portable DeepSeek Harness setup: every plugin bundle plus owner defaults, installed as one bundle",
   "icon": "./icon.svg",
   "files": [
@@ -13,17 +13,21 @@
     "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "dependencies": {
-    "@dsh-setup/plugin-composer-clock": "0.2.1",
-    "@dsh-setup/plugin-nuphus-mcp": "0.2.1",
-    "@dsh-setup/plugin-openspec": "0.2.1",
-    "@dsh-setup/plugin-ponytail": "0.2.1",
-    "@dsh-setup/plugin-rtk": "0.2.1",
-    "@dsh-setup/plugin-rust": "0.2.1",
-    "@dsh-setup/plugin-serena": "0.2.1",
-    "@dsh-setup/plugin-working-principles": "0.2.1"
+    "@dsh-setup/plugin-codex-subagent": "0.3.0",
+    "@dsh-setup/plugin-composer-clock": "0.3.0",
+    "@dsh-setup/plugin-delegation-rules": "0.3.0",
+    "@dsh-setup/plugin-nuphus-mcp": "0.3.0",
+    "@dsh-setup/plugin-openspec": "0.3.0",
+    "@dsh-setup/plugin-ponytail": "0.3.0",
+    "@dsh-setup/plugin-rtk": "0.3.0",
+    "@dsh-setup/plugin-rust": "0.3.0",
+    "@dsh-setup/plugin-serena": "0.3.0",
+    "@dsh-setup/plugin-working-principles": "0.3.0"
   },
   "bundleDependencies": [
+    "@dsh-setup/plugin-codex-subagent",
     "@dsh-setup/plugin-composer-clock",
+    "@dsh-setup/plugin-delegation-rules",
     "@dsh-setup/plugin-nuphus-mcp",
     "@dsh-setup/plugin-openspec",
     "@dsh-setup/plugin-ponytail",

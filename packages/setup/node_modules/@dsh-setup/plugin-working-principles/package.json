@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-working-principles",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "First-party working contract, on by default, plus the working-principles and verify-change skills",
   "icon": "./icon.svg",
   "type": "module",

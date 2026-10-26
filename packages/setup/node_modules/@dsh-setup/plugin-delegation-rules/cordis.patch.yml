@@ -1,0 +1,64 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-delegation-rules.
+- insert:
+    - id: dsh-setup-delegation-rules
+      name: "@dsh-setup/plugin-delegation-rules"
+      config:
+        targets:
+          codex:
+            provider: codex-subagent
+          codex-write:
+            provider: codex-subagent-write
+            write: true
+        rules:
+          - id: spec-review
+            when: spec-ready
+            to: codex
+            contract: review
+            phase: spec
+            scope: whole
+            gate: strict
+            instruction: bundled:review-spec
+          - id: task-review
+            when: spec-task-ready
+            to: codex
+            contract: review
+            scope: task
+            gate: strict
+            instruction: bundled:review-task
+          - id: task-progress
+            when: implementation-work
+            contract: note
+            gate: strict
+          - id: blocker
+            when: failure-streak
+            to: codex
+            contract: answer
+            gate: soft
+            instruction: bundled:consult
+          - id: research
+            when: manual
+            to: codex
+            contract: answer
+            gate: none
+            instruction: bundled:research
+          - id: bug-fix
+            when: manual
+            to: codex-write
+            contract: patch
+            gate: none
+            instruction: bundled:fix
+            isolation: worktree
+          - id: integration-review
+            when: implementation-complete
+            to: codex
+            contract: review
+            phase: integration
+            scope: whole
+            gate: soft
+            instruction: bundled:review-integration
+        timeouts:
+          review: 600000
+          answer: 300000
+          patch: 1800000
+        failureStreak: 3

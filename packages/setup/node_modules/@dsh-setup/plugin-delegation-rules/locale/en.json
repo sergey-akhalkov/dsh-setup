@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Delegation rules",
+    "description": "Model-agnostic delegation engine: configured triggers, targets, P0/P1 review contracts, task progress notes, and a turn-stopping gate. Defaults target the installed-Codex provider; point rules at any registered DSH subagent provider. Disable the row to remove the tools, gate, and skill; records remain."
+  }
+}

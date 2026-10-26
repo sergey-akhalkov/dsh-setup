@@ -1,0 +1,74 @@
+# Composition fragment for @dsh-setup/plugin-delegation-rules.
+#
+# `dsh-setup/scripts/generate.ts` reads every package's fragment and generates
+# both this package's own bundle patch and the aggregated setup patch. Row ids
+# are global: they must start with `dsh-setup-` and stay unique across the
+# repository, so two bundles can never mount competing entries under one id.
+#
+# The row config is the shipped default rule set. It is data: the engine has no
+# Codex dependency, and every rule/target below can be overridden in a profile
+# patch (a patch replaces the whole `config` object). Targets name registered
+# `ctx.subagents` providers; a missing provider is reported by the tools and
+# the gate instead of failing profile composition, so a standalone install with
+# another provider still composes. No machine path belongs in this file.
+rows:
+  - id: dsh-setup-delegation-rules
+    config:
+      targets:
+        codex:
+          provider: codex-subagent
+        codex-write:
+          provider: codex-subagent-write
+          write: true
+      rules:
+        - id: spec-review
+          when: spec-ready
+          to: codex
+          contract: review
+          phase: spec
+          scope: whole
+          gate: strict
+          instruction: "bundled:review-spec"
+        - id: task-review
+          when: spec-task-ready
+          to: codex
+          contract: review
+          scope: task
+          gate: strict
+          instruction: "bundled:review-task"
+        - id: task-progress
+          when: implementation-work
+          contract: note
+          gate: strict
+        - id: blocker
+          when: failure-streak
+          to: codex
+          contract: answer
+          gate: soft
+          instruction: "bundled:consult"
+        - id: research
+          when: manual
+          to: codex
+          contract: answer
+          gate: none
+          instruction: "bundled:research"
+        - id: bug-fix
+          when: manual
+          to: codex-write
+          contract: patch
+          gate: none
+          instruction: "bundled:fix"
+          isolation: worktree
+        - id: integration-review
+          when: implementation-complete
+          to: codex
+          contract: review
+          phase: integration
+          scope: whole
+          gate: soft
+          instruction: "bundled:review-integration"
+      timeouts:
+        review: 600000
+        answer: 300000
+        patch: 1800000
+      failureStreak: 3

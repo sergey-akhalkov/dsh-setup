@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Codex subagent (installed CLI)",
+    "description": "MIT fork of the Codex subagent provider that runs the Codex CLI installed on this machine (codexPath or PATH) as read-only codex-subagent and workspace-write codex-subagent-write targets; requires a signed-in codex CLI and reports it through codex_subagent_status"
+  }
+}

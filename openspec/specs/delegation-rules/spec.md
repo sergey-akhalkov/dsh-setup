@@ -1,10 +1,9 @@
-# Spec Delta
+# delegation-rules Specification
 
 ## Purpose
+Defines the model-agnostic delegation rule engine: configurable triggers, targets, instructions, contracts, and gates, with model-agnostic default rules, incremental task-scoped review, task progress notes, and a turn-stopping gate that binds a handoff to a digest-bound result.
 
-Defines the model-agnostic delegation rule engine: configurable triggers, targets, instructions, contracts, and gates, with model-agnostic default rules and a turn-stopping gate that binds a handoff to a digest-bound result.
-
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Delegation rule engine
 
@@ -13,7 +12,7 @@ The bundle SHALL register a rules engine whose rules are data: each rule names a
 #### Scenario: Default rules
 
 - **WHEN** the plugin is active with the shipped default rules
-- **THEN** the spec-review, implementation-review, blocker, research, and bug-fix rules are available to the delegate tool
+- **THEN** the spec-review, task-review, task-progress, blocker, research, bug-fix, and optional integration-review rules are available to the delegate/task_progress tools
 
 #### Scenario: Custom rule
 
@@ -32,17 +31,27 @@ The bundle SHALL register a rules engine whose rules are data: each rule names a
 
 ### Requirement: Trigger evaluation
 
-The engine SHALL implement the four deterministic triggers `manual`, `spec-ready`, `implementation-complete`, and `failure-streak`. A trigger MUST evaluate only from session/workspace state and tool results, MUST be evaluated at `agent/turn-stopping` for gated rules, and MUST NOT start a target run from the listener. A new trigger source requires a code extension.
+The engine SHALL implement the six deterministic triggers `manual`, `spec-ready`, `spec-task-ready`, `implementation-work`, `implementation-complete`, and `failure-streak`. A trigger MUST evaluate only from session/workspace state and tool results, MUST be evaluated at `agent/turn-stopping` for gated rules, and MUST NOT start a target run from the listener. A new trigger source requires a code extension.
 
 #### Scenario: Spec-ready trigger
 
-- **WHEN** an active review-ready change has a gated spec-review rule without a matching pass
+- **WHEN** an active review-ready change has a gated whole-spec review rule without a matching pass
 - **THEN** the trigger reports the rule as unsatisfied
+
+#### Scenario: Spec-task-ready trigger
+
+- **WHEN** a task in `tasks.md` is checked and has no matching task-review record
+- **THEN** the trigger reports the task as needing a task-scoped review
+
+#### Scenario: Implementation-work trigger
+
+- **WHEN** a turn changed implementation files and has neither a newly checked reviewed task nor a matching task-progress note for the current worktree
+- **THEN** the trigger reports that a tick+review or a progress note is required
 
 #### Scenario: Implementation-complete trigger
 
-- **WHEN** a change's task list is complete and its gated implementation-review rule has no matching pass
-- **THEN** the trigger reports the rule as unsatisfied
+- **WHEN** a change's task list is complete and its optional integration-review rule has no matching pass
+- **THEN** the trigger reports the integration rule as unsatisfied
 
 #### Scenario: Failure-streak trigger
 
@@ -85,7 +94,7 @@ A target SHALL name a registered DSH subagent provider and MAY add a model or ag
 
 ### Requirement: Review contract
 
-The review contract SHALL compute the rule's phase digest, run the target with the bundled P0/P1 prompt, accept exactly one matching JSON verdict, and write an atomic record with the rule, phase, digest, verdict, findings, target identity, and time. A `PASS` MUST require zero P0/P1 findings; a matching `PASS`/`FINDINGS` record MUST be reused without another run; a stale digest MUST be ignored.
+The review contract SHALL compute the rule's scope digest, run the target with the bundled P0/P1 prompt, accept exactly one matching JSON verdict, and write an atomic record with the rule, scope, task id when task-scoped, digest, verdict, findings, target identity, and time. A `PASS` MUST require zero P0/P1 findings; a matching `PASS`/`FINDINGS` record MUST be reused without another run; a stale whole-scope digest MUST be ignored.
 
 #### Scenario: Passing review
 
@@ -97,15 +106,87 @@ The review contract SHALL compute the rule's phase digest, run the target with t
 - **WHEN** the target returns at least one P0 or P1 finding
 - **THEN** the engine writes a `FINDINGS` record and returns every blocking finding with evidence and fix
 
-#### Scenario: Stale record
+#### Scenario: Stale whole-scope record
 
-- **WHEN** the reviewed artifact or worktree changes after a pass
+- **WHEN** the reviewed artifact or worktree changes after a whole-scope pass
 - **THEN** the stored record is ignored and a new review is required
 
 #### Scenario: Malformed verdict
 
 - **WHEN** the target returns no single matching verdict, an invalid severity, or prose only
 - **THEN** no `PASS` is written and the failure is reported
+
+### Requirement: Task-scoped review
+
+A task-scoped review SHALL be driven by a checked task, key the record by a stable hash of the normalized task text, include the change artifact digest and the current worktree snapshot, and treat the record as a historical task snapshot. Later tasks MUST NOT invalidate an earlier task record; the optional integration review MUST use the current whole-worktree digest.
+
+#### Scenario: Checked task reviewed
+
+- **WHEN** a checked task has no matching task-review record
+- **THEN** the engine requires a task-scoped review and writes its PASS/ERROR/FINDINGS record
+
+#### Scenario: Task text changed
+
+- **WHEN** a task's normalized text changes after its review
+- **THEN** the task id changes and a new task review is required
+
+#### Scenario: Later task does not invalidate
+
+- **WHEN** a later task changes the worktree after an earlier task pass
+- **THEN** the earlier task record remains historical and the optional integration review covers the current whole worktree
+
+#### Scenario: Task review staleness
+
+- **WHEN** the same task's worktree snapshot changes before its review
+- **THEN** the review uses the current snapshot and records it
+
+### Requirement: Task progress note
+
+The `task_progress` tool SHALL write a task id, status (`in-progress` or `blocked`), reason, worktree digest, and time without running a target or writing a `PASS`. The note MUST be the only non-tick way to close a code-changing turn and MUST become stale when the worktree digest changes.
+
+#### Scenario: In-progress task
+
+- **WHEN** a task spans the turn and the agent records `task_progress(task, in-progress, reason)`
+- **THEN** the engine writes the note with the current worktree digest and runs no model
+
+#### Scenario: Blocked task
+
+- **WHEN** the agent records `task_progress(task, blocked, reason)`
+- **THEN** the note is reported and the task remains unchecked
+
+#### Scenario: Stale note
+
+- **WHEN** the worktree changes after a progress note
+- **THEN** the note no longer authorizes a close and a fresh note or tick+review is required
+
+#### Scenario: No pass from a note
+
+- **WHEN** a progress note exists for a task
+- **THEN** it never counts as a task-review `PASS`
+
+### Requirement: Task progress gate
+
+The gate SHALL refuse a code-changing turn close unless every checked task has a matching task-review `PASS`/`ERROR` and the turn has a newly checked reviewed task or a matching task-progress note for the current worktree. A note MUST NOT authorize a completed task, and the status tool MUST report active and stale notes.
+
+#### Scenario: Code change without a tick or note
+
+- **WHEN** a turn changes implementation files and has no checked reviewed task and no progress note
+- **THEN** the gate steers to tick+review or `task_progress`
+
+#### Scenario: Progress note allows the close
+
+- **WHEN** a code-changing turn has a matching progress note for the current worktree
+- **THEN** the gate allows the close with the task still unchecked
+
+#### Scenario: Checked task without its review
+
+- **WHEN** a task is checked but has no task-review PASS/ERROR
+- **THEN** the gate refuses the close even if a progress note exists
+
+#### Scenario: Stale progress note
+
+- **WHEN** the worktree changes after a progress note
+- **THEN** the stale note no longer authorizes a close
 
 ### Requirement: Answer contract
 
@@ -181,12 +262,17 @@ For every gated rule, the engine SHALL refuse a turn close unless a matching `PA
 
 ### Requirement: Delegate tool and status
 
-The bundle SHALL register a `delegate` tool whose rule parameter is generated from the configured rules and whose description names the manual tasks, and a `delegation_status` tool that reports registered providers/capabilities, configured targets/rules, and missing-target diagnostics. The tools MUST validate their rule/target inputs before starting a run.
+The bundle SHALL register a `delegate` tool whose rule parameter is generated from the configured rules and whose description names the manual tasks, a `task_progress` tool for unchecked-task notes, and a `delegation_status` tool that reports registered providers/capabilities, configured targets/rules, active/stale notes, and missing-target diagnostics. The tools MUST validate their rule/target/note inputs before starting a run or writing a note.
 
 #### Scenario: Manual delegation
 
 - **WHEN** the agent calls delegate for a configured manual rule
 - **THEN** the engine validates the input and runs that rule's target/instruction
+
+#### Scenario: Progress tool
+
+- **WHEN** the agent calls task_progress for an unchecked task
+- **THEN** the tool writes the note and runs no model
 
 #### Scenario: Unknown rule
 
@@ -196,11 +282,11 @@ The bundle SHALL register a `delegate` tool whose rule parameter is generated fr
 #### Scenario: Status
 
 - **WHEN** the agent or user asks for delegation status
-- **THEN** the tool reports the available providers, targets, rules, and missing-target diagnostics
+- **THEN** the tool reports the available providers, targets, rules, active/stale notes, and missing-target diagnostics
 
 ### Requirement: Model-agnostic defaults and documentation
 
-The shipped default rules SHALL be model-agnostic data; the setup MAY default their targets to the Codex provider, but the bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The acceptance MUST exercise at least one non-Codex target.
+The shipped default rules SHALL be model-agnostic data; the setup MAY default their targets to the Codex provider, but the bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, task progress, blocker, research, bug fix, and an optional integration review. The acceptance MUST exercise at least one non-Codex target.
 
 #### Scenario: Default setup
 
@@ -222,9 +308,9 @@ The shipped default rules SHALL be model-agnostic data; the setup MAY default th
 - **WHEN** a user reads the plugin documentation
 - **THEN** it shows the trigger/contract/gate model, a Codex target, a non-Codex target, and the config/code boundary
 
-### Requirement: Model-facing cost and removal
+### Requirement: Model-facing cost
 
-The bundle SHALL NOT register an always-on system-prompt section. Its model-facing policy MUST stay in the tool descriptions and the on-demand skill, bounded by a documented budget. Disabling or uninstalling the `dsh-setup-delegation-rules` row MUST remove its tools, gate, and skill and stop enforcement; records and change artifacts MUST remain, and no in-session phrase may bypass an active gate.
+The bundle SHALL NOT register an always-on system-prompt section. Its model-facing policy MUST stay in the tool descriptions and the on-demand skill, bounded by a documented budget: the three tool descriptions plus the skill catalog description at 900 estimated tokens and the skill body at 24,000 UTF-8 bytes.
 
 #### Scenario: No prompt section
 
@@ -241,14 +327,23 @@ The bundle SHALL NOT register an always-on system-prompt section. Its model-faci
 - **WHEN** a tool or skill description grows past the documented budget
 - **THEN** repository validation fails and names the owning plugin and measured size
 
+### Requirement: Removal and opt-out
+
+Disabling or uninstalling the `dsh-setup-delegation-rules` row MUST remove its tools, gate, and skill and stop enforcement; records, progress notes, and change artifacts MUST remain, and no in-session phrase may bypass an active gate.
+
 #### Scenario: Row removed
 
 - **WHEN** the row is disabled or uninstalled
-- **THEN** the tools, gate, and skill are absent, no gate blocks a turn, and existing records remain
+- **THEN** the tools, gate, and skill are absent, no gate blocks a turn, and existing records and progress notes remain
+
+#### Scenario: No in-session bypass
+
+- **WHEN** a session claims a delegation is unnecessary or asks to skip the gate
+- **THEN** the active gate still requires the configured record or progress note
 
 ### Requirement: Security and trust boundaries
 
-The engine SHALL validate rule ids, change names, worktree paths, and git arguments before effects, MUST use fixed-argument git commands, and MUST keep records free of credentials, secrets, and machine paths. Target and model output MUST be treated as untrusted data, and a patch result MUST remain isolated until a human/agent review applies it.
+The engine SHALL validate rule ids, change names, task ids, worktree paths, and git arguments before effects, MUST use fixed-argument git commands, and MUST keep records and progress notes free of credentials, secrets, and machine paths. Target and model output MUST be treated as untrusted data, and a patch result MUST remain isolated until a human/agent review applies it.
 
 #### Scenario: Invalid rule or change
 
