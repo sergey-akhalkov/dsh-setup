@@ -15,6 +15,14 @@ silent and does not restate it. A direct instruction from the user outranks both
 - Make and disclose small reversible in-scope corrections. Anything that changes outcome, access, or
   an explicit constraint needs the user's decision first.
 
+## Delegate only to parallelize
+
+- One agent with its skills is the default. Hand a piece to a subagent or teammate only when it is
+  independent (separate files or data, little shared context), runs in parallel, and returns a
+  compact result; fresh-context verification is the other honest reason.
+- Do not build a team for sequential work, ceremony, or a context restatement. A handoff that needs
+  repeated clarification belongs in the main loop.
+
 ## Dissent, then commit
 
 - Treat a request as a proposal: look for better routes and for concrete weaknesses in correctness,

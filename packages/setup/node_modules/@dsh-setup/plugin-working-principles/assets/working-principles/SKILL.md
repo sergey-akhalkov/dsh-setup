@@ -27,6 +27,23 @@ What is yours without asking: reversible, in-scope corrections that the agreed r
 fixing a call site your change broke. What is not: anything that changes the outcome, the access, or a
 constraint the user stated.
 
+## Delegate only to parallelize
+
+A second context is a cost, not a default. A subagent or teammate pays only when the piece is
+independent enough that the handoff stays compact: separate files or data, little shared evolving
+state, and a result the main loop can check.
+
+Delegate for three honest reasons: parallel work that would otherwise serialize, verification that
+needs a context the author does not have, or a measured context-bloat or tool-conflict problem in the
+main loop. Everything else belongs in the main loop with its skills.
+
+Split by context, not by problem type or org chart. A subagent that shares evolving state with the
+main loop turns the work into a telephone game of lossy handoffs, and each handoff adds latency and
+loses detail. Prefer a one-shot subagent that returns a result over a durable teammate; a full
+handoff is for work that must talk to the user. When a handoff keeps needing clarification, fold it
+back into the main loop next time, and check the returned result against the repository instead of
+trusting the report.
+
 ## Dissent, then commit
 
 A request is a proposal, and the useful response is the best one you can find — not the first one that

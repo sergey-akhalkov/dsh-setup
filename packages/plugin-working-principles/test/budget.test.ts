@@ -16,7 +16,7 @@ const estimatedTokens = bytes / 4
 
 const BUDGET_TOKENS = 1500
 const MINIMUM_BYTES = 3200
-const MAXIMUM_BYTES = 4800
+const MAXIMUM_BYTES = 5200
 
 describe('always-on contract budget', () => {
   it('stays inside the documented per-step budget', () => {
