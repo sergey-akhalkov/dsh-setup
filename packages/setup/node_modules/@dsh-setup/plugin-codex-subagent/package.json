@@ -1,7 +1,7 @@
 {
   "name": "@dsh-setup/plugin-codex-subagent",
-  "version": "0.3.0",
-  "description": "MIT-attributed fork of the Codex subagent provider that runs the Codex CLI installed on the machine (codexPath or PATH), with read-only and workspace-write providers and a codex_subagent_status tool",
+  "version": "0.4.0",
+  "description": "MIT-attributed fork of the Codex subagent provider that runs a bundled pinned Codex CLI (codexPath override, then bundled @openai/codex, then PATH), with read-only and workspace-write providers and a codex_subagent_status tool",
   "icon": "./icon.svg",
   "type": "module",
   "main": "lib/index.js",
@@ -45,7 +45,8 @@
   "dependencies": {
     "@deepseek-ai/dsh-brand": "0.2.1-rc.3",
     "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.3",
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@openai/codex": "0.164.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",

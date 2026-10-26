@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,6 +11,8 @@ import {
   FakeSubagents,
   Harness,
   makeWorkspace,
+  passResponder,
+  runIdFrom,
   steerTexts,
   writeChange,
 } from './helpers.js'
@@ -129,7 +132,10 @@ describe('strict whole-spec gate', () => {
     expect(first).toMatch(/spec digest [0-9a-f]{12}/)
     expect(subagents.startCalls).toBe(0)
 
-    await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
+    const run = runIdFrom(
+      await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    await harness.waitForRun(run)
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent)).toHaveLength(1)
   })
@@ -145,11 +151,37 @@ describe('strict whole-spec gate', () => {
     })
     const harness = harnessFor(root, specOnly(), subagents)
     await harness.preStep(1)
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    ).rejects.toThrow()
+    const run = runIdFrom(
+      await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(await harness.waitForRun(run)).toContain('state=failed')
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('points a pending review at its run instead of starting another', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = registered()
+    const releases: Array<() => void> = []
+    subagents.respond = (run) =>
+      new Promise((resolve) => {
+        releases.push(() => resolve(passResponder(run)))
+      })
+    const harness = harnessFor(root, specOnly(), subagents)
+    await harness.preStep(1)
+    const run = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.turnStopping(1)
+    const message = combinedSteers(harness.agent)
+    expect(message).toContain(`review run ${run} is running`)
+    expect(message).toContain(`delegation_status (run ${run})`)
+    expect(message).not.toContain('Run: delegate(rule: "spec-review"')
+    expect(steerTexts(harness.agent)).toHaveLength(1)
+
+    releases.shift()?.()
+    await harness.waitForRun(run)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(1)
   })
 
   it('ignores a stale whole-spec record', async () => {
@@ -157,7 +189,10 @@ describe('strict whole-spec gate', () => {
     await writeChange(root, 'change-a', [])
     const harness = harnessFor(root, specOnly())
     await harness.preStep(1)
-    await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
+    const run = runIdFrom(
+      await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    await harness.waitForRun(run)
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent)).toHaveLength(0)
     await writeFile(
@@ -235,7 +270,10 @@ describe('task review gate', () => {
         stopReason: 'completed',
       }
     }
-    await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' })
+    const findingsRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' }),
+    )
+    await harness.waitForRun(findingsRun)
     await harness.turnStopping(1)
     expect(combinedSteers(harness.agent)).toContain('unresolved findings')
   })
@@ -245,7 +283,10 @@ describe('task review gate', () => {
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
     const harness = harnessFor(root, taskOnly())
     await harness.preStep(1)
-    await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' })
+    const taskRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' }),
+    )
+    await harness.waitForRun(taskRun)
     harness.git.status = ' M packages/engine.ts\0'
     harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
     await harness.turnStopping(1)
@@ -273,7 +314,10 @@ describe('implementation-work gate', () => {
     const harness = harnessFor(root, workAndReview())
     await harness.preStep(1)
     await writeFile(join(dir, 'tasks.md'), '# Tasks\n\n- [x] 1.1 First task\n')
-    await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' })
+    const tickRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' }),
+    )
+    await harness.waitForRun(tickRun)
     harness.git.status = ' M packages/engine.ts\0'
     harness.git.diff = 'M engine'
     await harness.turnStopping(1)
@@ -351,7 +395,10 @@ describe('integration review gate', () => {
     const afterFirst = steerTexts(soft.agent).length
     await soft.turnStopping(1)
     expect(steerTexts(soft.agent)).toHaveLength(afterFirst)
-    await soft.callTool('delegate', { rule: 'integration-review', change: 'change-a' })
+    const softRun = runIdFrom(
+      await soft.toolText('delegate', { rule: 'integration-review', change: 'change-a' }),
+    )
+    await soft.waitForRun(softRun)
     await soft.turnStopping(1)
     expect(steerTexts(soft.agent)).toHaveLength(afterFirst)
 
@@ -371,7 +418,10 @@ describe('integration review gate', () => {
     expect(strictFirst).toBeGreaterThan(0)
     await strict.turnStopping(1)
     expect(steerTexts(strict.agent).length).toBeGreaterThan(strictFirst)
-    await strict.callTool('delegate', { rule: 'integration-review', change: 'change-a' })
+    const strictRun = runIdFrom(
+      await strict.toolText('delegate', { rule: 'integration-review', change: 'change-a' }),
+    )
+    await strict.waitForRun(strictRun)
     await strict.turnStopping(1)
   })
 })
@@ -432,6 +482,235 @@ describe('failure-streak gate', () => {
     await turns.preStep(2)
     await turns.turnStopping(2)
     expect(steerTexts(turns.agent)).toHaveLength(0)
+  })
+})
+
+describe('thread-scoped triggers', () => {
+  const owner = (): FakeAgent => createAgent('thread-a')
+  const foreign = (): FakeAgent => createAgent('thread-b')
+
+  async function ownerOf(root: string, change = 'change-a'): Promise<string | undefined> {
+    const name = createHash('sha256').update(change).digest('hex').slice(0, 16)
+    try {
+      const value = JSON.parse(
+        await readFile(join(root, '.dsh', 'delegation', 'owners', `${name}.json`), 'utf8'),
+      ) as { session?: unknown }
+      return typeof value.session === 'string' ? value.session : undefined
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+  }
+
+  it('steers only the owning thread and persists the owner across engine recreation', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const config = specOnly()
+    const first = harnessFor(root, config)
+    const firstOwner = owner()
+    const firstForeign = foreign()
+    await first.preStep(1, firstOwner)
+    await first.turnStopping(1, firstOwner)
+    expect(combinedSteers(firstOwner)).toContain('rule "spec-review"')
+    await first.preStep(1, firstForeign)
+    await first.turnStopping(1, firstForeign)
+    expect(steerTexts(firstForeign)).toHaveLength(0)
+    expect(await ownerOf(root)).toBe('thread-a')
+
+    const second = harnessFor(root, config)
+    const secondForeign = foreign()
+    await second.preStep(1, secondForeign)
+    await second.turnStopping(1, secondForeign)
+    expect(steerTexts(secondForeign)).toHaveLength(0)
+    const secondOwner = owner()
+    await second.preStep(1, secondOwner)
+    await second.turnStopping(1, secondOwner)
+    expect(combinedSteers(secondOwner)).toContain('rule "spec-review"')
+  })
+
+  it('scopes the task review and implementation-work triggers to the owner', async () => {
+    const taskRoot = await workspace()
+    await writeChange(taskRoot, 'change-a', [
+      { number: '1.1', text: 'Checked task', checked: true },
+    ])
+    const taskHarness = harnessFor(taskRoot, taskOnly())
+    const taskOwner = owner()
+    const taskForeign = foreign()
+    await taskHarness.preStep(1, taskOwner)
+    await taskHarness.turnStopping(1, taskOwner)
+    expect(combinedSteers(taskOwner)).toContain('checked task "1.1 Checked task"')
+    await taskHarness.preStep(1, taskForeign)
+    await taskHarness.turnStopping(1, taskForeign)
+    expect(steerTexts(taskForeign)).toHaveLength(0)
+
+    const workRoot = await workspace()
+    await writeChange(workRoot, 'change-a', [{ number: '1.1', text: 'Open task' }])
+    const workHarness = harnessFor(workRoot, workOnly())
+    const workOwner = owner()
+    const workForeign = foreign()
+    // Both baselines must predate the edit, or the foreign no-steer passes vacuously.
+    await workHarness.preStep(1, workOwner)
+    await workHarness.preStep(1, workForeign)
+    workHarness.git.status = ' M packages/engine.ts\0'
+    workHarness.git.diff = 'M engine'
+    await workHarness.turnStopping(1, workOwner)
+    expect(combinedSteers(workOwner)).toContain('changed implementation files')
+    await workHarness.turnStopping(1, workForeign)
+    expect(steerTexts(workForeign)).toHaveLength(0)
+  })
+
+  it('does not let a foreign change artifact error block this thread', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    await rm(join(root, 'openspec', 'changes', 'change-b', 'tasks.md'))
+    const harness = harnessFor(root, specOnly())
+    const firstAgent = owner()
+    const secondAgent = foreign()
+    // Delegate claims only the resolved change, so the two threads own one change each.
+    const aRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' }, firstAgent),
+    )
+    // Claim change-b before any status poll: delegation_status observes and would claim it.
+    await expect(
+      harness.callTool('delegate', { rule: 'spec-review', change: 'change-b' }, secondAgent),
+    ).rejects.toThrow(/not review-ready/)
+    await harness.waitForRun(aRun, firstAgent)
+    expect(await ownerOf(root, 'change-a')).toBe('thread-a')
+    expect(await ownerOf(root, 'change-b')).toBe('thread-b')
+
+    await harness.preStep(1, firstAgent)
+    await harness.turnStopping(1, firstAgent)
+    expect(steerTexts(firstAgent)).toHaveLength(0)
+  })
+
+  it('scopes the optional integration review to the owner', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Done', checked: true }])
+    const harness = harnessFor(root, integrationOnly('strict'))
+    const integrationOwner = owner()
+    const integrationForeign = foreign()
+    await harness.preStep(1, integrationOwner)
+    await harness.turnStopping(1, integrationOwner)
+    expect(steerTexts(integrationOwner).length).toBeGreaterThan(0)
+    await harness.preStep(1, integrationForeign)
+    await harness.turnStopping(1, integrationForeign)
+    expect(steerTexts(integrationForeign)).toHaveLength(0)
+  })
+
+  it('keeps failure-streak steering thread-local in a foreign thread', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const config: BundleConfigLike = {
+      targets: codexTargets,
+      rules: [
+        ...(specOnly().rules ?? []),
+        {
+          id: 'blocker',
+          when: 'failure-streak',
+          to: 'codex',
+          contract: 'answer',
+          gate: 'soft',
+          instruction: 'bundled:consult',
+        },
+      ],
+      failureStreak: 3,
+    }
+    const harness = harnessFor(root, config)
+    const claimer = owner()
+    await harness.callTool('delegation_status', {}, claimer)
+    const other = foreign()
+    await harness.preStep(1, other)
+    await harness.toolResult(true, other)
+    await harness.toolResult(true, other)
+    await harness.toolResult(true, other)
+    await harness.turnStopping(1, other)
+    const message = combinedSteers(other)
+    expect(message).toContain('consecutive failed tool calls')
+    expect(message).not.toContain('spec-review')
+  })
+
+  it('shares one owner between the workspace root and a nested working directory', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const nested = join(root, 'packages', 'app')
+    await mkdir(nested, { recursive: true })
+    const harness = new Harness({
+      cwd: root,
+      config: specOnly(),
+      agents: registered(),
+      cwdByAgent: { 'thread-a': root, 'thread-b': nested },
+    })
+    const rootThread = createAgent('thread-a')
+    const nestedThread = createAgent('thread-b')
+    await harness.preStep(1, rootThread)
+    await harness.turnStopping(1, rootThread)
+    expect(combinedSteers(rootThread)).toContain('rule "spec-review"')
+    await harness.preStep(1, nestedThread)
+    await harness.turnStopping(1, nestedThread)
+    expect(steerTexts(nestedThread)).toHaveLength(0)
+    expect(await ownerOf(root)).toBe('thread-a')
+    expect(await ownerOf(nested)).toBeUndefined()
+  })
+
+  it('keeps one owner when two independent engines race the same claim', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const first = harnessFor(root, specOnly())
+    const second = harnessFor(root, specOnly())
+    const firstAgent = owner()
+    const secondAgent = foreign()
+    await Promise.all([first.turnStopping(1, firstAgent), second.turnStopping(1, secondAgent)])
+    const winnerId = await ownerOf(root)
+    expect(['thread-a', 'thread-b']).toContain(winnerId)
+    const winner = winnerId === 'thread-a' ? firstAgent : secondAgent
+    const loser = winnerId === 'thread-a' ? secondAgent : firstAgent
+    expect(steerTexts(winner).length).toBeGreaterThan(0)
+    expect(steerTexts(loser)).toHaveLength(0)
+
+    const winnerSteers = steerTexts(winner).length
+    await Promise.all([first.turnStopping(1, firstAgent), second.turnStopping(1, secondAgent)])
+    expect(steerTexts(winner).length).toBeGreaterThan(winnerSteers)
+    expect(steerTexts(loser)).toHaveLength(0)
+  })
+
+  it('preserves concurrent claims for different changes from two engines', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Task A' }])
+    await writeChange(root, 'change-b', [{ number: '2.1', text: 'Task B' }])
+    const first = harnessFor(root, specOnly())
+    const second = harnessFor(root, specOnly())
+    const firstAgent = owner()
+    const secondAgent = foreign()
+    await Promise.all([
+      first.callTool(
+        'task_progress',
+        { task: '1.1 Task A', status: 'in-progress', reason: 'a' },
+        firstAgent,
+      ),
+      second.callTool(
+        'task_progress',
+        { task: '2.1 Task B', status: 'in-progress', reason: 'b' },
+        secondAgent,
+      ),
+    ])
+    expect(await ownerOf(root, 'change-a')).toBe('thread-a')
+    expect(await ownerOf(root, 'change-b')).toBe('thread-b')
+  })
+
+  it('records an owner for a change named constructor', async () => {
+    const root = await workspace()
+    await writeChange(root, 'constructor', [])
+    const harness = harnessFor(root, specOnly())
+    const firstAgent = owner()
+    const secondAgent = foreign()
+    await harness.preStep(1, firstAgent)
+    await harness.turnStopping(1, firstAgent)
+    expect(combinedSteers(firstAgent)).toContain('change "constructor"')
+    await harness.preStep(1, secondAgent)
+    await harness.turnStopping(1, secondAgent)
+    expect(steerTexts(secondAgent)).toHaveLength(0)
+    expect(await ownerOf(root, 'constructor')).toBe('thread-a')
   })
 })
 

@@ -60,6 +60,16 @@ describe('model-facing budget', () => {
     expect(existsSync(join(packageDir, '..', '..', 'docs', 'plugins.md'))).toBe(true)
     expect(existsSync(join(packageDir, '..', '..', 'openspec', 'specs'))).toBe(true)
   })
+
+  it('documents the per-target model and effort example in the fragment and docs', () => {
+    const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
+    const docs = readFileSync(docsPath, 'utf8')
+    for (const text of [fragment, docs]) {
+      expect(text).toContain('codex-astra')
+      expect(text).toContain('model: gpt-6-astra')
+      expect(text).toContain('reasoningEffort: xhigh')
+    }
+  })
 })
 
 describe('bundled prompts', () => {

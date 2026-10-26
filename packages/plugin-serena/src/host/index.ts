@@ -1,21 +1,24 @@
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill'
+import type { PromptSection } from '@deepseek-ai/dsh-system-prompt'
 
 /**
  * Serena plugin: the adapter row mounts the Harness MCP client from the
- * composition fragment, and this module contributes the guidance skill that
- * describes how to use that server well. The two rows are independent, so
- * disabling this one leaves the Serena tools working.
+ * composition fragment, and this module contributes the always-on code-surface
+ * rule and the guidance skill that describes how to use that server well. The
+ * two rows are independent, so disabling this one leaves the Serena tools
+ * working.
  */
 
 /** Cordis plugin name, equal to the package name. */
 export const name = '@dsh-setup/plugin-serena'
 
-/** Service the registration depends on. */
-export const inject = ['skills']
+/** Services both registrations depend on. */
+export const inject = ['skills', 'systemPrompt']
 
 /** Skill name advertised in the catalog and loaded on demand. */
 const SKILL_NAME = 'serena-discipline'
@@ -29,14 +32,26 @@ const PROVIDER_NAME = 'dsh-setup-serena'
  */
 const BUNDLED_SKILL_RANK = 600
 
+/** Namespaced prompt-section name, unique inside the system-prompt registry. */
+const SECTION_NAME = 'dsh-setup:serena'
+
+/** After the working contract (110) and the RTK rule (120). */
+const SECTION_ORDER = 130
+
 /** Catalog text; a test keeps it identical to the asset's frontmatter. */
 const SKILL_DESCRIPTION =
   "Serena code work: symbol-level retrieval and editing before whole-file reads or line surgery, with bounded scope and answer sizes, and the project's own checks after every symbol edit. Use when Serena's code tools are available and the task touches source files."
 
 const assetsDirectory = fileURLToPath(new URL('../assets/serena-discipline', import.meta.url))
 const skillFile = join(assetsDirectory, 'SKILL.md')
+const rulesFile = join(assetsDirectory, 'rules.md')
 
 const invocation = { modelInvocable: true, userInvocable: true }
+
+/** Row configuration; only an explicit false disables the always-on rule. */
+interface BundleConfig {
+  alwaysOn?: boolean
+}
 
 function skillAdapterNote(): string {
   return [
@@ -79,7 +94,23 @@ function createSkillProvider(note: string): SkillProvider {
   }
 }
 
-/** Register the on-demand skill; the adapter row mounts separately. */
-export function apply(ctx: Context): void {
+/** Register the code-surface rule as a literal system-prompt section. */
+function registerRules(ctx: Context): void {
+  const text = readFileSync(rulesFile, 'utf8')
+  const section: PromptSection = {
+    name: SECTION_NAME,
+    order: SECTION_ORDER,
+    text,
+    interpolate: false,
+  }
+  ctx.systemPrompt.section(section)
+}
+
+/**
+ * Register the skill and, unless the row configures `alwaysOn: false`, the
+ * always-on code-surface rule.
+ */
+export function apply(ctx: Context, config: BundleConfig = {}): void {
   ctx.skills.registerProvider(() => createSkillProvider(skillAdapterNote()))
+  if (config.alwaysOn !== false) registerRules(ctx)
 }

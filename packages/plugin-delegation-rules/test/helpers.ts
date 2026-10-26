@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -87,6 +87,8 @@ export class FakeSubagents {
   readonly providers = new Map<string, SubagentProvider>()
   readonly runs: RunRecord[] = []
   startCalls = 0
+  /** Simulates a provider rejecting the start request before a child exists. */
+  startError?: Error
   respond: (run: RunRecord) => SubagentResult | Promise<SubagentResult> = passResponder
   private readonly responders = new Map<
     string,
@@ -123,6 +125,7 @@ export class FakeSubagents {
 
   async startActivation(spec: SubagentActivationSpec): Promise<SubagentActivation> {
     this.startCalls += 1
+    if (this.startError !== undefined) throw this.startError
     const run: RunRecord = {
       provider: spec.provider,
       label: spec.label,
@@ -145,14 +148,14 @@ export class FakeSubagents {
 
 export interface FakeAgent {
   id: string
-  session: { header: { origin?: 'subagent' } }
+  session: { id: string; header: { origin?: 'subagent' } }
   steer: ReturnType<typeof vi.fn>
 }
 
 export function createAgent(id = 'agent-1', origin?: 'subagent'): FakeAgent {
   return {
     id,
-    session: { header: origin === undefined ? {} : { origin } },
+    session: { id, header: origin === undefined ? {} : { origin } },
     steer: vi.fn(),
   }
 }
@@ -165,8 +168,23 @@ export function steerTexts(agent: FakeAgent): string[] {
   })
 }
 
+export function toolResultText(value: unknown): string {
+  if (typeof value === 'object' && value !== null && 'text' in value) {
+    return String((value as { text: unknown }).text)
+  }
+  throw new Error(`tool result has no text: ${JSON.stringify(value)}`)
+}
+
+export function runIdFrom(text: string): string {
+  const match = /^run: (\S+)$/m.exec(text)
+  if (match?.[1] === undefined) throw new Error(`tool result has no background run id:\n${text}`)
+  return match[1]
+}
+
 export interface HarnessOptions {
   cwd: string
+  /** Per-agent working directory override, keyed by the fake session id. */
+  cwdByAgent?: Record<string, string>
   config?: BundleConfig
   git?: FakeGit
   agents?: FakeSubagents
@@ -212,9 +230,10 @@ export class Harness {
     this.subagents = options.agents ?? new FakeSubagents()
     this.git = options.git ?? new FakeGit()
     const events = this.events
+    const cwdByAgent = options.cwdByAgent ?? {}
     const ctx = {
       subagents: this.subagents,
-      workingDirectory: { get: () => this.cwd },
+      workingDirectory: { get: (session: { id: string }) => cwdByAgent[session.id] ?? this.cwd },
       tools: {
         register: (definition: ToolDefinition) => {
           this.tools.set(definition.name, definition)
@@ -247,6 +266,34 @@ export class Harness {
       agent: agent as unknown as Agent,
       signal: new AbortController().signal,
     } as never)
+  }
+
+  /** Tool result text for the three delegation tools. */
+  async toolText(name: string, args: unknown, agent: FakeAgent = this.agent): Promise<string> {
+    return toolResultText(await this.callTool(name, args, agent))
+  }
+
+  /** Run a review delegate and return its background run id. */
+  async startReview(args: unknown, agent: FakeAgent = this.agent): Promise<string> {
+    return runIdFrom(await this.toolText('delegate', args, agent))
+  }
+
+  /** Poll the durable run file until the run reaches a terminal state. */
+  async waitForRun(runId: string, _agent: FakeAgent = this.agent): Promise<string> {
+    const file = join(this.cwd, '.dsh', 'delegation', 'runs', `${runId}.json`)
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      try {
+        const run = JSON.parse(await readFile(file, 'utf8')) as { state?: unknown }
+        const state = String(run.state)
+        if (state === 'completed' || state === 'failed' || state === 'discarded') {
+          return `- run ${runId}: state=${state}`
+        }
+      } catch {
+        // The run file is not written yet; keep polling.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    throw new Error(`review run ${runId} did not settle`)
   }
 
   private async fire(name: string, args: unknown[]): Promise<void> {

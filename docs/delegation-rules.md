@@ -72,6 +72,13 @@ result contract is a code extension.
 The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
 must not be strict (an answer writes no record).
 
+The change-scoped triggers (`spec-ready`, `spec-task-ready`, `implementation-work`,
+`implementation-complete`, and a configured integration review) evaluate only in the change's
+**owning thread**. The owner is the first DSH thread to observe the change; it is recorded under
+`.dsh/delegation/owners/` and reused across threads and engine restarts. Another thread reports the
+owner in `delegation_status` and is not steered for that change. `task_progress` notes, `answer`
+runs, and `patch` runs remain available in every thread.
+
 ### Contracts
 
 **`review`** computes a digest, runs the target with the bundled P0/P1 prompt, accepts exactly
@@ -88,6 +95,23 @@ never authorize a handoff. A malformed verdict (prose only, several fenced block
 severity, or a digest mismatch) writes no `PASS`; it writes an `ERROR` record and reports the
 failure, so the turn can close with the failure visible.
 
+A change-scoped review runs only in the change's owning thread. A `delegate` call from a foreign
+thread fails before the target starts and names the owning thread; run the review there. The record
+stores the owning thread alongside the other fields.
+
+A review runs **asynchronously**: `delegate` validates the rule/target/change (and task), waits for
+the target to start, and returns a run id, state, and record path while the verdict is produced in
+the background. Use `delegation_status` (or the record path) for completion; the gate points a
+pending review at its run instead of starting another. Answer and patch stay synchronous.
+
+Several reviews can run at once. A duplicate request is identified by rule + change + task/phase: a
+second call while that identity is pending returns the existing run handle. Different rules on the
+same change/task queue over one conversation key and each writes its own record. Task-scoped reviews
+accept an explicit `task` (id or task text), so parallel task reviews for different tasks do not
+collapse onto the engine's next-task choice. A run reviews stable inputs bound to its digest; any
+reviewed-input change during the run (including edit-read-restore) discards the verdict and reports
+a retry instead of publishing a `PASS`.
+
 **`answer`** is the read-only blocker/research contract. It returns the answer with evidence and,
 for research, sources and dates. It writes no gate record; a failed answer is reported and
 counts as a consultation attempt so a soft `failure-streak` rule does not loop.
@@ -101,7 +125,8 @@ The owner or agent reviews and merges manually.
 
 ### Targets
 
-A target names a registered `ctx.subagents` provider, optionally with a model and agent options:
+A target names a registered `ctx.subagents` provider and may add `model`, `reasoningEffort`, and
+provider-supported `agentOptions`:
 
 ```yaml
 targets:
@@ -110,12 +135,42 @@ targets:
   codex-write:
     provider: codex-subagent-write
     write: true
+  codex-astra:
+    provider: codex-subagent
+    model: gpt-6-astra
+    reasoningEffort: xhigh
 ```
 
-`model`, `reasoningEffort`, and `agentOptions` are forwarded only when the provider declares
-`agentOptions` support; otherwise the run is rejected with the unsupported capability instead of
-silently dropping the option. `write: true` is a declaration for the `patch` contract; the
-engine never silently escalates a target's permissions. The provider owns its sandbox.
+`codex-astra` is the shipped per-target example: it selects a specific Codex model and reasoning
+effort while the default `codex`/`codex-write` targets keep the provider defaults. Point a rule at
+it, or copy the two option lines onto an existing target:
+
+```yaml
+rules:
+  - id: spec-review
+    when: spec-ready
+    to: codex-astra
+    contract: review
+    phase: spec
+    scope: whole
+    gate: strict
+    instruction: "bundled:review-spec"
+```
+
+The engine resolves the target at use time, passes `model`/`reasoningEffort`/`agentOptions` in the
+DSH subagent start request, and lets the provider map them to its model and effort settings (the
+Codex fork maps them to the app-server thread/config). A target with no options sends none, so the
+provider applies its own default model/effort. Options are forwarded only when the provider declares
+`agentOptions` support; otherwise the run is rejected before starting with the target id, provider
+name, and the unsupported capability instead of silently dropping the option. `write: true` is a
+declaration for the `patch` contract; the engine never silently escalates a target's permissions.
+The provider owns its sandbox.
+
+The engine keeps no provider slug vocabulary: the delta spec's `astra` is illustrative and any
+string is passed through. The shipped example uses the model id verified live against the bundled
+Codex (`docs/codex-subagent.md` records the current one). An unknown model or effort is rejected by
+the provider at run time and recorded as an `ERROR` target failure, not silently replaced, and the
+Codex provider rejects unsupported `agentOptions` keys before a process starts.
 
 A non-Codex target uses the same rule shape:
 
@@ -135,9 +190,10 @@ rules:
 ```
 
 The shipped defaults target the installed-Codex provider because that is the owner's strongest
-current target. They are data; point a rule at another registered provider/model and the same
-contract and gate apply. The engine has no Codex dependency, so a standalone install composes
-with any provider and reports Codex-targeted rules as unavailable until a target is configured.
+current target. They are data; one target can select `astra`/`xhigh` and another a different
+model/effort, and the same rule contract and gate apply. The engine has no Codex dependency, so a
+standalone install composes with any provider and reports Codex-targeted rules as unavailable until
+a target is configured.
 
 ## Default rules
 
@@ -180,11 +236,14 @@ The turn-stopping gate refuses a code-changing turn close unless:
 - every strict whole-spec (and configured strict integration) rule has a matching record for the
   current digest.
 
-When it refuses, it steers with the rule id, trigger, digest, record path, and the exact
-`delegate`/`task_progress` call. Only a record satisfies the gate; a text claim does not. A soft
-rule steers once per streak and never traps the turn; a target failure writes an `ERROR` record
-so the turn can close with the failure visible. There is no livelock escape inside a session
-other than satisfying, disabling, or removing the rule's row.
+These checks apply in the change's owning thread; a foreign thread treats the change as not its own,
+gets no steer, and does not inherit a blocking digest issue from it. When the gate refuses, it steers
+with the rule id, trigger, digest, record path, and the exact `delegate`/`task_progress` call. Only a
+record satisfies the gate; a text claim does not. A soft rule steers once per streak and never traps
+the turn; a target failure writes an `ERROR` record so the turn can close with the failure visible.
+There is no livelock escape inside a session other than satisfying, disabling, or removing the rule's
+row; if the owning thread is gone, delete the change's owner file under
+`.dsh/delegation/owners/` and re-observe the change from the thread that should own it.
 
 ### The task progress note
 
@@ -197,7 +256,8 @@ task_progress(task: "2.1 Extract the parser", status: "in-progress", reason: "ha
 writes no `PASS`. The note authorizes a code-changing turn to close only while its digest still
 matches the worktree and the task is still unchecked. Any further file change makes it stale, so
 the next turn must refresh the note or tick the task and run its review. A checked task never
-accepts a note and a note never counts as a task-review `PASS`.
+accepts a note and a note never counts as a task-review `PASS`. A note may be written from any
+thread; it is workspace state, not ownership state.
 
 ## Digests and records
 
@@ -210,8 +270,13 @@ accepts a note and a note never counts as a task-review `PASS`.
 - A whole-scope record is valid only while its digest matches; a task-scope record is keyed by
   the stable task id and remains historical.
 - Records contain the rule, change, scope, phase, task id when task-scoped, digest, verdict,
-  findings, target identity, and time. Findings are sanitized of machine paths and obvious
-  credentials; records are parsed as data, never executed.
+  findings, target identity, time, and owning thread. Findings are sanitized of machine paths and
+  obvious credentials; records are parsed as data, never executed.
+- Owners live in `.dsh/delegation/owners/<sha256(change).slice(0,16)>.json` (one file per change,
+  written with an exclusive create) and resolve against the OpenSpec workspace root, so a nested
+  working directory cannot create a competing owner and concurrent runtimes cannot overwrite one.
+  A corrupt owner file is not auto-reclaimed: the gate fails visibly with its path, and deleting
+  that file (or `.dsh/delegation/owners/`) re-claims the change.
 
 ## Manual delegation
 
@@ -256,6 +321,10 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 - **The gate keeps steering** — a strict rule has no matching record for the current digest; run
   the exact `delegate` call in the steer message, or inspect the record path it names with
   `delegation_status`.
+- **A review is refused with an owning thread** — the change belongs to another thread; run the
+  exact `delegate` call there. If that thread is gone, delete the change's file under
+  `.dsh/delegation/owners/` (the error names it) and re-observe the change from the thread that
+  should own it.
 - **A note is stale** — the worktree changed after the note; refresh the note or tick the task
   and run its review.
 - **Configuration rejected** — the error names the rule/target and the next action; a patch

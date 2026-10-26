@@ -34,12 +34,17 @@ const DEFAULTS = [
   { id: 'ui-theme', config: { preference: 'dark' } },
 ]
 
-function plugin(name: string, version = '0.1.0'): PackageManifest {
+function plugin(
+  name: string,
+  version = '0.1.0',
+  dependencies?: Record<string, string>,
+): PackageManifest {
   return {
     name,
     version,
     engines: { dsh: VERSIONS.enginesDsh },
     exports: { './client': './lib/client.js' },
+    ...(dependencies === undefined ? {} : { dependencies }),
     dsh: { bundle: { patch: './cordis.patch.yml' }, client: { platform: 'web' } },
   }
 }
@@ -227,6 +232,29 @@ describe('setup manifest', () => {
         plugin('@dsh-setup/plugin-b', '0.2.0'),
       ]),
     ).toEqual([])
+  })
+
+  it('hoists plugin runtime dependencies without bundling them', () => {
+    const runtime = { '@deepseek-ai/dsh-brand': '0.2.1-rc.3', '@openai/codex': '0.164.0' }
+    const owners = [plugin('@dsh-setup/plugin-a', '0.1.0', runtime)]
+    const manifest = buildSetupManifest(owners, '0.1.0', VERSIONS)
+    expect(manifest.dependencies).toEqual({
+      '@dsh-setup/plugin-a': '0.1.0',
+      '@deepseek-ai/dsh-brand': '0.2.1-rc.3',
+      '@openai/codex': '0.164.0',
+    })
+    expect(manifest.bundleDependencies).toEqual(['@dsh-setup/plugin-a'])
+    expect(validatePackageManifest(manifest, VERSIONS.enginesDsh)).toEqual([])
+    expect(validateSetupManifest(manifest, owners)).toEqual([])
+  })
+
+  it('reports a missing hoisted runtime dependency', () => {
+    const owners = [plugin('@dsh-setup/plugin-a', '0.1.0', { '@openai/codex': '0.164.0' })]
+    const manifest = buildSetupManifest(owners, '0.1.0', VERSIONS)
+    const stripped = { ...manifest, dependencies: { '@dsh-setup/plugin-a': '0.1.0' } }
+    expect(validateSetupManifest(stripped, owners)).toEqual([
+      'missing runtime dependency @openai/codex',
+    ])
   })
 
   it('changes when the plugin set changes, so drift cannot go unnoticed', () => {

@@ -25,7 +25,7 @@ workflow generates the static format-1 market index pinned to the tagged commit 
 GitHub Pages.
 
 Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
-Repo package version (all packages move together): **0.3.0**.
+Repo package version (all packages move together): **0.4.0**.
 
 ## 2. First commands
 
@@ -60,30 +60,30 @@ Scripts under `scripts/` are TypeScript executed directly by Node 24: relative i
 
 ## 3. Repository map: handwritten vs generated
 
-| Path                                                        | Role                                                                          | Hand-edit?                                              |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `packages/plugin-*/src/**`, `test/**`                       | Plugin Host/Client sources and unit tests                                     | yes                                                     |
-| `packages/plugin-*/package.json`                            | Plugin manifest (`dsh.bundle`, `dsh.client`, `engines.dsh`, exports, peers)   | yes                                                     |
-| `packages/plugin-*/cordis.fragment.yml`                     | Row ids the plugin mounts (input to generation)                               | yes                                                     |
-| `packages/plugin-*/locale/en.json`, `icon.svg`              | Market title/description and card icon                                        | yes                                                     |
-| `packages/plugin-*/tsconfig.json`                           | Composite Host project (`src/host` -> `lib`)                                  | yes                                                     |
-| `packages/plugin-*/cordis.patch.yml`                        | Generated bundle patch                                                        | **no** (`pnpm gen`)                                     |
-| `packages/plugin-*/lib/index.js`, `lib/index.d.ts`          | Generated Host runtime (tsc)                                                  | **no** (`pnpm build`)                                   |
-| `packages/plugin-*/lib/client.js`                           | Generated Client bundle (esbuild + loader wrapper)                            | **no** (`pnpm build`)                                   |
-| `packages/plugin-codex-subagent/lib/**`                     | Vendored forked provider runtime (upstream MIT + local patch)                 | only via the fork README patch/rebase; not `pnpm build` |
-| `packages/plugin-ponytail/assets/**`, `ponytail.lock.json`  | Vendored upstream prompt, license, and provenance lock                        | **no** (`pnpm ponytail:update`)                         |
-| `packages/plugin-openspec/assets/**`, `openspec.lock.json`  | Generated OpenSpec core skills, license, and provenance lock                  | **no** (`pnpm openspec:update`)                         |
-| `packages/setup/defaults.yml`, `locale/en.json`, `icon.svg` | Owner defaults and setup card metadata                                        | yes                                                     |
-| `packages/setup/package.json`                               | Generated setup manifest (deps, `bundleDependencies`)                         | **no** (`pnpm gen`; version only via `release:prepare`) |
-| `packages/setup/cordis.patch.yml`                           | Generated aggregated setup patch                                              | **no** (`pnpm gen`)                                     |
-| `packages/setup/node_modules/@dsh-setup/**`                 | Generated vendored plugin copies; tracked despite `.gitignore`                | **no** (`pnpm gen`)                                     |
-| `scripts/**`                                                | Build, generation, market, validation, release helpers                        | yes                                                     |
-| `install.ps1`                                               | Standalone installer (duplicates `dsh.json` metadata on purpose)              | yes, carefully                                          |
-| `dsh.json`                                                  | Supported DSH versions, engines range, installer bundle lists, repository URL | yes                                                     |
-| `docs/**`, `README.md`                                      | User documentation                                                            | yes                                                     |
-| `openspec/**`                                               | Requirements: proposal, design, delta specs, tasks                            | yes (see §11)                                           |
-| `market/**`                                                 | Generated Pages artifact (`index.json` + `icons/`); gitignored                | **no** (CI release only)                                |
-| `.tmp/`, `.dsh/`, `*.tsbuildinfo`, `coverage/`              | Local scratch/state                                                           | not committed                                           |
+| Path                                                        | Role                                                                                      | Hand-edit?                                              |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `packages/plugin-*/src/**`, `test/**`                       | Plugin Host/Client sources and unit tests                                                 | yes                                                     |
+| `packages/plugin-*/package.json`                            | Plugin manifest (`dsh.bundle`, `dsh.client`, `engines.dsh`, exports, peers)               | yes                                                     |
+| `packages/plugin-*/cordis.fragment.yml`                     | Row ids the plugin mounts (input to generation)                                           | yes                                                     |
+| `packages/plugin-*/locale/en.json`, `icon.svg`              | Market title/description and card icon                                                    | yes                                                     |
+| `packages/plugin-*/tsconfig.json`                           | Composite Host project (`src/host` -> `lib`)                                              | yes                                                     |
+| `packages/plugin-*/cordis.patch.yml`                        | Generated bundle patch                                                                    | **no** (`pnpm gen`)                                     |
+| `packages/plugin-*/lib/index.js`, `lib/index.d.ts`          | Generated Host runtime (tsc)                                                              | **no** (`pnpm build`)                                   |
+| `packages/plugin-*/lib/client.js`                           | Generated Client bundle (esbuild + loader wrapper)                                        | **no** (`pnpm build`)                                   |
+| `packages/plugin-codex-subagent/lib/**`                     | Vendored forked provider runtime (upstream MIT + local patch)                             | only via the fork README patch/rebase; not `pnpm build` |
+| `packages/plugin-ponytail/assets/**`, `ponytail.lock.json`  | Vendored upstream prompt, license, and provenance lock                                    | **no** (`pnpm ponytail:update`)                         |
+| `packages/plugin-openspec/assets/**`, `openspec.lock.json`  | Generated OpenSpec core skills, license, and provenance lock                              | **no** (`pnpm openspec:update`)                         |
+| `packages/setup/defaults.yml`, `locale/en.json`, `icon.svg` | Owner defaults and setup card metadata                                                    | yes                                                     |
+| `packages/setup/package.json`                               | Generated setup manifest (plugin deps, hoisted plugin runtime deps, `bundleDependencies`) | **no** (`pnpm gen`; version only via `release:prepare`) |
+| `packages/setup/cordis.patch.yml`                           | Generated aggregated setup patch                                                          | **no** (`pnpm gen`)                                     |
+| `packages/setup/node_modules/@dsh-setup/**`                 | Generated vendored plugin copies; tracked despite `.gitignore`                            | **no** (`pnpm gen`)                                     |
+| `scripts/**`                                                | Build, generation, market, validation, release helpers                                    | yes                                                     |
+| `install.ps1`                                               | Standalone installer (duplicates `dsh.json` metadata on purpose)                          | yes, carefully                                          |
+| `dsh.json`                                                  | Supported DSH versions, engines range, installer bundle lists, repository URL             | yes                                                     |
+| `docs/**`, `README.md`                                      | User documentation                                                                        | yes                                                     |
+| `openspec/**`                                               | Requirements: proposal, design, delta specs, tasks                                        | yes (see §11)                                           |
+| `market/**`                                                 | Generated Pages artifact (`index.json` + `icons/`); gitignored                            | **no** (CI release only)                                |
+| `.tmp/`, `.dsh/`, `*.tsbuildinfo`, `coverage/`              | Local scratch/state                                                                       | not committed                                           |
 
 Consequences of "generated files are committed": after changing sources you must run the generator
 and/or build and commit the result; CI rejects a commit whose generated files differ from a fresh
@@ -225,6 +225,15 @@ Client half without a page reload; Host edits (`src/host/index.ts`) apply only o
 recomposition (profile patch change) or a Harness restart; the Desktop app picks up rebuilt Client
 bundles only after reopening/restarting. Do not assume both halves hot-reload.
 
+**Applying a change to the live profile.** Check the profile's `dependencies."@dsh-setup/setup"` in
+the Harness home (`profiles/<name>/package.json`). A `link:` spec means the app reads this checkout:
+run `pnpm gen` for assets/manifests (or `pnpm build` for Host/Client code), then fully quit and
+relaunch. A page reload or new chat is not enough: the Host registers the rules at startup, the
+current session keeps its prompt, and new sessions get the change. A linked profile also exposes
+uncommitted generated changes on restart. A `git+...`/version spec needs a commit/release and an
+install from an external PowerShell with the app closed; restart alone does nothing. See
+[docs/install.md](docs/install.md#apply-local-changes-from-a-linked-checkout).
+
 Manual install of a released bundle (app fully quit):
 
 ```sh
@@ -326,7 +335,15 @@ the archived `2026-10-26-add-working-ruleset-plugins` change added `session-guid
 `mcp-adapters`' approved-adapter-target rule so a code-bearing bundle may mount the approved adapter
 row, and the archived `2026-10-26-add-openspec-skills-plugin` change added `openspec-skills` and the
 packaged `@dsh-setup/plugin-openspec` bundle, and the archived `2026-10-26-add-delegation-rules`
-change added `delegation-rules` and `codex-subagent`. Cite
+change added `delegation-rules` and `codex-subagent`, the archived
+`2026-10-26-add-serena-always-on-guidance` change made the Serena code-surface rule always-on and
+re-budgeted the always-on contributions, the archived
+`2026-10-26-add-codex-bundle-and-target-options` change bundled the Codex CLI and added the Serena
+app-server configuration and per-target model/reasoning effort, the archived
+`2026-10-26-fix-delegation-thread-scope` change scoped the gated reviews to the change's owning
+thread, and the archived `2026-10-26-fix-delegation-async-and-review-session` change made review
+delegation asynchronous with explicit task selection, stable reviewed inputs, and Codex review-thread
+reuse. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -470,6 +487,7 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 | `git diff --exit-code` after `pnpm build` shows changes        | Committed `lib/**`/`lib/client.js` is stale; build and commit it                                                                                                                                                                                                                                                                                                                                                                   |
 | `pnpm test` fails with `run pnpm build before this test`       | The Client-bundle test reads `lib/client.js`; run `pnpm build` or use `pnpm check`                                                                                                                                                                                                                                                                                                                                                 |
 | A new plugin emits nothing                                     | Add it to root `tsconfig.json` `references`; confirm it has `dsh.bundle` and a `cordis.fragment.yml`                                                                                                                                                                                                                                                                                                                               |
+| A rule/plugin change is not visible after restart              | Check the profile's `dependencies."@dsh-setup/setup"`. `link:` reads this checkout: run `pnpm gen`/`pnpm build`, then fully quit and relaunch; a page reload/new chat does not rebuild the Host prompt, and the current session keeps its old prompt. A `git+...`/version spec needs a reinstall or release. See [docs/install.md](docs/install.md#apply-local-changes-from-a-linked-checkout).                                    |
 | `validate:repo`: machine path or secret                        | Remove the absolute path/credential from the tracked file; tests build such fixtures at runtime                                                                                                                                                                                                                                                                                                                                    |
 | `validate:composition` fails on network/DSH CLI                | It defaults to `pnpm dlx @deepseek-ai/dsh@<dsh.json.runtime>`; set `DSH_CLI` to an installed CLI                                                                                                                                                                                                                                                                                                                                   |
 | `validate:installer` skipped                                   | It runs only on Windows; use CI or a Windows machine                                                                                                                                                                                                                                                                                                                                                                               |

@@ -13,7 +13,8 @@ codes and stderr remain meaningful; do not hide a failure to save tokens.
 
 ## Supported commands
 
-Use the `rtk` form in the `pwsh` tool for commands whose output may be bulky:
+Use the `rtk` form in the `pwsh` tool; the always-on rule decides which commands are mandatory,
+and this table lists the supported forms:
 
 | Need | Try |
 | --- | --- |
@@ -22,22 +23,27 @@ Use the `rtk` form in the `pwsh` tool for commands whose output may be bulky:
 | JavaScript/TypeScript tests | `rtk pnpm test`, `rtk npm test`, `rtk vitest`, `rtk jest` |
 | Other test runners | `rtk cargo test`, `rtk pytest -q`, `rtk go test`, `rtk dotnet test`, `rtk playwright` |
 | Build and lint | `rtk tsc`, `rtk lint`, `rtk ruff check`, `rtk prettier`, `rtk mypy`, `rtk go build` |
-| Search | `rtk grep ...`, `rtk rg ...`, `rtk find ...`, `rtk fd ...` |
+| Search | `rtk grep ...`, `rtk find ...` |
 | Infrastructure | `rtk docker ps`, `rtk kubectl get pods`, `rtk aws ...`, `rtk psql ...` |
 | Files from the shell | `rtk read <file>`, `rtk ls`, `rtk tree` |
 
 The installed CLI is the authority. Run `rtk --help` or `rtk <command> --help` before relying on a
 subcommand this table does not name; if the command is not supported, run the native command.
 
+`rtk rg` and `rtk fd` are not filtered subcommands: the CLI falls back to the native binary, and
+`fd` may not be installed. Use `rtk grep` and `rtk find` for filtered output.
+
 ## Rules
 
-- One supported command per call. Do not mix it with PowerShell-only statements.
+- One rtk command per invocation. A compound PowerShell command needs each supported part prefixed
+  separately (`rtk git status; rtk git diff`); do not leave a supported part native.
 - Do not prefix commands that are not in rtk's list (for example `Get-ChildItem` or `Select-String`).
 - Do not prefix the `read`, `grep`, or `glob` tools; they do not pass through the shell.
 - Do not double-prefix. If the command already starts with `rtk`, leave it.
 - Keep errors and non-zero exits visible. rtk preserves them; a compact result is not a reason to
   drop the failure.
-- If the output is small, the native command is fine; do not add a process for a one-line result.
+- The always-on rule is authoritative: do not skip a command it lists because the output looks
+  small. For commands it does not list, the native form is fine.
 - Do not run a mutating command a second time only to see more output.
 
 ## Recovery and fallback

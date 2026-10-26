@@ -26,12 +26,13 @@ interface SkillProviderShape {
 
 interface FakeContext {
   skills: { registerProvider: (create: () => SkillProviderShape) => void }
+  systemPrompt: { section: (section: { name: string; order: number; text: string }) => void }
 }
 
 interface PluginModule {
   name: string
   inject: string[]
-  apply: (ctx: FakeContext) => void
+  apply: (ctx: FakeContext, config?: { alwaysOn?: boolean }) => void
 }
 
 async function loadPlugin(): Promise<PluginModule> {
@@ -47,6 +48,9 @@ function createContext(): { ctx: FakeContext; providers: SkillProviderShape[] } 
       registerProvider(create: () => SkillProviderShape): void {
         providers.push(create())
       },
+    },
+    systemPrompt: {
+      section(): void {},
     },
   }
   return { ctx, providers }
@@ -68,7 +72,7 @@ describe('serena guidance half', () => {
   it('exports the package identity and the injected service', async () => {
     const plugin = await loadPlugin()
     expect(plugin.name).toBe('@dsh-setup/plugin-serena')
-    expect(plugin.inject).toEqual(['skills'])
+    expect(plugin.inject).toEqual(['skills', 'systemPrompt'])
   })
 
   it('lists the serena-discipline skill from its own asset directory', async () => {

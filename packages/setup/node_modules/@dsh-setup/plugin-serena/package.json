@@ -1,7 +1,7 @@
 {
   "name": "@dsh-setup/plugin-serena",
-  "version": "0.3.0",
-  "description": "Serena MCP: symbol-level code navigation and editing through the DeepSeek Harness MCP client, plus the serena-discipline skill",
+  "version": "0.4.0",
+  "description": "Serena MCP: symbol-level code navigation and editing through the DeepSeek Harness MCP client, plus an always-on code-surface rule and the serena-discipline skill",
   "icon": "./icon.svg",
   "type": "module",
   "main": "lib/index.js",
@@ -24,7 +24,8 @@
     "lib/index.d.ts",
     "cordis.patch.yml",
     "cordis.fragment.yml",
-    "assets/serena-discipline/SKILL.md"
+    "assets/serena-discipline/SKILL.md",
+    "assets/serena-discipline/rules.md"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.3 <0.3.0"
@@ -34,7 +35,8 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-skill": "0.2.1-rc.3"
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.3"
   },
   "dsh": {
     "bundle": {

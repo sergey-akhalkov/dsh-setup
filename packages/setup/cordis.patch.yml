@@ -18,6 +18,10 @@
           codex-write:
             provider: codex-subagent-write
             write: true
+          codex-astra:
+            provider: codex-subagent
+            model: gpt-6-astra
+            reasoningEffort: xhigh
         rules:
           - id: spec-review
             when: spec-ready
@@ -103,6 +107,7 @@
           - start-mcp-server
           - --context=vscode
           - --enable-web-dashboard=false
+          - --enable-gui-log-window=false
         toolCallTimeoutMs: 120000
         failOnStartupError: false
     - id: dsh-setup-serena-guidance

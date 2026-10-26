@@ -153,11 +153,28 @@ The market has no in-place upgrade action. To update, install the newer version 
 `-SetupVersion`. The previous version is replaced; older listed versions remain installable if you
 need to pin back.
 
+## Apply local changes from a linked checkout
+
+Check the profile's `dependencies."@dsh-setup/setup"` in `profiles/<name>/package.json` under the
+Harness home. When it is `link:<absolute checkout>/packages/setup`, the app reads that checkout
+directly; no release or reinstall is involved. After changing an asset or manifest, run `pnpm gen`
+(and `pnpm build` for Host/Client code), then **fully quit and relaunch** DeepSeek Harness. A page
+reload or a new chat is not enough for an always-on rule: the Host registers it at startup, the
+current session keeps the prompt it started with, and new sessions get the new text. A linked
+profile also sees uncommitted generated changes on the next restart; settle the checkout before
+relaunching if that is not wanted.
+
+When the dependency is a `git+...` or version spec, restarting changes nothing. Commit and push (or
+release), then install the new spec with the app fully closed from an external PowerShell; verify the
+installer against a copy of the profile with `pnpm dogfood` first. Do not run the live install from a
+shell hosted by the running app.
+
 ## Serena MCP
 
 The setup also ships the Serena adapter bundle, which adds Serena's symbol-level code tools through
-the Harness MCP client. It is optional and can be disabled (see below). The bundle also ships a
-`serena-discipline` skill in the catalog; the adapter row works without it.
+the Harness MCP client. It is optional and can be disabled (see below). The bundle also ships an
+always-on code-surface rule and a `serena-discipline` skill; the adapter row works without either.
+See [Serena code guidance](serena.md) for the rule, its prompt cost and its opt-out.
 
 Prerequisite: `uv`/`uvx` must be on the PATH of the Harness process. The adapter runs
 `uvx --from serena-agent==1.7.0 serena start-mcp-server ...`; the first start downloads that pinned
@@ -166,11 +183,12 @@ restart DeepSeek Harness once, or pre-warm the download with
 `uvx --from serena-agent==1.7.0 serena --version`. Without `uv`, the Harness still starts and logs the
 failed connection; no Serena tools are added.
 
-Serena works with a project: on first use, ask the agent to activate the current project with Serena
-(the adapter's built-in instructions point it at `activate_project`). One Serena instance serves the
-whole profile, so switching the active project in one session changes it for all sessions. Serena's
-tools run in its own process and edit the activated project directly; the MCP tool call is the
-approval gate.
+Serena works with a project: the always-on rule makes the agent call `get_current_config` first and
+`activate_project` on the session's working directory when no project is active (the adapter's
+built-in instructions point at the same steps). One Serena instance serves the whole profile, so
+switching the active project in one session changes it for the others, and a restarted server starts
+with no project. Serena's tools run in its own process and edit the activated project directly; the
+MCP tool call is the approval gate.
 
 To disable the adapter, add this to the profile's own `cordis.patch.yml`:
 
@@ -178,6 +196,9 @@ To disable the adapter, add this to the profile's own `cordis.patch.yml`:
 - id: dsh-setup-serena
   disabled: true
 ```
+
+To keep the tools but drop only the always-on rule, set `alwaysOn: false` on the
+`dsh-setup-serena-guidance` row in the same file; the `serena-discipline` skill stays cataloged.
 
 ## Nuphus MCP
 

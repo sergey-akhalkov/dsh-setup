@@ -1,14 +1,17 @@
+import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  createAgent,
   defaultTestConfig,
   FakeSubagents,
   Harness,
   makeWorkspace,
   passResponder,
   type RunRecord,
+  runIdFrom,
   steerTexts,
   writeChange,
 } from './helpers.js'
@@ -149,17 +152,234 @@ describe('target resolution', () => {
     )
     expect(subagents.startCalls).toBe(0)
   })
+
+  it('passes the target model and reasoning effort in the subagent start request', async () => {
+    const root = await workspace()
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: true })
+    const harness = harnessFor(
+      root,
+      {
+        targets: {
+          'codex-astra': {
+            provider: 'codex-subagent',
+            model: 'astra',
+            reasoningEffort: 'xhigh',
+          },
+        },
+        rules: [
+          {
+            id: 'research',
+            when: 'manual',
+            to: 'codex-astra',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await harness.callTool('delegate', { rule: 'research' })
+    expect(subagents.runs[0]?.agentOptions).toEqual({
+      model: 'astra',
+      reasoningEffort: 'xhigh',
+    })
+  })
+
+  it('passes an effort-only target and leaves the model to the provider default', async () => {
+    const root = await workspace()
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: true })
+    const harness = harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent', reasoningEffort: 'xhigh' } },
+        rules: [
+          {
+            id: 'research',
+            when: 'manual',
+            to: 'codex',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await harness.callTool('delegate', { rule: 'research' })
+    expect(subagents.runs[0]?.agentOptions).toEqual({ reasoningEffort: 'xhigh' })
+    expect(subagents.runs[0]?.agentOptions).not.toHaveProperty('model')
+  })
+
+  it('sends no agent options when the target selects none, even without the capability', async () => {
+    const root = await workspace()
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: false })
+    const harness = harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'research',
+            when: 'manual',
+            to: 'codex',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await harness.callTool('delegate', { rule: 'research' })
+    expect(subagents.runs[0]?.agentOptions).toBeUndefined()
+  })
+
+  it('merges agentOptions under the explicit target model and effort', async () => {
+    const root = await workspace()
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: true })
+    const harness = harnessFor(
+      root,
+      {
+        targets: {
+          codex: {
+            provider: 'codex-subagent',
+            model: 'astra',
+            reasoningEffort: 'xhigh',
+            agentOptions: { provider: 'codex-route', model: 'ignored', maxTokens: 4096 },
+          },
+        },
+        rules: [
+          {
+            id: 'research',
+            when: 'manual',
+            to: 'codex',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await harness.callTool('delegate', { rule: 'research' })
+    expect(subagents.runs[0]?.agentOptions).toEqual({
+      provider: 'codex-route',
+      model: 'astra',
+      reasoningEffort: 'xhigh',
+      maxTokens: 4096,
+    })
+  })
+
+  it('rejects an unsupported reasoning effort with the capability diagnostic', async () => {
+    const root = await workspace()
+    const subagents = new FakeSubagents()
+    subagents.addProvider('spawn', { agentOptions: false })
+    const harness = harnessFor(
+      root,
+      {
+        targets: { dsh: { provider: 'spawn', reasoningEffort: 'xhigh' } },
+        rules: [
+          {
+            id: 'research',
+            when: 'manual',
+            to: 'dsh',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await expect(harness.callTool('delegate', { rule: 'research' })).rejects.toThrow(
+      /target "dsh" requests model\/agent options.*does not support them/,
+    )
+    expect(subagents.startCalls).toBe(0)
+  })
+
+  it('reports a provider start rejection with the target id, provider, and next action', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: true })
+    subagents.startError = new Error(
+      'subagent-codex: unsupported Codex target option "maxTokens" (allowed: model, reasoningEffort)',
+    )
+    const harness = harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        targets: {
+          codex: { provider: 'codex-subagent', agentOptions: { maxTokens: 4096 } },
+        },
+      },
+      subagents,
+    )
+    await expect(
+      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    ).rejects.toThrow(
+      /rule "spec-review": target "codex" on provider "codex-subagent" could not start: .*unsupported Codex target option "maxTokens".*check targets\.codex options against provider "codex-subagent"/,
+    )
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(record.verdict).toBe('ERROR')
+  })
+
+  it('records the resolved model and effort as target identity', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: true })
+    const harness = harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        targets: {
+          codex: { provider: 'codex-subagent', model: 'astra', reasoningEffort: 'xhigh' },
+        },
+      },
+      subagents,
+    )
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect(subagents.runs[0]?.agentOptions).toEqual({
+      model: 'astra',
+      reasoningEffort: 'xhigh',
+    })
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { target: Record<string, unknown>; runId: string }
+    expect(record.target).toEqual({
+      provider: 'codex-subagent',
+      model: 'astra',
+      reasoningEffort: 'xhigh',
+    })
+    expect(record.runId).toBe(runId)
+  })
 })
 
 describe('review records', () => {
-  it('writes a PASS record, refuses a text claim, and reuses the record', async () => {
+  it('starts a background run, returns a handle, writes PASS, and reuses it', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', { agentOptions: false })
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const first = await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
-    expect(text(first)).toMatch(/rule "spec-review" PASS/)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(runId).toMatch(/^run-/)
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
     expect(subagents.startCalls).toBe(1)
     const recordPath = join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json')
     const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
@@ -171,20 +391,24 @@ describe('review records', () => {
       verdict: 'PASS',
       findings: [],
       target: { provider: 'codex-subagent' },
+      runId,
     })
     expect(String(record.digest)).toMatch(/^[0-9a-f]{64}$/)
     expect(typeof record.time).toBe('string')
     expect(JSON.stringify(record)).not.toContain(root)
 
-    const second = await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
-    expect(text(second)).toContain('reused record')
+    const second = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(second).toContain('reused record')
     expect(subagents.startCalls).toBe(1)
 
     await writeFile(
       join(root, 'openspec', 'changes', 'change-a', 'specs', 'capability', 'spec.md'),
       '# Spec\n\nChanged.\n',
     )
-    await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
+    const rerun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(rerun)).toContain('state=completed')
     expect(subagents.startCalls).toBe(2)
   })
 
@@ -194,7 +418,8 @@ describe('review records', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.waitForRun(runId)
     await writeFile(
       join(root, 'openspec', 'changes', 'change-a', 'tasks.md'),
       '# Tasks\n\n- [x] 1.1 First task\n',
@@ -210,26 +435,27 @@ describe('review records', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, findingsResponder('FINDINGS', 'P0'))
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const result = await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
-    const rendered = text(result)
-    expect(rendered).toContain('P0 Missing failure path')
-    expect(rendered).toContain('evidence:')
-    expect(rendered).not.toContain('secret.ts')
-    expect(rendered).not.toContain('ABCDEFGH12345678')
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
         'utf8',
       ),
-    ) as { verdict: string; findings: Array<{ severity: string }> }
+    ) as { verdict: string; findings: Array<{ severity: string; evidence: string }> }
     expect(record.verdict).toBe('FINDINGS')
     expect(record.findings[0]?.severity).toBe('P0')
-    const again = await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
-    expect(text(again)).toContain('reused record')
+    const rendered = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(rendered).toContain('reused record')
+    expect(rendered).toContain('P0 Missing failure path')
+    expect(rendered).not.toContain('secret.ts')
+    expect(rendered).not.toContain('ABCDEFGH12345678')
     expect(subagents.startCalls).toBe(1)
   })
 
-  it('writes an ERROR record when the verdict is malformed and never a PASS', async () => {
+  it('writes an ERROR record and failed state when the verdict is malformed', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
@@ -239,19 +465,19 @@ describe('review records', () => {
     })
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    ).rejects.toThrow(/no usable verdict.*no fenced JSON verdict/)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
         'utf8',
       ),
-    ) as { verdict: string }
+    ) as { verdict: string; error: string }
     expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('no fenced JSON verdict')
   })
 
-  it('writes an ERROR record when the target run fails', async () => {
+  it('writes an ERROR record and failed state when the target run fails', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
@@ -262,9 +488,16 @@ describe('review records', () => {
     })
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    ).rejects.toThrow(/ERROR record was written.*model transport failed/)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string; error: string }
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('model transport failed')
   })
 
   it('retries an ERROR record after the cause is fixed and leaves no temporary files', async () => {
@@ -278,16 +511,13 @@ describe('review records', () => {
     })
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    ).rejects.toThrow()
+    const failedRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.waitForRun(failedRun)
     const directory = join(root, '.dsh', 'delegation', 'spec-review', 'change-a')
     expect(await readdir(directory)).toEqual(['spec.json'])
     subagents.respond = passResponder
-    const retried = text(
-      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    )
-    expect(retried).toMatch(/rule "spec-review" PASS/)
+    const retryRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(retryRun)).toContain('state=completed')
     expect(subagents.startCalls).toBe(2)
     expect(await readdir(directory)).toEqual(['spec.json'])
   })
@@ -313,9 +543,8 @@ describe('review records', () => {
         stopReason: 'completed',
       }))
       const harness = harnessFor(root, defaultTestConfig(), subagents)
-      await expect(
-        harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-      ).rejects.toThrow(/no usable verdict/)
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      expect(await harness.waitForRun(runId)).toContain('state=failed')
       const record = JSON.parse(
         await readFile(
           join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
@@ -332,16 +561,16 @@ describe('review records', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => new Promise(() => undefined))
     const harness = harnessFor(root, defaultTestConfig({ timeouts: { review: 5 } }), subagents)
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
-    ).rejects.toThrow(/did not finish within 5 ms; widen timeouts\.review/)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
         'utf8',
       ),
-    ) as { verdict: string }
+    ) as { verdict: string; error: string }
     expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('did not finish within 5 ms')
   })
 })
 
@@ -370,11 +599,11 @@ describe('task-scoped reviews', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, taskConfig, subagents)
-    const result = await text(
-      await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
-    )
-    expect(result).toMatch(/task id: [0-9a-f]{16}/)
-    const taskId = /task id: ([0-9a-f]{16})/.exec(result)?.[1] as string
+    const handle = await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' })
+    const runId = runIdFrom(handle)
+    expect(handle).toMatch(/task id: [0-9a-f]{16}/)
+    const taskId = /task id: ([0-9a-f]{16})/.exec(handle)?.[1] as string
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
     const recordPath = join(
       root,
       '.dsh',
@@ -396,9 +625,7 @@ describe('task-scoped reviews', () => {
     // A later task changing the worktree does not invalidate the historical record.
     harness.git.status = ' M packages/engine.ts\0'
     harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
-    const reused = await text(
-      await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
-    )
+    const reused = await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' })
     expect(reused).toContain('reused record')
     expect(subagents.startCalls).toBe(1)
 
@@ -407,10 +634,8 @@ describe('task-scoped reviews', () => {
       join(dir, 'tasks.md'),
       '# Tasks\n\n- [x] 1.1 First task restated\n\n- [ ] 1.2 Second task\n',
     )
-    const rerun = await text(
-      await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
-    )
-    expect(rerun).not.toContain('reused record')
+    const rerun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(rerun)).toContain('state=completed')
     expect(subagents.startCalls).toBe(2)
   })
 
@@ -424,6 +649,8 @@ describe('task-scoped reviews', () => {
       return runs === 1 ? findingsResponder('FINDINGS', 'P1')(run) : findingsResponder('PASS')(run)
     })
     const harness = harnessFor(root, taskConfig, subagents)
+    const firstRun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(firstRun)).toContain('state=completed')
     const first = text(
       await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
     )
@@ -438,10 +665,8 @@ describe('task-scoped reviews', () => {
 
     harness.git.status = ' M packages/engine.ts\0'
     harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
-    const fixed = text(
-      await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
-    )
-    expect(fixed).toContain('PASS')
+    const fixedRun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(fixedRun)).toContain('state=completed')
     expect(subagents.startCalls).toBe(2)
   })
 })
@@ -655,7 +880,7 @@ describe('tools and status', () => {
       root,
       {
         targets: {
-          dsh: { provider: 'spawn', model: 'deepseek-flash' },
+          dsh: { provider: 'spawn', model: 'deepseek-flash', reasoningEffort: 'max' },
           broken: { provider: 'missing-provider' },
         },
         rules: [
@@ -677,7 +902,9 @@ describe('tools and status', () => {
     const status = text(await harness.callTool('delegation_status', {}))
     expect(status).toContain('Registered subagent providers:')
     expect(status).toContain('- spawn: agentOptions')
-    expect(status).toContain('- dsh: provider=spawn model=deepseek-flash (available)')
+    expect(status).toContain(
+      '- dsh: provider=spawn model=deepseek-flash reasoningEffort=max (available)',
+    )
     expect(status).toContain('MISSING provider "missing-provider"')
     expect(status).toContain('- spec-review: when=spec-ready contract=review gate=strict')
     expect(status).toContain('change-a (review-ready)')
@@ -763,5 +990,506 @@ describe('failures and replies', () => {
     const steersBefore = steerTexts(harness.agent).length
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent)).toHaveLength(steersBefore)
+  })
+})
+
+describe('thread-scoped ownership', () => {
+  const owner = (): ReturnType<typeof createAgent> => createAgent('thread-a')
+  const foreign = (): ReturnType<typeof createAgent> => createAgent('thread-b')
+
+  async function ownerOf(root: string): Promise<string | undefined> {
+    const name = createHash('sha256').update('change-a').digest('hex').slice(0, 16)
+    try {
+      const value = JSON.parse(
+        await readFile(join(root, '.dsh', 'delegation', 'owners', `${name}.json`), 'utf8'),
+      ) as { session?: unknown }
+      return typeof value.session === 'string' ? value.session : undefined
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+  }
+
+  it('refuses a foreign review before starting a target and names the owner', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    await harness.callTool('delegation_status', {}, owner())
+    await expect(
+      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, foreign()),
+    ).rejects.toThrow(
+      /change "change-a" is owned by thread "thread-a"; run this review in that thread.*reset the owner/,
+    )
+    expect(subagents.startCalls).toBe(0)
+  })
+
+  it('writes the owning session into the record and reports owner/current in status', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, owner())
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { session?: string }
+    expect(record.session).toBe('thread-a')
+
+    const ownerStatus = text(await harness.callTool('delegation_status', {}, owner()))
+    expect(ownerStatus).toContain('owner=thread-a (current thread)')
+    const foreignStatus = text(await harness.callTool('delegation_status', {}, foreign()))
+    expect(foreignStatus).toContain('owner=thread-a (foreign thread)')
+    expect(subagents.startCalls).toBe(1)
+  })
+
+  it('keeps a legacy record without a session field readable and reusable', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const path = join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json')
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, owner())
+    await harness.waitForRun(runId)
+    const legacy = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    delete legacy.session
+    await writeFile(path, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8')
+    const reused = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, owner()),
+    )
+    expect(reused).toContain('reused record')
+    expect(reused).not.toContain('session:')
+    expect(subagents.startCalls).toBe(1)
+  })
+
+  it('keeps task_progress notes and answer runs available in a foreign thread', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task' }])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const harness = harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        rules: [
+          ...(defaultTestConfig().rules ?? []),
+          {
+            id: 'research',
+            when: 'manual',
+            to: 'codex',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await harness.callTool('delegation_status', {}, owner())
+    const note = text(
+      await harness.callTool(
+        'task_progress',
+        { task: '1.1 Open task', status: 'in-progress', reason: 'midway' },
+        foreign(),
+      ),
+    )
+    expect(note).toContain('progress note written')
+    expect(await ownerOf(root)).toBe('thread-a')
+
+    const answer = text(
+      await harness.callTool('delegate', { rule: 'research', change: 'change-a' }, foreign()),
+    )
+    expect(answer).toContain('does not satisfy a strict review rule')
+    expect(subagents.startCalls).toBe(1)
+    expect(await ownerOf(root)).toBe('thread-a')
+  })
+
+  it('keeps a patch delegation available in a foreign thread without changing the owner', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.addProvider('codex-subagent-write', {}, () => ({
+      output: [{ type: 'text', text: 'Root cause fixed. Ran pnpm test: 12 passed.' }],
+      stopReason: 'completed',
+    }))
+    const harness = harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        rules: [
+          ...(defaultTestConfig().rules ?? []),
+          {
+            id: 'bug-fix',
+            when: 'manual',
+            to: 'codex-write',
+            contract: 'patch',
+            gate: 'none',
+            instruction: 'bundled:fix',
+            isolation: 'worktree',
+          },
+        ],
+      },
+      subagents,
+    )
+    await harness.callTool('delegation_status', {}, owner())
+    expect(await ownerOf(root)).toBe('thread-a')
+    harness.git.status = ' M packages/engine.ts\0'
+    harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
+
+    const patch = text(
+      await harness.callTool(
+        'delegate',
+        { rule: 'bug-fix', objective: 'fix the crash', change: 'change-a' },
+        foreign(),
+      ),
+    )
+    expect(patch).toContain('isolated worktree .dsh/delegation/worktrees/')
+    expect(patch).toContain('packages/engine.ts')
+    expect(patch).toContain('Nothing was applied to the session worktree')
+    expect(subagents.startCalls).toBe(1)
+    expect(subagents.runs[0]?.cwd).toContain(join('.dsh', 'delegation', 'worktrees'))
+    expect(await ownerOf(root)).toBe('thread-a')
+
+    // A patch run must not unblock a foreign review of the same change.
+    await expect(
+      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, foreign()),
+    ).rejects.toThrow(/owned by thread "thread-a"/)
+    expect(subagents.startCalls).toBe(1)
+  })
+})
+
+describe('asynchronous review runs', () => {
+  function deferred() {
+    const releases: Array<() => void> = []
+    return {
+      responder: (run: RunRecord): Promise<ReturnType<typeof passResponder>> =>
+        new Promise((resolve) => {
+          releases.push(() => resolve(passResponder(run)))
+        }),
+      releases,
+    }
+  }
+
+  async function until(condition: () => boolean, label: string): Promise<void> {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      if (condition()) return
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    throw new Error(`timed out waiting for ${label}`)
+  }
+
+  async function specRecord(root: string): Promise<Record<string, unknown>> {
+    return JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as Record<string, unknown>
+  }
+
+  it('starts a review in the background and lets the turn continue', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task' }])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const handle = await harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-a',
+    })
+    const runId = runIdFrom(handle)
+    expect(handle).toContain('review started')
+    expect(handle).toContain('record: .dsh/delegation/spec-review/change-a/spec.json')
+    expect(handle).toContain('The run continues in the background; the turn can continue.')
+    expect(subagents.startCalls).toBe(1)
+    await expect(
+      readFile(join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json')),
+    ).rejects.toThrow()
+
+    // The turn is not blocked: another tool call works while the run is pending.
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toMatch(new RegExp(`run ${runId}: .*state=running`))
+    const note = await harness.toolText('task_progress', {
+      task: '1.1 Open task',
+      status: 'in-progress',
+      reason: 'while the review runs',
+    })
+    expect(note).toContain('progress note written')
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect(await specRecord(root)).toMatchObject({ verdict: 'PASS', runId })
+
+    // Run state is durable scratch: a fresh engine still reports the completed run.
+    const restarted = harnessFor(root, defaultTestConfig())
+    const restartedStatus = await restarted.toolText('delegation_status', {})
+    expect(restartedStatus).toMatch(new RegExp(`run ${runId}: .*state=completed`))
+  })
+
+  it('returns the existing handle for a duplicate pending identity and starts nothing', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const first = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const runId = runIdFrom(first)
+    const duplicate = await harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-a',
+    })
+    expect(duplicate).toContain('review already pending')
+    expect(duplicate).toContain(`run: ${runId}`)
+    expect(subagents.startCalls).toBe(1)
+    pending.releases.shift()?.()
+    await harness.waitForRun(runId)
+  })
+
+  it('queues different rules on the same task, serializes them, and writes both records', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Shared task', checked: true }])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+          {
+            id: 'task-review-extra',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'soft',
+            instruction: 'bundled:review-task',
+          },
+        ],
+      },
+      subagents,
+    )
+    const first = await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' })
+    const firstRun = runIdFrom(first)
+    const taskId = /task id: ([0-9a-f]{16})/.exec(first)?.[1] as string
+    const second = await harness.toolText('delegate', {
+      rule: 'task-review-extra',
+      change: 'change-a',
+      task: taskId,
+    })
+    const secondRun = runIdFrom(second)
+    expect(secondRun).not.toBe(firstRun)
+    expect(second).toContain('review queued')
+    expect(subagents.startCalls).toBe(1)
+    const queuedStatus = await harness.toolText('delegation_status', {})
+    expect(queuedStatus).toMatch(new RegExp(`run ${firstRun}: .*state=running`))
+    expect(queuedStatus).toMatch(new RegExp(`run ${secondRun}: .*state=queued`))
+
+    pending.releases.shift()?.()
+    await harness.waitForRun(firstRun)
+    await until(() => subagents.startCalls === 2, 'the queued run to start')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(secondRun)).toContain('state=completed')
+    expect(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
+        'utf8',
+      ),
+    ).toContain('"verdict": "PASS"')
+    expect(
+      await readFile(
+        join(
+          root,
+          '.dsh',
+          'delegation',
+          'task-review-extra',
+          'change-a',
+          'tasks',
+          `${taskId}.json`,
+        ),
+        'utf8',
+      ),
+    ).toContain('"verdict": "PASS"')
+  })
+
+  it('discards a late completion that cannot replace the authoritative record', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const firstSubagents = new FakeSubagents()
+    const secondSubagents = new FakeSubagents()
+    const firstPending = deferred()
+    const secondPending = deferred()
+    firstSubagents.addProvider('codex-subagent', {}, firstPending.responder)
+    secondSubagents.addProvider('codex-subagent', {}, secondPending.responder)
+    const first = harnessFor(root, defaultTestConfig(), firstSubagents)
+    const second = harnessFor(root, defaultTestConfig(), secondSubagents)
+    const firstRun = await first.startReview({ rule: 'spec-review', change: 'change-a' })
+    const secondRun = await second.startReview({ rule: 'spec-review', change: 'change-a' })
+
+    firstPending.releases.shift()?.()
+    expect(await first.waitForRun(firstRun)).toContain('state=completed')
+    const authoritative = await specRecord(root)
+    expect(authoritative.runId).toBe(firstRun)
+
+    secondPending.releases.shift()?.()
+    expect(await second.waitForRun(secondRun)).toContain('state=discarded')
+    const record = await specRecord(root)
+    expect(record.runId).toBe(firstRun)
+    expect(record.verdict).toBe('PASS')
+  })
+
+  it('reviews an explicit task, rejects unknown/unchecked tasks, and runs different tasks in parallel', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [
+      { number: '1.1', text: 'First task', checked: true },
+      { number: '1.2', text: 'Second task', checked: true },
+      { number: '1.3', text: 'Unchecked task' },
+    ])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+          {
+            id: 'spec-review',
+            when: 'spec-ready',
+            to: 'codex',
+            contract: 'review',
+            phase: 'spec',
+            scope: 'whole',
+            gate: 'strict',
+            instruction: 'bundled:review-spec',
+          },
+        ],
+      },
+      subagents,
+    )
+    await expect(
+      harness.callTool('delegate', {
+        rule: 'spec-review',
+        change: 'change-a',
+        task: '1.1 First task',
+      }),
+    ).rejects.toThrow(/reviews the whole scope; omit task/)
+    await expect(
+      harness.callTool('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        task: '9.9 Ghost task',
+      }),
+    ).rejects.toThrow(/was not found.*allowed checked tasks/)
+    await expect(
+      harness.callTool('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        task: '1.3 Unchecked task',
+      }),
+    ).rejects.toThrow(/is not checked.*Allowed checked tasks/)
+    expect(subagents.startCalls).toBe(0)
+
+    const first = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task: '1.1 First task',
+    })
+    const second = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task: '1.2 Second task',
+    })
+    expect(subagents.startCalls).toBe(2)
+    for (const release of pending.releases) release()
+    await harness.waitForRun(runIdFrom(first))
+    await harness.waitForRun(runIdFrom(second))
+    const tasksDir = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
+    const records = (await readdir(tasksDir)).filter((name) => name.endsWith('.json'))
+    expect(records).toHaveLength(2)
+    const taskIds = new Set(
+      await Promise.all(
+        records.map(async (name) => {
+          const record = JSON.parse(await readFile(join(tasksDir, name), 'utf8')) as {
+            taskId: string
+          }
+          return record.taskId
+        }),
+      ),
+    )
+    expect(taskIds.size).toBe(2)
+  })
+
+  it('publishes no PASS when a reviewed file is edited and restored during the run', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    const file = join(root, 'src', 'engine.ts')
+    await writeFile(file, 'original content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+        ],
+      },
+      subagents,
+    )
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(subagents.startCalls).toBe(1)
+    // Edit, read, restore: content ends identical and a digest re-check would pass.
+    await writeFile(file, 'temporary edit\n', 'utf8')
+    expect(await readFile(file, 'utf8')).toBe('temporary edit\n')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await writeFile(file, 'original content\n', 'utf8')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const tasksDir = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
+    const [recordName] = await readdir(tasksDir)
+    const record = JSON.parse(await readFile(join(tasksDir, recordName as string), 'utf8')) as {
+      verdict: string
+      error: string
+    }
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('reviewed inputs changed during the run')
   })
 })

@@ -22,8 +22,9 @@ rows:
         # (no Serena read/write/shell/list tools) and tells the agent to
         # activate the working directory and read the initial instructions.
         - "--context=vscode"
-        # No dashboard server and no browser window inside the Harness process.
+        # No dashboard server and no browser/GUI log window inside the Harness process.
         - "--enable-web-dashboard=false"
+        - "--enable-gui-log-window=false"
       # The first symbolic call may wait for a language server to start.
       toolCallTimeoutMs: 120000
       # A missing uv or a slow first download must not reject the row; the

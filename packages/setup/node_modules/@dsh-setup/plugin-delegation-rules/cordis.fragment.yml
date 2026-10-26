@@ -11,6 +11,13 @@
 # `ctx.subagents` providers; a missing provider is reported by the tools and
 # the gate instead of failing profile composition, so a standalone install with
 # another provider still composes. No machine path belongs in this file.
+#
+# `codex-astra` is the per-target model/effort example: point a rule at it (or
+# copy the two option lines onto `codex`) to select a specific Codex model and
+# reasoning effort. The model id is the one verified live against the bundled
+# Codex; the delta spec's `astra` is illustrative, and the engine passes any
+# string through. The default `codex`/`codex-write` targets keep the provider
+# defaults, so an unavailable model slug cannot break the default rules.
 rows:
   - id: dsh-setup-delegation-rules
     config:
@@ -20,6 +27,10 @@ rows:
         codex-write:
           provider: codex-subagent-write
           write: true
+        codex-astra:
+          provider: codex-subagent
+          model: gpt-6-astra
+          reasoningEffort: xhigh
       rules:
         - id: spec-review
           when: spec-ready

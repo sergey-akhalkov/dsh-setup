@@ -40,6 +40,12 @@ dependencies: pnpm installs the bundled copies directly, no registry or second f
 Each plugin therefore stays independently installable, while the setup bundle remains one
 self-contained package.
 
+A plugin may itself have runtime dependencies — the vendored Codex provider depends on
+`@openai/codex` for its bundled binary. pnpm does not install a bundled dependency's own
+dependencies, so the generator hoists every plugin's runtime `dependencies` into the setup
+manifest's regular `dependencies` (outside `bundleDependencies`). The profile install then fetches
+them, including the platform-specific Codex package, from the registry.
+
 The copies are generated from the plugin packages and never edited by hand. `pnpm gen:check` also
 reports stale or extra files under `packages/setup/node_modules`, so a removed plugin cannot leave a
 dead copy behind.

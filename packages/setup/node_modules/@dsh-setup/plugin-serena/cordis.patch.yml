@@ -14,6 +14,7 @@
           - start-mcp-server
           - --context=vscode
           - --enable-web-dashboard=false
+          - --enable-gui-log-window=false
         toolCallTimeoutMs: 120000
         failOnStartupError: false
     - id: dsh-setup-serena-guidance

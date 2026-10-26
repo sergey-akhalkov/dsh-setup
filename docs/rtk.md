@@ -8,9 +8,9 @@ the CLI through the ordinary `pwsh` tool.
 ## What the plugin ships
 
 - **An always-on routing rule, enabled by default.** The rule is a system-prompt section, so a session
-  receives it without loading a skill. It names the command categories, keeps the `read`, `grep`, and
-  `glob` tools for file inspection, and states the native fallback when rtk is missing or a command is
-  unsupported.
+  receives it without loading a skill. It names the hot commands and their rtk forms explicitly,
+  applies to subagents, keeps the `read`, `grep`, and `glob` tools for file inspection, and states the
+  native fallback when rtk is missing or a command is unsupported.
 - **One on-demand skill.** `rtk` carries the command groups, the fallback, the full-output recovery
   route, and the `rtk trust` security boundary. It is listed in the catalog and costs nothing until
   invoked.
@@ -66,26 +66,30 @@ The always-on rule is a hard budget, not a preference. The package test measures
 | Contribution                         | Size        | Cost per model step |
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
-| Working contract                     | 4,424 bytes | ~1.1k tokens        |
-| RTK routing rule                     | 838 bytes   | ~0.2k tokens        |
-| **All three, active**                |             | **~2.0k tokens**    |
+| Working contract                     | 4,876 bytes | ~1.2k tokens        |
+| RTK routing rule                     | 884 bytes   | ~0.2k tokens        |
+| Serena code-surface rule             | 1,597 bytes | ~0.4k tokens        |
+| **All four, active**                 |             | **~2.5k tokens**    |
 
-The `rtk` skill body is 3,245 bytes and loads only when invoked, so it is not in the per-step table.
+The `rtk` skill body is 3,618 bytes and loads only when invoked, so it is not in the per-step table.
 The measured values come from the package budget test and the asset files; update this table when the
 assets change.
 
 ## What the agent is told
 
-The rule and skill cover these command groups:
+The always-on rule names the hot forms; the skill carries the full table:
 
 - Git inspection and changes: `rtk git status`, `rtk git diff`, `rtk git log`, `rtk git add`,
   `rtk git commit`, `rtk git push`.
 - Tests: `rtk pnpm test`, `rtk npm test`, `rtk vitest`, `rtk jest`, `rtk cargo test`, `rtk pytest`,
   `rtk go test`, `rtk dotnet test`, `rtk playwright`.
 - Build and lint: `rtk tsc`, `rtk lint`, `rtk ruff check`, `rtk prettier`, `rtk mypy`, `rtk go build`.
-- Search: `rtk grep`, `rtk rg`, `rtk find`, `rtk fd`.
+- Search: `rtk grep`, `rtk find`. (`rtk rg` and `rtk fd` are native fallbacks, not filters.)
 - Infrastructure: `rtk docker`, `rtk kubectl`, `rtk aws`, `rtk psql`.
 - Shell file commands: `rtk read`, `rtk ls`, `rtk tree`.
+
+The rule states those forms are mandatory for the listed hot commands, says tests and build logs are
+the biggest wins, applies to subagents, and notes that rtk keeps errors and exit codes.
 
 The installed CLI is the authority: `rtk --help` and `rtk <command> --help` list the current surface.
 If a command has no rtk equivalent, the agent runs the native command and keeps its errors.

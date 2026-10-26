@@ -10,6 +10,10 @@
           codex-write:
             provider: codex-subagent-write
             write: true
+          codex-astra:
+            provider: codex-subagent
+            model: gpt-6-astra
+            reasoningEffort: xhigh
         rules:
           - id: spec-review
             when: spec-ready

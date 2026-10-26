@@ -58,8 +58,15 @@ describe('configuration validation', () => {
       'bug-fix',
       'integration-review',
     ])
-    expect([...config.targets.keys()]).toEqual(['codex', 'codex-write'])
+    expect([...config.targets.keys()]).toEqual(['codex', 'codex-write', 'codex-astra'])
     expect(config.targets.get('codex-write')?.write).toBe(true)
+    // The default Codex targets keep provider defaults; the example target selects a model/effort.
+    expect(config.targets.get('codex')).toEqual({ provider: 'codex-subagent' })
+    expect(config.targets.get('codex-astra')).toEqual({
+      provider: 'codex-subagent',
+      model: 'gpt-6-astra',
+      reasoningEffort: 'xhigh',
+    })
     expect(config.failureStreak).toBe(3)
     const integration = config.rules.find((rule) => rule.id === 'integration-review')
     expect(integration).toMatchObject({
@@ -262,6 +269,29 @@ describe('configuration validation', () => {
         rules: [],
       },
       /unknown option "temperature"/,
+    ],
+    [
+      'an empty target model',
+      { targets: { codex: { provider: 'codex-subagent', model: '' } }, rules: [] },
+      /target "codex".model.*must be a non-empty string/,
+    ],
+    [
+      'a non-string reasoning effort',
+      {
+        targets: { codex: { provider: 'codex-subagent', reasoningEffort: 5 } },
+        rules: [],
+      },
+      /target "codex".reasoningEffort.*must be a non-empty string/,
+    ],
+    [
+      'an empty agent-options reasoning effort',
+      {
+        targets: {
+          codex: { provider: 'codex-subagent', agentOptions: { reasoningEffort: '' } },
+        },
+        rules: [],
+      },
+      /target "codex".agentOptions.reasoningEffort.*must be a non-empty string/,
     ],
     [
       'an invalid timeout',

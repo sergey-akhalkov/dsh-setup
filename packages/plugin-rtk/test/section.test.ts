@@ -80,6 +80,10 @@ describe('rtk plugin always-on rule', () => {
     expect(section?.text).toContain('stop rtk routing')
     expect(section?.text).toContain('read`, `grep`, and `glob`')
     expect(section?.text).toContain('rtk git diff')
+    expect(section?.text).toContain('rtk vitest')
+    expect(section?.text).toContain('rtk tsc')
+    expect(section?.text).toContain('MUST')
+    expect(section?.text).toContain('subagents')
   })
 
   it('skips only the always-on section when asked to via configuration', async () => {

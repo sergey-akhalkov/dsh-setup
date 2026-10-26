@@ -1,4 +1,12 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { ADAPTER_ROW_NAMES, type FragmentRow } from './fragments.ts'
@@ -93,8 +101,26 @@ export function buildSetupManifest(
   versions: DshVersions,
 ): PackageManifest {
   const dependencies: Record<string, string> = {}
+  // pnpm does not install dependencies of bundled packages, so each plugin's
+  // runtime dependencies must be hoisted into the setup's own dependency set.
+  const runtime = new Map<string, string>()
+  for (const plugin of plugins) {
+    for (const [name, range] of Object.entries(plugin.dependencies ?? {})) {
+      if (name === plugin.name) continue
+      const existing = runtime.get(name)
+      if (existing !== undefined && existing !== range) {
+        throw new Error(`conflicting runtime dependency ${name}: "${existing}" vs "${range}"`)
+      }
+      runtime.set(name, range)
+    }
+  }
+  const bundled: string[] = []
   for (const plugin of [...plugins].sort((left, right) => left.name.localeCompare(right.name))) {
     dependencies[plugin.name] = plugin.version
+    bundled.push(plugin.name)
+  }
+  for (const [name, range] of [...runtime].sort(([left], [right]) => left.localeCompare(right))) {
+    dependencies[name] = range
   }
   return {
     name: SETUP_PACKAGE_NAME,
@@ -105,7 +131,7 @@ export function buildSetupManifest(
     files: ['cordis.patch.yml', 'defaults.yml', 'icon.svg', 'locale/*.json'],
     engines: { dsh: versions.enginesDsh },
     dependencies,
-    bundleDependencies: Object.keys(dependencies),
+    bundleDependencies: bundled,
     dsh: {
       manifestVersion: 1,
       bundle: { patch: './cordis.patch.yml' },
@@ -124,6 +150,18 @@ export function validateSetupManifest(
 ): string[] {
   const problems: string[] = []
   const expected = new Map(plugins.map((plugin) => [plugin.name, plugin.version]))
+  const runtime = new Map<string, string>()
+  for (const plugin of plugins) {
+    for (const [name, range] of Object.entries(plugin.dependencies ?? {})) {
+      if (expected.has(name) || name === plugin.name) continue
+      const existing = runtime.get(name)
+      if (existing !== undefined && existing !== range) {
+        problems.push(`conflicting runtime dependency ${name}: "${existing}" vs "${range}"`)
+        continue
+      }
+      runtime.set(name, range)
+    }
+  }
 
   if (manifest.name !== SETUP_PACKAGE_NAME) {
     problems.push(`name must be ${SETUP_PACKAGE_NAME}`)
@@ -135,8 +173,15 @@ export function validateSetupManifest(
       problems.push(`dependency ${name} is "${declared}", expected exact "${version}"`)
     }
   }
+  for (const [name, range] of runtime) {
+    const declared = manifest.dependencies?.[name]
+    if (declared === undefined) problems.push(`missing runtime dependency ${name}`)
+    else if (declared !== range) {
+      problems.push(`runtime dependency ${name} is "${declared}", expected "${range}"`)
+    }
+  }
   for (const name of Object.keys(manifest.dependencies ?? {})) {
-    if (!expected.has(name)) problems.push(`unexpected dependency ${name}`)
+    if (!expected.has(name) && !runtime.has(name)) problems.push(`unexpected dependency ${name}`)
   }
   const bundled = new Set(manifest.bundleDependencies ?? [])
   for (const name of expected.keys()) {
@@ -188,6 +233,22 @@ export function readPluginFiles(
   return collected
 }
 
+/** Read every file of a runtime dependency package, skipping nested node_modules. */
+function readPackageFiles(directory: string): Array<{ path: string; content: Buffer }> {
+  const collected: Array<{ path: string; content: Buffer }> = []
+  const walk = (relativeDir: string): void => {
+    for (const entry of readdirSync(join(directory, relativeDir), { withFileTypes: true })) {
+      if (entry.name === 'node_modules') continue
+      const path = relativeDir === '' ? entry.name : `${relativeDir}/${entry.name}`
+      if (entry.isDirectory()) walk(path)
+      else if (entry.isFile())
+        collected.push({ path, content: readFileSync(join(directory, path)) })
+    }
+  }
+  walk('')
+  return collected
+}
+
 /** Compose every generated artifact: plugin patches, the setup patch, manifest, and vendored copies. */
 export function computeGenerated(
   pluginRows: Array<{ pkg: WorkspacePackage; rows: FragmentRow[] }>,
@@ -220,6 +281,63 @@ export function computeGenerated(
     ]
     for (const file of vendored) {
       files.set(join(SETUP_VENDOR_DIR, pkg.manifest.name, file.path), file.content)
+    }
+  }
+
+  // The vendored plugin copies cannot resolve their own dependencies from the
+  // setup's node_modules, so small runtime dependency trees are vendored beside
+  // them. @openai/codex is installed by the profile instead: its platform binary
+  // is not committed and must come from the registry.
+  const runtimeDependencies = new Map<string, string>()
+  const storeCandidates = (name: string): string[] => {
+    const store = join('node_modules', '.pnpm')
+    if (!statSync(store, { throwIfNoEntry: false })?.isDirectory()) return []
+    const prefix = `${name.replace('/', '+')}@`
+    return readdirSync(store)
+      .filter((entry) => entry.startsWith(prefix))
+      .map((entry) => join(store, entry, 'node_modules', name))
+  }
+  const addRuntimeDependency = (name: string, candidates: string[], origin: string): void => {
+    if (runtimeDependencies.has(name)) return
+    const directory = [...candidates, ...storeCandidates(name)].find((candidate) =>
+      statSync(candidate, { throwIfNoEntry: false })?.isDirectory(),
+    )
+    if (directory === undefined) {
+      throw new Error(`${origin}: runtime dependency ${name} is not installed; run pnpm install`)
+    }
+    const resolved = realpathSync(directory)
+    runtimeDependencies.set(name, resolved)
+    const manifest = JSON.parse(
+      readFileSync(join(resolved, 'package.json'), 'utf8'),
+    ) as PackageManifest
+    for (const child of Object.keys(manifest.dependencies ?? {})) {
+      if (child.startsWith('@openai/')) continue
+      addRuntimeDependency(
+        child,
+        [
+          join(dirname(resolved), child),
+          join(resolved, 'node_modules', child),
+          join('node_modules', child),
+        ],
+        `${origin} -> ${name}`,
+      )
+    }
+  }
+  for (const { pkg } of pluginRows) {
+    for (const name of Object.keys(pkg.manifest.dependencies ?? {})) {
+      if (name.startsWith('@openai/')) continue
+      addRuntimeDependency(
+        name,
+        [join(pkg.dir, 'node_modules', name), join('node_modules', name)],
+        pkg.relativeDir,
+      )
+    }
+  }
+  for (const [name, directory] of [...runtimeDependencies].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    for (const file of readPackageFiles(directory)) {
+      files.set(join(SETUP_VENDOR_DIR, name, file.path), file.content)
     }
   }
 

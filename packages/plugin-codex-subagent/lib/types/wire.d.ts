@@ -1,9 +1,10 @@
 /**
  * Minimal Codex app-server protocol adapter, retained from upstream: written
- * against Codex 0.153.4 and verified against the installed 0.164.0 during this
- * fork's acceptance. The shared JSON-RPC transport owns framing and request
- * correlation; this module owns only the product methods, current thread/turn
- * association, unattended approval responses, and terminal-answer selection.
+ * against Codex 0.153.4 and verified against the bundled 0.164.0 during this
+ * fork's acceptance, including a completed authenticated turn. The shared
+ * JSON-RPC transport owns framing and request correlation; this module owns
+ * only the product methods, current thread/turn association, unattended
+ * approval responses, and terminal-answer selection.
  *
  * @module @dsh-setup/plugin-codex-subagent/wire
  */
@@ -35,6 +36,7 @@ export declare class CodexAppServerWire {
   private readonly permissionMode
   private readonly model?
   private readonly sandbox?
+  private readonly reasoningEffort?
   private readonly transport
   private readonly fatal
   private threadId
@@ -59,6 +61,7 @@ export declare class CodexAppServerWire {
     permissionMode: CodexPermissionMode,
     model?: string | undefined,
     sandbox?: CodexSandboxMode | undefined,
+    reasoningEffort?: string | undefined,
   )
   /** Start reading app-server frames. */
   start(): void
