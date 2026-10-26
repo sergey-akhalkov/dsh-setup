@@ -84,7 +84,7 @@ describe('defaults', () => {
   })
 
   it('rejects the reserved plugin row prefix', () => {
-    expect(() => parseDefaults('- id: dsh-setup-composer-clock\n  config: {}\n')).toThrow(
+    expect(() => parseDefaults('- id: dsh-setup-example\n  config: {}\n')).toThrow(
       /reserved plugin row prefix/,
     )
   })

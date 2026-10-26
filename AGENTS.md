@@ -118,12 +118,13 @@ Useful environment variables: `DSH_CLI` (CLI command to use instead of `pnpm dlx
 
 ## 5. Create a new plugin package (the main task)
 
-Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; copy
-`packages/plugin-composer-clock` as the template. A bundle that only connects an external MCP server
-can skip the TypeScript project entirely: keep `package.json`, `cordis.fragment.yml`, `locale/en.json`,
-and `icon.svg`, and skip `main`/`types`/`dsh.client`, `src/`, `lib/`, `tsconfig.json`, and the Client
-test. That shape may add a Host module later (as `packages/plugin-serena` did for its guidance skill);
-see [docs/plugins.md](docs/plugins.md). Checklist:
+Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; start from the closest
+existing package shape (`packages/plugin-rust` for a Host-only bundle) and rename it. A bundle that
+only connects an external MCP server can skip the TypeScript project entirely: keep `package.json`,
+`cordis.fragment.yml`, `locale/en.json`, and `icon.svg`, and skip `main`/`types`/`dsh.client`, `src/`,
+`lib/`, `tsconfig.json`, and the Client test. That shape may add a Host module later (as
+`packages/plugin-serena` did for its guidance skill); see [docs/plugins.md](docs/plugins.md).
+Checklist:
 
 1. **Manifest** `packages/plugin-<name>/package.json`
    - `name`, `version` (equal to the repo version), `description`, `icon: "./icon.svg"`,
@@ -316,9 +317,9 @@ pnpm test:watch                                      # watch
 ```
 
 `scripts/test/` covers generation, fragment/manifest validation, market mapping/merging, and the
-repository scans. The Client-bundle test loads the already-built `lib/client.js`, so run `pnpm build`
-first (or use `pnpm check`, which builds before testing). Tests that need machine-path fixtures
-compose them at runtime so `validate:repo` does not flag the test file.
+repository scans. Tests that load built `lib/**` output need `pnpm build` first (or `pnpm check`,
+which builds before testing). Tests that need machine-path fixtures compose them at runtime so
+`validate:repo` does not flag the test file.
 
 ## 11. OpenSpec workflow (requirements are spec-driven)
 
@@ -466,7 +467,7 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 
 | Need                                                   | File                                                                                                                                                                               |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Add/change a plugin, Client slots, HMR behavior        | [docs/plugins.md](docs/plugins.md), `packages/plugin-composer-clock/**`                                                                                                            |
+| Add/change a plugin, Client slots, HMR behavior        | [docs/plugins.md](docs/plugins.md), `packages/plugin-rust/**` (package shape)                                                                                                      |
 | How the setup patch/manifest/vendor tree are generated | [docs/setup-composition.md](docs/setup-composition.md), `scripts/lib/generate.ts`, `scripts/lib/fragments.ts`                                                                      |
 | Installer behavior, options, manual install            | [docs/install.md](docs/install.md), `install.ps1`                                                                                                                                  |
 | Owner-profile dogfood without touching the live state  | [docs/install.md](docs/install.md#dogfood-on-the-current-machine), `scripts/dogfood.ts`, `scripts/lib/dogfood.ts`                                                                  |
@@ -485,7 +486,6 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `gen:check` reports `missing`/`changed`/`unexpected`           | Run `pnpm gen` and commit the regenerated files; `unexpected` means a stale vendored file or a plugin removed without regenerating                                                                                                                                                                                                                                                                                                 |
 | `git diff --exit-code` after `pnpm build` shows changes        | Committed `lib/**`/`lib/client.js` is stale; build and commit it                                                                                                                                                                                                                                                                                                                                                                   |
-| `pnpm test` fails with `run pnpm build before this test`       | The Client-bundle test reads `lib/client.js`; run `pnpm build` or use `pnpm check`                                                                                                                                                                                                                                                                                                                                                 |
 | A new plugin emits nothing                                     | Add it to root `tsconfig.json` `references`; confirm it has `dsh.bundle` and a `cordis.fragment.yml`                                                                                                                                                                                                                                                                                                                               |
 | A rule/plugin change is not visible after restart              | Check the profile's `dependencies."@dsh-setup/setup"`. `link:` reads this checkout: run `pnpm gen`/`pnpm build`, then fully quit and relaunch; a page reload/new chat does not rebuild the Host prompt, and the current session keeps its old prompt. A `git+...`/version spec needs a reinstall or release. See [docs/install.md](docs/install.md#apply-local-changes-from-a-linked-checkout).                                    |
 | `validate:repo`: machine path or secret                        | Remove the absolute path/credential from the tracked file; tests build such fixtures at runtime                                                                                                                                                                                                                                                                                                                                    |

@@ -149,8 +149,6 @@ function main(): number {
       step('compose the setup rows and owner defaults', () => {
         if (dump.status !== 0) throw failure(dump)
         for (const marker of [
-          'dsh-setup-composer-clock',
-          '@dsh-setup/plugin-composer-clock',
           'dsh-setup-serena',
           'dsh-setup-nuphus-mcp',
           '@deepseek-ai/dsh-mcp-client',

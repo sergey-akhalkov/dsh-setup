@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { FragmentError, parseCompositionFragment } from '../lib/fragments.ts'
 
-const PACKAGE = '@dsh-setup/plugin-composer-clock'
+const PACKAGE = '@dsh-setup/plugin-example'
 
 describe('parseCompositionFragment', () => {
   it('derives the row module name from the owning package', () => {
-    const fragment = parseCompositionFragment('rows:\n  - id: dsh-setup-composer-clock\n', PACKAGE)
-    expect(fragment.rows).toEqual([{ id: 'dsh-setup-composer-clock', name: PACKAGE }])
+    const fragment = parseCompositionFragment('rows:\n  - id: dsh-setup-example\n', PACKAGE)
+    expect(fragment.rows).toEqual([{ id: 'dsh-setup-example', name: PACKAGE }])
   })
 
   it('keeps an optional row config', () => {
     const fragment = parseCompositionFragment(
-      'rows:\n  - id: dsh-setup-composer-clock\n    config:\n      format: short\n',
+      'rows:\n  - id: dsh-setup-example\n    config:\n      format: short\n',
       PACKAGE,
     )
     expect(fragment.rows[0]?.config).toEqual({ format: 'short' })
@@ -19,16 +19,13 @@ describe('parseCompositionFragment', () => {
 
   it('rejects an unknown top-level field', () => {
     expect(() =>
-      parseCompositionFragment('rows:\n  - id: dsh-setup-composer-clock\nextra: true\n', PACKAGE),
+      parseCompositionFragment('rows:\n  - id: dsh-setup-example\nextra: true\n', PACKAGE),
     ).toThrow(/unknown field "extra"/)
   })
 
   it('rejects an unknown row field', () => {
     expect(() =>
-      parseCompositionFragment(
-        'rows:\n  - id: dsh-setup-composer-clock\n    command: other\n',
-        PACKAGE,
-      ),
+      parseCompositionFragment('rows:\n  - id: dsh-setup-example\n    command: other\n', PACKAGE),
     ).toThrow(/unknown field "command"/)
   })
 
@@ -62,7 +59,7 @@ describe('parseCompositionFragment', () => {
   })
 
   it('rejects an id outside the repository namespace', () => {
-    expect(() => parseCompositionFragment('rows:\n  - id: composer-clock\n', PACKAGE)).toThrow(
+    expect(() => parseCompositionFragment('rows:\n  - id: example\n', PACKAGE)).toThrow(
       FragmentError,
     )
   })
@@ -70,7 +67,7 @@ describe('parseCompositionFragment', () => {
   it('rejects a duplicate id', () => {
     expect(() =>
       parseCompositionFragment(
-        'rows:\n  - id: dsh-setup-composer-clock\n  - id: dsh-setup-composer-clock\n',
+        'rows:\n  - id: dsh-setup-example\n  - id: dsh-setup-example\n',
         PACKAGE,
       ),
     ).toThrow(/not unique/)

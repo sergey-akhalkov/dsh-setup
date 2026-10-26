@@ -172,8 +172,8 @@ describe('checkSetupRows', () => {
   })
 
   it('reports a missing setup row', () => {
-    expect(checkSetupRows(['dsh-setup-composer-clock'], DUMP)).toEqual([
-      'setup row "dsh-setup-composer-clock" is missing from the composed profile',
+    expect(checkSetupRows(['dsh-setup-example'], DUMP)).toEqual([
+      'setup row "dsh-setup-example" is missing from the composed profile',
     ])
   })
 })

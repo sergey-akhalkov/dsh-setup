@@ -1,7 +1,6 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/plugin-composer-clock" },
     { "path": "./packages/plugin-delegation-rules" },
     { "path": "./packages/plugin-nuphus-mcp" },
     { "path": "./packages/plugin-openspec" },

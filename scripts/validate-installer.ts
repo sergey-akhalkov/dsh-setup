@@ -281,7 +281,7 @@ function main(): number {
       const markers = [
         ...versions.installBundles.shipped,
         ...versions.installBundles.registry,
-        'dsh-setup-composer-clock',
+        'dsh-setup-ponytail',
         'reasoningEffort: high',
         'preference: dark',
         'selectedDefault: cordis',

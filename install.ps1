@@ -96,11 +96,11 @@ $ShippedBundles = @(
   '@deepseek-ai/dsh-experimental-session-search',
   '@deepseek-ai/dsh-experimental-terminal-bundle'
 )
-$RegistryBundles = @('@deepseek-ai/dsh-subagent-codex')
+$RegistryBundles = @()
 # END REPOSITORY METADATA
 
 $SetupPackage = '@dsh-setup/setup'
-$SetupRowsMarker = 'dsh-setup-composer-clock'
+$SetupRowsMarker = 'dsh-setup-ponytail'
 
 function Write-Step([string]$Message) {
   Write-Host "==> $Message"

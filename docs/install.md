@@ -40,8 +40,7 @@ The script:
    manifest, patch, and composed root under `$DSH_HOME/.dsh-setup-backups/` before anything changes.
 3. Enables the shipped bundles the setup expects by appending their names to `dsh.profile.bundles` —
    exactly the operation behind the **Plugins** toggles. The profile patch is not touched.
-4. Installs `@deepseek-ai/dsh-subagent-codex` at the running DSH version with
-   `dsh plugin --profile desktop add`, then installs the setup bundle from the pinned release commit.
+4. Installs the setup bundle from the pinned release commit.
 5. Verifies the selection, the installed setup version, that the setup bundle is last in
    `dsh.profile.bundles` (so its defaults outrank the shipped layers), and that `cordis.patch.yml`
    is byte-identical to before.
@@ -78,7 +77,9 @@ does not duplicate their rows or add them itself.
 - **Custom plugin markets** — `@deepseek-ai/dsh-experimental-plugin-market-bundle`
 - **Session search** — `@deepseek-ai/dsh-experimental-session-search`
 - **Terminal** — `@deepseek-ai/dsh-experimental-terminal-bundle`
-- **Codex subagent** — `@deepseek-ai/dsh-subagent-codex` (installed from the registry, not shipped)
+
+Codex subagents come from the setup bundle's `@dsh-setup/plugin-codex-subagent`; the stock
+`@deepseek-ai/dsh-subagent-codex` bundle is not selected by the installer.
 
 The list is the single source in [`dsh.json`](../dsh.json) (`installBundles`); the standalone installer
 contains its own copy, and repository validation fails if the two disagree.
@@ -97,7 +98,7 @@ Use this path when you cannot run the installer, for example on a CLI-only machi
 
 3. Select the **dsh-setup** market, open the **dsh-setup** entry, and select **Install**.
 4. Confirm the version and its source. The bundle is added to the running profile, its patch applies,
-   and the composer-clock plugin appears in the conversation composer dock.
+   and the setup rows and owner defaults appear in the composed config.
 
 The full setup also ships two guidance bundles. The packaged Ponytail prompt is always on by default
 with its skill available on demand, and the first-party working contract is always on by default with

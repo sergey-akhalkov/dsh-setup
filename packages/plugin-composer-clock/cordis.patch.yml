@@ -1,5 +1,0 @@
-# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
-# Bundle layer for @dsh-setup/plugin-composer-clock.
-- insert:
-    - id: dsh-setup-composer-clock
-      name: "@dsh-setup/plugin-composer-clock"

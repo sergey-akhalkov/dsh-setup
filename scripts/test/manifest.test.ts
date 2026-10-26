@@ -4,7 +4,7 @@ import type { PackageManifest } from '../lib/workspace.ts'
 
 function manifest(overrides: Partial<PackageManifest> = {}): PackageManifest {
   return {
-    name: '@dsh-setup/plugin-composer-clock',
+    name: '@dsh-setup/plugin-example',
     version: '0.1.0',
     engines: { dsh: '>=0.2.1-rc.3 <0.3.0' },
     exports: { './client': './lib/client.js' },

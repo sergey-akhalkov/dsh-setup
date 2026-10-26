@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "@dsh-setup/plugin-codex-subagent": "0.4.0",
-    "@dsh-setup/plugin-composer-clock": "0.4.0",
     "@dsh-setup/plugin-delegation-rules": "0.4.0",
     "@dsh-setup/plugin-nuphus-mcp": "0.4.0",
     "@dsh-setup/plugin-openspec": "0.4.0",
@@ -30,7 +29,6 @@
   },
   "bundleDependencies": [
     "@dsh-setup/plugin-codex-subagent",
-    "@dsh-setup/plugin-composer-clock",
     "@dsh-setup/plugin-delegation-rules",
     "@dsh-setup/plugin-nuphus-mcp",
     "@dsh-setup/plugin-openspec",

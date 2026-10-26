@@ -7,8 +7,6 @@
 - insert:
     - id: dsh-setup-codex-subagent
       name: "@dsh-setup/plugin-codex-subagent"
-    - id: dsh-setup-composer-clock
-      name: "@dsh-setup/plugin-composer-clock"
     - id: dsh-setup-delegation-rules
       name: "@dsh-setup/plugin-delegation-rules"
       config:

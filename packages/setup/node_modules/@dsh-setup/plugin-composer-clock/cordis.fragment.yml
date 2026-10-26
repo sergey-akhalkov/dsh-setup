@@ -1,8 +1,0 @@
-# Composition fragment for @dsh-setup/plugin-composer-clock.
-#
-# `dsh-setup/scripts/generate.ts` reads every package's fragment and generates
-# both this package's own bundle patch and the aggregated setup patch. Row ids
-# are global: they must start with `dsh-setup-` and stay unique across the
-# repository, so two bundles can never mount competing entries under one id.
-rows:
-  - id: dsh-setup-composer-clock

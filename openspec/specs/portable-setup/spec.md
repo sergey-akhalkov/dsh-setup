@@ -28,7 +28,7 @@ The repository SHALL publish one setup bundle that, when installed through the n
 
 ### Requirement: One-command installation
 
-The repository SHALL ship a single installer command that reproduces the complete setup on a prepared machine: enable the documented shipped bundles through the profile's native bundle selection, install the registry bundle through the native plugin manager, install the setup bundle at a pinned release, verify the result, and restart DeepSeek Harness.
+The repository SHALL ship a single installer command that reproduces the complete setup on a prepared machine: enable the documented shipped bundles through the profile's native bundle selection, install any registry bundles declared in `dsh.json` through the native plugin manager, install the setup bundle at a pinned release, verify the result, and restart DeepSeek Harness.
 
 #### Scenario: Fresh machine
 
