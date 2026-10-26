@@ -1426,22 +1426,31 @@ function textTask(prompt) {
 /**
 * Extract the delegation engine's stable review key from the prompt. The engine
 * emits one line `- Review key: review:<change>:task:<taskId>` (or `whole:<phase>`)
-* for every review; the prompt is the contract because the start request shape
-* is unchanged. Multiple different keys in one prompt are rejected rather than
-* guessing which conversation to resume.
+* plus a digest line in every review prompt; the prompt is the contract because
+* the start request shape is unchanged. Model-supplied `## Context` /
+* `## Objective` sections are ignored, and a prompt without the review digest is
+* not treated as a review, so a forged key line cannot hijack an answer/patch
+* conversation. Multiple different keys or digests in the review preamble are
+* rejected rather than guessing which conversation to resume.
 * @param prompt - task content accepted from the shared subagent service.
 * @returns the review key, or undefined when the prompt is not a review.
 */
 function reviewKeyFromPrompt(prompt) {
 	const text = prompt.map((block) => block !== null && typeof block === "object" && typeof block.text === "string" ? block.text : "").join("\n");
+	const preamble = text.split(/^## (?:Context|Objective)\s*$/mu)[0] ?? text;
 	const keys = [];
-	for (const line of text.split(/\r?\n/u)) {
-		const match = /^- Review key: (review:[^\r\n]+?)\s*$/u.exec(line);
-		if (match !== null) keys.push(match[1]);
+	const digests = [];
+	for (const line of preamble.split(/\r?\n/u)) {
+		const key = /^- Review key: (review:[^\r\n]+?)\s*$/u.exec(line)?.[1];
+		if (key !== void 0) keys.push(key);
+		const digest = /^- Digest: ([0-9a-f]{64})\s*$/u.exec(line)?.[1];
+		if (digest !== void 0) digests.push(digest);
 	}
-	const unique = [...new Set(keys)];
-	if (unique.length > 1) throw new Error(`${CODEX_ERROR_PREFIX}prompt contains conflicting review keys`);
-	return unique[0];
+	const uniqueKeys = [...new Set(keys)];
+	if (uniqueKeys.length > 1) throw new Error(`${CODEX_ERROR_PREFIX}prompt contains conflicting review keys`);
+	if (uniqueKeys.length === 0 || digests.length === 0) return void 0;
+	if (new Set(digests).size > 1) throw new Error(`${CODEX_ERROR_PREFIX}prompt contains conflicting review digests`);
+	return uniqueKeys[0];
 }
 /**
 * Close the private wire, terminate the managed range, and wait for the
