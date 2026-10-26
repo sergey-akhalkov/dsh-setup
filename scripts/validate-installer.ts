@@ -203,6 +203,28 @@ function main(): number {
     })
 
     const patchBefore = hashFile(patchPath)
+
+    // A downloaded copy has no checkout beside it, so it must resolve the
+    // release from the index or the tag fallback. Use the documented URL and
+    // prove the plan carries a full git spec; the real run below keeps its pin.
+    step('a downloaded installer resolves a git release spec', () => {
+      const copy = join(home, 'install.ps1')
+      cpSync(join(rootDir, 'install.ps1'), copy)
+      const args = ['-NoProfile', '-File', copy, '-Profile', 'ci', '-DshHome', home, '-DryRun']
+      if (cli !== undefined) args.push('-DshCli', cli)
+      const result = shell(pwsh, args, env, 120_000)
+      if (result.status !== 0) throw fail(result)
+      for (const fragment of [
+        'git+https://github.com/sergey-akhalkov/dsh-setup.git#',
+        '&path:/packages/setup',
+        'Dry run: no changes were made',
+      ]) {
+        if (!result.stdout.includes(fragment)) {
+          throw new Error(`the plan lacks "${fragment}"\n${result.stdout.trim()}`)
+        }
+      }
+    })
+
     const installerArgs = [
       '-NoProfile',
       '-File',

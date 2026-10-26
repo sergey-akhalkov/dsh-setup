@@ -33,6 +33,9 @@ Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/ma
 & $installer
 ```
 
+The script resolves the setup version from the published market index and falls back to the newest
+`v*` release tag when that index cannot be read.
+
 The script:
 
 1. Reads the running CLI and DSH version and refuses an unsupported one.
@@ -57,7 +60,7 @@ reports the same profile state.
 | `-Profile <name>`       | Profile to install into. Default `desktop`.                                            |
 | `-DshHome <path>`       | Harness home. Default `$env:DSH_HOME`, else `~/.dsh`.                                  |
 | `-DshCli <path>`        | CLI to use. Default `dsh` on PATH, else the Desktop CLI.                               |
-| `-SetupVersion <x.y.z>` | Install that exact release instead of the newest one listed in the index.              |
+| `-SetupVersion <x.y.z>` | Install that exact release instead of the newest index entry or tag.                   |
 | `-SetupSpec <spec>`     | Install an explicit package spec, for example a checkout's `packages/setup` directory. |
 | `-NoStopApp`            | Abort instead of closing a running DeepSeek Harness; quit the app and rerun.           |
 | `-NoRestart`            | Leave DeepSeek Harness closed after installing.                                        |

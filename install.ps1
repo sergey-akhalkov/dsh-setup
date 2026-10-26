@@ -215,11 +215,35 @@ function Get-DshCli {
 }
 
 function Invoke-DshPlugin([string[]]$Arguments) {
+  # A .cmd shim re-parses its command line: an unquoted spec containing "&"
+  # (git+...#<commit>&path:/packages/setup) would be split by cmd.exe.
+  $cli = Get-Command $DshCli -ErrorAction SilentlyContinue
+  $cliPath = if ($cli) { $cli.Source } else { $DshCli }
+  if ($cliPath -match '\.(cmd|bat)$') {
+    $Arguments = @($Arguments | ForEach-Object {
+      $value = [string]$_
+      if ($value -match '[&^]') { "`"$value`"" } else { $value }
+    })
+  }
   # Stream the manager's own output: a slow or stalled package operation must
   # show where it is, not disappear into a buffer until the call returns.
-  $output = & $DshCli plugin --profile $Profile @Arguments 2>&1 | Tee-Object -Variable output
+  $output = & $cliPath plugin --profile $Profile @Arguments 2>&1 | Tee-Object -Variable output
   $code = $LASTEXITCODE
   if ($code -ne 0) { throw "dsh plugin --profile $Profile $($Arguments -join ' ') failed with exit code $code" }
+}
+
+function Get-LatestReleaseTag {
+  # The index is the preferred pin, but the release tags are the fallback when
+  # Pages has no published index yet.
+  $output = @(& git ls-remote --tags --refs $Repository 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw "git ls-remote $Repository failed with exit code $LASTEXITCODE" }
+  $versions = @(
+    foreach ($line in $output) {
+      if ([string]$line -match 'refs/tags/v(\d+\.\d+\.\d+)$') { [version]$Matches[1] }
+    }
+  )
+  if ($versions.Count -eq 0) { return $null }
+  return (($versions | Sort-Object -Descending) | Select-Object -First 1).ToString()
 }
 
 function Resolve-SetupSpec {
@@ -266,7 +290,20 @@ function Resolve-SetupSpec {
     Write-Warn "falling back to the release tag v$SetupVersion instead of the index"
     return "git+$Repository.git#v$SetupVersion&path:/packages/setup"
   }
-  throw "Cannot resolve the setup release: $IndexUrl is unreachable and no -SetupVersion or -SetupSpec was given."
+
+  $latest = $null
+  try {
+    $latest = Get-LatestReleaseTag
+  } catch {
+    Write-Warn "cannot list the release tags: $($_.Exception.Message)"
+  }
+  if ($latest) {
+    $script:SetupVersion = $latest
+    Write-Warn "using the latest release tag v$latest instead of the index"
+    return "git+$Repository.git#v$latest&path:/packages/setup"
+  }
+
+  throw "Cannot resolve the setup release: $IndexUrl is unreachable and no release tag could be read from $Repository; pass -SetupVersion or -SetupSpec."
 }
 
 function Get-InstalledSetupVersion([string]$ProfileDirectory) {
