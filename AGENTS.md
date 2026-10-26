@@ -353,8 +353,9 @@ commit-pinned throwaway-profile install, and 9.4 the committed `pnpm dogfood` co
 `docs/` consistent with spec changes; the design's D8 layout is stale about the Client bundle path
 (actual: `lib/client.js`, not package-root `client.js`). Trust the code and `docs/plugins.md`.
 
-The archived `2026-10-26-add-delegation-rules` tasks record 50/61; the open 8.x tasks are the live
-acceptance (Codex sign-in, real review/patch/gate/non-Codex target) and need the owner's live profile.
+The archived `2026-10-26-add-delegation-rules` tasks record 51/61; the open 8.x tasks are the live
+DSH-profile acceptance (real review/patch/gate/non-Codex target). Codex sign-in, a completed
+app-server turn, and the standalone `.cmd`/`.exe`/PATH/status probe are verified.
 
 ## 12. CI gate (what blocks a merge)
 

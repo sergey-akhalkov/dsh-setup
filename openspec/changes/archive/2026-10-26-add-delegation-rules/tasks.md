@@ -73,7 +73,7 @@
 ## 8. Live acceptance in a throwaway profile
 
 - [ ] 8.1 Create a throwaway `dev`/`ci` profile with the two bundles; put the installed `codex` 0.164.0 on PATH; verify auto-detect and `codex_subagent_status` report its path/version; run a manual `delegate` review or answer and record the result. Do not install into the live desktop profile from a shell hosted by the running Harness.
-- [ ] 8.2 Set an explicit `codexPath`, verify it wins over PATH; test a `.cmd` and an `.exe`; remove the path/CLI and verify the missing-CLI error and the status snippet. Verify the profile patch is unchanged by the status tool.
+- [x] 8.2 Set an explicit `codexPath`, verify it wins over PATH; test a `.cmd` and an `.exe`; remove the path/CLI and verify the missing-CLI error and the status snippet. Verify the profile patch is unchanged by the status tool.
 - [ ] 8.3 Seed a test OpenSpec change with a deliberate P0 gap; run the whole-spec review rule, verify FINDINGS with evidence/fix, fix the spec, re-run to PASS, edit the spec and verify the stale whole-spec re-review.
 - [ ] 8.4 Task-by-task acceptance: tick one task and run its task review (FINDINGS→PASS); tick the next task and verify the earlier task record remains historical; verify a checked task without a review is refused and an unchecked task is not reviewed.
 - [ ] 8.5 Mid-task acceptance: change implementation files without ticking; verify `implementation-work` steers; record `task_progress(in-progress)` and verify the turn may close; change the worktree and verify the note is stale; verify a checked task without PASS is refused even with a note.
