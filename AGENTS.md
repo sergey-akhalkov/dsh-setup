@@ -71,6 +71,7 @@ Scripts under `scripts/` are TypeScript executed directly by Node 24: relative i
 | `packages/plugin-*/lib/index.js`, `lib/index.d.ts`          | Generated Host runtime (tsc)                                                  | **no** (`pnpm build`)                                   |
 | `packages/plugin-*/lib/client.js`                           | Generated Client bundle (esbuild + loader wrapper)                            | **no** (`pnpm build`)                                   |
 | `packages/plugin-ponytail/assets/**`, `ponytail.lock.json`  | Vendored upstream prompt, license, and provenance lock                        | **no** (`pnpm ponytail:update`)                         |
+| `packages/plugin-openspec/assets/**`, `openspec.lock.json`  | Generated OpenSpec core skills, license, and provenance lock                  | **no** (`pnpm openspec:update`)                         |
 | `packages/setup/defaults.yml`, `locale/en.json`, `icon.svg` | Owner defaults and setup card metadata                                        | yes                                                     |
 | `packages/setup/package.json`                               | Generated setup manifest (deps, `bundleDependencies`)                         | **no** (`pnpm gen`; version only via `release:prepare`) |
 | `packages/setup/cordis.patch.yml`                           | Generated aggregated setup patch                                              | **no** (`pnpm gen`)                                     |
@@ -94,6 +95,7 @@ rebuild (`git diff --exit-code` after `pnpm build`, plus `pnpm gen:check`).
 | `pnpm gen`                                    | Rewrites per-plugin `cordis.patch.yml`, `packages/setup/{package.json,cordis.patch.yml}`, vendored tree; removes stale vendored files | fragment, plugin manifest/`files`, `defaults.yml`, or `dsh.json` engines change |
 | `pnpm gen:check`                              | Byte-compares generated files and reports missing/changed/unexpected; exits 1 on drift                                                | before committing                                                               |
 | `pnpm ponytail:update --version X.Y.Z`        | Refreshes the vendored Ponytail prompt and lock from a pinned upstream release                                                        | updating the vendored prompt                                                    |
+| `pnpm openspec:update --version X.Y.Z`        | Regenerates the vendored OpenSpec core skills and lock from a pinned upstream release                                                 | updating the vendored skills                                                    |
 | `pnpm build`                                  | `tsc -b` Host output + esbuild Client bundles                                                                                         | any `src/**` change                                                             |
 | `pnpm build:watch`                            | Rebuild Host (tsc watch) and Client bundles on change                                                                                 | plugin development loop                                                         |
 | `pnpm typecheck`                              | `tsc -p tsconfig.check.json` (packages src+test, scripts, DOM/react libs)                                                             | any TS change                                                                   |
@@ -319,9 +321,10 @@ accepted requirements: `portable-setup` and `plugin-market` were synced from the
 its `portable-setup` amendment, the archived `2026-10-26-add-serena-mcp-plugin` change added
 `mcp-adapters` and amended `portable-setup`'s dependency-containment requirement, the archived
 `2026-10-26-add-nuphus-mcp-plugin` change added the strict-confirmation requirement to `mcp-adapters`,
-and the archived `2026-10-26-add-working-ruleset-plugins` change added `session-guidance` and relaxed
+the archived `2026-10-26-add-working-ruleset-plugins` change added `session-guidance` and relaxed
 `mcp-adapters`' approved-adapter-target rule so a code-bearing bundle may mount the approved adapter
-row. Cite
+row, and the archived `2026-10-26-add-openspec-skills-plugin` change added `openspec-skills` and the
+packaged `@dsh-setup/plugin-openspec` bundle. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -329,11 +332,12 @@ data` as MODIFIED with the current main-spec text (the Serena and Ponytail amend
 archive applied without spec changes.
 
 Flow: **propose** (proposal -> design -> delta specs -> tasks) -> **apply** (implement and tick
-tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skills are installed
-(`openspec-propose`, `openspec-explore`, `openspec-apply-change`, `openspec-sync-specs`,
-`openspec-archive-change`), use them; otherwise follow the same flow manually. Behavior changes that
-touch a documented requirement should update the corresponding delta spec and design rationale in the
-same change.
+tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skills are available
+(`openspec-propose`, `openspec-explore`, `openspec-apply-change`, `openspec-update-change`,
+`openspec-sync-specs`, `openspec-archive-change` — shipped globally by the
+`@dsh-setup/plugin-openspec` bundle), use them; otherwise follow the same flow manually. Behavior
+changes that touch a documented requirement should update the corresponding delta spec and design
+rationale in the same change.
 
 The archived tasks record 32/35. Open owner follow-ups: 7.1 first published release/tag verification,
 7.4 second release update visibility, 8.1 clean-machine rehearsal. (7.2 dogfood verification, 7.3
@@ -377,6 +381,9 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - **Vendored Ponytail assets are generated** (`packages/plugin-ponytail/assets/**`,
   `ponytail.lock.json`). Refresh them with `pnpm ponytail:update` and never by hand; the offline
   provenance test pins their sizes and SHA-256, and Biome ignores them so hashes stay stable.
+- **Vendored OpenSpec assets are generated** (`packages/plugin-openspec/assets/**`,
+  `openspec.lock.json`). Refresh them with `pnpm openspec:update --version X.Y.Z` and never by hand;
+  the offline provenance test pins their sizes and SHA-256.
 - **`packages/setup` is deliberately outside the pnpm workspace** (`pnpm-workspace.yaml` lists only
   `packages/plugin-*`). Do not add it and do not run installs inside it: pnpm would prune the tracked
   vendored `node_modules` tree. `.gitignore` deliberately re-includes

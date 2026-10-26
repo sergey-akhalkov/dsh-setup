@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/plugin-composer-clock" },
     { "path": "./packages/plugin-nuphus-mcp" },
+    { "path": "./packages/plugin-openspec" },
     { "path": "./packages/plugin-ponytail" },
     { "path": "./packages/plugin-rtk" },
     { "path": "./packages/plugin-rust" },

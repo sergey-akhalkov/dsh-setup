@@ -15,6 +15,7 @@
   "dependencies": {
     "@dsh-setup/plugin-composer-clock": "0.2.1",
     "@dsh-setup/plugin-nuphus-mcp": "0.2.1",
+    "@dsh-setup/plugin-openspec": "0.2.1",
     "@dsh-setup/plugin-ponytail": "0.2.1",
     "@dsh-setup/plugin-rtk": "0.2.1",
     "@dsh-setup/plugin-rust": "0.2.1",
@@ -24,6 +25,7 @@
   "bundleDependencies": [
     "@dsh-setup/plugin-composer-clock",
     "@dsh-setup/plugin-nuphus-mcp",
+    "@dsh-setup/plugin-openspec",
     "@dsh-setup/plugin-ponytail",
     "@dsh-setup/plugin-rtk",
     "@dsh-setup/plugin-rust",

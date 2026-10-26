@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "OpenSpec",
+    "description": "Six on-demand OpenSpec core skills packaged from OpenSpec 1.15.0 (MIT, Fission-AI/OpenSpec); requires the openspec CLI on PATH (npm install -g @fission-ai/openspec@1.15.0); specs stay in each workspace's own openspec/ root"
+  }
+}

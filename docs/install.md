@@ -243,12 +243,32 @@ To disable the adapter entirely:
 Do not install the upstream `dsh-nuphus-mcp` plugin together with the setup: both would mount a row
 that spawns the same server.
 
+## OpenSpec
+
+The setup ships the six core OpenSpec skills from `@dsh-setup/plugin-openspec`. The catalog lists them
+in every session, a skill body loads only when invoked, and the skills work on the workspace's own
+`openspec/` root.
+
+Prerequisite: the `openspec` CLI must be on the PATH of the Harness process. Install the pinned
+release yourself; the setup does not install runtime prerequisites:
+
+```sh
+npm install -g @fission-ai/openspec@1.15.0
+```
+
+Without the CLI, the skills stay listed and every command fails with a "command not found" error.
+First use in a workspace runs `openspec init --tools none` at the workspace root. If the workspace
+already has `.dsh/skills/openspec-*` copies from an earlier skill-installing init, delete them so the
+packaged definitions win. See [openspec.md](openspec.md) for the full workflow and update contract.
+
 ## What is not included
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
-- Runtime prerequisites such as `uv` for the Serena adapter or `@nuphus/nuphus-mcp` for the Nuphus
-  adapter: install them yourself; the setup does not run system installers.
+- Runtime prerequisites such as `uv` for the Serena adapter, `@nuphus/nuphus-mcp` for the Nuphus
+  adapter, or `@fission-ai/openspec` for the OpenSpec skills: install them yourself; the setup does
+  not run system installers.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
-  The setup does ship one packaged third-party prompt, Ponytail, whose vendored bytes and upstream pin
-  are documented in [ponytail.md](ponytail.md).
+  The setup does ship packaged third-party content: the Ponytail prompt, whose vendored bytes and
+  upstream pin are documented in [ponytail.md](ponytail.md), and the OpenSpec core skills, documented
+  in [openspec.md](openspec.md).

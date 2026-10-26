@@ -10,6 +10,7 @@
       "!packages/*/client.js",
       "!packages/*/assets",
       "!packages/*/ponytail.lock.json",
+      "!packages/*/openspec.lock.json",
       "!market",
       "!openspec",
       "!.tmp",

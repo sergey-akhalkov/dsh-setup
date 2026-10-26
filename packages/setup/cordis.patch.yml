@@ -19,6 +19,8 @@
         failOnStartupError: false
     - id: dsh-setup-nuphus-guidance
       name: "@dsh-setup/plugin-nuphus-mcp"
+    - id: dsh-setup-openspec
+      name: "@dsh-setup/plugin-openspec"
     - id: dsh-setup-ponytail
       name: "@dsh-setup/plugin-ponytail"
     - id: dsh-setup-rtk
