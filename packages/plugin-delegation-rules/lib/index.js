@@ -649,8 +649,12 @@ async function captureSnapshot(cwd, changes, services, signal) {
             tasks = await readTasks(change.dir);
         }
         catch (error) {
-            snapshot.changes.push({ name: change.name, tasks: [] });
-            snapshot.digestError = snapshot.digestError ?? errorMessage(error);
+            // A change artifact problem stays per-change; it is not a worktree git failure.
+            snapshot.changes.push({
+                name: change.name,
+                tasks: [],
+                error: `tasks.md is missing or unreadable (${errorMessage(error)})`,
+            });
             continue;
         }
         const entry = { name: change.name, tasks };
@@ -658,7 +662,7 @@ async function captureSnapshot(cwd, changes, services, signal) {
             entry.specDigest = await specDigest(change.dir, signal);
         }
         catch (error) {
-            snapshot.digestError = snapshot.digestError ?? errorMessage(error);
+            entry.error = `change artifacts are unreadable (${errorMessage(error)})`;
         }
         snapshot.changes.push(entry);
     }
@@ -751,6 +755,18 @@ async function claimOwner(workspaceRoot, change, thread) {
 }
 async function ensureOwner(workspaceRoot, change, thread) {
     return ((await readOwner(workspaceRoot, change)) ?? (await claimOwner(workspaceRoot, change, thread)));
+}
+/** The active changes this thread owns; foreign changes never enter its snapshots. */
+async function ownedActiveChanges(workspaceRoot, changes, thread) {
+    if (workspaceRoot === undefined)
+        return [];
+    const owned = [];
+    for (const change of changes) {
+        // First observation claims the change at the workspace root; only the owner evaluates it.
+        if ((await ensureOwner(workspaceRoot, change.name, thread)) === thread)
+            owned.push(change);
+    }
+    return owned;
 }
 async function writeJsonAtomic(path, value) {
     await mkdir(dirname(path), { recursive: true });
@@ -2134,14 +2150,7 @@ async function evaluateGate(deps, agent, turn, signal) {
     const openspecRoot = await findOpenSpecRoot(cwd);
     const workspaceRoot = openspecRoot === undefined ? undefined : dirname(openspecRoot);
     const changes = openspecRoot === undefined ? [] : await listActiveChanges(openspecRoot);
-    const ownedChanges = [];
-    for (const change of changes) {
-        // First observation claims the change at the workspace root; only the owner evaluates it.
-        if (workspaceRoot !== undefined &&
-            (await ensureOwner(workspaceRoot, change.name, thread)) === thread) {
-            ownedChanges.push(change);
-        }
-    }
+    const ownedChanges = await ownedActiveChanges(workspaceRoot, changes, thread);
     // Foreign changes are not snapshotted: their broken artifacts must not block this thread.
     const current = await captureSnapshot(cwd, ownedChanges, deps.services.git, signal);
     const baseline = deps.state.baselineOf(agentId, turn);
@@ -2173,6 +2182,10 @@ async function evaluateGate(deps, agent, turn, signal) {
             const changeSnapshot = current.changes.find((entry) => entry.name === change.name);
             const tasks = changeSnapshot?.tasks ?? [];
             const changeSpecDigest = changeSnapshot?.specDigest;
+            if (changeSnapshot?.error !== undefined) {
+                pushSoft(`change-artifacts:${change.name}`, 'change-artifacts', `change "${change.name}" (owner ${thread}) ${changeSnapshot.error}; repair that change's artifacts or archive the change so its gated reviews can be evaluated.`, `repair openspec/changes/${change.name} (or archive the change)`);
+                continue;
+            }
             for (const rule of deps.config.rules) {
                 if (rule.when === 'spec-ready' &&
                     rule.contract === 'review' &&
@@ -2353,7 +2366,8 @@ function attachGate({ ctx, deps }) {
             const cwd = deps.services.workingDirectory.get(payload.agent.session);
             const root = await findOpenSpecRoot(cwd);
             const changes = root === undefined ? [] : await listActiveChanges(root);
-            deps.state.setBaseline(agentId, await captureSnapshot(cwd, changes, deps.services.git, payload.signal));
+            const ownedChanges = await ownedActiveChanges(root === undefined ? undefined : dirname(root), changes, currentThread(payload.agent));
+            deps.state.setBaseline(agentId, await captureSnapshot(cwd, ownedChanges, deps.services.git, payload.signal));
         }
         catch {
             // A pre-step observer never fails the step.

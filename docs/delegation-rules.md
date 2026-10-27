@@ -241,6 +241,11 @@ gets no steer, and does not inherit a blocking digest issue from it. When the ga
 with the rule id, trigger, digest, record path, and the exact `delegate`/`task_progress` call. Only a
 record satisfies the gate; a text claim does not. A soft rule steers once per streak and never traps
 the turn; a target failure writes an `ERROR` record so the turn can close with the failure visible.
+A missing or unreadable planning file in an owned change is a per-change problem, not a worktree
+failure: the gate names the change and its owner, points at the unreadable file, and does not report
+`the worktree digest could not be computed`. Both the turn-start baseline and the turn-end snapshot
+contain only the changes the current thread owns, so a foreign change's incomplete artifacts never
+set this thread's digest error or block its close.
 There is no livelock escape inside a session other than satisfying, disabling, or removing the rule's
 row; if the owning thread is gone, delete the change's owner file under
 `.dsh/delegation/owners/` and re-observe the change from the thread that should own it.
