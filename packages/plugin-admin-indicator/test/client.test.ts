@@ -88,6 +88,10 @@ function applyClient(): { registration: LoaderRegistration; calls: FakeContextCa
   const module = registration.factory(() => ({}))
   const calls: FakeContextCalls = {}
   const ctx = {
+    effect(callback: () => () => void) {
+      callback()
+      return () => {}
+    },
     locale: {
       register(namespace: string, locale: string, dictionary: Record<string, string>) {
         calls.locale = { namespace, locale, dictionary }
@@ -161,6 +165,58 @@ describe('admin indicator Client half', () => {
       order: 50,
     })
     expect(typeof calls.component).toBe('function')
+  })
+
+  it('re-registers its locale dictionary when the Client entry reloads', () => {
+    const registration = loadClient()
+    const module = registration.factory(() => ({}))
+    const locales = new Set<string>()
+    const locale = {
+      register(namespace: string, id: string) {
+        const key = `${namespace}\0${id}`
+        if (locales.has(key))
+          throw new Error(`locale namespace "${namespace}" already has locale "${id}"`)
+        locales.add(key)
+        return () => {
+          locales.delete(key)
+        }
+      },
+      bind() {
+        return (key: string) => key
+      },
+    }
+    const applyOnce = (): string[] => {
+      const disposers: Array<() => void> = []
+      const injected: string[] = []
+      module.apply?.({
+        effect(callback: () => () => void) {
+          const dispose = callback()
+          disposers.push(dispose)
+          return () => {}
+        },
+        locale,
+        slots: {
+          inject(key: string, callback: () => () => void) {
+            injected.push(key)
+            callback()
+            return () => {}
+          },
+          register() {
+            return () => {}
+          },
+        },
+      })
+      for (const dispose of disposers) dispose()
+      return injected
+    }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(applyOnce()).toEqual(['conversation.input.left'])
+      expect(applyOnce()).toEqual(['conversation.input.left'])
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
   })
 
   it('never replaces a draft, reference, or attachment', () => {

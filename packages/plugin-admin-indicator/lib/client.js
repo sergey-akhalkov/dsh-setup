@@ -117,7 +117,7 @@ window.__ModuleLoader__.load({
     }
     function apply(ctx) {
       try {
-        ctx.locale.register(NS, "en", EN);
+        ctx.effect(() => ctx.locale.register(NS, "en", EN));
         const t = ctx.locale.bind(NS);
         ctx.slots.inject(
           "conversation.input.left",

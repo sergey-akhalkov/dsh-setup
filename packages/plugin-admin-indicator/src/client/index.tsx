@@ -34,6 +34,7 @@ const EMPTY_INPUT: ComposerInput = {
 }
 
 interface ClientContext {
+  effect: (callback: () => () => void) => () => void
   slots: {
     inject: (key: string, callback: () => () => void) => () => void
     register: (
@@ -167,7 +168,9 @@ export function apply(ctx: ClientContext): void {
   // Fail open: a broken badge must never turn into a failed web boot that
   // forces the owner to disable every third-party plugin.
   try {
-    ctx.locale.register(NS, 'en', EN)
+    // The Client entry re-applies on every code reload, so the dictionary
+    // must be withdrawn with the fiber; a stale namespace makes apply throw.
+    ctx.effect(() => ctx.locale.register(NS, 'en', EN))
     const t = ctx.locale.bind(NS)
     ctx.slots.inject('conversation.input.left', () =>
       ctx.slots.register({ name: 'conversation.input.left', id: NS, order: 50 }, (props = {}) => (
