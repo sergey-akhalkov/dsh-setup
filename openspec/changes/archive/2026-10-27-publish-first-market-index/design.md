@@ -20,6 +20,7 @@ Constraints:
 - Keep the existing release workflow and its publication gate unchanged.
 - Prove the index is directly reachable and that the installer resolves through it.
 - Leave v0.4.0 unlisted and untouched.
+- Document the live Discover path in the README.
 
 **Non-Goals:**
 
@@ -35,6 +36,8 @@ Constraints:
 3. **Use the existing `release.yml` unchanged.** The failure was in the tagged test code, not the workflow; the current workflow already implements the required gate and deploys last. A manual Pages deploy or a new dispatch path would bypass the gate and add code for no need.
 4. **Verify with the published artifact, not a new tool.** Check the index URL with a direct `curl` (no redirects), parse `format`, the setup version, the tag commit, and the icon references; run `install.ps1 -DryRun -SetupVersion 0.5.0` from the checkout so it reads the index instead of the local setup. The Discover UI check stays an owner smoke test; no new script.
 5. **Local gate before the tag, CI gate at the tag.** Run `pnpm release:prepare`, `pnpm build`, `pnpm validate`, `pnpm gen:check`, and the post-commit clean-build check locally; the release workflow repeats the full gate on the tag. If the local environment cannot run the composition/installer checks, the release workflow remains the authority, but the tag is not pushed until the local failures are understood.
+
+6. **Document the now-live path in the README.** Add the published URL and the Discover steps to the README, and leave `docs/install.md` unchanged because it already owns the detailed manual-install procedure. Alternative: only update `docs/install.md`; rejected because the README is the first install entry point and the user-facing switch to the index was the missing context.
 
 ## Risks / Trade-offs
 
@@ -52,6 +55,7 @@ Constraints:
 3. Tag `v0.5.0` and push `main` and the tag; record the release run.
 4. Watch `versions` → `validate` → `publish`; the publish job fetches the previous index (404 is expected for the first release), generates the index from the tag commit, and deploys Pages last.
 5. Verify the index URL, the setup entry, the tag commit, the icons, and the installer's index resolution; the owner confirms the index source in Discover.
-6. Archive the change after the release and the owner check.
+6. Update the README to state that the index is live, include the URL and the Discover steps, and run `pnpm lint`.
+7. Archive the change after the release, the owner check, and the README update.
 
 **Rollback:** before deployment, a failed job leaves no index; fix and re-run the publish job, or cut a new tag if the workflow/code must change. After deployment, replace the artifact with a new release; do not move or delete the tag. There is no previous index to restore for this first publication.

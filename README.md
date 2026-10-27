@@ -100,11 +100,18 @@ duplicate their rows:
 - **Terminal** (`@deepseek-ai/dsh-experimental-terminal-bundle`) — persistent terminal sessions for
   REPL and interactive work.
 
-### Install individual plugins
+### Install individual plugins from Discover
 
-The same plugins are listed separately in the plugin-market index. See
-[Manual install](docs/install.md#manual-install) for the **Discover** path; install either the full
-setup or individual plugins for a given plugin, never both, because both mount the same row.
+The setup and every plugin are listed in the published market index:
+
+```text
+https://sergey-akhalkov.github.io/dsh-setup/index.json
+```
+
+Enable **Custom plugin markets**, open **Discover**, and add that URL as an index source. See
+[Manual install](docs/install.md#manual-install) for the full steps. The index pins every listed
+version to a reviewed commit; install either the full setup or individual plugins for a given
+plugin, never both, because both mount the same row.
 
 ## Development
 
