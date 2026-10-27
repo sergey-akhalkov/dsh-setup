@@ -240,6 +240,11 @@ uncommitted generated changes on restart. A `git+...`/version spec needs a commi
 install from an external PowerShell with the app closed; restart alone does nothing. See
 [docs/install.md](docs/install.md#apply-local-changes-from-a-linked-checkout).
 
+**Never reload or restart the running Desktop app from an agent session**, including a page reload
+(`Ctrl+R`) in its window: the app owns the Host and the current session, and a page reload killed the
+Host and the turn (2026-10-27). The owner relaunches the app; a Client-only change in a linked
+checkout is loaded by that relaunch. Verify afterwards from the new session.
+
 Manual install of a released bundle (app fully quit):
 
 ```sh
