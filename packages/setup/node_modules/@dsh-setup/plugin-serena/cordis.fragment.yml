@@ -4,9 +4,14 @@
 # this package, and the guidance row mounts this package's own Host module,
 # which registers the `serena-discipline` skill. The rows are independent, so
 # the adapter keeps working when the guidance row is disabled.
+#
+# Both rows ship disabled: a default installation pays neither the tool schemas
+# nor the always-on rule. Enable them in the profile's cordis.patch.yml with
+# `disabled: false` on each row.
 rows:
   - id: dsh-setup-serena
     name: "@deepseek-ai/dsh-mcp-client"
+    disabled: true
     config:
       serverName: serena
       transport: stdio
@@ -31,3 +36,4 @@ rows:
       # Harness starts without Serena tools and logs the failed connection.
       failOnStartupError: false
   - id: dsh-setup-serena-guidance
+    disabled: true

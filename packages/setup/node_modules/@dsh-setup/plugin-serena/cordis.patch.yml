@@ -17,5 +17,7 @@
           - --enable-gui-log-window=false
         toolCallTimeoutMs: 120000
         failOnStartupError: false
+      disabled: true
     - id: dsh-setup-serena-guidance
       name: "@dsh-setup/plugin-serena"
+      disabled: true

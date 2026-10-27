@@ -3,12 +3,13 @@
 `@dsh-setup/plugin-serena` ships two rows: the adapter row mounts the Serena MCP server through the
 Harness MCP client, and the guidance row contributes an always-on code-surface rule and the on-demand
 `serena-discipline` skill. The rows are independent: disabling the guidance row leaves the Serena
-tools working, and disabling the adapter row leaves the guidance in place.
+tools working, and disabling the adapter row leaves the guidance in place. **Both rows ship disabled;
+see [Shipped disabled](#shipped-disabled) to turn them on.**
 
 ## What the plugin ships
 
-- **An always-on code-surface rule, enabled by default.** It is a system-prompt section, so a session
-  receives it without loading a skill. It says when Serena is the right surface, how to activate the
+- **An always-on code-surface rule, active when the owner enables the guidance row.** It is a
+  system-prompt section, so a session receives it without loading a skill. It says when Serena is the right surface, how to activate the
   project, how to read and edit through symbols, how to bound calls, and which work stays on the
   ordinary tools.
 - **One on-demand skill.** `serena-discipline` carries the full procedure, the activation and
@@ -18,7 +19,28 @@ tools working, and disabling the adapter row leaves the guidance in place.
   tool hook. The adapter row runs the pinned `serena-agent` release through `uvx`; the guidance row
   only registers prompt content.
 
-## Why the rule is always-on
+## Shipped disabled
+
+Both rows ship with `disabled: true`, so installing the bundle or the setup mounts them without
+starting the MCP server or the rule. The measured cost is the reason: the 24 Serena tool schemas
+add 25,815 bytes (~6,454 tokens) to every request and the rule costs ~400 tokens per step, while 7
+of 58 recorded sessions used the tools and no session used the symbol-editing path. The plugin stays
+installable and one profile override away.
+
+Enable the adapter (tools) and, if wanted, the guidance row (rule and skill) in the profile's
+`cordis.patch.yml`:
+
+```yaml
+- id: dsh-setup-serena
+  disabled: false
+- id: dsh-setup-serena-guidance
+  disabled: false
+```
+
+A row override only sets `disabled: false`; it does not restate the row configuration. Restart
+DeepSeek Harness after editing the profile patch, because the Host composes rows at startup.
+
+## Why the rule is always-on when enabled
 
 The earlier shape was one on-demand skill. In the owner's recorded sessions it was never loaded, and a
 skill that nobody invokes binds nothing. The one Serena-heavy session was the session that installed
@@ -84,8 +106,8 @@ this table when the assets change.
 
 ## Turn off the always-on rule
 
-Keep the skill but drop the system-prompt section by overriding the row in the profile's
-`cordis.patch.yml`:
+The row ships disabled; when the owner has enabled it, keep the skill but drop the system-prompt
+section by overriding the row in the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: dsh-setup-serena-guidance
@@ -104,7 +126,7 @@ section deliberately names no slash command because the Harness does not provide
 
 ## Disable or remove
 
-The two rows are independent:
+The rows ship disabled and the two overrides stay independent:
 
 ```yaml
 - id: dsh-setup-serena

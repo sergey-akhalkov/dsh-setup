@@ -17,6 +17,20 @@ describe('parseCompositionFragment', () => {
     expect(fragment.rows[0]?.config).toEqual({ format: 'short' })
   })
 
+  it('keeps a disabled row flag', () => {
+    const fragment = parseCompositionFragment(
+      'rows:\n  - id: dsh-setup-example\n    disabled: true\n',
+      PACKAGE,
+    )
+    expect(fragment.rows[0]?.disabled).toBe(true)
+  })
+
+  it('rejects a non-boolean disabled flag', () => {
+    expect(() =>
+      parseCompositionFragment('rows:\n  - id: dsh-setup-example\n    disabled: 5\n', PACKAGE),
+    ).toThrow(/disabled must be a boolean/)
+  })
+
   it('rejects an unknown top-level field', () => {
     expect(() =>
       parseCompositionFragment('rows:\n  - id: dsh-setup-example\nextra: true\n', PACKAGE),

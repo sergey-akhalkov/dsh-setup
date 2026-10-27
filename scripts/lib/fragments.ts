@@ -8,6 +8,8 @@ export interface FragmentRow {
   name: string
   /** Optional loader configuration for the row. */
   config?: Record<string, unknown>
+  /** Ship the row inactive; a profile patch enables it with `disabled: false`. */
+  disabled?: boolean
 }
 
 /**
@@ -60,7 +62,7 @@ export function parseCompositionFragment(text: string, packageName: string): Com
     const at = `rows[${index}]`
     if (!isRecord(row)) throw new FragmentError(`${at} must be a mapping`)
     for (const key of Object.keys(row)) {
-      if (key !== 'id' && key !== 'name' && key !== 'config') {
+      if (key !== 'id' && key !== 'name' && key !== 'config' && key !== 'disabled') {
         throw new FragmentError(`${at}: unknown field "${key}"`)
       }
     }
@@ -84,6 +86,12 @@ export function parseCompositionFragment(text: string, packageName: string): Com
     if (row.config !== undefined) {
       if (!isRecord(row.config)) throw new FragmentError(`${at}.config must be a mapping`)
       generated.config = row.config
+    }
+    if (row.disabled !== undefined) {
+      if (typeof row.disabled !== 'boolean') {
+        throw new FragmentError(`${at}.disabled must be a boolean`)
+      }
+      generated.disabled = row.disabled
     }
     result.push(generated)
   })

@@ -157,7 +157,10 @@ Checklist:
      - id: dsh-setup-<slug>
    ```
 
-   Only `rows` at top level, only `id`/optional `name`/optional `config` per row. `id` must match
+   Only `rows` at top level, only `id`/optional `name`/optional `config`/optional `disabled`
+   per row. A row marked `disabled: true` is mounted but inactive; a profile patch enables it with
+   `disabled: false` (the Serena bundle ships both its rows disabled; enable them with
+   `disabled: false` on `dsh-setup-serena` and `dsh-setup-serena-guidance`). `id` must match
    `^dsh-setup-[a-z0-9]+(?:-[a-z0-9]+)*$` and be globally unique. Omit `name` — the module specifier
    is derived from the owning package. A row may instead name the approved Harness adapter
    `@deepseek-ai/dsh-mcp-client`, on a configuration-only adapter or beside a code-bearing package's

@@ -109,6 +109,12 @@ describe('patch rendering', () => {
     expect(patch).toContain('do not edit')
   })
 
+  it('renders a disabled row into both patches', () => {
+    const rows = [{ id: 'dsh-setup-a', name: '@dsh-setup/plugin-a', disabled: true }]
+    expect(renderBundlePatch(rows)).toContain('disabled: true')
+    expect(renderSetupPatch(rows, DEFAULTS)).toContain('disabled: true')
+  })
+
   it('renders the setup patch with every row and complete defaults', () => {
     const patch = renderSetupPatch(
       [

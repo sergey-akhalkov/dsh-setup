@@ -70,6 +70,9 @@ Rules:
 - Optional `name` is allowed only with the approved adapter target; omit it for a row that mounts
   the package itself.
 - Optional `config` on a row maps to the Loader row configuration.
+- Optional `disabled: true` ships the row mounted but inactive; a profile patch enables it with
+  `disabled: false`. The Serena bundle ships both rows disabled this way; a profile enables them
+  with `disabled: false` on `dsh-setup-serena` and `dsh-setup-serena-guidance`.
 
 `pnpm gen` writes both this package's `cordis.patch.yml` and the aggregated
 `packages/setup/cordis.patch.yml` from every fragment. Run it after changing a fragment.

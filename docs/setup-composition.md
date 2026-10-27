@@ -61,6 +61,16 @@ A profile's own `cordis.patch.yml` is applied after the bundle layer and still w
 preferences remain the user's. A patch replaces the whole `config` object rather than merging it:
 every default must restate the complete configuration its row needs.
 
+## Shipping a row disabled
+
+A plugin fragment may mark a row `disabled: true`. Generation carries the flag into the plugin patch
+and the aggregated setup patch, so the row stays mounted and inactive, and a profile patch enables
+it with `disabled: false` (a row override sets only that flag and does not restate the config). Use
+this when a plugin stays installable but must not pay a per-request cost by default; the plugin
+documentation and market card must state the default and the override. The Serena bundle is the
+current example: `dsh-setup-serena` and `dsh-setup-serena-guidance` ship disabled, and a profile
+enables them with `disabled: false` on each row.
+
 ## Changing defaults
 
 1. Edit `packages/setup/defaults.yml`.
