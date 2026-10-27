@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-rust",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Rust and Cargo guidance: MSRV-gated standard features, the narrowest check/test/clippy command, build-test-disk diagnosis, profile and target-directory hygiene",
   "license": "MIT",
   "icon": "./icon.svg",

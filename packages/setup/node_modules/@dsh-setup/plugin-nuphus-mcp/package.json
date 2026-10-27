@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-nuphus-mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Nuphus MCP: desktop automation (screen, windows, mouse and keyboard, Chrome) through the DeepSeek Harness MCP client, plus the nuphus-discipline skill",
   "license": "MIT",
   "icon": "./icon.svg",
