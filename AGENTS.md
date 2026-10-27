@@ -347,7 +347,9 @@ delegation asynchronous with explicit task selection, stable reviewed inputs, an
 reuse. The archived `2026-10-27-add-one-line-installer` change added the one-line install and update
 contract to `portable-setup`: the documented pipeline form must not terminate the caller's session,
 rerunning the command updates to the newest release, and the installer verifies the resolved version
-against the installed one. Cite
+against the installed one. The archived `2026-10-27-fix-delegation-foreign-change-digest` change made
+the turn-start baseline and the turn-end snapshot owner-only and moved missing or unreadable change
+artifacts out of the worktree digest into a per-change hint that names the change and its owner. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -377,6 +379,10 @@ commit-pinned throwaway-profile install, and 9.4 the committed `pnpm dogfood` co
 The archived `2026-10-27-add-one-line-installer` tasks record 8/8; its remaining owner step is a live
 run of the documented one-liner from an external PowerShell window, after the dogfood round-trip
 against a copy of the desktop profile passed.
+
+The archived `2026-10-27-fix-delegation-foreign-change-digest` tasks record 4/4; its Host fix is in
+the committed `lib/` and the vendored setup copy, so a linked profile picks it up after a full
+restart, while other machines need a separate release of the setup bundle.
 
 The archived `2026-10-26-add-delegation-rules` tasks record 51/61; the open 8.x tasks are the live
 DSH-profile acceptance (real review/patch/gate/non-Codex target). Codex sign-in, a completed
