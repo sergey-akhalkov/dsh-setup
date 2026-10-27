@@ -125,6 +125,7 @@ export function buildSetupManifest(
   return {
     name: SETUP_PACKAGE_NAME,
     version,
+    license: 'MIT',
     description:
       'The full portable DeepSeek Harness setup: every plugin bundle plus owner defaults, installed as one bundle',
     icon: './icon.svg',

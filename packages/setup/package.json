@@ -1,6 +1,7 @@
 {
   "name": "@dsh-setup/setup",
   "version": "0.4.0",
+  "license": "MIT",
   "description": "The full portable DeepSeek Harness setup: every plugin bundle plus owner defaults, installed as one bundle",
   "icon": "./icon.svg",
   "files": [

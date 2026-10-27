@@ -25,6 +25,7 @@ export interface DshManifest {
 export interface PackageManifest {
   name: string
   version: string
+  license?: string
   description?: string
   icon?: string
   type?: string

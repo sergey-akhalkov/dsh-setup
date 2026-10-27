@@ -2,6 +2,7 @@
 
 [![validate](https://github.com/sergey-akhalkov/dsh-setup/actions/workflows/validate.yml/badge.svg)](https://github.com/sergey-akhalkov/dsh-setup/actions/workflows/validate.yml)
 ![DeepSeek Harness 0.2.1-rc.3](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.3-blue)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A portable, installable setup for [DeepSeek Harness](https://www.deepseek.com/en/harness/) (DSH):
 nine plugin bundles for agent rules, skills, code navigation, desktop automation, and cross-model
@@ -141,3 +142,12 @@ prompts and skills are vendored with provenance locks (`ponytail.lock.json`, `op
 that offline tests verify. The installer closes DeepSeek Harness while it writes the profile, saves a
 manifest backup, and changes only the bundle selection and installed packages — never the profile's
 own patch. This repository contains no credentials, sessions, or machine-specific paths.
+
+## License
+
+[MIT](LICENSE), copyright (c) 2026 Sergey Akhalkov. It covers the original code and documentation in
+this repository. Vendored third-party content keeps its upstream MIT license and attribution, with
+the upstream license shipped beside the files: the Ponytail prompt in
+`packages/plugin-ponytail/assets/ponytail/`, the OpenSpec skills in
+`packages/plugin-openspec/assets/openspec/`, and the Codex subagent provider in
+`packages/plugin-codex-subagent/`.
