@@ -14,17 +14,38 @@ given plugin, never both.
 
 ## Install or update
 
-Run this from an ordinary PowerShell window, not from a terminal hosted by DeepSeek Harness. Start
-DeepSeek Harness once and quit it first so the `desktop` profile exists.
+### Install individual plugins from Discover
+
+The setup and every plugin are listed in the published market index:
+
+```text
+https://sergey-akhalkov.github.io/dsh-setup/index.json
+```
+
+Enable **Custom plugin markets** (this adds the Discover tab), open **Discover**, and add that URL as
+an index source. The index pins every listed version to a reviewed commit; install either the full
+setup or individual plugins for a given plugin, never both, because both mount the same row. See
+[Manual install](docs/install.md#manual-install) for the full steps.
+
+Installing the **dsh-setup** entry from Discover mounts the setup and its plugin rows, but it does
+not enable the other shipped DSH bundles (Agent Teams, tool worktree, Ralph, session search,
+terminal). Enable them in **Plugins**, or use the full-setup command below. See
+[Shipped DSH bundles](#shipped-dsh-bundles).
+
+### Install the full setup with PowerShell
+
+Use this on Windows when you want the complete setup in one command. Run it from an ordinary
+PowerShell window, not from a terminal hosted by DeepSeek Harness. Start DeepSeek Harness once and
+quit it first so the `desktop` profile exists.
 
 ```powershell
 irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 | iex
 ```
 
 The installer prints its plan, closes DeepSeek Harness, backs up the profile manifest and patch,
-enables the shipped bundles the setup expects, installs or updates `@dsh-setup/setup` from the newest
-release, verifies the result, and starts the app again. **Rerun the same command to update**; when the
-newest release is already installed, it changes nothing.
+enables the shipped DSH bundles, installs or updates `@dsh-setup/setup` from the newest release,
+verifies the result, and starts the app again. **Rerun the same command to update**; when the newest
+release is already installed, it changes nothing.
 
 For `-DryRun`, a different profile, or a pinned version, download the script and run the file:
 
@@ -34,8 +55,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/ma
 & $installer -DryRun
 ```
 
-All options, the manual Discover install, and the update behavior are in
-[docs/install.md](docs/install.md).
+All options, the manual install, and the update behavior are in [docs/install.md](docs/install.md).
 
 ## Dependencies
 
@@ -99,19 +119,6 @@ duplicate their rows:
 - **Session search** (`@deepseek-ai/dsh-experimental-session-search`) — search across prior sessions.
 - **Terminal** (`@deepseek-ai/dsh-experimental-terminal-bundle`) — persistent terminal sessions for
   REPL and interactive work.
-
-### Install individual plugins from Discover
-
-The setup and every plugin are listed in the published market index:
-
-```text
-https://sergey-akhalkov.github.io/dsh-setup/index.json
-```
-
-Enable **Custom plugin markets**, open **Discover**, and add that URL as an index source. See
-[Manual install](docs/install.md#manual-install) for the full steps. The index pins every listed
-version to a reviewed commit; install either the full setup or individual plugins for a given
-plugin, never both, because both mount the same row.
 
 ## Development
 
