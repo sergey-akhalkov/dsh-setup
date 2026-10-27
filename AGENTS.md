@@ -203,6 +203,9 @@ Checklist:
    `packages/setup/{package.json,cordis.patch.yml}`, `packages/setup/node_modules/**`). The vendored
    copies are tracked; `pnpm gen:check` flags stale or unexpected ones, so a removed plugin cannot
    leave dead files behind.
+9. **Root README**: add or update this plugin's row in the plugin table in the root `README.md`
+   (name, short role, and current behavior/actions/config) whenever the plugin is new or its behavior
+   changes. Run `pnpm lint` afterward; a plugin change is not done until the README row is accurate.
 
 The Client build emits `window.__ModuleLoader__.load({ id: <package name>, factory: (require) => ... })`
 automatically; never hand-write or edit `lib/client.js`. Entry candidates in order:
@@ -210,7 +213,8 @@ automatically; never hand-write or edit `lib/client.js`. Entry candidates in ord
 
 Definition of done for a plugin change: `pnpm build` leaves `git diff` clean after committing,
 `pnpm gen:check` passes, `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm validate:repo` pass,
-new behavior is covered by a test, and `locale/en.json` describes the plugin for the market card.
+new behavior is covered by a test, `locale/en.json` describes the plugin for the market card, and the
+root `README.md` plugin row reflects the plugin's current name, role, and behavior.
 
 ## 6. Plugin development loop (link a workspace package)
 
