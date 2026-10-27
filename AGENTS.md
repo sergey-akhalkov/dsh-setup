@@ -25,7 +25,8 @@ workflow generates the static format-1 market index pinned to the tagged commit 
 GitHub Pages.
 
 Supported DSH today: **0.2.1-rc.3** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
-Repo package version (all packages move together): **0.4.0**.
+Repo package version: one version for all packages; `pnpm release:prepare` sets it and
+`package.json` is authoritative.
 
 ## 2. First commands
 
@@ -295,6 +296,15 @@ pnpm gen:check
 git tag vX.Y.Z
 git push origin main vX.Y.Z
 ```
+
+Re-check `install.ps1` before tagging. It resolves the setup version from the market index or the
+newest `v*` tag at run time, so a normal release needs no version edit there; do not add a setup
+version constant. Include it in the release commit only when `dsh.json` changes (the
+`$SupportedDshVersions`, `$ShippedBundles`, `$RegistryBundles` arrays), when the installer behavior or
+options change, or when a new shipped/registry bundle enters the selection. `pnpm validate` already
+runs `validate:installer`; after the workflow is green, verify the live index (direct 200, every plugin
+at the new version, pinned to the tag commit) and install that version from the live index into a
+throwaway profile both fresh and over the previous release.
 
 The release workflow validates the full matrix on `windows-latest`, then (only if validation passes)
 checks the tag, builds, fetches the previously published index with

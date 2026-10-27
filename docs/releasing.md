@@ -69,6 +69,13 @@ per-release edit. Its standalone copy of the supported versions and bundle list 
 
    Then add the URL in Discover and confirm the entries and their source commits.
 
+8. Confirm the released installer still installs the new version: run a downloaded copy of
+   `install.ps1` (no checkout beside it) against a throwaway profile once fresh and once over the
+   previous release, then check the installed setup version and the new plugin rows. This is the
+   verification run for the installer, not a per-release edit: the script resolves the newest version
+   at run time, so only a `dsh.json` change, an installer behavior/option change, or a new
+   shipped/registry bundle requires editing it.
+
 ## Refreshing the vendored Ponytail prompt
 
 `packages/plugin-ponytail` vendors the upstream prompt (skill, rules file, license) from one pinned
