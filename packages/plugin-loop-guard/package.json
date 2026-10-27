@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-loop-guard",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Loop guard: cuts repeated streamed reasoning, steers a recovery notice, and bounds escalation with an automatic turn reset",
   "license": "MIT",
   "icon": "./icon.svg",
