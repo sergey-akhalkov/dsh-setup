@@ -1784,6 +1784,15 @@ class DelegationEngine {
     freeRun(run) {
         this.runs.delete(run.file.id);
         this.runIdentities.delete(run.file.identity);
+        const state = run.file.state;
+        if (state === 'queued' || state === 'running')
+            return;
+        try {
+            this.services.onRunSettled?.(run.file.id, state);
+        }
+        catch {
+            // The observer is a test seam; it must not change run cleanup.
+        }
     }
     async startNextRun(key) {
         const queue = this.runQueues.get(key);
@@ -2565,6 +2574,7 @@ export function apply(ctx, config = {}, options = {}) {
         git: { runGit: options.runGit ?? defaultGit },
         now: options.now ?? (() => new Date()),
         timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
+        ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);

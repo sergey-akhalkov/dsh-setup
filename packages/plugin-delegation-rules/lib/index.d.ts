@@ -77,7 +77,11 @@ export interface BundleConfig {
 export interface ApplyOptions {
     runGit?: GitRunner;
     now?: () => Date;
+    /** Called once per review run after it settles; the run is no longer pending. */
+    onRunSettled?: (runId: string, state: SettledRunState) => void;
 }
+/** Terminal review-run states reported to the settlement observer. */
+export type SettledRunState = 'completed' | 'failed' | 'discarded';
 /** One fixed-argument git invocation; output is raw bytes so diffs stay lossless. */
 export type GitRunner = (args: readonly string[], cwd: string, signal?: AbortSignal) => Promise<Buffer>;
 interface EngineConfig {

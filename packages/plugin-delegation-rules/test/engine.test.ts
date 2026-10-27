@@ -1165,6 +1165,86 @@ describe('thread-scoped ownership', () => {
   })
 })
 
+describe('settlement observer', () => {
+  it('notifies once after the run settles, never while it is running', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    let release: (() => void) | undefined
+    subagents.addProvider(
+      'codex-subagent',
+      {},
+      (run) =>
+        new Promise((resolve) => {
+          release = () => resolve(passResponder(run))
+        }),
+    )
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(harness.settledRuns).toEqual([])
+    release?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect(harness.settledRuns).toEqual([{ runId, state: 'completed' }])
+  })
+
+  it('reports a failed run once', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, () => ({
+      output: [],
+      stopReason: 'error',
+      diagnostic: 'target unavailable',
+    }))
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    expect(harness.settledRuns).toEqual([{ runId, state: 'failed' }])
+  })
+
+  it('keeps records, status, and the gate working when the observer is omitted', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, passResponder)
+    const seed = harnessFor(root, defaultTestConfig(), subagents)
+    const seedRun = await seed.startReview({ rule: 'spec-review', change: 'change-a' })
+    await seed.waitForRun(seedRun)
+
+    const harness = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: subagents,
+      observeSettlements: false,
+    })
+    await harness.preStep(1)
+    const reused = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(reused).toContain('reused record')
+
+    subagents.startError = new Error('target unavailable')
+    await expect(
+      harness.callTool('delegate', { rule: 'spec-review', change: 'change-b' }),
+    ).rejects.toThrow(/could not start: target unavailable/)
+    const failed = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-b', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(failed.verdict).toBe('ERROR')
+    expect(harness.settledRuns).toEqual([])
+
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toContain(`run ${seedRun}`)
+    expect(status).toMatch(/run run-.*: .*state=failed/)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+})
+
 describe('asynchronous review runs', () => {
   function deferred() {
     const releases: Array<() => void> = []
@@ -1175,14 +1255,6 @@ describe('asynchronous review runs', () => {
         }),
       releases,
     }
-  }
-
-  async function until(condition: () => boolean, label: string): Promise<void> {
-    for (let attempt = 0; attempt < 400; attempt += 1) {
-      if (condition()) return
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
-    throw new Error(`timed out waiting for ${label}`)
   }
 
   async function specRecord(root: string): Promise<Record<string, unknown>> {
@@ -1299,15 +1371,21 @@ describe('asynchronous review runs', () => {
     expect(secondRun).not.toBe(firstRun)
     expect(second).toContain('review queued')
     expect(subagents.startCalls).toBe(1)
+    expect(harness.settledRuns).toEqual([])
     const queuedStatus = await harness.toolText('delegation_status', {})
     expect(queuedStatus).toMatch(new RegExp(`run ${firstRun}: .*state=running`))
     expect(queuedStatus).toMatch(new RegExp(`run ${secondRun}: .*state=queued`))
 
     pending.releases.shift()?.()
     await harness.waitForRun(firstRun)
-    await until(() => subagents.startCalls === 2, 'the queued run to start')
+    expect(harness.settledRuns).toEqual([{ runId: firstRun, state: 'completed' }])
+    await subagents.waitForStarts(2)
     pending.releases.shift()?.()
     expect(await harness.waitForRun(secondRun)).toContain('state=completed')
+    expect(harness.settledRuns).toEqual([
+      { runId: firstRun, state: 'completed' },
+      { runId: secondRun, state: 'completed' },
+    ])
     expect(
       await readFile(
         join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),

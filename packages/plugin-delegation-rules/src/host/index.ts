@@ -153,7 +153,12 @@ export interface BundleConfig {
 export interface ApplyOptions {
   runGit?: GitRunner
   now?: () => Date
+  /** Called once per review run after it settles; the run is no longer pending. */
+  onRunSettled?: (runId: string, state: SettledRunState) => void
 }
+
+/** Terminal review-run states reported to the settlement observer. */
+export type SettledRunState = 'completed' | 'failed' | 'discarded'
 
 /** One fixed-argument git invocation; output is raw bytes so diffs stay lossless. */
 export type GitRunner = (
@@ -1597,6 +1602,8 @@ interface EngineServices {
   git: GitServices
   now: () => Date
   timeoutsFor(rule: RuleConfig): number
+  /** Test seam: fired once per review run after it leaves the pending set. */
+  onRunSettled?: (runId: string, state: SettledRunState) => void
   /** Set by the engine after construction so the gate can see pending review runs. */
   pendingReview?: (
     workspaceRoot: string,
@@ -2347,6 +2354,13 @@ class DelegationEngine {
   private freeRun(run: ManagedRun): void {
     this.runs.delete(run.file.id)
     this.runIdentities.delete(run.file.identity)
+    const state = run.file.state
+    if (state === 'queued' || state === 'running') return
+    try {
+      this.services.onRunSettled?.(run.file.id, state)
+    } catch {
+      // The observer is a test seam; it must not change run cleanup.
+    }
   }
 
   private async startNextRun(key: string): Promise<void> {
@@ -3272,6 +3286,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
     git: { runGit: options.runGit ?? defaultGit },
     now: options.now ?? (() => new Date()),
     timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
+    ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
   }
   const engine = new DelegationEngine(validated, services)
   services.pendingReview = (workspaceRoot, ruleId, change, taskId) =>

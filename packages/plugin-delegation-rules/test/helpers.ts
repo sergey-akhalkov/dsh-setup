@@ -14,7 +14,7 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect, vi } from 'vitest'
-import { apply, type BundleConfig } from '../lib/index.js'
+import { apply, type BundleConfig, type SettledRunState } from '../lib/index.js'
 
 export type GitRunner = (
   args: readonly string[],
@@ -90,6 +90,7 @@ export class FakeSubagents {
   /** Simulates a provider rejecting the start request before a child exists. */
   startError?: Error
   respond: (run: RunRecord) => SubagentResult | Promise<SubagentResult> = passResponder
+  private readonly startWaiters: Array<{ count: number; resolve: () => void }> = []
   private readonly responders = new Map<
     string,
     (run: RunRecord) => SubagentResult | Promise<SubagentResult>
@@ -123,6 +124,12 @@ export class FakeSubagents {
     return this.providers.get(name)
   }
 
+  /** Resolve once at least `count` target starts have begun. */
+  waitForStarts(count: number): Promise<void> {
+    if (this.startCalls >= count) return Promise.resolve()
+    return new Promise((resolve) => this.startWaiters.push({ count, resolve }))
+  }
+
   async startActivation(spec: SubagentActivationSpec): Promise<SubagentActivation> {
     this.startCalls += 1
     if (this.startError !== undefined) throw this.startError
@@ -138,6 +145,11 @@ export class FakeSubagents {
     this.runs.push(run)
     const responder = this.responders.get(spec.provider) ?? this.respond
     const result = Promise.resolve().then(() => responder(run))
+    for (const waiter of [...this.startWaiters]) {
+      if (waiter.count > this.startCalls) continue
+      this.startWaiters.splice(this.startWaiters.indexOf(waiter), 1)
+      waiter.resolve()
+    }
     return {
       childId: 'child-1' as never,
       result,
@@ -189,6 +201,8 @@ export interface HarnessOptions {
   git?: FakeGit
   agents?: FakeSubagents
   now?: () => Date
+  /** Set false to exercise the engine path with no settlement observer. */
+  observeSettlements?: boolean
 }
 
 type ContextEvent = (...args: unknown[]) => unknown
@@ -223,6 +237,9 @@ export class Harness {
   readonly tools = new Map<string, ToolDefinition>()
   readonly events = new Map<string, ContextEvent[]>()
   readonly skillProviders: SkillProviderLike[] = []
+  /** Terminal review-run states reported by the engine, in completion order. */
+  readonly settledRuns: Array<{ runId: string; state: SettledRunState }> = []
+  private readonly settlementWaiters = new Map<string, Array<(state: SettledRunState) => void>>()
 
   constructor(options: HarnessOptions) {
     this.cwd = options.cwd
@@ -256,6 +273,9 @@ export class Harness {
     apply(ctx as unknown as Context, options.config ?? {}, {
       runGit: this.git.run,
       now: options.now ?? (() => new Date('2026-10-26T12:00:00.000Z')),
+      ...(options.observeSettlements === false
+        ? {}
+        : { onRunSettled: (runId, state) => this.recordSettlement(runId, state) }),
     })
   }
 
@@ -278,22 +298,30 @@ export class Harness {
     return runIdFrom(await this.toolText('delegate', args, agent))
   }
 
-  /** Poll the durable run file until the run reaches a terminal state. */
+  /** Await the engine's settlement signal, then require that state in the durable run file. */
   async waitForRun(runId: string, _agent: FakeAgent = this.agent): Promise<string> {
+    const signalled =
+      this.settledRuns.find((entry) => entry.runId === runId)?.state ??
+      (await new Promise<SettledRunState>((resolve) => {
+        const waiters = this.settlementWaiters.get(runId) ?? []
+        waiters.push(resolve)
+        this.settlementWaiters.set(runId, waiters)
+      }))
     const file = join(this.cwd, '.dsh', 'delegation', 'runs', `${runId}.json`)
-    for (let attempt = 0; attempt < 400; attempt += 1) {
-      try {
-        const run = JSON.parse(await readFile(file, 'utf8')) as { state?: unknown }
-        const state = String(run.state)
-        if (state === 'completed' || state === 'failed' || state === 'discarded') {
-          return `- run ${runId}: state=${state}`
-        }
-      } catch {
-        // The run file is not written yet; keep polling.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5))
+    const run = JSON.parse(await readFile(file, 'utf8')) as { state?: unknown }
+    if (run.state !== signalled) {
+      throw new Error(
+        `review run ${runId} settled as ${signalled} but its run file reports state=${String(run.state)}`,
+      )
     }
-    throw new Error(`review run ${runId} did not settle`)
+    return `- run ${runId}: state=${signalled}`
+  }
+
+  private recordSettlement(runId: string, state: SettledRunState): void {
+    this.settledRuns.push({ runId, state })
+    const waiters = this.settlementWaiters.get(runId)
+    this.settlementWaiters.delete(runId)
+    for (const resolve of waiters ?? []) resolve(state)
   }
 
   private async fire(name: string, args: unknown[]): Promise<void> {
