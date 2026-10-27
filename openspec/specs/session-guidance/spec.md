@@ -240,12 +240,17 @@ The always-on working contract SHALL state that one agent with its on-demand ski
 
 ### Requirement: Serena always-on code-surface rule
 
-The setup SHALL ship the Serena guidance bundle with an always-on system-prompt section, enabled by default, that states when and how to use the Serena MCP code tools. The rule MUST begin with project activation, MUST direct reading and editing through symbol operations with bounded calls, and MUST route literal text, regex, configuration and document work to the ripgrep-backed file tools instead of Serena's text search.
+The setup SHALL ship the Serena guidance bundle with both of its rows disabled by default, so a default installation mounts neither the MCP adapter nor the always-on rule. A profile that enables the guidance row receives an always-on system-prompt section that states when and how to use the Serena MCP code tools. The rule MUST begin with project activation, MUST direct reading and editing through symbol operations with bounded calls, and MUST route literal text, regex, configuration and document work to the ripgrep-backed file tools instead of Serena's text search.
 
 #### Scenario: Fresh installation
 
-- **WHEN** a session starts in a profile where the Serena guidance row is active with default configuration
-- **THEN** the assembled system prompt contains the code-surface rule and the catalog still lists `serena-discipline`
+- **WHEN** the setup is installed and no profile patch overrides the Serena rows
+- **THEN** both Serena rows remain disabled, the assembled system prompt contains no code-surface rule, and the catalog lists no `serena-discipline` skill
+
+#### Scenario: Enabled by the owner
+
+- **WHEN** the profile patch enables the Serena rows
+- **THEN** the assembled system prompt contains the code-surface rule and the catalog lists `serena-discipline`
 
 #### Scenario: Activation before symbol calls
 

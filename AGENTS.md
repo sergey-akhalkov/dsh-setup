@@ -346,10 +346,11 @@ which builds before testing). Tests that need machine-path fixtures compose them
 ## 11. OpenSpec workflow (requirements are spec-driven)
 
 `openspec/config.yaml` requires **English** for all artifacts and keeps structural headings and
-SHALL/MUST keywords in English. There is no active change; the latest archived changes on
-2026-10-27 are `add-admin-indicator` (authenticated shortcut POST with native Toast; restart behind
-the default-off `restart` row flag pending live UAC verification), `add-loop-guard`, and
-`fix-delegation-session-scope`. The final delegation Host was edited after its recorded 3.3 live
+SHALL/MUST keywords in English. There is no active change; the latest archived change is
+`2026-10-28-ship-serena-disabled` (the Serena bundle ships both rows disabled by default, enabled by
+a profile override), preceded on 2026-10-27 by `add-admin-indicator` (authenticated shortcut POST
+with native Toast; restart behind the default-off `restart` row flag pending live UAC
+verification), `add-loop-guard`, and `fix-delegation-session-scope`. The final delegation Host was edited after its recorded 3.3 live
 acceptance, so a live re-acceptance of the final Host remains an owner follow-up. The parent change was archived on
 2026-10-26 as `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/` (proposal, design, delta
 specs `portable-setup` and `plugin-market`, tasks). The main specs under `openspec/specs/` hold the
@@ -375,8 +376,11 @@ contract to `portable-setup`: the documented pipeline form must not terminate th
 rerunning the command updates to the newest release, and the installer verifies the resolved version
 against the installed one. The archived `2026-10-27-fix-delegation-foreign-change-digest` change made
 the turn-start baseline and the turn-end snapshot owner-only and moved missing or unreadable change
-artifacts out of the worktree digest into a per-change hint that names the change and its owner. Cite
-`openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
+artifacts out of the worktree digest into a per-change hint that names the change and its owner. The
+archived `2026-10-28-ship-serena-disabled` change added the optional `disabled` fragment row field and
+flipped the Serena bundle to ship disabled by default; its deltas amended `session-guidance` and
+`mcp-adapters`. Cite `openspec/specs/` for accepted requirements and an archived change's delta
+specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
 data` as MODIFIED with the current main-spec text (the Serena and Ponytail amendments), so the
