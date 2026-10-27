@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -38,7 +38,7 @@ export const skillDescription = 'Delegation rules: authored triggers, targets, r
 export const toolDescriptions = {
     delegate: 'Run one configured delegation rule through its target. Manual tasks: `research` answers a question with evidence and sources; `blocker` consults on a stuck plan when the failure-streak hint appears; `bug-fix` runs a write target in an isolated git worktree and returns the diff and test report (never auto-merged). Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record; `integration-review` is the optional whole-worktree check. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. The `answer` contract writes no gate record. Only a matching record satisfies the turn-stopping gate: a text claim does not. A missing or incompatible target is reported with the target id, provider name, and next action.',
     task_progress: 'Record an explicit in-progress or blocked note for one unchecked task, with the reason and the current worktree digest. Use it when a task spans turns instead of ticking `tasks.md`: it runs no model and costs nothing. The note lets a code-changing turn close only while the worktree still matches it; after any further change it is stale and a fresh note or the tick plus `delegate` task review is required. A checked task never accepts a note, and a note never counts as a task-review PASS.',
-    delegation_status: 'Report registered DSH subagent providers and capabilities, configured delegation targets and rules, per-change task/progress-note state, review record state (matching, stale, missing, malformed), and missing-target diagnostics with the next action. Use it when a `delegate` call reports a target problem or before configuring rules.',
+    delegation_status: "Report registered DSH subagent providers and capabilities, configured delegation targets and rules, each active change's involvement by this session (created, spec changed, checked tasks), per-change task/progress-note state, review record state (matching, stale, missing, malformed), and missing-target diagnostics with the next action. It never attributes a change. Use it when a `delegate` call reports a target problem or before configuring rules.",
 };
 /** JSON output contract shared by the three tools: one rendered text result. */
 const TOOL_OUTPUT_SCHEMA = {
@@ -406,8 +406,7 @@ function hashParts(parts) {
     }
     return hash.digest('hex');
 }
-async function readTasks(changeDir) {
-    const markdown = await readFile(join(changeDir, 'tasks.md'), 'utf8');
+function parseTasksText(markdown) {
     const tasks = [];
     const pattern = /^\s*-\s*\[([ xX])\]\s+(\d+(?:\.\d+)*)\s+(.+?)\s*$/gm;
     for (const match of markdown.matchAll(pattern)) {
@@ -416,6 +415,13 @@ async function readTasks(changeDir) {
         tasks.push({ id: taskIdOf(text), at: match.index ?? 0, number, text, checked: mark !== ' ' });
     }
     return tasks;
+}
+async function readTasks(changeDir) {
+    return parseTasksText(await readFile(join(changeDir, 'tasks.md'), 'utf8'));
+}
+/** Checkbox state only: a task tick alone never changes this normalized text. */
+function normalizeCheckboxes(markdown) {
+    return markdown.replace(/^(\s*-\s*)\[[xX]\]/gm, '$1[ ]');
 }
 async function statSafe(path) {
     try {
@@ -446,6 +452,24 @@ async function findOpenSpecRoot(cwd) {
     for (;;) {
         if ((await statSafe(join(current, 'openspec', 'changes'))) === 'directory') {
             return join(current, 'openspec');
+        }
+        const parent = dirname(current);
+        if (parent === current)
+            return undefined;
+        current = parent;
+    }
+}
+/** Synchronous workspace-root lookup for event-time write evidence. */
+function findOpenSpecRootSync(cwd) {
+    let current = resolve(cwd);
+    for (;;) {
+        try {
+            if (statSync(join(current, 'openspec', 'changes')).isDirectory()) {
+                return join(current, 'openspec');
+            }
+        }
+        catch {
+            // Keep walking up.
         }
         const parent = dirname(current);
         if (parent === current)
@@ -644,25 +668,21 @@ async function captureSnapshot(cwd, changes, services, signal) {
         snapshot.implementationFingerprint = undefined;
     }
     for (const change of changes) {
-        let tasks;
-        try {
-            tasks = await readTasks(change.dir);
-        }
-        catch (error) {
-            // A change artifact problem stays per-change; it is not a worktree git failure.
-            snapshot.changes.push({
-                name: change.name,
-                tasks: [],
-                error: `tasks.md is missing or unreadable (${errorMessage(error)})`,
-            });
-            continue;
-        }
-        const entry = { name: change.name, tasks };
+        const entry = { name: change.name, tasks: [] };
+        // The artifact digest is independent of task parsing: a change whose
+        // tasks.md is missing still has a digest, so a later write is detectable.
         try {
             entry.specDigest = await specDigest(change.dir, signal);
         }
         catch (error) {
             entry.error = `change artifacts are unreadable (${errorMessage(error)})`;
+        }
+        try {
+            entry.tasks = await readTasks(change.dir);
+        }
+        catch (error) {
+            // A change artifact problem stays per-change; it is not a worktree git failure.
+            entry.error = `tasks.md is missing or unreadable (${errorMessage(error)})`;
         }
         snapshot.changes.push(entry);
     }
@@ -694,79 +714,504 @@ function recordPath(cwd, rule, change, taskId) {
 function notePath(cwd, change) {
     return join(cwd, DELEGATION_DIR, 'task-progress', `${change}.json`);
 }
-function ownersDirectory(workspaceRoot) {
-    return join(workspaceRoot, DELEGATION_DIR, 'owners');
-}
-function ownerFile(workspaceRoot, change) {
-    if (!CHANGE_PATTERN.test(change))
-        fail(`change "${change}" is not a plain change name`);
-    // Hashed file name: no path characters and no Windows device-name collisions.
-    const name = createHash('sha256').update(change).digest('hex').slice(0, 16);
-    return join(ownersDirectory(workspaceRoot), `${name}.json`);
-}
-/** The owner recorded for one change, or undefined when unowned/unreadable. */
-async function readOwner(workspaceRoot, change) {
-    let raw;
-    try {
-        raw = await readFile(ownerFile(workspaceRoot, change), 'utf8');
-    }
-    catch {
-        return undefined;
-    }
-    try {
-        const value = JSON.parse(raw);
-        if (!isRecord(value) || typeof value.session !== 'string' || value.session === '') {
-            return undefined;
-        }
-        return value.session;
-    }
-    catch {
-        return undefined;
-    }
-}
 function currentThread(agent) {
     return String(agent.session.id);
 }
-/**
- * One ownership file per change, created with an exclusive `wx` open: concurrent
- * runtimes cannot overwrite an owner, and claims for different changes cannot
- * drop each other. A loser reads the winner; a just-created file may still be
- * mid-write, so reads retry briefly before reporting unreadable scratch state.
- */
-async function claimOwner(workspaceRoot, change, thread) {
-    const file = ownerFile(workspaceRoot, change);
-    await mkdir(dirname(file), { recursive: true });
-    const content = `${JSON.stringify({ change, session: thread })}\n`;
+function sessionsDirectory(workspaceRoot) {
+    return join(workspaceRoot, DELEGATION_DIR, 'sessions');
+}
+function involvementFile(workspaceRoot, session) {
+    // Hashed file name: no path characters and no Windows device-name collisions.
+    const name = createHash('sha256').update(session).digest('hex').slice(0, 16);
+    return join(sessionsDirectory(workspaceRoot), `${name}.json`);
+}
+function emptyInvolvement(session) {
+    return { session, changes: Object.create(null) };
+}
+function freshEntry() {
+    return { created: false, specChanged: false, tasks: [], completed: false };
+}
+function parseInvolvement(value, session) {
+    if (!isRecord(value) || value.session !== session || !isRecord(value.changes))
+        return undefined;
+    const involvement = emptyInvolvement(session);
+    for (const [name, raw] of Object.entries(value.changes)) {
+        if (!CHANGE_PATTERN.test(name) || !isRecord(raw))
+            return undefined;
+        if (typeof raw.created !== 'boolean' ||
+            typeof raw.specChanged !== 'boolean' ||
+            typeof raw.completed !== 'boolean' ||
+            !Array.isArray(raw.tasks) ||
+            !raw.tasks.every((task) => typeof task === 'string' && TASK_ID_PATTERN.test(task))) {
+            return undefined;
+        }
+        involvement.changes[name] = {
+            created: raw.created,
+            specChanged: raw.specChanged,
+            tasks: [...raw.tasks],
+            completed: raw.completed,
+        };
+    }
+    return involvement;
+}
+/** Missing state is empty; malformed state is empty plus a status warning, never a failure. */
+async function readInvolvement(workspaceRoot, session) {
+    const file = involvementFile(workspaceRoot, session);
+    let raw;
     try {
-        await writeFile(file, content, { encoding: 'utf8', flag: 'wx' });
-        return thread;
+        raw = await readFile(file, 'utf8');
     }
     catch (error) {
-        if (error.code !== 'EEXIST')
-            throw error;
+        if (error.code === 'ENOENT') {
+            return { involvement: emptyInvolvement(session) };
+        }
+        return {
+            involvement: emptyInvolvement(session),
+            warning: `session involvement at ${relativePath(workspaceRoot, file)} is unreadable (${errorMessage(error)}); treating it as empty`,
+        };
     }
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-        const owner = await readOwner(workspaceRoot, change);
-        if (owner !== undefined)
-            return owner;
-        await new Promise((resolve) => setTimeout(resolve, 5));
+    try {
+        const parsed = parseInvolvement(JSON.parse(raw), session);
+        if (parsed !== undefined)
+            return { involvement: parsed };
     }
-    fail(`ownership state for change "${change}" is unreadable at ${relativePath(workspaceRoot, file)}; delete that file to reset the owner`);
+    catch {
+        // Fall through to the malformed warning.
+    }
+    return {
+        involvement: emptyInvolvement(session),
+        warning: `session involvement at ${relativePath(workspaceRoot, file)} is malformed; treating it as empty (delete it to reset)`,
+    };
 }
-async function ensureOwner(workspaceRoot, change, thread) {
-    return ((await readOwner(workspaceRoot, change)) ?? (await claimOwner(workspaceRoot, change, thread)));
+async function writeInvolvement(workspaceRoot, involvement) {
+    await writeJsonAtomic(involvementFile(workspaceRoot, involvement.session), involvement);
 }
-/** The active changes this thread owns; foreign changes never enter its snapshots. */
-async function ownedActiveChanges(workspaceRoot, changes, thread) {
-    if (workspaceRoot === undefined)
-        return [];
-    const owned = [];
-    for (const change of changes) {
-        // First observation claims the change at the workspace root; only the owner evaluates it.
-        if ((await ensureOwner(workspaceRoot, change.name, thread)) === thread)
-            owned.push(change);
+/** Serialize one session's read-modify-write involvement updates in this process. */
+const involvementWrites = new Map();
+async function withInvolvementLock(workspaceRoot, session, task) {
+    const key = `${workspaceRoot}\u0000${session}`;
+    const previous = involvementWrites.get(key) ?? Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => {
+        release = resolve;
+    });
+    const queued = previous.then(() => current);
+    involvementWrites.set(key, queued);
+    await previous;
+    try {
+        return await task();
     }
-    return owned;
+    finally {
+        release();
+        if (involvementWrites.get(key) === queued)
+            involvementWrites.delete(key);
+    }
+}
+function involvementEntry(involvement, change) {
+    let entry = involvement.changes[change];
+    if (entry === undefined) {
+        entry = freshEntry();
+        involvement.changes[change] = entry;
+    }
+    return entry;
+}
+function involvementSummary(entry, checkedTasks) {
+    const parts = [];
+    if (entry.created)
+        parts.push('created');
+    if (entry.specChanged)
+        parts.push('spec changed');
+    parts.push(`${checkedTasks} checked task(s)`);
+    return parts.join(' / ');
+}
+function freshEvidence() {
+    return { creation: false, outsideTasks: false, taskWrites: [], opaqueTaskWrite: false };
+}
+/** Resolve `openspec/changes/<change>/<file>` from an absolute or relative path. */
+function changeFromEvidencePath(path) {
+    const normalized = path.replaceAll('\\', '/');
+    const marker = 'openspec/changes/';
+    const index = normalized.lastIndexOf(marker);
+    if (index < 0)
+        return undefined;
+    if (index > 0 && normalized[index - 1] !== '/')
+        return undefined;
+    const rest = normalized.slice(index + marker.length);
+    const slash = rest.indexOf('/');
+    if (slash <= 0 || slash === rest.length - 1)
+        return undefined;
+    const change = rest.slice(0, slash);
+    if (!CHANGE_PATTERN.test(change) || change === 'archive')
+        return undefined;
+    return { change, file: rest.slice(slash + 1) };
+}
+/** Resolve a write path only when it lands inside this workspace's active change. */
+function evidenceTarget(workspaceCwd, executionCwd, rawPath) {
+    const path = rawPath.trim();
+    if (path === '')
+        return undefined;
+    const target = changeFromEvidencePath(path);
+    if (target === undefined)
+        return undefined;
+    const openspecRoot = findOpenSpecRootSync(workspaceCwd);
+    if (openspecRoot === undefined)
+        return undefined;
+    const activeDir = resolve(openspecRoot, 'changes', target.change);
+    try {
+        if (!statSync(activeDir).isDirectory())
+            return undefined;
+    }
+    catch {
+        return undefined;
+    }
+    const absolute = resolve(executionCwd, path);
+    const rel = relative(activeDir, absolute);
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel))
+        return undefined;
+    return target;
+}
+/** Quote-aware tokenizer: quoted text stays one argument and never becomes an operator. */
+function shellSegments(command) {
+    const segments = [];
+    let tokens = [];
+    let value = '';
+    let quoted = false;
+    let quote = null;
+    const pushToken = () => {
+        if (value !== '' || quoted) {
+            tokens.push({ value, quoted });
+            value = '';
+            quoted = false;
+        }
+    };
+    const pushSegment = () => {
+        pushToken();
+        if (tokens.length > 0)
+            segments.push({ tokens });
+        tokens = [];
+    };
+    for (let index = 0; index < command.length; index += 1) {
+        const char = command[index];
+        if (quote !== null) {
+            if (char === quote) {
+                quote = null;
+                quoted = true;
+                continue;
+            }
+            value += char;
+            quoted = true;
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            quote = char;
+            quoted = true;
+            continue;
+        }
+        if (char === '#') {
+            const newline = command.indexOf('\n', index);
+            if (newline < 0) {
+                index = command.length;
+                break;
+            }
+            index = newline;
+            pushSegment();
+            continue;
+        }
+        if (char === '\n' || char === '\r') {
+            pushSegment();
+            if (char === '\r' && command[index + 1] === '\n')
+                index += 1;
+            continue;
+        }
+        if (/\s/u.test(char)) {
+            pushToken();
+            continue;
+        }
+        if (char === ';') {
+            pushSegment();
+            continue;
+        }
+        if (char === '|') {
+            if (command[index + 1] === '|')
+                index += 1;
+            pushSegment();
+            continue;
+        }
+        if (char === '&' && command[index + 1] === '&') {
+            index += 1;
+            pushSegment();
+            continue;
+        }
+        if (char === '>') {
+            pushToken();
+            const operator = command[index + 1] === '>' ? '>>' : '>';
+            tokens.push({ value: operator, quoted: false });
+            if (operator === '>>')
+                index += 1;
+            continue;
+        }
+        value += char;
+    }
+    pushSegment();
+    return segments;
+}
+const CONTROL_COMMANDS = new Set([
+    'if',
+    'else',
+    'elseif',
+    'for',
+    'foreach',
+    'while',
+    'do',
+    'switch',
+    'try',
+    'catch',
+    'finally',
+    'function',
+    'filter',
+    'begin',
+    'process',
+    'end',
+    'return',
+    'throw',
+    'exit',
+    'param',
+    'using',
+    'class',
+    'enum',
+    'trap',
+]);
+const SIMPLE_REJECT = new Set(['{', '}', '(', ')']);
+const WRITE_VERBS = new Set([
+    'set-content',
+    'add-content',
+    'out-file',
+    'copy-item',
+    'move-item',
+    'new-item',
+    'rename-item',
+    'remove-item',
+    'cp',
+    'mv',
+    'rm',
+    'touch',
+    'tee',
+]);
+const VALUE_OPTIONS = new Set([
+    '-value',
+    '-encoding',
+    '-itemtype',
+    '-type',
+    '-name',
+    '-newname',
+    '-path',
+    '-literalpath',
+    '-filepath',
+    '-destination',
+    '-filter',
+    '-include',
+    '-exclude',
+    '-erroraction',
+]);
+/**
+ * One explicit simple command form, or undefined for compound/control syntax.
+ * Splitting a compound command would let a skipped branch attribute writes.
+ */
+function simpleCommand(command) {
+    const segments = shellSegments(command);
+    if (segments.length !== 1)
+        return undefined;
+    const tokens = segments[0]?.tokens ?? [];
+    if (tokens.length === 0)
+        return undefined;
+    if (tokens[0].quoted)
+        return undefined;
+    if (CONTROL_COMMANDS.has(tokens[0].value.toLowerCase()))
+        return undefined;
+    // PowerShell preview switches never perform the write they name.
+    if (tokens.some((token) => !token.quoted && /^-(?:whatif|wi|wh|what|whati)(?::|$)/iu.test(token.value))) {
+        return undefined;
+    }
+    if (tokens.some((token) => SIMPLE_REJECT.has(token.value)))
+        return undefined;
+    return [...tokens];
+}
+/** Skip option values so the returned tokens are positional arguments only. */
+function positionalTokens(args) {
+    const tokens = [];
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        if (arg.startsWith('-')) {
+            if (VALUE_OPTIONS.has(arg.toLowerCase()))
+                index += 1;
+            continue;
+        }
+        tokens.push(arg);
+    }
+    return tokens;
+}
+function namedArgument(args, names) {
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index].toLowerCase();
+        for (const name of names) {
+            if (arg === name)
+                return args[index + 1];
+            if (arg.startsWith(`${name}:`))
+                return args[index].slice(name.length + 1);
+        }
+    }
+    return undefined;
+}
+function writeDestination(verb, args) {
+    const positional = positionalTokens(args);
+    if (/^(?:copy-item|move-item|cp|mv)$/u.test(verb)) {
+        return namedArgument(args, ['-destination']) ?? positional[positional.length - 1];
+    }
+    return namedArgument(args, ['-path', '-literalpath', '-filepath']) ?? positional[0];
+}
+/** Only actual destinations inside this workspace; ambiguous forms stay unattributed. */
+function shellWriteTargets(workspaceCwd, executionCwd, tokens) {
+    const targets = [];
+    for (let index = 0; index < tokens.length - 1; index += 1) {
+        const token = tokens[index];
+        if (token.quoted || (token.value !== '>' && token.value !== '>>'))
+            continue;
+        const target = evidenceTarget(workspaceCwd, executionCwd, tokens[index + 1].value);
+        if (target !== undefined)
+            targets.push(target);
+    }
+    const verb = (tokens[0].value ?? '').toLowerCase();
+    if (!WRITE_VERBS.has(verb))
+        return targets;
+    const destination = writeDestination(verb, tokens.slice(1).map((token) => token.value));
+    const target = destination === undefined ? undefined : evidenceTarget(workspaceCwd, executionCwd, destination);
+    if (target !== undefined)
+        targets.push(target);
+    return targets;
+}
+// shortcut: shell evidence watches only one explicit simple command; quoted
+// examples, comments, argument text, control/compound syntax, quoted
+// operators, ambiguous option positions, and cross-workspace paths stay
+// unattributed and need task_progress or an explicit review/patch delegate.
+function recordWriteEvidence(state, agentId, cwd, exec, result) {
+    if (result.isError)
+        return;
+    const args = isRecord(exec.arguments) ? exec.arguments : {};
+    const value = isRecord(result.value) ? result.value : undefined;
+    if (exec.name === 'edit' || exec.name === 'write') {
+        const canonical = typeof value?.path === 'string' ? value.path : undefined;
+        const argumentPath = typeof args.file_path === 'string' ? args.file_path : undefined;
+        const path = canonical ?? (argumentPath === undefined ? undefined : resolve(cwd, argumentPath));
+        if (path === undefined)
+            return;
+        const target = evidenceTarget(cwd, cwd, path);
+        if (target === undefined)
+            return;
+        const evidence = state.evidenceFor(agentId, target.change);
+        if (target.file === 'tasks.md') {
+            if (value !== undefined &&
+                (value.before === null || typeof value.before === 'string') &&
+                typeof value.after === 'string') {
+                evidence.taskWrites.push({ before: value.before, after: value.after });
+            }
+            else {
+                evidence.opaqueTaskWrite = true;
+            }
+        }
+        else {
+            evidence.outsideTasks = true;
+        }
+        return;
+    }
+    if (exec.name !== 'pwsh' && exec.name !== 'bash')
+        return;
+    const command = typeof args.command === 'string' ? args.command : undefined;
+    if (command === undefined)
+        return;
+    // The installed shell tool reports ordinary command failures as a successful
+    // tool call with a nonzero exit; a failed command wrote nothing attributable.
+    if (value === undefined || value.exitCode !== 0)
+        return;
+    const workspaceRoot = findOpenSpecRootSync(cwd);
+    const reportedCwd = typeof value.cwd === 'string' ? value.cwd : undefined;
+    const executionCwd = reportedCwd !== undefined
+        ? resolve(cwd, reportedCwd)
+        : typeof args.workdir === 'string'
+            ? resolve(cwd, args.workdir)
+            : cwd;
+    const tokens = simpleCommand(command);
+    const executionRoot = findOpenSpecRootSync(executionCwd);
+    if (tokens !== undefined) {
+        if (workspaceRoot !== undefined &&
+            executionRoot === workspaceRoot &&
+            tokens[0].value.toLowerCase() === 'openspec' &&
+            tokens[1]?.value.toLowerCase() === 'new' &&
+            tokens[2]?.value.toLowerCase() === 'change') {
+            const change = tokens[3]?.value ?? '';
+            if (CHANGE_PATTERN.test(change))
+                state.evidenceFor(agentId, change).creation = true;
+        }
+        for (const target of shellWriteTargets(cwd, executionCwd, tokens)) {
+            const evidence = state.evidenceFor(agentId, target.change);
+            if (target.file === 'tasks.md')
+                evidence.opaqueTaskWrite = true;
+            else
+                evidence.outsideTasks = true;
+        }
+    }
+}
+/**
+ * Attribute this turn's evidence. The snapshot baseline identifies a newly
+ * created change and the current list; per-write canonical contents identify
+ * checkbox transitions and substantive edits.
+ */
+function applyTurnEvidence(involvement, evidence, baseline, current) {
+    let changed = false;
+    for (const [name, changeEvidence] of evidence) {
+        const currentChange = current.changes.find((entry) => entry.name === name);
+        if (currentChange === undefined)
+            continue;
+        const previous = JSON.stringify(involvement.changes[name]);
+        const entry = involvementEntry(involvement, name);
+        const existed = baseline.changes.some((change) => change.name === name);
+        if (!existed && changeEvidence.creation) {
+            entry.created = true;
+            entry.specChanged = true;
+        }
+        else if (changeEvidence.outsideTasks) {
+            entry.specChanged = true;
+        }
+        let writeCompletedList = false;
+        for (const write of changeEvidence.taskWrites) {
+            const beforeText = write.before ?? '';
+            if (normalizeCheckboxes(write.after) !== normalizeCheckboxes(beforeText)) {
+                entry.specChanged = true;
+            }
+            const checkedBefore = new Set(parseTasksText(beforeText)
+                .filter((task) => task.checked)
+                .map((task) => task.id));
+            const afterTasks = parseTasksText(write.after);
+            let addedInWrite = false;
+            for (const task of afterTasks) {
+                if (!task.checked || checkedBefore.has(task.id))
+                    continue;
+                if (!entry.tasks.includes(task.id))
+                    entry.tasks.push(task.id);
+                addedInWrite = true;
+            }
+            if (addedInWrite && afterTasks.length > 0 && afterTasks.every((task) => task.checked)) {
+                writeCompletedList = true;
+            }
+        }
+        if (writeCompletedList &&
+            currentChange.tasks.length > 0 &&
+            currentChange.tasks.every((task) => task.checked)) {
+            entry.completed = true;
+        }
+        if (JSON.stringify(involvement.changes[name]) !== previous)
+            changed = true;
+    }
+    return changed;
 }
 async function writeJsonAtomic(path, value) {
     await mkdir(dirname(path), { recursive: true });
@@ -1149,13 +1594,20 @@ function gateMessage(text) {
     });
     return message;
 }
-/** Per-agent failure streak, consultation, steering, and turn-snapshot state. */
+/** Per-agent failure streak, consultation, steering, snapshots, and write evidence. */
 class DelegationState {
     agents = new Map();
     of(agentId) {
         let state = this.agents.get(agentId);
         if (state === undefined) {
-            state = { failures: 0, epoch: 0, consultedEpoch: -1, steered: new Set(), turn: -1 };
+            state = {
+                failures: 0,
+                epoch: 0,
+                consultedEpoch: -1,
+                steered: new Set(),
+                turn: -1,
+                evidence: new Map(),
+            };
             this.agents.set(agentId, state);
         }
         return state;
@@ -1180,7 +1632,20 @@ class DelegationState {
         state.epoch += 1;
         state.steered.clear();
         state.baseline = undefined;
+        state.evidence = new Map();
         return true;
+    }
+    evidenceFor(agentId, change) {
+        const evidence = this.of(agentId).evidence;
+        let entry = evidence.get(change);
+        if (entry === undefined) {
+            entry = freshEvidence();
+            evidence.set(change, entry);
+        }
+        return entry;
+    }
+    evidenceOf(agentId) {
+        return this.of(agentId).evidence;
     }
     failuresOf(agentId) {
         return this.of(agentId).failures;
@@ -1210,6 +1675,11 @@ class DelegationState {
         if (state.baseline !== undefined && state.turn === turn)
             return state.baseline;
         return state.lastSnapshot;
+    }
+    /** The pre-step snapshot for this turn only; no fallback, because attribution needs a baseline. */
+    turnBaselineOf(agentId, turn) {
+        const state = this.of(agentId);
+        return state.turn === turn ? state.baseline : undefined;
     }
     rememberSnapshot(agentId, snapshot) {
         this.of(agentId).lastSnapshot = snapshot;
@@ -1472,19 +1942,11 @@ class DelegationEngine {
         }
         const agent = this.requireAgent(context);
         const cwd = this.services.workingDirectory.get(agent.session);
-        const thread = currentThread(agent);
         const opened = rule.contract === 'review' || args.change !== undefined
             ? await openChange(cwd, args.change)
             : undefined;
         const change = opened?.change;
         const workspaceRoot = opened === undefined ? undefined : dirname(opened.openspecRoot);
-        if (change !== undefined && workspaceRoot !== undefined) {
-            // Ownership lives at the OpenSpec workspace root, so nested cwds share it.
-            const owner = await ensureOwner(workspaceRoot, change.name, thread);
-            if (rule.contract === 'review' && owner !== thread) {
-                fail(`change "${change.name}" is owned by thread "${owner}"; run this review in that thread (or delete ${relativePath(workspaceRoot, ownerFile(workspaceRoot, change.name))} to reset the owner)`);
-            }
-        }
         if (rule.contract === 'answer') {
             this.services.state.markConsulted(String(agent.id));
             const result = await runTarget(this.services, {
@@ -1501,6 +1963,9 @@ class DelegationEngine {
             if (args.objective === undefined || args.objective.trim() === '') {
                 fail(`rule "${rule.id}": a patch rule needs objective: to name the bug to fix`);
             }
+            if (change !== undefined && workspaceRoot !== undefined) {
+                await this.attributeChange(workspaceRoot, agent, change.name);
+            }
             return this.runPatch(rule, args, agent, cwd, context.signal);
         }
         if (change === undefined || workspaceRoot === undefined) {
@@ -1510,6 +1975,21 @@ class DelegationEngine {
             fail(`change "${change.name}" is not review-ready; a whole-scope review needs proposal.md, design.md, tasks.md, and at least one specs/*/spec.md`);
         }
         return this.startReview(rule, change, agent, cwd, workspaceRoot, args);
+    }
+    /** An explicit task_progress/review/patch call opts this session into the change. */
+    async attributeChange(workspaceRoot, agent, change, taskId) {
+        await withInvolvementLock(workspaceRoot, currentThread(agent), async () => {
+            const { involvement } = await readInvolvement(workspaceRoot, currentThread(agent));
+            const existed = involvement.changes[change] !== undefined;
+            const entry = involvementEntry(involvement, change);
+            let changed = !existed;
+            if (taskId !== undefined && !entry.tasks.includes(taskId)) {
+                entry.tasks.push(taskId);
+                changed = true;
+            }
+            if (changed)
+                await writeInvolvement(workspaceRoot, involvement);
+        });
     }
     createRun(workspaceRoot, rule, change, task, agent, cwd, args) {
         const id = `run-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -1554,6 +2034,9 @@ class DelegationEngine {
         else if (rule.scope === 'task') {
             task = await this.nextTaskForReview(change, tasks, cwd);
         }
+        // Explicit review: any session may run it; the call attributes the change,
+        // and a task-scoped review also attributes the selected checked task.
+        await this.attributeChange(workspaceRoot, agent, change.name, task?.id);
         const run = this.createRun(workspaceRoot, rule, change, task, agent, cwd, args);
         const pending = this.runIdentities.get(run.file.identity);
         if (pending !== undefined)
@@ -1944,7 +2427,15 @@ class DelegationEngine {
             fail('task_progress needs task: the task text from tasks.md (or a task id)');
         const matches = [];
         for (const change of await listActiveChanges(openspecRoot)) {
-            for (const task of await readTasks(change.dir)) {
+            let tasks;
+            try {
+                tasks = await readTasks(change.dir);
+            }
+            catch {
+                // An unrelated change with no readable tasks.md must not block this note.
+                continue;
+            }
+            for (const task of tasks) {
                 const fullText = normalizeTaskText(`${task.number} ${task.text}`);
                 if (task.id === wanted ||
                     normalizeTaskText(task.text) === normalizeTaskText(wanted) ||
@@ -1961,11 +2452,11 @@ class DelegationEngine {
             fail(`task_progress: the task text matches more than one active change (${changes.join(', ')}); tick or note the task only in the change you are implementing`);
         }
         const match = matches[0];
-        // Notes stay available in any thread; the observation only records the owner if unset.
-        await ensureOwner(workspaceRoot, match.change.name, currentThread(agent));
         if (match.task.checked) {
             fail(`task_progress: task "${match.task.number} ${match.task.text}" is checked; a completed task needs its task-review PASS/ERROR, not a progress note`);
         }
+        // An explicit note opts this session into the change; it is valid in any session.
+        await this.attributeChange(workspaceRoot, agent, match.change.name);
         const digest = await worktreeDigest(cwd, this.services.git, context.signal);
         const note = {
             taskId: match.task.id,
@@ -2041,18 +2532,28 @@ class DelegationEngine {
             if (changes.length === 0)
                 lines.push('- no active change');
             const workspaceRoot = dirname(openspecRoot);
+            const involvementRead = await readInvolvement(workspaceRoot, thread);
+            if (involvementRead.warning !== undefined) {
+                lines.push(`- session involvement: ${involvementRead.warning}`);
+            }
             for (const change of changes) {
-                const owner = await ensureOwner(workspaceRoot, change.name, thread);
-                const ownership = owner === thread ? 'current thread' : 'foreign thread';
-                lines.push(`- ${change.name} (${change.reviewReady ? 'review-ready' : 'not review-ready'}) owner=${owner} (${ownership})`);
+                const entry = involvementRead.involvement.changes[change.name];
+                lines.push(`- ${change.name} (${change.reviewReady ? 'review-ready' : 'not review-ready'})`);
                 let tasks;
                 try {
                     tasks = await readTasks(change.dir);
                 }
                 catch (error) {
                     lines.push(`  tasks: unreadable (${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)})`);
-                    continue;
                 }
+                const attributedChecked = entry === undefined
+                    ? 0
+                    : tasks === undefined
+                        ? entry.tasks.length
+                        : tasks.filter((task) => task.checked && entry.tasks.includes(task.id)).length;
+                lines.push(`  this session: ${entry === undefined ? 'not involved' : involvementSummary(entry, attributedChecked)}`);
+                if (tasks === undefined)
+                    continue;
                 const checked = tasks.filter((task) => task.checked);
                 lines.push(`  tasks: ${checked.length}/${tasks.length} checked`);
                 for (const rule of this.config.rules) {
@@ -2150,10 +2651,25 @@ async function evaluateGate(deps, agent, turn, signal) {
     const openspecRoot = await findOpenSpecRoot(cwd);
     const workspaceRoot = openspecRoot === undefined ? undefined : dirname(openspecRoot);
     const changes = openspecRoot === undefined ? [] : await listActiveChanges(openspecRoot);
-    const ownedChanges = await ownedActiveChanges(workspaceRoot, changes, thread);
-    // Foreign changes are not snapshotted: their broken artifacts must not block this thread.
-    const current = await captureSnapshot(cwd, ownedChanges, deps.services.git, signal);
+    // All active changes are snapshotted so a new or newly edited change is
+    // detectable; only the session's involved changes are evaluated.
+    const current = await captureSnapshot(cwd, changes, deps.services.git, signal);
     const baseline = deps.state.baselineOf(agentId, turn);
+    const turnBaseline = deps.state.turnBaselineOf(agentId, turn);
+    const involvement = workspaceRoot === undefined
+        ? emptyInvolvement(thread)
+        : await withInvolvementLock(workspaceRoot, thread, async () => {
+            const read = await readInvolvement(workspaceRoot, thread);
+            if (turnBaseline !== undefined) {
+                const evidence = deps.state.evidenceOf(agentId);
+                if (evidence.size > 0 &&
+                    applyTurnEvidence(read.involvement, evidence, turnBaseline, current)) {
+                    await writeInvolvement(workspaceRoot, read.involvement);
+                }
+            }
+            return read.involvement;
+        });
+    const involved = changes.filter((change) => involvement.changes[change.name] !== undefined);
     const issues = [];
     const digestShort = (digest) => digest === undefined ? '(unavailable)' : digest.slice(0, 12);
     const digestFailure = () => current.digestError;
@@ -2178,19 +2694,21 @@ async function evaluateGate(deps, agent, turn, signal) {
         ? undefined
         : deps.services.pendingReview?.(workspaceRoot, ruleId, changeName, taskId);
     if (openspecRoot !== undefined) {
-        for (const change of ownedChanges) {
+        for (const change of involved) {
+            const entry = involvement.changes[change.name];
             const changeSnapshot = current.changes.find((entry) => entry.name === change.name);
             const tasks = changeSnapshot?.tasks ?? [];
             const changeSpecDigest = changeSnapshot?.specDigest;
             if (changeSnapshot?.error !== undefined) {
-                pushSoft(`change-artifacts:${change.name}`, 'change-artifacts', `change "${change.name}" (owner ${thread}) ${changeSnapshot.error}; repair that change's artifacts or archive the change so its gated reviews can be evaluated.`, `repair openspec/changes/${change.name} (or archive the change)`);
+                pushSoft(`change-artifacts:${change.name}`, 'change-artifacts', `change "${change.name}" (session ${thread}) ${changeSnapshot.error}; repair that change's artifacts or archive the change so its gated reviews can be evaluated.`, `repair openspec/changes/${change.name} (or archive the change)`);
                 continue;
             }
             for (const rule of deps.config.rules) {
                 if (rule.when === 'spec-ready' &&
                     rule.contract === 'review' &&
                     rule.scope === 'whole' &&
-                    rule.gate !== 'none') {
+                    rule.gate !== 'none' &&
+                    (entry.created || entry.specChanged)) {
                     if (!change.reviewReady)
                         continue;
                     const path = recordPath(cwd, rule, change.name);
@@ -2215,6 +2733,7 @@ async function evaluateGate(deps, agent, turn, signal) {
                     rule.contract === 'review' &&
                     rule.scope === 'whole' &&
                     rule.gate !== 'none' &&
+                    entry.completed &&
                     tasks.length > 0 &&
                     tasks.every((task) => task.checked)) {
                     const path = recordPath(cwd, rule, change.name);
@@ -2239,7 +2758,8 @@ async function evaluateGate(deps, agent, turn, signal) {
             const taskRules = deps.config.rules.filter((rule) => rule.when === 'spec-task-ready' && rule.contract === 'review' && rule.scope === 'task');
             const strictTaskRule = taskRules.find((rule) => rule.gate === 'strict');
             const softTaskRule = taskRules.find((rule) => rule.gate === 'soft');
-            for (const task of tasks.filter((entry) => entry.checked)) {
+            // Only the checked tasks this session attributed are in its review scope.
+            for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
                 let satisfied = false;
                 let findingsOnly = false;
                 for (const rule of taskRules) {
@@ -2262,7 +2782,7 @@ async function evaluateGate(deps, agent, turn, signal) {
                         : 'it has no task-review PASS/ERROR record';
                 const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`;
                 const call = pending === undefined
-                    ? `delegate(rule: "${ruleId}", change: "${change.name}")`
+                    ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
                     : `delegation_status (run ${pending.id})`;
                 if (strictTaskRule !== undefined)
                     pushStrict(ruleId, text, call);
@@ -2274,16 +2794,19 @@ async function evaluateGate(deps, agent, turn, signal) {
             if (workRules.length > 0) {
                 const base = baseline?.changes.find((entry) => entry.name === change.name);
                 const baseChecked = new Set((base?.tasks ?? []).filter((task) => task.checked).map((task) => task.id));
-                const newlyChecked = tasks.filter((task) => task.checked && !baseChecked.has(task.id));
-                let tickedReviewed = false;
-                for (const task of newlyChecked) {
+                const newlyChecked = tasks.filter((task) => task.checked && entry.tasks.includes(task.id) && !baseChecked.has(task.id));
+                const ownChecked = tasks.filter((task) => task.checked && entry.tasks.includes(task.id));
+                const reviewedOwn = new Set();
+                for (const task of ownChecked) {
                     for (const rule of taskRules) {
                         const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
                         if (recordSatisfies(state, change.name, 'task', undefined, task.id)) {
-                            tickedReviewed = true;
+                            reviewedOwn.add(task.id);
+                            break;
                         }
                     }
                 }
+                const tickedReviewed = newlyChecked.some((task) => reviewedOwn.has(task.id));
                 let matchingNote = false;
                 const note = await inspectNote(cwd, change.name);
                 if (note.kind === 'note' && current.digest !== undefined) {
@@ -2298,8 +2821,11 @@ async function evaluateGate(deps, agent, turn, signal) {
                 if (changed && !tickedReviewed && !matchingNote) {
                     const nextTask = tasks.find((task) => !task.checked);
                     const taskReviewRule = strictTaskRule ?? softTaskRule;
+                    const ownReviewTarget = ownChecked.find((task) => !reviewedOwn.has(task.id));
                     const what = nextTask === undefined
-                        ? 'tick the completed task and run its task review'
+                        ? ownReviewTarget === undefined
+                            ? 'the task list is fully checked and this session has no unreviewed task; add a task for follow-up work or archive the change'
+                            : `review task "${ownReviewTarget.number} ${ownReviewTarget.text}"`
                         : taskReviewRule === undefined
                             ? `tick the completed task, or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
                             : `tick the completed task and run delegate(rule: "${taskReviewRule.id}"), or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`;
@@ -2307,10 +2833,10 @@ async function evaluateGate(deps, agent, turn, signal) {
                         workRules[0]?.id ??
                         'task-progress';
                     const text = `rule "${ruleId}": this turn changed implementation files in change "${change.name}" without a newly checked-and-reviewed task and without a matching progress note for worktree digest ${digestShort(current.digest)}; ${what}.`;
-                    const call = nextTask === undefined && taskReviewRule !== undefined
-                        ? `delegate(rule: "${taskReviewRule.id}", change: "${change.name}")`
+                    const call = nextTask === undefined && taskReviewRule !== undefined && ownReviewTarget !== undefined
+                        ? `delegate(rule: "${taskReviewRule.id}", change: "${change.name}", task: "${ownReviewTarget.id}")`
                         : nextTask === undefined
-                            ? 'none: no task-review rule is configured; disable the task-progress rule or add a task review'
+                            ? 'delegation_status: no unchecked or unreviewed session task remains; add a task for follow-up work or archive the change'
                             : `task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`;
                     if (workRules.some((rule) => rule.gate === 'strict'))
                         pushStrict(ruleId, text, call);
@@ -2320,7 +2846,7 @@ async function evaluateGate(deps, agent, turn, signal) {
             }
         }
     }
-    if (openspecRoot !== undefined && current.digestError !== undefined && ownedChanges.length > 0) {
+    if (openspecRoot !== undefined && current.digestError !== undefined && involved.length > 0) {
         pushStrict('digest', `the worktree digest could not be computed (${current.digestError}); fix the git workspace failure so gated rules can be evaluated.`, 'git status --porcelain=v1 -z --untracked-files=all');
     }
     for (const rule of deps.config.rules) {
@@ -2366,8 +2892,7 @@ function attachGate({ ctx, deps }) {
             const cwd = deps.services.workingDirectory.get(payload.agent.session);
             const root = await findOpenSpecRoot(cwd);
             const changes = root === undefined ? [] : await listActiveChanges(root);
-            const ownedChanges = await ownedActiveChanges(root === undefined ? undefined : dirname(root), changes, currentThread(payload.agent));
-            deps.state.setBaseline(agentId, await captureSnapshot(cwd, ownedChanges, deps.services.git, payload.signal));
+            deps.state.setBaseline(agentId, await captureSnapshot(cwd, changes, deps.services.git, payload.signal));
         }
         catch {
             // A pre-step observer never fails the step.
@@ -2377,7 +2902,10 @@ function attachGate({ ctx, deps }) {
     ctx.on('tools/result', (exec, result) => {
         try {
             if (exec.agent !== undefined) {
-                deps.state.recordToolResult(String(exec.agent.id), result.isError);
+                const agentId = String(exec.agent.id);
+                deps.state.recordToolResult(agentId, result.isError);
+                const cwd = deps.services.workingDirectory.get(exec.agent.session);
+                recordWriteEvidence(deps.state, agentId, cwd, exec, result);
             }
         }
         catch {

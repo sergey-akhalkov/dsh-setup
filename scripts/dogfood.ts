@@ -313,6 +313,7 @@ function main(): number {
       home,
       '-NoStopApp',
       '-NoRestart',
+      '-NoDesktopShortcut',
       '-SetupSpec',
       setupDir,
       '-DshCli',

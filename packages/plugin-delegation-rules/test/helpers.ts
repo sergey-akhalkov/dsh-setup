@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -240,14 +241,16 @@ export class Harness {
   /** Terminal review-run states reported by the engine, in completion order. */
   readonly settledRuns: Array<{ runId: string; state: SettledRunState }> = []
   private readonly settlementWaiters = new Map<string, Array<(state: SettledRunState) => void>>()
+  private readonly cwdByAgent: Record<string, string>
 
   constructor(options: HarnessOptions) {
     this.cwd = options.cwd
     this.agent = createAgent()
     this.subagents = options.agents ?? new FakeSubagents()
     this.git = options.git ?? new FakeGit()
+    this.cwdByAgent = options.cwdByAgent ?? {}
     const events = this.events
-    const cwdByAgent = options.cwdByAgent ?? {}
+    const cwdByAgent = this.cwdByAgent
     const ctx = {
       subagents: this.subagents,
       workingDirectory: { get: (session: { id: string }) => cwdByAgent[session.id] ?? this.cwd },
@@ -355,6 +358,75 @@ export class Harness {
       { isError },
     ])
   }
+
+  cwdFor(agent: FakeAgent = this.agent): string {
+    return this.cwdByAgent[String(agent.session.id)] ?? this.cwd
+  }
+
+  /** Fire one `tools/result` with a tool name, arguments, and canonical result value. */
+  async toolOutcome(
+    name: string,
+    args: unknown,
+    value: unknown,
+    agent: FakeAgent = this.agent,
+    isError = false,
+  ): Promise<void> {
+    await this.fire('tools/result', [
+      {
+        agent,
+        arguments: args,
+        callId: 'call-1',
+        name,
+        rootCallId: 'root-1',
+        signal: new AbortController().signal,
+        token: Symbol('token'),
+      },
+      { isError, value, content: [] },
+    ])
+  }
+
+  /** A first-party `edit`/`write` result with the canonical before/after contents. */
+  async writeResult(
+    filePath: string,
+    before: string | null,
+    after: string,
+    agent: FakeAgent = this.agent,
+    name: 'edit' | 'write' = 'write',
+  ): Promise<void> {
+    const absolute = resolve(this.cwdFor(agent), filePath)
+    await this.toolOutcome(name, { file_path: filePath }, { path: absolute, before, after }, agent)
+  }
+
+  /** A successful shell call; only its command text is evidence. */
+  async shellResult(
+    command: string,
+    agent: FakeAgent = this.agent,
+    isError = false,
+  ): Promise<void> {
+    await this.toolOutcome('pwsh', { command }, { output: '', exitCode: 0 }, agent, isError)
+  }
+
+  involvementPath(sessionId: string = this.agent.id): string {
+    const name = createHash('sha256').update(sessionId).digest('hex').slice(0, 16)
+    return join(this.cwd, '.dsh', 'delegation', 'sessions', `${name}.json`)
+  }
+
+  async readInvolvement(sessionId: string = this.agent.id): Promise<InvolvementFile | undefined> {
+    try {
+      return JSON.parse(await readFile(this.involvementPath(sessionId), 'utf8')) as InvolvementFile
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+  }
+}
+
+export interface InvolvementFile {
+  session: string
+  changes: Record<
+    string,
+    { created: boolean; specChanged: boolean; tasks: string[]; completed: boolean }
+  >
 }
 
 export async function makeWorkspace(): Promise<{ root: string; cleanup: () => Promise<void> }> {
@@ -390,6 +462,11 @@ export async function writeChange(
   await writeFile(join(dir, 'tasks.md'), `# Tasks\n\n${body}\n`, 'utf8')
   await writeFile(join(dir, 'specs', 'capability', 'spec.md'), spec, 'utf8')
   return dir
+}
+
+/** The engine's stable task id: normalized task text, sha256, 16 hex chars. */
+export function taskIdFor(text: string): string {
+  return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 16)
 }
 
 /** A useful default config: two Codex targets, the shipped rule shapes. */

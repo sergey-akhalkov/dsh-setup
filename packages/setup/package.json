@@ -14,8 +14,10 @@
     "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "dependencies": {
+    "@dsh-setup/plugin-admin-indicator": "0.5.0",
     "@dsh-setup/plugin-codex-subagent": "0.5.0",
     "@dsh-setup/plugin-delegation-rules": "0.5.0",
+    "@dsh-setup/plugin-loop-guard": "0.5.0",
     "@dsh-setup/plugin-nuphus-mcp": "0.5.0",
     "@dsh-setup/plugin-openspec": "0.5.0",
     "@dsh-setup/plugin-ponytail": "0.5.0",
@@ -29,8 +31,10 @@
     "@openai/codex": "0.164.0"
   },
   "bundleDependencies": [
+    "@dsh-setup/plugin-admin-indicator",
     "@dsh-setup/plugin-codex-subagent",
     "@dsh-setup/plugin-delegation-rules",
+    "@dsh-setup/plugin-loop-guard",
     "@dsh-setup/plugin-nuphus-mcp",
     "@dsh-setup/plugin-openspec",
     "@dsh-setup/plugin-ponytail",

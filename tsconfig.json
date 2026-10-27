@@ -1,7 +1,9 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/plugin-admin-indicator" },
     { "path": "./packages/plugin-delegation-rules" },
+    { "path": "./packages/plugin-loop-guard" },
     { "path": "./packages/plugin-nuphus-mcp" },
     { "path": "./packages/plugin-openspec" },
     { "path": "./packages/plugin-ponytail" },

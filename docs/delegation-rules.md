@@ -13,10 +13,10 @@ system-prompt section.
 ## Row opt-out and removal
 
 Disabling or removing the `dsh-setup-delegation-rules` row removes the tools, the gate, and the
-skill, and stops all enforcement. Delegation records (`.dsh/delegation/`), progress notes,
-worktrees, and change artifacts remain on disk. There is no in-session bypass: the only opt-out
-is disabling the row. Records are a process-integrity check, not anti-forgery — a model with
-full filesystem access could write a record-shaped file.
+skill, and stops all enforcement. Delegation records (`.dsh/delegation/`), session involvement
+files, progress notes, worktrees, and change artifacts remain on disk. There is no in-session
+bypass: the only opt-out is disabling the row. Records are a process-integrity check, not
+anti-forgery — a model with full filesystem access could write a record-shaped file.
 
 ## The rule model
 
@@ -59,25 +59,83 @@ result contract is a code extension.
 ### Triggers
 
 - `manual` — no automatic condition; only `delegate` runs the rule.
-- `spec-ready` — an active review-ready OpenSpec change exists and the whole-spec review has no
-  matching `PASS`/`ERROR` record for the current spec digest.
-- `spec-task-ready` — a checked task in the change's `tasks.md` has no task-review record.
-- `implementation-work` — the turn changed implementation files and has neither a newly
-  checked-and-reviewed task nor a `task_progress` note matching the current worktree digest.
-- `implementation-complete` — every task is checked and the optional integration review has no
-  matching `PASS`/`ERROR` record for the current worktree digest.
+- `spec-ready` — a change this session created or whose spec artifacts it changed is review-ready
+  and the whole-spec review has no matching `PASS`/`ERROR` record for the current spec digest.
+- `spec-task-ready` — a task this session checked has no task-review record.
+- `implementation-work` — this session's turn changed implementation files in an involved change
+  and has neither a newly checked-and-reviewed task nor a `task_progress` note matching the
+  current worktree digest.
+- `implementation-complete` — this session completed the change's task list and the optional
+  integration review has no matching `PASS`/`ERROR` record for the current worktree digest.
 - `failure-streak` — the configured number of consecutive failed tool calls with no intervening
   success and no consultation attempt for that streak.
 
 The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
 must not be strict (an answer writes no record).
 
-The change-scoped triggers (`spec-ready`, `spec-task-ready`, `implementation-work`,
-`implementation-complete`, and a configured integration review) evaluate only in the change's
-**owning thread**. The owner is the first DSH thread to observe the change; it is recorded under
-`.dsh/delegation/owners/` and reused across threads and engine restarts. Another thread reports the
-owner in `delegation_status` and is not steered for that change. `task_progress` notes, `answer`
-runs, and `patch` runs remain available in every thread.
+The change-scoped triggers evaluate only for changes attributed to the current session. A session
+is involved in a change when it created or modified it in this workspace; observation, a
+`delegation_status` poll, and another session's edits never attribute. `spec-ready` applies only
+when the session created the change or changed its spec artifacts, `spec-task-ready` only to the
+tasks the session checked, `implementation-work` only to an involved change, and
+`implementation-complete` only when the session completed the task list. Another session's ticks
+are not imported into a creator's scope. `task_progress` notes, `answer` runs, and `patch` runs
+remain available in every session; an explicit `task_progress` or review/patch `delegate` also
+attributes the change.
+
+### Session involvement
+
+Attribution is per session, under `.dsh/delegation/sessions/`:
+
+```json
+{
+  "session": "session-...",
+  "changes": {
+    "change-a": {
+      "created": false,
+      "specChanged": true,
+      "tasks": ["<task-id>"],
+      "completed": false
+    }
+  }
+}
+```
+
+The file name is `sha256(session).slice(0, 16)` plus `.json`, so path characters and Windows
+device names cannot collide and two sessions never write one file. The content keeps the raw
+session id. Writes are atomic; a missing or malformed file reads as empty and is reported as a
+warning by `delegation_status` without blocking the turn. The file lives at the OpenSpec workspace
+root, so a nested working directory shares it, and it is local scratch: a fresh checkout or a new
+machine starts with no involvement.
+
+Attribution comes only from session-attributable write evidence captured from a successful
+`tools/result`:
+
+- a first-party `edit`/`write` with a resolved `file_path` under
+  `openspec/changes/<change>/`; the canonical path from the tool result is used, and a `tasks.md`
+  write uses that write's own canonical `before`/`after` contents, never an independent read;
+- a successful shell call whose command creates the change (`openspec new change <name>`) or
+  writes a file under the change directory; the change is attributed, but a shell `tasks.md`
+  write cannot yield task ids or decide whether the edit was substantive;
+- a nested `run_code` dispatch only when it surfaces its own `tools/result` with the calling
+  agent.
+
+A read, `grep`, `glob`, `delegation_status`, `openspec list/show/status/validate`, or any
+unrecognized tool is not write evidence. A write through an unrecognized tool or an unparsed
+shell form under-gates: the session can call `task_progress` or a review/patch `delegate` to opt
+in. There is deliberately no attribution from the workspace diff, file mtimes, or a change
+directory timestamp, because those identify content but not the writer.
+
+At turn-stopping, the pre-step baseline and the turn-end snapshot are compared only for changes
+that have evidence; without a baseline, nothing is attributed. For an evidenced change:
+
+- a new change plus creation evidence records `created` and `specChanged`, and never imports task
+  ids from the snapshot;
+- an existing change plus a write outside `tasks.md` records `specChanged`;
+- a `tasks.md` write derives the checkbox transitions from its own `before`/`after` contents and
+  records `specChanged` only when those contents differ beyond checkbox state, so a checkbox-only
+  tick is not a spec change while a substantial task-plan edit or a newly supplied `tasks.md` is;
+- `completed` is recorded only when the session's addition made the whole list checked.
 
 ### Contracts
 
@@ -95,9 +153,10 @@ never authorize a handoff. A malformed verdict (prose only, several fenced block
 severity, or a digest mismatch) writes no `PASS`; it writes an `ERROR` record and reports the
 failure, so the turn can close with the failure visible.
 
-A change-scoped review runs only in the change's owning thread. A `delegate` call from a foreign
-thread fails before the target starts and names the owning thread; run the review there. The record
-stores the owning thread alongside the other fields.
+A review may run in any session. The explicit `delegate` call attributes the change to that
+session; the record names the reviewing session alongside the other fields. Records stay
+workspace-global and are keyed by rule/change/task, so a `PASS`/`ERROR` written by any session
+satisfies the task or rule.
 
 A review runs **asynchronously**: `delegate` validates the rule/target/change (and task), waits for
 the target to start, and returns a run id, state, and record path while the verdict is produced in
@@ -230,25 +289,29 @@ earlier one.
 
 The turn-stopping gate refuses a code-changing turn close unless:
 
-- every checked task has a task-review `PASS`/`ERROR` record;
-- the turn has a newly checked-and-reviewed task **or** a progress note matching the current
-  worktree digest;
-- every strict whole-spec (and configured strict integration) rule has a matching record for the
-  current digest.
+- every checked task that this session attributed (the task ids in its involvement file) has a
+  task-review `PASS`/`ERROR` record;
+- the turn has a newly checked-and-reviewed task or a progress note matching the current worktree
+  digest;
+- every strict whole-spec rule applies with a matching record for the current spec digest when
+  this session created the change or changed its spec artifacts;
+- the optional integration rule is met when this session's work completed the task list.
 
-These checks apply in the change's owning thread; a foreign thread treats the change as not its own,
-gets no steer, and does not inherit a blocking digest issue from it. When the gate refuses, it steers
-with the rule id, trigger, digest, record path, and the exact `delegate`/`task_progress` call. Only a
-record satisfies the gate; a text claim does not. A soft rule steers once per streak and never traps
-the turn; a target failure writes an `ERROR` record so the turn can close with the failure visible.
-A missing or unreadable planning file in an owned change is a per-change problem, not a worktree
-failure: the gate names the change and its owner, points at the unreadable file, and does not report
-`the worktree digest could not be computed`. Both the turn-start baseline and the turn-end snapshot
-contain only the changes the current thread owns, so a foreign change's incomplete artifacts never
-set this thread's digest error or block its close.
-There is no livelock escape inside a session other than satisfying, disabling, or removing the rule's
-row; if the owning thread is gone, delete the change's owner file under
-`.dsh/delegation/owners/` and re-observe the change from the thread that should own it.
+The gate evaluates only involved changes. A session that did not create or modify a change is not
+steered for it and does not inherit a blocking digest issue from it, even when a foreign change
+has a missing `tasks.md`. When the gate refuses, it steers with the rule id, trigger, digest,
+record path, and the exact `delegate`/`task_progress` call; a task-review steer names the explicit
+task id so it cannot select another session's checked task. Only a record satisfies the gate; a
+text claim does not. A soft rule steers once per streak and never traps the turn; a target failure
+writes an `ERROR` record so the turn can close with the failure visible. A missing or unreadable
+planning file in an involved change is a per-change problem, not a worktree failure: the gate
+names the change and the session, points at the unreadable file, and does not report
+`the worktree digest could not be computed`.
+
+There is no livelock escape inside a session other than satisfying the rule, disabling or removing
+its row, or making the change part of this session's work through an edit, `task_progress`, or an
+explicit review/patch `delegate`. Legacy `.dsh/delegation/owners/` files from the previous
+ownership model are ignored and may be deleted.
 
 ### The task progress note
 
@@ -262,12 +325,16 @@ writes no `PASS`. The note authorizes a code-changing turn to close only while i
 matches the worktree and the task is still unchecked. Any further file change makes it stale, so
 the next turn must refresh the note or tick the task and run its review. A checked task never
 accepts a note and a note never counts as a task-review `PASS`. A note may be written from any
-thread; it is workspace state, not ownership state.
+session, and it attributes the change to that session; task lookup skips an unrelated change whose
+`tasks.md` is unreadable and validates the selected readable task.
 
 ## Digests and records
 
 - The whole-spec digest hashes every file in the change directory except `.openspec.yaml`, with
-  `tasks.md` checkbox state normalized so ticking tasks does not invalidate a spec review.
+  `tasks.md` checkbox state normalized so ticking tasks does not invalidate a spec review. It is
+  computed independently of task parsing, so a partial change whose `tasks.md` is missing still has
+  an artifact digest and a write that makes it readable is detectable. A per-change artifact error
+  stays a per-change hint and is never reported as a worktree digest failure.
 - The worktree digest hashes `git status --porcelain=v1 -z --untracked-files=all`, the binary
   diff against `HEAD`, and untracked file bytes, ignoring `.dsh/` and `.tmp/`. Git runs with
   fixed argument arrays and no shell; a git failure becomes a visible gate issue, not a silent
@@ -275,13 +342,14 @@ thread; it is workspace state, not ownership state.
 - A whole-scope record is valid only while its digest matches; a task-scope record is keyed by
   the stable task id and remains historical.
 - Records contain the rule, change, scope, phase, task id when task-scoped, digest, verdict,
-  findings, target identity, time, and owning thread. Findings are sanitized of machine paths and
-  obvious credentials; records are parsed as data, never executed.
-- Owners live in `.dsh/delegation/owners/<sha256(change).slice(0,16)>.json` (one file per change,
-  written with an exclusive create) and resolve against the OpenSpec workspace root, so a nested
-  working directory cannot create a competing owner and concurrent runtimes cannot overwrite one.
-  A corrupt owner file is not auto-reclaimed: the gate fails visibly with its path, and deleting
-  that file (or `.dsh/delegation/owners/`) re-claims the change.
+  findings, target identity, time, and the reviewing session. Findings are sanitized of machine
+  paths and obvious credentials; records are parsed as data, never executed.
+- Session involvement lives in `.dsh/delegation/sessions/<sha256(session).slice(0,16)>.json` and
+  is written atomically. It is the inverse of the old owner map: a session reads and writes only
+  its own file, so concurrent sessions never contend. A missing or malformed file reads as empty;
+  `delegation_status` reports the malformed state as a warning. Legacy
+  `.dsh/delegation/owners/` files are ignored and have no effect; no migration imports them,
+  because the first observer was often not the session that did the work.
 
 ## Manual delegation
 
@@ -301,9 +369,9 @@ repeat.
 The plugin adds no always-on prompt text. Its model-facing policy is the three tool descriptions
 plus the skill catalog line, and the full workflow is loaded only when the skill is invoked.
 
-- Measured: three tool descriptions plus the skill catalog description are 2179 UTF-8 bytes
-  (~545 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 8688 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: three tool descriptions plus the skill catalog description are 2298 UTF-8 bytes
+  (~575 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
+- Measured: the skill body is 10998 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise.
@@ -324,12 +392,12 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 - **"no fenced JSON verdict"** — the target returned prose or an invalid block; an `ERROR` record
   was written, so the gate can close with the failure visible and a later run retries.
 - **The gate keeps steering** — a strict rule has no matching record for the current digest; run
-  the exact `delegate` call in the steer message, or inspect the record path it names with
-  `delegation_status`.
-- **A review is refused with an owning thread** — the change belongs to another thread; run the
-  exact `delegate` call there. If that thread is gone, delete the change's file under
-  `.dsh/delegation/owners/` (the error names it) and re-observe the change from the thread that
-  should own it.
+  the exact `delegate` call in the steer message (it names the task id for a task review), or
+  inspect the record path it names with `delegation_status`.
+- **A change is not involved** — the session did not write to it and made no explicit change-scoped
+  call. Edit the change, call `task_progress`, or run a review/patch `delegate` to opt in. A write
+  through an unrecognized tool or an unparsed shell form does not attribute. Legacy
+  `.dsh/delegation/owners/` files are ignored; delete them if a clean status is wanted.
 - **A note is stale** — the worktree changed after the note; refresh the note or tick the task
   and run its review.
 - **Configuration rejected** — the error names the rule/target and the next action; a patch

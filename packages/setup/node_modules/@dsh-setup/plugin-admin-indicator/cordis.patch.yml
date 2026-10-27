@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-admin-indicator.
+- insert:
+    - id: dsh-setup-admin-indicator
+      name: "@dsh-setup/plugin-admin-indicator"

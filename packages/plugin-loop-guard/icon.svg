@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Loop Guard">
+  <circle cx="32" cy="32" r="26" fill="#0f766e" opacity="0.14"/>
+  <path d="M18 32a14 14 0 1 0 14-14" fill="none" stroke="#0f766e" stroke-width="4" stroke-linecap="round"/>
+  <path d="M32 12v12l9-6z" fill="#0f766e"/>
+  <rect x="30" y="30" width="4" height="14" rx="2" fill="#0f766e"/>
+  <circle cx="32" cy="26" r="2.5" fill="#0f766e"/>
+</svg>

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Loop Guard",
+    "description": "Cuts repeated streamed reasoning early, steers a recovery notice, and bounds escalation with an automatic turn reset"
+  }
+}

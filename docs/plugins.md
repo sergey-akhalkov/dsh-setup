@@ -122,12 +122,23 @@ Disabling it takes only the row id:
 
 Do not install both the setup bundle and the individual adapter bundle: the row id would mount twice.
 
+## Host-only behavior bundle
+
+A Host-only bundle that changes runtime behavior rather than adding skills or UI needs the standard
+package shape (`package.json`, a fragment row, `src/host/index.ts`, tests, locale, icon). Its `apply`
+registers lifecycle listeners and keeps module scope free of side effects; it ships no Client half and
+no prompt section. [`packages/plugin-loop-guard`](../packages/plugin-loop-guard) is the reference: it
+observes `llm/stream` and `session/event`, delivers recovery through agent steering and cancellation,
+and carries its documented defaults in the fragment row. Its behavior is documented in
+[loop-guard.md](loop-guard.md).
+
 ## Adding a package
 
-1. Copy the closest existing package shape (`packages/plugin-rust` for a Host-only bundle) and
-   rename the package. For an MCP adapter without a Host module, keep only `package.json`,
-   `cordis.fragment.yml`, `locale/en.json`, and `icon.svg` and skip the TypeScript project, build,
-   and package-test steps; `pnpm gen` and the repository validation still apply.
+1. Copy the closest existing package shape (`packages/plugin-rust` for a Host-only bundle,
+   `packages/plugin-admin-indicator` for a Host+Client bundle) and rename the package. For an MCP
+   adapter without a Host module, keep only `package.json`, `cordis.fragment.yml`, `locale/en.json`,
+   and `icon.svg` and skip the TypeScript project, build, and package-test steps; `pnpm gen` and the
+   repository validation still apply.
 2. Update `package.json` (`name`, `description`, `icon`, fragment, Client manifest) and
    `locale/en.json`.
 3. Add the package to the root `tsconfig.json` references.

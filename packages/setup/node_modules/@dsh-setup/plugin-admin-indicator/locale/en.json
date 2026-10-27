@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Administrator indicator",
+    "description": "Shows whether DeepSeek Harness Desktop is running with Windows administrator rights and adds a Create admin desktop shortcut action for launching it elevated"
+  }
+}

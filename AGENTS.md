@@ -324,7 +324,11 @@ which builds before testing). Tests that need machine-path fixtures compose them
 ## 11. OpenSpec workflow (requirements are spec-driven)
 
 `openspec/config.yaml` requires **English** for all artifacts and keeps structural headings and
-SHALL/MUST keywords in English. There is no active change; the parent change was archived on
+SHALL/MUST keywords in English. There is no active change; the latest archived changes on
+2026-10-27 are `add-admin-indicator` (authenticated shortcut POST with native Toast; restart behind
+the default-off `restart` row flag pending live UAC verification), `add-loop-guard`, and
+`fix-delegation-session-scope`. The final delegation Host was edited after its recorded 3.3 live
+acceptance, so a live re-acceptance of the final Host remains an owner follow-up. The parent change was archived on
 2026-10-26 as `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/` (proposal, design, delta
 specs `portable-setup` and `plugin-market`, tasks). The main specs under `openspec/specs/` hold the
 accepted requirements: `portable-setup` and `plugin-market` were synced from the parent change on

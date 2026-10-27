@@ -1,0 +1,20 @@
+# Composition fragment for @dsh-setup/plugin-loop-guard.
+#
+# `dsh-setup/scripts/generate.ts` reads every package's fragment and generates
+# both this package's own bundle patch and the aggregated setup patch. Row ids
+# are global: they must start with `dsh-setup-` and stay unique across the
+# repository, so two bundles can never mount competing entries under one id.
+rows:
+  - id: dsh-setup-loop-guard
+    config:
+      reasoning: true
+      text: false
+      subagents: false
+      minRepeats: 5
+      minLineChars: 12
+      crossBlockWindow: 10
+      crossBlockRepeats: 4
+      maxInterventionsPerTurn: 3
+      maxResetsPerSession: 2
+      previewChars: 80
+      finalFallback: stop

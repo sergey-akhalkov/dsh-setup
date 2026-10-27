@@ -16,28 +16,51 @@ enforcement points; this skill is the authoring and workflow guide.
 
 ## Tools
 
-- `delegate(rule, change?, context?, objective?)` runs one configured rule. The `rule` enum is
-  generated from the config, so an unknown rule is rejected with the allowed ids. Write the
-  smallest useful `context` (failing output, files, constraints); `objective` is required for
+- `delegate(rule, change?, task?, context?, objective?)` runs one configured rule. The `rule`
+  enum is generated from the config, so an unknown rule is rejected with the allowed ids. Write
+  the smallest useful `context` (failing output, files, constraints); `objective` is required for
   the patch contract.
 - `task_progress(task, status, reason)` records an explicit `in-progress`/`blocked` note for an
   unchecked task. It runs no model, costs nothing, and is the only non-tick way to close a
   code-changing turn.
-- `delegation_status` lists providers/capabilities, targets, rules, records, and active/stale
-  notes, plus missing-target diagnostics.
+- `delegation_status` lists providers/capabilities, targets, rules, each active change's
+  involvement by this session, records, and active/stale notes, plus missing-target diagnostics.
+  It never attributes a change.
 
 Do not paste a delegation result as a "claim". Only a record written by the engine satisfies a
 strict gate.
+
+## Session involvement
+
+The gate applies only to changes the current session created or modified. The state is
+per-session (`.dsh/delegation/sessions/<hash>.json`), not per-change, so two sessions can work
+on one change without an exclusive owner.
+
+- A successful first-party `edit`/`write` with a path under `openspec/changes/<change>/`
+  attributes that change. A successful shell `openspec new change <name>` attributes it as
+  created; a shell write under the change directory attributes it without task ids. A read,
+  search, `delegation_status`, or `openspec list/show/status/validate` does not attribute.
+- A `tasks.md` write attributes only the checkboxes it transitions, read from that write's own
+  before/after contents. A checkbox-only tick is not a spec change; a substantive task-plan edit
+  or a newly supplied `tasks.md` is. A brand-new change records created and spec-changed but does
+  not import another session's checked tasks.
+- `task_progress` and a review or patch `delegate` attribute the change explicitly; an `answer`
+  `delegate` does not, even with a `change` argument.
+- Legacy `.dsh/delegation/owners/` files are ignored; do not rely on them.
+
+A session with no involvement is not steered for the change. To opt in, edit the change or call
+`task_progress` or a review/patch `delegate`. `delegation_status` shows `this session: ...` or
+`not involved`.
 
 ## Triggers
 
 | Trigger | Fires when | Typical contract |
 | --- | --- | --- |
 | `manual` | No automatic condition; only `delegate` runs it. | `answer`, `patch` |
-| `spec-ready` | An active, review-ready change exists and the whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
-| `spec-task-ready` | A checked task in `tasks.md` has no task-review PASS/ERROR record. | `review` scope `task` |
-| `implementation-work` | The turn changed implementation files and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
-| `implementation-complete` | Every task is checked and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
+| `spec-ready` | A change this session created or whose spec artifacts it changed is review-ready and its whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
+| `spec-task-ready` | A task this session checked has no task-review PASS/ERROR record. | `review` scope `task` |
+| `implementation-work` | The turn changed implementation files in a change this session is involved in and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
+| `implementation-complete` | This session completed the change's task list and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
 | `failure-streak` | The configured number of consecutive failed tool calls has no intervening success and no consultation attempt for that streak. | `answer` (soft) |
 
 `manual` rules must use `gate: none`. `failure-streak` rules must not be `strict` (an `answer`
@@ -51,7 +74,9 @@ scope; `implementation-work` requires `note`.
   `.dsh/delegation/<rule>/<change>/` (`<phase>.json` for whole scope, `tasks/<taskId>.json` for
   task scope). `PASS` needs zero P0/P1 findings; `FINDINGS` and `ERROR` are reported but do not
   pass a strict gate. A matching `PASS` is reused without another run; a `FINDINGS` record is
-  reused only while the digest is unchanged; an `ERROR` is retried.
+  reused only while the digest is unchanged; an `ERROR` is retried. Any session may run a review:
+  the call attributes the change to that session, the record names the reviewing session, and
+  records stay workspace-global.
 - **answer** — read-only prompt for a blocker or research question; returns the answer with
   evidence and, for research, sources. Writes no gate record. A failed answer is reported and
   marks a consultation attempt so a soft failure-streak rule does not loop.
@@ -67,8 +92,8 @@ This is the intended loop for an OpenSpec change:
 
 1. Implement the smallest reviewable task.
 2. Mark that task `[x]` in `tasks.md`.
-3. Run `delegate(rule: "task-review", change: "<change>")` immediately, before starting the
-   next task.
+3. Run `delegate(rule: "task-review", change: "<change>", task: "<task id>")` immediately, before
+   starting the next task. The gate names the explicit task id it wants; use it.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`. A task-scoped `PASS` is a
    historical snapshot: later tasks do not invalidate it.
 5. If the turn must stop mid-task, call `task_progress` for that task instead of ticking it.
@@ -76,9 +101,10 @@ This is the intended loop for an OpenSpec change:
    matches.
 
 The gate refuses a code-changing turn unless a task was newly checked and reviewed, or a fresh
-progress note matches the current worktree. A checked task always requires its review record;
-a note never counts as a PASS. Ticking tasks in a batch at the end defeats the per-task chunk
-and is refused by the gate.
+progress note matches the current worktree. Only the checked tasks this session attributed are
+gated; another session's ticks are not imported. A checked task always requires its review
+record; a note never counts as a PASS. Ticking tasks in a batch at the end defeats the per-task
+chunk and is refused by the gate.
 
 ## Default rules
 
@@ -142,8 +168,9 @@ Per-task reviews multiply runs, so keep tasks small and sized for one review; se
 integration review to `soft` or `none` if it adds noise. The engine never starts a target from
 the turn-stopping listener, uses fixed-argument git calls with no shell, and treats target output
 as untrusted data: only the declared fenced verdict is parsed and nothing is executed. Records
-and notes are redacted of machine paths and obvious credentials. Records are a process-integrity
-check, not anti-forgery: a model with full filesystem access could write a record-shaped file.
+and notes are redacted of machine paths and obvious credentials. Session involvement files are
+local scratch under `.dsh/` and are never committed. Records are a process-integrity check, not
+anti-forgery: a model with full filesystem access could write a record-shaped file.
 
 ## Troubleshooting
 
@@ -156,6 +183,10 @@ check, not anti-forgery: a model with full filesystem access could write a recor
 - **"no fenced JSON verdict"** — the target returned prose or a malformed block; an `ERROR`
   record was written, so the gate can close with the failure visible.
 - **The gate keeps steering** — a strict rule has no matching record for the current digest;
-  run the exact `delegate` call in the steer message, or check the record path it names.
+  run the exact `delegate` call in the steer message (it names the task id for a task review),
+  or check the record path it names.
+- **A change is not attributed** — the session never wrote to it or called an explicit tool, or
+  the write used a tool or shell form the engine does not parse. Run `task_progress` or a
+  review/patch `delegate` to opt in. Legacy `.dsh/delegation/owners/` files are ignored.
 - **A note is stale** — the worktree changed after the note; refresh the note or tick the task
   and run its review.

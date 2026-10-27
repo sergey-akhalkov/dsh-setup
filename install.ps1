@@ -53,6 +53,9 @@ desktop profile.
 .PARAMETER NoRestart
 Do not start DeepSeek Harness again after installing.
 
+.PARAMETER NoDesktopShortcut
+Do not create the administrator desktop shortcut on the current user's Desktop.
+
 .PARAMETER DryRun
 Print the plan without changing anything.
 
@@ -78,6 +81,7 @@ param(
   [string]$SetupSpec,
   [switch]$NoStopApp,
   [switch]$NoRestart,
+  [switch]$NoDesktopShortcut,
   [switch]$DryRun
 )
 
@@ -323,6 +327,42 @@ function Test-PatchUnchanged([string]$Path, [string]$Hash) {
   return $after -eq $Hash
 }
 
+function Resolve-DesktopAppPath([string]$KnownPath) {
+  if (
+    $KnownPath -and
+    (Test-Path -LiteralPath $KnownPath) -and
+    ((Split-Path -Leaf $KnownPath) -ieq 'DeepSeek Harness.exe')
+  ) {
+    return $KnownPath
+  }
+  $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\DeepSeek Harness.lnk'
+  if (Test-Path -LiteralPath $startMenu) {
+    try {
+      $target = (New-Object -ComObject WScript.Shell).CreateShortcut($startMenu).TargetPath
+      if ($target -and (Test-Path -LiteralPath $target)) { return $target }
+    } catch {
+      Write-Warn "cannot read the Start Menu shortcut: $($_.Exception.Message)"
+    }
+  }
+  $fallback = Join-Path $env:LOCALAPPDATA 'Programs\DeepSeek Harness\DeepSeek Harness.exe'
+  if (Test-Path -LiteralPath $fallback) { return $fallback }
+  return $null
+}
+
+function New-AdminDesktopShortcut([string]$Executable) {
+  $desktop = [Environment]::GetFolderPath('Desktop')
+  $link = Join-Path $desktop 'DeepSeek Harness (Administrator).lnk'
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($link)
+  $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $escapedExecutable = $Executable.Replace("'", "''")
+  $shortcut.Arguments = '-NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath ''{0}'' -Verb RunAs"' -f $escapedExecutable
+  $shortcut.WorkingDirectory = Split-Path -Parent $Executable
+  $shortcut.IconLocation = "$Executable,0"
+  $shortcut.Save()
+  return $link
+}
+
 $stoppedApp = $false
 $appPath = $null
 $backupPath = $null
@@ -368,6 +408,8 @@ try {
     if ($existingBundles -contains $name) { Write-Host "    keep     $name" }
     else { Write-Host "    enable   $name" }
   }
+  if ($NoDesktopShortcut) { Write-Host '    shortcut: skip' }
+  else { Write-Host '    shortcut: create DeepSeek Harness (Administrator).lnk on the Desktop' }
   if ($DryRun) {
     Write-Step "Dry run: no changes were made"
     return
@@ -471,6 +513,23 @@ try {
   Write-Step "Installing the setup bundle"
   Invoke-DshPlugin @('add', $setupSpec)
   Write-Ok "installed: $SetupPackage"
+
+  if ($NoDesktopShortcut) {
+    Write-Skip 'desktop administrator shortcut skipped'
+  } else {
+    Write-Step "Creating the administrator desktop shortcut"
+    try {
+      $desktopApp = Resolve-DesktopAppPath $appPath
+      if ($null -eq $desktopApp) {
+        Write-Warn 'DeepSeek Harness Desktop was not found; the administrator shortcut was not created'
+      } else {
+        $shortcutPath = New-AdminDesktopShortcut $desktopApp
+        Write-Ok "administrator shortcut: $shortcutPath"
+      }
+    } catch {
+      Write-Warn "could not create the administrator shortcut: $($_.Exception.Message)"
+    }
+  }
 
   Write-Step "Verifying the installed profile"
   $manifest = Read-JsonFile $profileManifestPath

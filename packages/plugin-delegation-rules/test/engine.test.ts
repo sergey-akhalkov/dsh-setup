@@ -13,6 +13,7 @@ import {
   type RunRecord,
   runIdFrom,
   steerTexts,
+  taskIdFor,
   writeChange,
 } from './helpers.js'
 
@@ -993,59 +994,168 @@ describe('failures and replies', () => {
   })
 })
 
-describe('thread-scoped ownership', () => {
+describe('session involvement', () => {
   const owner = (): ReturnType<typeof createAgent> => createAgent('thread-a')
   const foreign = (): ReturnType<typeof createAgent> => createAgent('thread-b')
 
-  async function ownerOf(root: string): Promise<string | undefined> {
-    const name = createHash('sha256').update('change-a').digest('hex').slice(0, 16)
-    try {
-      const value = JSON.parse(
-        await readFile(join(root, '.dsh', 'delegation', 'owners', `${name}.json`), 'utf8'),
-      ) as { session?: unknown }
-      return typeof value.session === 'string' ? value.session : undefined
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
-  }
-
-  it('refuses a foreign review before starting a target and names the owner', async () => {
+  it('attributes a first-party write at turn-stopping and reports it in status', async () => {
     const root = await workspace()
-    await writeChange(root, 'change-a', [])
+    const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task' }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    await harness.callTool('delegation_status', {}, owner())
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, foreign()),
-    ).rejects.toThrow(
-      /change "change-a" is owned by thread "thread-a"; run this review in that thread.*reset the owner/,
+    const agent = owner()
+    await harness.preStep(1, agent)
+    await harness.writeResult(
+      join(dir, 'proposal.md'),
+      '# Proposal\n\nWhy.\n',
+      '# Proposal\n\nWhy changed.\n',
+      agent,
+      'edit',
     )
-    expect(subagents.startCalls).toBe(0)
+    await harness.turnStopping(1, agent)
+    expect(await harness.readInvolvement('thread-a')).toEqual({
+      session: 'thread-a',
+      changes: {
+        'change-a': { created: false, specChanged: true, tasks: [], completed: false },
+      },
+    })
+    const status = text(await harness.callTool('delegation_status', {}, agent))
+    expect(status).toContain('this session: spec changed / 0 checked task(s)')
+    expect(status).toContain('spec-review: missing')
   })
 
-  it('writes the owning session into the record and reports owner/current in status', async () => {
+  it('does not attribute a fresh observer of a change with old checked tasks', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Old task', checked: true }])
+    const harness = harnessFor(root, defaultTestConfig())
+    const agent = owner()
+    await harness.preStep(1, agent)
+    await harness.turnStopping(1, agent)
+    expect(steerTexts(agent)).toHaveLength(0)
+    expect(await harness.readInvolvement('thread-a')).toBeUndefined()
+    const status = text(await harness.callTool('delegation_status', {}, agent))
+    expect(status).toContain('this session: not involved')
+  })
+
+  it('starts a review from an uninvolved session, records it, and attributes the change', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
-    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, owner())
-    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const reviewer = foreign()
+    const run = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, reviewer)
+    expect(await harness.waitForRun(run, reviewer)).toContain('state=completed')
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
         'utf8',
       ),
-    ) as { session?: string }
-    expect(record.session).toBe('thread-a')
+    ) as { session: string }
+    expect(record.session).toBe('thread-b')
+    expect(await harness.readInvolvement('thread-b')).toEqual({
+      session: 'thread-b',
+      changes: {
+        'change-a': { created: false, specChanged: false, tasks: [], completed: false },
+      },
+    })
+    expect(await harness.readInvolvement('thread-a')).toBeUndefined()
+  })
 
-    const ownerStatus = text(await harness.callTool('delegation_status', {}, owner()))
-    expect(ownerStatus).toContain('owner=thread-a (current thread)')
-    const foreignStatus = text(await harness.callTool('delegation_status', {}, foreign()))
-    expect(foreignStatus).toContain('owner=thread-a (foreign thread)')
-    expect(subagents.startCalls).toBe(1)
+  it('does not attribute an answer delegate with a change argument or a status poll', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const config = defaultTestConfig({
+      rules: [
+        ...(defaultTestConfig().rules ?? []),
+        {
+          id: 'research',
+          when: 'manual',
+          to: 'codex',
+          contract: 'answer',
+          gate: 'none',
+          instruction: 'bundled:research',
+        },
+      ],
+    })
+    const harness = harnessFor(root, config, subagents)
+    const agent = foreign()
+    await harness.callTool('delegation_status', {}, agent)
+    expect(await harness.readInvolvement('thread-b')).toBeUndefined()
+    const answer = await harness.toolText(
+      'delegate',
+      { rule: 'research', change: 'change-a' },
+      agent,
+    )
+    expect(answer).toContain('does not satisfy a strict review rule')
+    expect(await harness.readInvolvement('thread-b')).toBeUndefined()
+  })
+
+  it('attributes an explicit task_progress note from any session', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task' }])
+    const harness = harnessFor(root, defaultTestConfig())
+    const agent = foreign()
+    await harness.callTool('delegation_status', {}, agent)
+    expect(await harness.readInvolvement('thread-b')).toBeUndefined()
+    const note = await harness.toolText(
+      'task_progress',
+      { task: '1.1 Open task', status: 'in-progress', reason: 'midway' },
+      agent,
+    )
+    expect(note).toContain('progress note written')
+    expect(await harness.readInvolvement('thread-b')).toEqual({
+      session: 'thread-b',
+      changes: {
+        'change-a': { created: false, specChanged: false, tasks: [], completed: false },
+      },
+    })
+  })
+
+  it('preserves both changes under concurrent explicit attribution', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task A' }])
+    await writeChange(root, 'change-b', [{ number: '1.1', text: 'Open task B' }])
+    const harness = harnessFor(root, defaultTestConfig())
+    const agent = createAgent('thread-a')
+    await Promise.all([
+      harness.toolText(
+        'task_progress',
+        { task: '1.1 Open task A', status: 'in-progress', reason: 'midway' },
+        agent,
+      ),
+      harness.toolText(
+        'task_progress',
+        { task: '1.1 Open task B', status: 'in-progress', reason: 'midway' },
+        agent,
+      ),
+    ])
+    const involvement = await harness.readInvolvement('thread-a')
+    expect(Object.keys(involvement?.changes ?? {}).sort()).toEqual(['change-a', 'change-b'])
+  })
+
+  it('ignores legacy owner files', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const legacy = join(root, '.dsh', 'delegation', 'owners')
+    await mkdir(legacy, { recursive: true })
+    const name = createHash('sha256').update('change-a').digest('hex').slice(0, 16)
+    await writeFile(
+      join(legacy, `${name}.json`),
+      JSON.stringify({ change: 'change-a', session: 'thread-a' }),
+    )
+    const harness = harnessFor(root, defaultTestConfig())
+    const agent = owner()
+    await harness.preStep(1, agent)
+    await harness.turnStopping(1, agent)
+    expect(steerTexts(agent)).toHaveLength(0)
+    expect(await harness.readInvolvement('thread-a')).toBeUndefined()
+    expect(await harness.toolText('delegation_status', {}, agent)).toContain(
+      'this session: not involved',
+    )
   })
 
   it('keeps a legacy record without a session field readable and reusable', async () => {
@@ -1054,25 +1164,30 @@ describe('thread-scoped ownership', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const agent = owner()
     const path = join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json')
-    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, owner())
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' }, agent)
     await harness.waitForRun(runId)
     const legacy = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
     delete legacy.session
     await writeFile(path, `${JSON.stringify(legacy, null, 2)}\n`, 'utf8')
     const reused = text(
-      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, owner()),
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, agent),
     )
     expect(reused).toContain('reused record')
     expect(reused).not.toContain('session:')
     expect(subagents.startCalls).toBe(1)
   })
 
-  it('keeps task_progress notes and answer runs available in a foreign thread', async () => {
+  it('keeps task_progress, answer, and patch runs available in any session', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Open task' }])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
+    subagents.addProvider('codex-subagent-write', {}, () => ({
+      output: [{ type: 'text', text: 'Root cause fixed. Ran pnpm test: 12 passed.' }],
+      stopReason: 'completed',
+    }))
     const harness = harnessFor(
       root,
       {
@@ -1087,44 +1202,6 @@ describe('thread-scoped ownership', () => {
             gate: 'none',
             instruction: 'bundled:research',
           },
-        ],
-      },
-      subagents,
-    )
-    await harness.callTool('delegation_status', {}, owner())
-    const note = text(
-      await harness.callTool(
-        'task_progress',
-        { task: '1.1 Open task', status: 'in-progress', reason: 'midway' },
-        foreign(),
-      ),
-    )
-    expect(note).toContain('progress note written')
-    expect(await ownerOf(root)).toBe('thread-a')
-
-    const answer = text(
-      await harness.callTool('delegate', { rule: 'research', change: 'change-a' }, foreign()),
-    )
-    expect(answer).toContain('does not satisfy a strict review rule')
-    expect(subagents.startCalls).toBe(1)
-    expect(await ownerOf(root)).toBe('thread-a')
-  })
-
-  it('keeps a patch delegation available in a foreign thread without changing the owner', async () => {
-    const root = await workspace()
-    await writeChange(root, 'change-a', [])
-    const subagents = new FakeSubagents()
-    subagents.addProvider('codex-subagent')
-    subagents.addProvider('codex-subagent-write', {}, () => ({
-      output: [{ type: 'text', text: 'Root cause fixed. Ran pnpm test: 12 passed.' }],
-      stopReason: 'completed',
-    }))
-    const harness = harnessFor(
-      root,
-      {
-        ...defaultTestConfig(),
-        rules: [
-          ...(defaultTestConfig().rules ?? []),
           {
             id: 'bug-fix',
             when: 'manual',
@@ -1138,30 +1215,36 @@ describe('thread-scoped ownership', () => {
       },
       subagents,
     )
-    await harness.callTool('delegation_status', {}, owner())
-    expect(await ownerOf(root)).toBe('thread-a')
+    const patchAgent = owner()
+    const answerAgent = createAgent('thread-c')
+    await harness.preStep(1, patchAgent)
+    const note = await harness.toolText(
+      'task_progress',
+      { task: '1.1 Open task', status: 'in-progress', reason: 'midway' },
+      patchAgent,
+    )
+    expect(note).toContain('progress note written')
+    expect(await harness.readInvolvement('thread-a')).toBeDefined()
+
+    const answer = await harness.toolText(
+      'delegate',
+      { rule: 'research', change: 'change-a' },
+      answerAgent,
+    )
+    expect(answer).toContain('does not satisfy a strict review rule')
+    expect(await harness.readInvolvement('thread-c')).toBeUndefined()
+
     harness.git.status = ' M packages/engine.ts\0'
     harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
-
-    const patch = text(
-      await harness.callTool(
-        'delegate',
-        { rule: 'bug-fix', objective: 'fix the crash', change: 'change-a' },
-        foreign(),
-      ),
+    const patch = await harness.toolText(
+      'delegate',
+      { rule: 'bug-fix', objective: 'fix the crash', change: 'change-a' },
+      patchAgent,
     )
     expect(patch).toContain('isolated worktree .dsh/delegation/worktrees/')
-    expect(patch).toContain('packages/engine.ts')
     expect(patch).toContain('Nothing was applied to the session worktree')
-    expect(subagents.startCalls).toBe(1)
-    expect(subagents.runs[0]?.cwd).toContain(join('.dsh', 'delegation', 'worktrees'))
-    expect(await ownerOf(root)).toBe('thread-a')
-
-    // A patch run must not unblock a foreign review of the same change.
-    await expect(
-      harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }, foreign()),
-    ).rejects.toThrow(/owned by thread "thread-a"/)
-    expect(subagents.startCalls).toBe(1)
+    expect(subagents.startCalls).toBe(2)
+    expect(await harness.readInvolvement('thread-a')).toBeDefined()
   })
 })
 
@@ -1509,6 +1592,9 @@ describe('asynchronous review runs', () => {
     for (const release of pending.releases) release()
     await harness.waitForRun(runIdFrom(first))
     await harness.waitForRun(runIdFrom(second))
+    expect((await harness.readInvolvement())?.changes['change-a']?.tasks).toEqual(
+      expect.arrayContaining([taskIdFor('First task'), taskIdFor('Second task')]),
+    )
     const tasksDir = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
     const records = (await readdir(tasksDir)).filter((name) => name.endsWith('.json'))
     expect(records).toHaveLength(2)

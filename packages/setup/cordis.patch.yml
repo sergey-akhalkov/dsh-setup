@@ -5,6 +5,8 @@
 # Layer order: all plugin rows mount first, then owner defaults override the
 # shipped rows they name. A profile cordis.patch.yml still outranks this layer.
 - insert:
+    - id: dsh-setup-admin-indicator
+      name: "@dsh-setup/plugin-admin-indicator"
     - id: dsh-setup-codex-subagent
       name: "@dsh-setup/plugin-codex-subagent"
     - id: dsh-setup-delegation-rules
@@ -72,6 +74,20 @@
           answer: 300000
           patch: 1800000
         failureStreak: 3
+    - id: dsh-setup-loop-guard
+      name: "@dsh-setup/plugin-loop-guard"
+      config:
+        reasoning: true
+        text: false
+        subagents: false
+        minRepeats: 5
+        minLineChars: 12
+        crossBlockWindow: 10
+        crossBlockRepeats: 4
+        maxInterventionsPerTurn: 3
+        maxResetsPerSession: 2
+        previewChars: 80
+        finalFallback: stop
     - id: dsh-setup-nuphus-mcp
       name: "@deepseek-ai/dsh-mcp-client"
       config:

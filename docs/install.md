@@ -60,10 +60,12 @@ The script:
 3. Enables the shipped bundles the setup expects by appending their names to `dsh.profile.bundles` —
    exactly the operation behind the **Plugins** toggles. The profile patch is not touched.
 4. Installs the setup bundle from the pinned release commit.
-5. Verifies the selection, the installed setup version, that the setup bundle is last in
+5. Creates the administrator desktop shortcut unless `-NoDesktopShortcut` is set; a missing Desktop
+   app is a warning rather than a failed install.
+6. Verifies the selection, the installed setup version, that the setup bundle is last in
    `dsh.profile.bundles` (so its defaults outrank the shipped layers), and that `cordis.patch.yml`
    is byte-identical to before.
-6. Starts DeepSeek Harness again.
+7. Starts DeepSeek Harness again.
 
 Running the command a second time is safe: it keeps existing selections, installs nothing when the
 resolved version is already current, and fails the verification when the installed version is not the
@@ -83,10 +85,34 @@ Options apply to the downloaded-file form; the pipeline form runs with the defau
 | `-SetupSpec <spec>`     | Install an explicit package spec, for example a checkout's `packages/setup` directory. |
 | `-NoStopApp`            | Abort instead of closing a running DeepSeek Harness; quit the app and rerun.           |
 | `-NoRestart`            | Leave DeepSeek Harness closed after installing.                                        |
+| `-NoDesktopShortcut`    | Do not create the administrator desktop shortcut.                                      |
 | `-IndexUrl <url>`       | Market index used to pin the release. Default: the published Pages index.              |
 
 When the script is inside a full checkout of this repository it installs that checkout's
 `packages/setup`; pass `-SetupVersion` or `-SetupSpec` to install a released bundle instead.
+
+## Administrator desktop shortcut and restart
+
+The installer creates `DeepSeek Harness (Administrator)` on the current user's Desktop unless
+`-NoDesktopShortcut` or `-DryRun` is set. The shortcut starts the installed Desktop app through the
+Windows UAC prompt; it does not elevate the current app. Close DeepSeek Harness before using it, and
+keep the normal shortcut for everyday work.
+
+The `@dsh-setup/plugin-admin-indicator` bundle adds a shield and the visible label **Standard User** or
+**Administrator** next to the composer permission control; the label collapses to the shield on narrow
+windows. Its “Create admin desktop shortcut” menu action calls the fixed authenticated route and shows a
+native success or error toast; it never reads or changes the composer draft and works alongside
+attachments. The `/admin-shortcut` command remains available for manual use. The restart action is
+behind the row feature flag `restart`, disabled by default; when enabled it asks for confirmation and
+requests UAC first, then the elevated helper closes the current app and starts the new elevated
+instance. The current session ends; declining UAC leaves the current app running. The actions are
+unavailable outside the Desktop app and when DSH already runs as administrator.
+
+"Full access" in the composer is a per-session tool permission, not OS administrator rights. Running
+the whole app as administrator gives every session, tool, terminal, MCP server, and subagent the
+elevated token, so use administrator mode only when the task needs it. The app restart uses a
+detached Windows script: it targets only the owning Desktop process tree, asks the window to close,
+force-closes the remaining processes after a short grace, and starts the new instance.
 
 ## Bundles the setup enables
 

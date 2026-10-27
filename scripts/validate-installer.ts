@@ -353,6 +353,7 @@ function main(): number {
               index.url,
               '-NoStopApp',
               '-NoRestart',
+              '-NoDesktopShortcut',
             ],
             {
               ...env,
@@ -450,6 +451,7 @@ function main(): number {
       home,
       '-NoStopApp',
       '-NoRestart',
+      '-NoDesktopShortcut',
       '-SetupSpec',
       setupSpec,
     ]
