@@ -11,4 +11,4 @@
 
 ## 3. Verification
 
-- [ ] 3.1 Build, generate, run the full gate, and commit the generated `lib/` and vendored plugin copy.
+- [x] 3.1 Build, generate, run the full gate, and commit the generated `lib/` and vendored plugin copy.
