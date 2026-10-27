@@ -41,6 +41,12 @@ function checkInstaller(problems: string[]): void {
     return
   }
   const text = readFileSync(INSTALLER_FILE, 'utf8')
+  // The documented one-line form runs the script through `Invoke-Expression`,
+  // where an exit statement terminates the caller's PowerShell process. The
+  // keyword is case-insensitive in PowerShell, so the check is too.
+  if (/^\s*exit\b/imu.test(text)) {
+    problems.push('install.ps1: a bare `exit` terminates the caller when run through `iex`')
+  }
   const versions = readDshVersions()
   try {
     compareInstallerList(

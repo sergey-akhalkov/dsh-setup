@@ -19,7 +19,15 @@ const TEXT_EXTENSIONS = new Set([
 ])
 
 /** Directories with no reviewed source: VCS, dependencies, transient state, generated publication. */
-const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', '.tmp', 'market', 'coverage', '.vitest'])
+const SKIP_DIRECTORIES = new Set([
+  '.git',
+  'node_modules',
+  '.tmp',
+  '.dsh',
+  'market',
+  'coverage',
+  '.vitest',
+])
 
 const FORBIDDEN_FILENAMES = new Set([
   '.credentials.yaml',

@@ -344,7 +344,10 @@ app-server configuration and per-target model/reasoning effort, the archived
 `2026-10-26-fix-delegation-thread-scope` change scoped the gated reviews to the change's owning
 thread, and the archived `2026-10-26-fix-delegation-async-and-review-session` change made review
 delegation asynchronous with explicit task selection, stable reviewed inputs, and Codex review-thread
-reuse. Cite
+reuse. The archived `2026-10-27-add-one-line-installer` change added the one-line install and update
+contract to `portable-setup`: the documented pipeline form must not terminate the caller's session,
+rerunning the command updates to the newest release, and the installer verifies the resolved version
+against the installed one. Cite
 `openspec/specs/` for accepted requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -370,6 +373,10 @@ The archived tasks record 32/35. Open owner follow-ups: 7.1 first published rele
 commit-pinned throwaway-profile install, and 9.4 the committed `pnpm dogfood` command are done.) Keep
 `docs/` consistent with spec changes; the design's D8 layout is stale about the Client bundle path
 (actual: `lib/client.js`, not package-root `client.js`). Trust the code and `docs/plugins.md`.
+
+The archived `2026-10-27-add-one-line-installer` tasks record 8/8; its remaining owner step is a live
+run of the documented one-liner from an external PowerShell window, after the dogfood round-trip
+against a copy of the desktop profile passed.
 
 The archived `2026-10-26-add-delegation-rules` tasks record 51/61; the open 8.x tasks are the live
 DSH-profile acceptance (real review/patch/gate/non-Codex target). Codex sign-in, a completed
@@ -436,8 +443,8 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - **Never add absolute machine paths, credentials, sessions, or private keys to tracked files.**
   `validate:repo` scans `.ts/.tsx/.js/.mjs/.cjs/.json/.yml/.yaml/.md/.svg/.toml/.ps1` — including this
   file and `docs/` — and rejects Windows drive paths, UNC paths, POSIX home paths, credential
-  filenames, and private-key markers. It skips `.git`, `node_modules`, `.tmp`, `market`, `coverage`,
-  and `openspec/` (deliberately, so specs are not scanned), but scans the vendored
+  filenames, and private-key markers. It skips `.git`, `node_modules`, `.tmp`, `.dsh`, `market`,
+  `coverage`, and `openspec/` (deliberately, so specs are not scanned), but scans the vendored
   `packages/setup/node_modules`.
 - **LF everywhere.** `.gitattributes` forces `eol=lf` because `gen:check` compares bytes; a CRLF
   checkout makes a clean tree fail. `.editorconfig`: UTF-8, LF, 2 spaces.
@@ -448,6 +455,10 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   `allowImportingTsExtensions`.
 - **Keep `dsh.json` and `install.ps1` in sync** (versions and both bundle lists). `install.ps1` is
   standalone by design and duplicates this metadata; `validate:repo` compares them.
+- **`install.ps1` also runs through `Invoke-Expression`.** The documented one-line command is
+  `irm <install.ps1-url> | iex`; an `exit` statement there terminates the user's PowerShell process,
+  so the script ends normally on success and throws on failure. `validate:repo` rejects a bare
+  `exit` in it.
 - **`pnpm validate` is not the full release check.** It does not catch stale committed build output;
   run `pnpm build && git diff --exit-code` and `pnpm gen:check` before committing.
 - **`market/` is generated and gitignored**; never commit it and never point `--output` at a checked-in

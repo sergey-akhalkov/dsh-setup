@@ -249,11 +249,14 @@ function Get-LatestReleaseTag {
 function Resolve-SetupSpec {
   if ($SetupSpec) { return $SetupSpec }
 
-  $scriptDirectory = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-  $localSetup = Join-Path $scriptDirectory 'packages/setup/package.json'
-  if (-not $SetupVersion -and (Test-Path -LiteralPath $localSetup)) {
-    Write-Ok "using the setup bundle from this checkout: $scriptDirectory/packages/setup"
-    return (Resolve-Path -LiteralPath (Join-Path $scriptDirectory 'packages/setup')).Path
+  # A pipeline run has no script path; the caller's working directory must not
+  # silently become the installation source.
+  if ($PSScriptRoot) {
+    $localSetup = Join-Path $PSScriptRoot 'packages/setup/package.json'
+    if (-not $SetupVersion -and (Test-Path -LiteralPath $localSetup)) {
+      Write-Ok "using the setup bundle from this checkout: $PSScriptRoot/packages/setup"
+      return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'packages/setup')).Path
+    }
   }
 
   Write-Step "Looking up the setup release"
@@ -269,6 +272,9 @@ function Resolve-SetupSpec {
       $selected = $versions | Select-Object -First 1
       if ($null -ne $selected) {
         $source = $selected.source
+        # The resolved version is what the installed package must match; a rerun
+        # that leaves an older package behind must fail the verification below.
+        $script:SetupVersion = $selected.version
         Write-Ok "index lists setup $($selected.version) at commit $($source.commit.Substring(0, 12))"
       }
     }
@@ -364,7 +370,7 @@ try {
   }
   if ($DryRun) {
     Write-Step "Dry run: no changes were made"
-    exit 0
+    return
   }
 
   if ($Profile -eq 'desktop' -and (Test-HarnessHosted)) {
@@ -487,7 +493,7 @@ try {
   if ($null -eq $installedVersion) {
     $problems += "the installed setup package was not found under the profile's node_modules"
   } elseif ($SetupVersion -and $installedVersion -ne $SetupVersion) {
-    $problems += "installed setup version $installedVersion is not the requested $SetupVersion"
+    $problems += "installed setup version $installedVersion is not the resolved $SetupVersion"
   }
   if ($null -ne $patchHash -and -not (Test-PatchUnchanged $patchPath $patchHash)) {
     $problems += "the profile's cordis.patch.yml changed; the installer must not modify it"
@@ -521,14 +527,15 @@ try {
   if ($backupPath) { Write-Ok "profile backups: $backupDirectory" }
   Write-Host ''
   Write-Host "Installed. Start DeepSeek Harness and the setup bundle is active."
-  exit 0
 } catch {
   Write-Host ''
   Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
   if ($backupPath) { Write-Host "The profile manifest backup is at $backupPath" }
   if ($patchBackupPath) { Write-Host "The profile patch backup is at $patchBackupPath" }
   if ($cordisBackupPath) { Write-Host "The profile root backup is at $cordisBackupPath" }
-  exit 1
+  # The script also runs through Invoke-Expression: a terminating error keeps the
+  # caller's window alive and still reports a non-zero exit for `pwsh -File`.
+  throw
 } finally {
   if ($stoppedApp -and -not $NoRestart) {
     $launch = $appPath

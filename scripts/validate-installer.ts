@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   cpSync,
@@ -69,6 +69,78 @@ function hashFile(path: string): string | undefined {
   return existsSync(path)
     ? createHash('sha256').update(readFileSync(path)).digest('hex')
     : undefined
+}
+
+/**
+ * The installer runs through spawnSync, which blocks this event loop, so the
+ * loopback index server lives in a child process and its port arrives on disk.
+ */
+function serveIndex(home: string, document: unknown): { url: string; stop: () => void } {
+  const portFile = join(home, 'index-port.txt')
+  const script = [
+    "const http = require('node:http')",
+    "const fs = require('node:fs')",
+    'const document = JSON.parse(process.env.INDEX_DOCUMENT)',
+    'const server = http.createServer((request, response) => {',
+    "  response.writeHead(200, { 'content-type': 'application/json' })",
+    '  response.end(JSON.stringify(document))',
+    '})',
+    "server.listen(0, '127.0.0.1', () => {",
+    '  fs.writeFileSync(process.env.PORT_FILE, String(server.address().port))',
+    '})',
+  ].join('\n')
+  const child = spawn(process.execPath, ['-e', script], {
+    env: { ...process.env, INDEX_DOCUMENT: JSON.stringify(document), PORT_FILE: portFile },
+    stdio: 'ignore',
+  })
+  for (let attempt = 0; attempt < 100 && !existsSync(portFile); attempt += 1) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+  }
+  if (!existsSync(portFile)) {
+    child.kill()
+    throw new Error('the loopback index server did not start')
+  }
+  const port = readFileSync(portFile, 'utf8').trim()
+  return {
+    url: `http://127.0.0.1:${port}/index.json`,
+    stop: () => child.kill(),
+  }
+}
+
+/**
+ * A stand-in plugin manager for the version comparison: it answers the version
+ * query and the dump, and on install records a chosen installed version.
+ */
+function writeStubCli(home: string): string {
+  const stub = join(home, 'stub-dsh.ps1')
+  writeFileSync(
+    stub,
+    [
+      '$ErrorActionPreference = "Stop"',
+      '$arguments = @($args)',
+      'if ($arguments -contains "--version") { Write-Output $env:STUB_DSH_VERSION; exit 0 }',
+      '$profile = $null',
+      'for ($index = 0; $index -lt $arguments.Count; $index++) {',
+      '  if ($arguments[$index] -eq "--profile") { $profile = $arguments[$index + 1] }',
+      '}',
+      'if ($arguments -contains "--dump-config") { Write-Output "- id: dsh-setup-ponytail"; exit 0 }',
+      'if ($arguments -contains "plugin") {',
+      '  $profileDir = Join-Path (Join-Path $env:DSH_HOME "profiles") $profile',
+      '  $manifestPath = Join-Path $profileDir "package.json"',
+      '  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json',
+      '  $manifest.dependencies | Add-Member -NotePropertyName "@dsh-setup/setup" -NotePropertyValue "stub" -Force',
+      '  $bundles = @($manifest.dsh.profile.bundles) + "@dsh-setup/setup"',
+      '  $manifest.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue $bundles -Force',
+      '  $manifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $manifestPath',
+      '  $packageDir = Join-Path (Join-Path $profileDir "node_modules") "@dsh-setup/setup"',
+      '  New-Item -ItemType Directory -Force -Path $packageDir | Out-Null',
+      '  [pscustomobject]@{ name = "@dsh-setup/setup"; version = $env:STUB_INSTALLED_VERSION } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageDir "package.json")',
+      '  exit 0',
+      '}',
+      'exit 1',
+    ].join('\n'),
+  )
+  return stub
 }
 
 function main(): number {
@@ -221,6 +293,149 @@ function main(): number {
       ]) {
         if (!result.stdout.includes(fragment)) {
           throw new Error(`the plan lacks "${fragment}"\n${result.stdout.trim()}`)
+        }
+      }
+    })
+
+    // Neither existing run can prove the resolved-version check: the install
+    // passes -SetupSpec, which returns before market resolution, and the dry run
+    // stops before verification. This step supplies both sides of the comparison:
+    // a loopback index with a chosen version and a stub plugin manager reporting
+    // a chosen installed version. A stale installed version must fail the run.
+    step('the installed version is verified against the resolved index version', () => {
+      const commit = '0123456789abcdef0123456789abcdef01234567'
+      const document = (version: string) => ({
+        plugins: [
+          {
+            name: '@dsh-setup/setup',
+            versions: [
+              {
+                version,
+                source: {
+                  type: 'git',
+                  url: 'https://example.invalid/dsh-setup',
+                  commit,
+                  path: 'packages/setup',
+                },
+              },
+            ],
+          },
+        ],
+      })
+      const run = (resolvedVersion: string, installedVersion: string) => {
+        const runHome = mkdtempSync(join(tmpRoot, 'installer-market-'))
+        // A downloaded copy, like the documented one-liner: it has no checkout
+        // beside it, so the index is the source instead of the local repository.
+        const installerCopy = join(runHome, 'install.ps1')
+        cpSync(join(rootDir, 'install.ps1'), installerCopy)
+        const profileDir = join(runHome, 'profiles', 'market')
+        mkdirSync(profileDir, { recursive: true })
+        writeFileSync(
+          join(profileDir, 'package.json'),
+          JSON.stringify({ name: 'market', dependencies: {}, dsh: { profile: { bundles: [] } } }),
+        )
+        const stub = writeStubCli(runHome)
+        const index = serveIndex(runHome, document(resolvedVersion))
+        try {
+          return shell(
+            pwsh,
+            [
+              '-NoProfile',
+              '-File',
+              installerCopy,
+              '-Profile',
+              'market',
+              '-DshHome',
+              runHome,
+              '-DshCli',
+              stub,
+              '-IndexUrl',
+              index.url,
+              '-NoStopApp',
+              '-NoRestart',
+            ],
+            {
+              ...env,
+              DSH_HOME: runHome,
+              STUB_DSH_VERSION: dshVersion,
+              STUB_INSTALLED_VERSION: installedVersion,
+            },
+            240_000,
+          )
+        } finally {
+          index.stop()
+          if (process.env.DSH_KEEP !== '1') {
+            try {
+              rmSync(runHome, { recursive: true, force: true })
+            } catch (error) {
+              console.warn(
+                `validate-installer: could not remove ${relative(rootDir, runHome)}: ${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
+          }
+        }
+      }
+
+      const mismatch = run('1.2.4', '1.2.3')
+      const mismatchOutput = `${mismatch.stdout}\n${mismatch.stderr}`
+      if (mismatch.status === 0) {
+        throw new Error(
+          `a stale installed version passed the verification\n${mismatchOutput.trim()}`,
+        )
+      }
+      for (const fragment of ['1.2.3', '1.2.4']) {
+        if (!mismatchOutput.includes(fragment)) {
+          throw new Error(`the version failure does not name ${fragment}\n${mismatchOutput.trim()}`)
+        }
+      }
+
+      const matching = run('1.2.3', '1.2.3')
+      if (matching.status !== 0) throw fail(matching)
+      if (!matching.stdout.includes('setup version 1.2.3')) {
+        throw new Error(`the run does not report the installed version\n${matching.stdout.trim()}`)
+      }
+    })
+
+    // The documented one-line form executes the installer through
+    // Invoke-Expression, so a failure must not terminate the calling process:
+    // the wrapper prints a marker from its catch and a sentinel after the call,
+    // then ends with its own non-zero exit. A run that never failed is a miss.
+    step('the one-line form keeps the calling session alive', () => {
+      const iexHome = mkdtempSync(join(tmpRoot, 'installer-iex-'))
+      const probe = join(iexHome, 'probe.ps1')
+      writeFileSync(
+        probe,
+        [
+          `$env:DSH_HOME = '${iexHome}'`,
+          '$caught = $null',
+          `try { iex (Get-Content -Raw -LiteralPath '${join(rootDir, 'install.ps1')}') } catch { $caught = $_; Write-Host 'PROBE-CAUGHT' }`,
+          "Write-Host 'PROBE-SENTINEL'",
+          "if ($null -eq $caught) { Write-Host 'PROBE-NO-FAILURE'; exit 2 }",
+          'exit 1',
+        ].join('\n'),
+      )
+      try {
+        const result = shell(pwsh, ['-NoProfile', '-File', probe], env, 120_000)
+        const output = `${result.stdout}\n${result.stderr}`
+        if (result.status !== 1) {
+          throw new Error(
+            `the probe exited ${String(result.status)} instead of 1\n${output.trim()}`,
+          )
+        }
+        for (const marker of ['FAILED:', 'PROBE-CAUGHT', 'PROBE-SENTINEL']) {
+          if (!output.includes(marker)) {
+            throw new Error(`the probe output lacks "${marker}"\n${output.trim()}`)
+          }
+        }
+      } finally {
+        if (process.env.DSH_KEEP !== '1') {
+          try {
+            rmSync(iexHome, { recursive: true, force: true })
+          } catch (error) {
+            console.warn(
+              `validate-installer: could not remove ${relative(rootDir, iexHome)}: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          }
         }
       }
     })

@@ -25,16 +25,32 @@ profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead.
 
 ## One command
 
-Run this in PowerShell:
+Run this from an ordinary PowerShell window:
 
 ```powershell
-$installer = Join-Path $env:TEMP 'dsh-setup-install.ps1'
-Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 -OutFile $installer
-& $installer
+irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 | iex
+```
+
+The command downloads and executes the installer in one pipeline: it prints its plan, closes
+DeepSeek Harness while it writes the profile, and leaves the window open with the run's exit status.
+The pipeline needs no execution-policy change, because a downloaded expression is not a script file.
+From `cmd.exe`, wrap it the same way as other installers:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 | iex"
 ```
 
 The script resolves the setup version from the published market index and falls back to the newest
 `v*` release tag when that index cannot be read.
+
+The pipeline form runs with the default options. For `-DryRun`, `-Profile`, `-SetupVersion`, or
+`-SetupSpec`, download the script and run the file:
+
+```powershell
+$installer = Join-Path $env:TEMP 'dsh-setup-install.ps1'
+Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 -OutFile $installer
+& $installer -DryRun
+```
 
 The script:
 
@@ -49,10 +65,13 @@ The script:
    is byte-identical to before.
 6. Starts DeepSeek Harness again.
 
-Running the command a second time is safe: it keeps existing selections, installs nothing new, and
-reports the same profile state.
+Running the command a second time is safe: it keeps existing selections, installs nothing when the
+resolved version is already current, and fails the verification when the installed version is not the
+resolved one.
 
 ### Installer options
+
+Options apply to the downloaded-file form; the pipeline form runs with the defaults.
 
 | Option                  | Meaning                                                                                |
 | ----------------------- | -------------------------------------------------------------------------------------- |
@@ -152,10 +171,12 @@ cleanly against the current profile.
 
 ## Update
 
-The market has no in-place upgrade action. To update, install the newer version from its entry page
-(or re-run the git specification with the newer commit), or rerun `install.ps1` after passing
-`-SetupVersion`. The previous version is replaced; older listed versions remain installable if you
-need to pin back.
+Rerun the same one command. It resolves the newest released setup version, installs it over the
+current one, and fails the verification when the installed version is not the resolved one. When the
+resolved version is already current, the run changes nothing and reports that version.
+
+To pin an exact version or install a checkout, use the downloaded-file form with `-SetupVersion` or
+`-SetupSpec`; older listed versions remain installable if you need to pin back.
 
 ## Apply local changes from a linked checkout
 

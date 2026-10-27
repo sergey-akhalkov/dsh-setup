@@ -5,8 +5,10 @@ installable setup bundle, the individual plugin bundles it contains, the static 
 that makes them discoverable from the Harness Web UI, and the one-command installer that reproduces
 the setup on another machine.
 
-- **Install:** run [`install.ps1`](install.ps1) (see [docs/install.md](docs/install.md)). It enables
-  the shipped bundles the setup expects and installs the setup bundle in one command.
+- **Install or update:** run
+  `irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 | iex` in an
+  external PowerShell window (see [docs/install.md](docs/install.md)). It enables the shipped bundles
+  the setup expects and installs or updates the setup bundle in one command; rerun it to update.
 - **Add a plugin package:** see [docs/plugins.md](docs/plugins.md).
 - **Understand the generated setup patch:** see [docs/setup-composition.md](docs/setup-composition.md).
 - **Cut a release:** see [docs/releasing.md](docs/releasing.md).

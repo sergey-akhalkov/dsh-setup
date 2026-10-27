@@ -14,6 +14,7 @@
       "!market",
       "!openspec",
       "!.tmp",
+      "!.dsh",
       "!.serena",
       "!coverage"
     ]
