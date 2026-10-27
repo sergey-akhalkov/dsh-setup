@@ -123,8 +123,8 @@ Name it `packages/plugin-<name>`, package name `@dsh-setup/plugin-<name>`; start
 existing package shape (`packages/plugin-rust` for a Host-only bundle) and rename it. A bundle that
 only connects an external MCP server can skip the TypeScript project entirely: keep `package.json`,
 `cordis.fragment.yml`, `locale/en.json`, and `icon.svg`, and skip `main`/`types`/`dsh.client`, `src/`,
-`lib/`, `tsconfig.json`, and the Client test. That shape may add a Host module later (as
-`packages/plugin-serena` did for its guidance skill); see [docs/plugins.md](docs/plugins.md).
+`lib/`, `tsconfig.json`, and the Client test. That shape may add a Host module later for an on-demand skill; see
+[docs/plugins.md](docs/plugins.md).
 Checklist:
 
 1. **Manifest** `packages/plugin-<name>/package.json`
@@ -159,8 +159,7 @@ Checklist:
 
    Only `rows` at top level, only `id`/optional `name`/optional `config`/optional `disabled`
    per row. A row marked `disabled: true` is mounted but inactive; a profile patch enables it with
-   `disabled: false` (the Serena bundle ships both its rows disabled; enable them with
-   `disabled: false` on `dsh-setup-serena` and `dsh-setup-serena-guidance`). `id` must match
+   `disabled: false`. `id` must match
    `^dsh-setup-[a-z0-9]+(?:-[a-z0-9]+)*$` and be globally unique. Omit `name` — the module specifier
    is derived from the owning package. A row may instead name the approved Harness adapter
    `@deepseek-ai/dsh-mcp-client`, on a configuration-only adapter or beside a code-bearing package's
@@ -346,28 +345,25 @@ which builds before testing). Tests that need machine-path fixtures compose them
 ## 11. OpenSpec workflow (requirements are spec-driven)
 
 `openspec/config.yaml` requires **English** for all artifacts and keeps structural headings and
-SHALL/MUST keywords in English. There is no active change; the latest archived change is
-`2026-10-28-ship-serena-disabled` (the Serena bundle ships both rows disabled by default, enabled by
-a profile override), preceded on 2026-10-27 by `add-admin-indicator` (authenticated shortcut POST
-with native Toast; restart behind the default-off `restart` row flag pending live UAC
-verification), `add-loop-guard`, and `fix-delegation-session-scope`. The final delegation Host was edited after its recorded 3.3 live
+SHALL/MUST keywords in English. There is no active change; the latest archived changes on
+2026-10-27 are `add-admin-indicator` (authenticated shortcut POST with native Toast; restart behind
+the default-off `restart` row flag pending live UAC verification), `add-loop-guard`, and
+`fix-delegation-session-scope`. The final delegation Host was edited after its recorded 3.3 live
 acceptance, so a live re-acceptance of the final Host remains an owner follow-up. The parent change was archived on
 2026-10-26 as `openspec/changes/archive/2026-10-26-add-portable-dsh-setup/` (proposal, design, delta
 specs `portable-setup` and `plugin-market`, tasks). The main specs under `openspec/specs/` hold the
 accepted requirements: `portable-setup` and `plugin-market` were synced from the parent change on
 2026-10-25, the archived `2026-10-25-add-ponytail-skill-plugin` change added `packaged-skills` plus
-its `portable-setup` amendment, the archived `2026-10-26-add-serena-mcp-plugin` change added
-`mcp-adapters` and amended `portable-setup`'s dependency-containment requirement, the archived
+its `portable-setup` amendment, an earlier change added `mcp-adapters` and amended
+`portable-setup`'s dependency-containment requirement, the archived
 `2026-10-26-add-nuphus-mcp-plugin` change added the strict-confirmation requirement to `mcp-adapters`,
 the archived `2026-10-26-add-working-ruleset-plugins` change added `session-guidance` and relaxed
 `mcp-adapters`' approved-adapter-target rule so a code-bearing bundle may mount the approved adapter
 row, and the archived `2026-10-26-add-openspec-skills-plugin` change added `openspec-skills` and the
 packaged `@dsh-setup/plugin-openspec` bundle, and the archived `2026-10-26-add-delegation-rules`
 change added `delegation-rules` and `codex-subagent`, the archived
-`2026-10-26-add-serena-always-on-guidance` change made the Serena code-surface rule always-on and
-re-budgeted the always-on contributions, the archived
-`2026-10-26-add-codex-bundle-and-target-options` change bundled the Codex CLI and added the Serena
-app-server configuration and per-target model/reasoning effort, the archived
+`2026-10-26-add-codex-bundle-and-target-options` change bundled the Codex CLI and added per-target
+model/reasoning effort, the archived
 `2026-10-26-fix-delegation-thread-scope` change scoped the gated reviews to the change's owning
 thread, and the archived `2026-10-26-fix-delegation-async-and-review-session` change made review
 delegation asynchronous with explicit task selection, stable reviewed inputs, and Codex review-thread
@@ -376,15 +372,14 @@ contract to `portable-setup`: the documented pipeline form must not terminate th
 rerunning the command updates to the newest release, and the installer verifies the resolved version
 against the installed one. The archived `2026-10-27-fix-delegation-foreign-change-digest` change made
 the turn-start baseline and the turn-end snapshot owner-only and moved missing or unreadable change
-artifacts out of the worktree digest into a per-change hint that names the change and its owner. The
-archived `2026-10-28-ship-serena-disabled` change added the optional `disabled` fragment row field and
-flipped the Serena bundle to ship disabled by default; its deltas amended `session-guidance` and
-`mcp-adapters`. Cite `openspec/specs/` for accepted requirements and an archived change's delta
+artifacts out of the worktree digest into a per-change hint that names the change and its owner. An
+archived 2026-10-28 change added the optional `disabled` fragment row field and amended
+`session-guidance` and `mcp-adapters`. Cite `openspec/specs/` for accepted requirements and an archived change's delta
 specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
-data` as MODIFIED with the current main-spec text (the Serena and Ponytail amendments), so the
-archive applied without spec changes.
+data` as MODIFIED with the current main-spec text (the later amendments), so the archive applied
+without spec changes.
 
 Flow: **propose** (proposal -> design -> delta specs -> tasks) -> **apply** (implement and tick
 tasks) -> **sync** deltas into main specs -> **archive**. When the OpenSpec skills are available
