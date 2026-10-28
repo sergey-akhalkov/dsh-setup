@@ -61,6 +61,10 @@ silent and does not restate it. A direct instruction from the user outranks both
 - New topic, new session; carry a short handoff rather than a long history.
 - Repeated waits, growing logs, and tool activity are not progress. If every possible outcome leads
   to the same action, the observation is not useful.
+- A goal round never ends only to wait: use `job_output(wait: true)` or independent work, and recheck
+  the same handle after a timeout. `blocked` needs three consecutive rounds with the same checkable
+  obstacle; difficulty, uncertainty, and remaining work are not blockers. `complete` needs current
+  evidence for every requirement. Omit `max_goal_rounds` unless the user asked.
 - Different errors in one expensive stage, or preparation without observations, mean the approach is
   wrong. Fix or change it; escalate with cause, consequence, remedy, and an interim route rather than
   with another retry.

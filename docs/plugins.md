@@ -140,6 +140,20 @@ observes `llm/stream` and `session/event`, delivers recovery through agent steer
 and carries its documented defaults in the fragment row. Its behavior is documented in
 [loop-guard.md](loop-guard.md).
 
+## Goal continuity
+
+[`packages/plugin-goal-continuity`](../packages/plugin-goal-continuity) is the Host-only supervisor
+for an existing root-agent goal. It reconciles an active but disarmed goal after recoverable harness
+stops, prevents the goal driver's pause for a loop-guard reset, extends a reached round cap under a
+bounded budget, and records a visible `continuity-stopped` block on real stops. Notices are
+non-waking (`agent.inject`); the plugin never starts a turn, forks the driver, or calls the model.
+
+The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: non-goal`,
+`maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, and
+`hardMaxGoalRounds: 5000`. Restart resume is opt-in: set `resumeAfterRestart: true` on the row in the
+profile's `cordis.patch.yml`. Set `enabled: false` or disable the row to restore stock DSH goal
+behavior with no disarm, resume, extension, block, suppression, or notice.
+
 ## Adding a package
 
 1. Copy the closest existing package shape (`packages/plugin-rust` for a Host-only bundle,

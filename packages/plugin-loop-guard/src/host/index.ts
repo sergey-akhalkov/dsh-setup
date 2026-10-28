@@ -436,12 +436,12 @@ function resetNotice(
 
 /** The step-end cancel reason for a reset; it becomes the durable turn-end reason. */
 function resetReason(detection: LoopDetection, config: ResolvedConfig): string {
-  return `loop-guard: reset the turn after ${config.maxInterventionsPerTurn} recovery notices; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`
+  return `loop-guard:reset: reset the turn after ${config.maxInterventionsPerTurn} recovery notices; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`
 }
 
 /** The final stop reason; it names the repeated line and the configured limits. */
 function finalStopReason(detection: LoopDetection, config: ResolvedConfig): string {
-  return `loop-guard: the streamed ${detection.kind} kept repeating after ${config.maxInterventionsPerTurn} recovery notices and ${config.maxResetsPerSession} turn resets; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`
+  return `loop-guard:final: the streamed ${detection.kind} kept repeating after ${config.maxInterventionsPerTurn} recovery notices and ${config.maxResetsPerSession} turn resets; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`
 }
 
 /** Pending step-end action: a turn reset followed by a notice, or the final stop. */

@@ -1,0 +1,16 @@
+# Composition fragment for @dsh-setup/plugin-goal-continuity.
+#
+# `dsh-setup/scripts/generate.ts` reads every package's fragment and generates
+# both this package's own bundle patch and the aggregated setup patch. Row ids
+# are global: they must start with `dsh-setup-` and stay unique across the
+# repository, so two bundles can never mount competing entries under one id.
+rows:
+  - id: dsh-setup-goal-continuity
+    config:
+      enabled: true
+      resumeAfterRestart: false
+      resumeAfterUserStop: non-goal
+      maxSessionResumes: 20
+      roundExtension: 1000
+      maxRoundExtensions: 2
+      hardMaxGoalRounds: 5000

@@ -347,7 +347,9 @@ which builds before testing). Tests that need machine-path fixtures compose them
 ## 11. OpenSpec workflow (requirements are spec-driven)
 
 `openspec/config.yaml` requires **English** for all artifacts and keeps structural headings and
-SHALL/MUST keywords in English. There is no active change; the latest archived changes on
+SHALL/MUST keywords in English. The latest archived change on 2026-10-28 is `add-goal-continuity`
+(the goal-continuity supervisor, the loop-guard machine-readable abort causes, and the goal-round
+policy in `session-guidance`; live owner acceptance partially run). Earlier archived changes on
 2026-10-27 are `add-admin-indicator` (authenticated shortcut POST with native Toast; restart behind
 the default-off `restart` row flag pending live UAC verification), `add-loop-guard`, and
 `fix-delegation-session-scope`. The final delegation Host was edited after its recorded 3.3 live
@@ -376,7 +378,9 @@ against the installed one. The archived `2026-10-27-fix-delegation-foreign-chang
 the turn-start baseline and the turn-end snapshot owner-only and moved missing or unreadable change
 artifacts out of the worktree digest into a per-change hint that names the change and its owner. An
 archived 2026-10-28 change added the optional `disabled` fragment row field and amended
-`session-guidance` and `mcp-adapters`. Cite `openspec/specs/` for accepted requirements and an archived change's delta
+`session-guidance` and `mcp-adapters`, and the archived `2026-10-28-add-goal-continuity` change added
+`goal-continuity`, the loop-guard machine-readable abort cause, and the goal-round guidance in
+`session-guidance`. Cite `openspec/specs/` for accepted requirements and an archived change's delta
 specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
@@ -410,6 +414,12 @@ against a copy of the desktop profile passed.
 The archived `2026-10-27-fix-delegation-foreign-change-digest` tasks record 4/4; its Host fix is in
 the committed `lib/` and the vendored setup copy, so a linked profile picks it up after a full
 restart, while other machines need a separate release of the setup bundle.
+
+The archived `2026-10-28-add-goal-continuity` tasks record 22/24; the open 8.2 live owner acceptance
+was partially run (post-restart load, pause/resume, and goal-driver continuation passed; the non-goal
+Stop, restart-default, and terminal-stop checks were not all exercised) and the optional 8.3
+forced-reset check was not run. The plugin is in the setup bundle; completing live acceptance remains
+an owner follow-up.
 
 The archived `2026-10-26-add-delegation-rules` tasks record 51/61; the open 8.x tasks are the live
 DSH-profile acceptance (real review/patch/gate/non-Codex target). Codex sign-in, a completed

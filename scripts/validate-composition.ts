@@ -69,6 +69,11 @@ function rowBlock(dump: string, id: string): string {
   return [lines[start], ...(end === -1 ? rest : rest.slice(0, end))].join('\n')
 }
 
+/** Whether a dumped row contains one exact trimmed YAML line (not a prefix). */
+function rowHasLine(row: string, expected: string): boolean {
+  return row.split('\n').some((line) => line.trim() === expected)
+}
+
 function failure(result: RunResult): Error {
   return new Error(
     `exit ${String(result.status)}\n${tail(result.stdout)}\n${tail(result.stderr)}`.trim(),
@@ -169,12 +174,34 @@ function main(): number {
         for (const marker of [
           'dsh-setup-serena',
           'dsh-setup-nuphus-mcp',
+          'dsh-setup-goal-continuity',
           '@deepseek-ai/dsh-mcp-client',
           'reasoningEffort: high',
           'preference: dark',
           'selectedDefault: cordis',
         ]) {
           if (!dump.stdout.includes(marker)) throw new Error(`composed dump lacks "${marker}"`)
+        }
+      })
+
+      const goalContinuityDefaults = [
+        'enabled: true',
+        'resumeAfterRestart: false',
+        'resumeAfterUserStop: non-goal',
+        'maxSessionResumes: 20',
+        'roundExtension: 1000',
+        'maxRoundExtensions: 2',
+        'hardMaxGoalRounds: 5000',
+      ]
+
+      step('compose the goal-continuity row enabled with its defaults', () => {
+        const row = rowBlock(dump.stdout, 'dsh-setup-goal-continuity')
+        if (row === '') throw new Error('goal-continuity row is missing')
+        if (rowHasLine(row, 'disabled: true')) throw new Error('goal-continuity row is disabled')
+        for (const expected of goalContinuityDefaults) {
+          if (!rowHasLine(row, expected)) {
+            throw new Error(`goal-continuity row lacks "${expected}"`)
+          }
         }
       })
 
@@ -238,6 +265,33 @@ function main(): number {
         if (!lazy.includes('servers: []')) throw new Error('lazy servers list is not empty')
         if (lazy.includes('serverName: nuphus-mcp'))
           throw new Error('Nuphus stayed in the lazy list')
+      })
+
+      const goalContinuityDisabled = run(
+        base,
+        [
+          '--profile',
+          'ci',
+          '--patch',
+          overlay(
+            'goal-continuity-disabled.yml',
+            '- id: dsh-setup-goal-continuity\n  disabled: true\n',
+          ),
+          '--dump-config',
+        ],
+        env,
+      )
+      step('compose the goal-continuity row disabled with its defaults', () => {
+        if (goalContinuityDisabled.status !== 0) throw failure(goalContinuityDisabled)
+        const row = rowBlock(goalContinuityDisabled.stdout, 'dsh-setup-goal-continuity')
+        if (!rowHasLine(row, 'disabled: true')) {
+          throw new Error('profile disabled:true did not disable the goal-continuity row')
+        }
+        for (const expected of goalContinuityDefaults) {
+          if (!rowHasLine(row, expected)) {
+            throw new Error(`disabled goal-continuity row lacks "${expected}"`)
+          }
+        }
       })
 
       step('ship no absolute machine path in the setup package', () => {

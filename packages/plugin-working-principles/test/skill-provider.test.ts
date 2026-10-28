@@ -171,6 +171,16 @@ describe('working-principles plugin', () => {
     expect(footer).not.toContain('/working-principles')
   })
 
+  it('includes the goal-round policy in the assembled always-on section', async () => {
+    const plugin = await loadPlugin()
+    const { ctx, sections } = createContext()
+    plugin.apply(ctx)
+    const text = sections[0]?.text ?? ''
+    expect(text).toContain('`job_output(wait: true)`')
+    expect(text).toContain('max_goal_rounds')
+    expect(text).toContain('three consecutive rounds')
+  })
+
   it('skips only the always-on section when asked to via configuration', async () => {
     const plugin = await loadPlugin()
     const { ctx, providers, sections } = createContext()

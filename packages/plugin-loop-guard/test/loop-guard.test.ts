@@ -663,8 +663,10 @@ describe('loop guard step-end reset', () => {
     await harness.runStream(callThenLoop())
     harness.finishStep(1, 2, true)
     await flushMicrotasks()
+    // The guard must recognize its own prefixed hook cause, or this follow-up is dropped.
     expect(harness.agent.followups).toHaveLength(1)
     expect(harness.agent.cancels).toHaveLength(1)
+    expect(harness.agent.cancels[0]?.cause.reason).toMatch(/^loop-guard:reset:/u)
     expect(harness.agent.cancels[0]?.cause.reason).toContain('reset the turn')
 
     // Turn 2: the reset budget is spent, so the next detection stops the turn.
@@ -676,6 +678,7 @@ describe('loop guard step-end reset', () => {
     harness.finishStep(2, 2, true)
     expect(harness.agent.cancels).toHaveLength(2)
     const finalReason = harness.agent.cancels[1]?.cause.reason ?? ''
+    expect(finalReason).toMatch(/^loop-guard:final:/u)
     expect(finalReason).toContain('kept repeating')
     expect(finalReason).toContain('1 recovery notices')
     expect(finalReason).toContain('The same repeated planning line.')

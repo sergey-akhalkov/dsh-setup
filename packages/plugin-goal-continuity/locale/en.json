@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Goal Continuity",
+    "description": "Keeps an active goal alive across recoverable harness stops: re-arms a disarmed goal, resumes after a loop-guard reset, extends the round cap within bounds, and leaves a visible reason on real blockers"
+  }
+}

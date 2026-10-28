@@ -327,11 +327,11 @@ function resetNotice(detection, resetsUsed, config) {
 }
 /** The step-end cancel reason for a reset; it becomes the durable turn-end reason. */
 function resetReason(detection, config) {
-    return `loop-guard: reset the turn after ${config.maxInterventionsPerTurn} recovery notices; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`;
+    return `loop-guard:reset: reset the turn after ${config.maxInterventionsPerTurn} recovery notices; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`;
 }
 /** The final stop reason; it names the repeated line and the configured limits. */
 function finalStopReason(detection, config) {
-    return `loop-guard: the streamed ${detection.kind} kept repeating after ${config.maxInterventionsPerTurn} recovery notices and ${config.maxResetsPerSession} turn resets; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`;
+    return `loop-guard:final: the streamed ${detection.kind} kept repeating after ${config.maxInterventionsPerTurn} recovery notices and ${config.maxResetsPerSession} turn resets; repeated line: "${cappedPreview(detection.line, config.previewChars)}"`;
 }
 /** A subagent session is excluded unless the row enables subagent coverage. */
 function isSubagent(agent) {

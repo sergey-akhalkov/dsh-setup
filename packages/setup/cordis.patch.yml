@@ -75,6 +75,16 @@
           answer: 300000
           patch: 1800000
         failureStreak: 3
+    - id: dsh-setup-goal-continuity
+      name: "@dsh-setup/plugin-goal-continuity"
+      config:
+        enabled: true
+        resumeAfterRestart: false
+        resumeAfterUserStop: non-goal
+        maxSessionResumes: 20
+        roundExtension: 1000
+        maxRoundExtensions: 2
+        hardMaxGoalRounds: 5000
     - id: dsh-setup-loop-guard
       name: "@dsh-setup/plugin-loop-guard"
       config:
