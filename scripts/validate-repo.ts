@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 import { parseCompositionFragment } from './lib/fragments.ts'
-import { parseDefaults, validateSetupManifest } from './lib/generate.ts'
+import { parseDefaults, validateDefaultsTargets, validateSetupManifest } from './lib/generate.ts'
 import { validatePackageManifest } from './lib/manifest.ts'
 import { readRepositoryFiles, scanMachinePaths, scanSecrets } from './lib/scan.ts'
 import {
@@ -124,10 +124,8 @@ function checkComposition(problems: string[]): void {
   const defaultsPath = join(setupDir, 'defaults.yml')
   try {
     const defaults = parseDefaults(readFileSync(defaultsPath, 'utf8'))
-    for (const entry of defaults) {
-      if (rowIds.has(entry.id)) {
-        problems.push(`defaults.yml: "${entry.id}" collides with a plugin row id`)
-      }
+    for (const problem of validateDefaultsTargets(defaults, rowIds)) {
+      problems.push(`defaults.yml: ${problem}`)
     }
   } catch (error) {
     problems.push(`defaults.yml: ${error instanceof Error ? error.message : String(error)}`)

@@ -10,6 +10,7 @@ import {
   renderBundlePatch,
   renderSetupPatch,
   SETUP_PATCH_FILE,
+  validateDefaultsTargets,
   validateSetupManifest,
 } from '../lib/generate.ts'
 import { validatePackageManifest } from '../lib/manifest.ts'
@@ -77,15 +78,23 @@ describe('defaults', () => {
     ).toEqual([{ id: 'agent-default-model', config: { model: 'deepseek-flash' } }])
   })
 
+  it('accepts a setup-contributed row with no config and a disable override', () => {
+    expect(parseDefaults('- id: dsh-setup-mcp-lazy\n  disabled: true\n')).toEqual([
+      { id: 'dsh-setup-mcp-lazy', disabled: true },
+    ])
+    expect(
+      parseDefaults(
+        '- id: dsh-setup-mcp-lazy\n  config:\n    servers: []\n- id: dsh-setup-nuphus-mcp\n  disabled: true\n',
+      ),
+    ).toEqual([
+      { id: 'dsh-setup-mcp-lazy', config: { servers: [] } },
+      { id: 'dsh-setup-nuphus-mcp', disabled: true },
+    ])
+  })
+
   it('rejects an unknown field', () => {
     expect(() => parseDefaults('- id: ui-theme\n  config: {}\n  name: x\n')).toThrow(
       /unknown field "name"/,
-    )
-  })
-
-  it('rejects the reserved plugin row prefix', () => {
-    expect(() => parseDefaults('- id: dsh-setup-example\n  config: {}\n')).toThrow(
-      /reserved plugin row prefix/,
     )
   })
 
@@ -95,8 +104,36 @@ describe('defaults', () => {
     ).toThrow(/not unique/)
   })
 
-  it('rejects a missing config', () => {
-    expect(() => parseDefaults('- id: ui-theme\n')).toThrow(/config must be a mapping/)
+  it('rejects an entry with neither config nor disabled', () => {
+    expect(() => parseDefaults('- id: ui-theme\n')).toThrow(/needs "config" or "disabled"/)
+  })
+
+  it('rejects a non-boolean disabled', () => {
+    expect(() => parseDefaults('- id: dsh-setup-example\n  disabled: yes\n')).toThrow(
+      /disabled must be a boolean/,
+    )
+  })
+})
+
+describe('defaults targets', () => {
+  const rows = new Set(['dsh-setup-mcp-lazy'])
+
+  it('accepts an existing setup row and a shipped-row default', () => {
+    expect(
+      validateDefaultsTargets(
+        [
+          { id: 'dsh-setup-mcp-lazy', disabled: true },
+          { id: 'ui-theme', config: { preference: 'dark' } },
+        ],
+        rows,
+      ),
+    ).toEqual([])
+  })
+
+  it('rejects an unknown setup row', () => {
+    expect(validateDefaultsTargets([{ id: 'dsh-setup-ghost', disabled: true }], rows)).toEqual([
+      '"dsh-setup-ghost" does not match a plugin row id',
+    ])
   })
 })
 
@@ -131,6 +168,24 @@ describe('patch rendering', () => {
     for (const row of ['dsh-setup-a', 'dsh-setup-b', 'agent-default-model', 'ui-theme']) {
       expect(patch).toContain(row)
     }
+  })
+
+  it('bakes a setup-row disable into its insert and omits the duplicate entry', () => {
+    const patch = renderSetupPatch(
+      [{ id: 'dsh-setup-nuphus-mcp', name: '@deepseek-ai/dsh-mcp-client' }],
+      [{ id: 'dsh-setup-nuphus-mcp', disabled: true }],
+    )
+    expect(patch.match(/- id: dsh-setup-nuphus-mcp/g)).toHaveLength(1)
+    expect(patch).toContain('disabled: true')
+  })
+
+  it('keeps a setup-row configuration as a separate override', () => {
+    const patch = renderSetupPatch(
+      [{ id: 'dsh-setup-mcp-lazy', name: '@dsh-setup/plugin-mcp-lazy' }],
+      [{ id: 'dsh-setup-mcp-lazy', config: { servers: [] } }],
+    )
+    expect(patch.match(/- id: dsh-setup-mcp-lazy/g)).toHaveLength(2)
+    expect(patch).toContain('servers: []')
   })
 })
 

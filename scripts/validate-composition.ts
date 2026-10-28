@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { join, relative } from 'node:path'
 import { type RepositoryFile, scanMachinePaths } from './lib/scan.ts'
 import { readDshVersions, readJson, rootDir, setupDir } from './lib/workspace.ts'
@@ -49,6 +57,16 @@ function run(base: string, args: string[], env: NodeJS.ProcessEnv): RunResult {
 
 function tail(text: string, lines = 6): string {
   return text.trim().split('\n').slice(-lines).join('\n')
+}
+
+/** One top-level row block from a `--dump-config` document, for targeted assertions. */
+function rowBlock(dump: string, id: string): string {
+  const lines = dump.split('\n')
+  const start = lines.findIndex((line) => line.trim() === `- id: ${id}`)
+  if (start === -1) return ''
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((line) => line.startsWith('- id: '))
+  return [lines[start], ...(end === -1 ? rest : rest.slice(0, end))].join('\n')
 }
 
 function failure(result: RunResult): Error {
@@ -158,6 +176,68 @@ function main(): number {
         ]) {
           if (!dump.stdout.includes(marker)) throw new Error(`composed dump lacks "${marker}"`)
         }
+      })
+
+      step('ship Nuphus dormant in the lazy row and disable its static adapter', () => {
+        const lazy = rowBlock(dump.stdout, 'dsh-setup-mcp-lazy')
+        for (const expected of [
+          'serverName: nuphus-mcp',
+          'command: nuphus-mcp',
+          '--confirm-write',
+          'toolCallTimeoutMs: 120000',
+        ]) {
+          if (!lazy.includes(expected)) throw new Error(`lazy row lacks "${expected}"`)
+        }
+        if (!rowBlock(dump.stdout, 'dsh-setup-nuphus-mcp').includes('disabled: true')) {
+          throw new Error('static Nuphus adapter row is not disabled')
+        }
+      })
+
+      const overlay = (name: string, text: string): string => {
+        const path = join(home, name)
+        writeFileSync(path, text, 'utf8')
+        return path
+      }
+      const explicitEnable = run(
+        base,
+        [
+          '--profile',
+          'ci',
+          '--patch',
+          overlay('upgrade-enable.yml', '- id: dsh-setup-nuphus-mcp\n  disabled: false\n'),
+          '--dump-config',
+        ],
+        env,
+      )
+      step('compose an explicit static enable alongside the lazy default', () => {
+        if (explicitEnable.status !== 0) throw failure(explicitEnable)
+        if (rowBlock(explicitEnable.stdout, 'dsh-setup-nuphus-mcp').includes('disabled: true')) {
+          throw new Error('profile disabled:false did not enable the static row')
+        }
+        if (
+          !rowBlock(explicitEnable.stdout, 'dsh-setup-mcp-lazy').includes('serverName: nuphus-mcp')
+        ) {
+          throw new Error('lazy Nuphus entry was lost')
+        }
+      })
+
+      const optOut = run(
+        base,
+        [
+          '--profile',
+          'ci',
+          '--patch',
+          overlay('upgrade-optout.yml', '- id: dsh-setup-mcp-lazy\n  config:\n    servers: []\n'),
+          '--dump-config',
+        ],
+        env,
+      )
+      step('compose the documented opt-out with an empty lazy list', () => {
+        if (optOut.status !== 0) throw failure(optOut)
+        const lazy = rowBlock(optOut.stdout, 'dsh-setup-mcp-lazy')
+        if (!lazy.includes('servers: []')) throw new Error('lazy servers list is not empty')
+        if (lazy.includes('serverName: nuphus-mcp'))
+          throw new Error('Nuphus stayed in the lazy list')
       })
 
       step('ship no absolute machine path in the setup package', () => {

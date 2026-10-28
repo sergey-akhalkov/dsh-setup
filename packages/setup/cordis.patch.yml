@@ -2,8 +2,9 @@
 # scripts/generate.ts; do not edit. Run `pnpm gen` after changing a fragment
 # or a default.
 #
-# Layer order: all plugin rows mount first, then owner defaults override the
-# shipped rows they name. A profile cordis.patch.yml still outranks this layer.
+# Layer order: all plugin rows mount first, then owner defaults configure the
+# rows they name; a setup-row disable is part of its inserted row. A profile
+# cordis.patch.yml still outranks this layer.
 - insert:
     - id: dsh-setup-admin-indicator
       name: "@dsh-setup/plugin-admin-indicator"
@@ -88,6 +89,10 @@
         maxResetsPerSession: 2
         previewChars: 80
         finalFallback: stop
+    - id: dsh-setup-mcp-lazy
+      name: "@dsh-setup/plugin-mcp-lazy"
+      config:
+        servers: []
     - id: dsh-setup-nuphus-mcp
       name: "@deepseek-ai/dsh-mcp-client"
       config:
@@ -98,6 +103,7 @@
           - --confirm-write
         toolCallTimeoutMs: 120000
         failOnStartupError: false
+      disabled: true
     - id: dsh-setup-nuphus-guidance
       name: "@dsh-setup/plugin-nuphus-mcp"
     - id: dsh-setup-openspec
@@ -146,3 +152,12 @@
   config:
     default: standard
     selectedDefault: cordis
+- id: dsh-setup-mcp-lazy
+  config:
+    servers:
+      - serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args:
+          - --confirm-write
+        toolCallTimeoutMs: 120000

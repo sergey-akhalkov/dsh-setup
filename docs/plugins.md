@@ -125,6 +125,11 @@ Disabling it takes only the row id:
 
 Do not install both the setup bundle and the individual adapter bundle: the row id would mount twice.
 
+A server that should stay dormant until the model needs it has its own bundle instead of a static
+adapter row: [`packages/plugin-mcp-lazy`](../packages/plugin-mcp-lazy) mounts no per-server tools and
+reaches configured stdio servers through `mcp_tools` and `mcp_call`, so the model-facing tool set
+never grows with the server count. See [lazy-mcp.md](lazy-mcp.md).
+
 ## Host-only behavior bundle
 
 A Host-only bundle that changes runtime behavior rather than adding skills or UI needs the standard

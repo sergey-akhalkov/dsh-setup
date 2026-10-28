@@ -1,0 +1,10 @@
+# Composition fragment for @dsh-setup/plugin-mcp-lazy.
+#
+# One Host row, configured with the servers this profile keeps dormant. The
+# shipped list is empty: a bundle that shipped servers would reintroduce the
+# always-on cost this plugin exists to remove. Every entry uses the Harness MCP
+# client's field names, so a stdio definition moves here unchanged.
+rows:
+  - id: dsh-setup-mcp-lazy
+    config:
+      servers: []

@@ -1,0 +1,7 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-mcp-lazy.
+- insert:
+    - id: dsh-setup-mcp-lazy
+      name: "@dsh-setup/plugin-mcp-lazy"
+      config:
+        servers: []

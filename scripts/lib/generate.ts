@@ -13,10 +13,11 @@ import { ADAPTER_ROW_NAMES, type FragmentRow } from './fragments.ts'
 import type { DshVersions, PackageManifest, WorkspacePackage } from './workspace.ts'
 import { SETUP_PACKAGE_NAME, setupDir } from './workspace.ts'
 
-/** One owner-defaults entry: a shipped row id plus its complete configuration. */
+/** One owner-defaults entry: a row id plus a configuration and/or a disable override. */
 export interface DefaultsEntry {
   id: string
-  config: Record<string, unknown>
+  config?: Record<string, unknown>
+  disabled?: boolean
 }
 
 /** Generated files are addressed absolutely so drift checks compare one namespace. */
@@ -30,8 +31,6 @@ export const SETUP_MANIFEST_FILE = join(setupDir, 'package.json')
 
 /** Relative path of the vendored plugin copies inside the setup bundle. */
 export const SETUP_VENDOR_DIR = join(setupDir, 'node_modules')
-
-const ROW_PREFIX = 'dsh-setup-'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -58,15 +57,35 @@ export function renderBundlePatch(rows: FragmentRow[]): string {
 
 /** Render the aggregated setup bundle patch: every plugin row, then owner defaults. */
 export function renderSetupPatch(rows: FragmentRow[], defaults: DefaultsEntry[]): string {
+  const rowIds = new Set(rows.map((row) => row.id))
+  // The Loader ignores a same-layer `disabled` override on a row the same patch
+  // inserts, so a setup-row disable is baked into its insert entry instead.
+  const disabledByRow = new Map(
+    defaults
+      .filter((entry) => entry.disabled !== undefined && rowIds.has(entry.id))
+      .map((entry) => [entry.id, entry.disabled]),
+  )
+  const inserted = rows.map((row) => {
+    const disabled = disabledByRow.get(row.id)
+    return disabled === undefined ? row : { ...row, disabled }
+  })
+  const separate = defaults
+    .filter((entry) => !rowIds.has(entry.id) || entry.config !== undefined)
+    .map((entry) =>
+      rowIds.has(entry.id) && entry.disabled !== undefined
+        ? { id: entry.id, config: entry.config }
+        : entry,
+    )
   return (
     header([
       'Generated from every package cordis.fragment.yml and defaults.yml by',
       'scripts/generate.ts; do not edit. Run `pnpm gen` after changing a fragment',
       'or a default.',
       '',
-      'Layer order: all plugin rows mount first, then owner defaults override the',
-      'shipped rows they name. A profile cordis.patch.yml still outranks this layer.',
-    ]) + renderPatchBody([{ insert: rows }, ...defaults])
+      'Layer order: all plugin rows mount first, then owner defaults configure the',
+      'rows they name; a setup-row disable is part of its inserted row. A profile',
+      'cordis.patch.yml still outranks this layer.',
+    ]) + renderPatchBody([{ insert: inserted }, ...separate])
   )
 }
 
@@ -79,19 +98,45 @@ export function parseDefaults(text: string): DefaultsEntry[] {
     const at = `defaults[${index}]`
     if (!isRecord(entry)) throw new Error(`${at} must be a mapping`)
     for (const key of Object.keys(entry)) {
-      if (key !== 'id' && key !== 'config') throw new Error(`${at}: unknown field "${key}"`)
+      if (key !== 'id' && key !== 'config' && key !== 'disabled') {
+        throw new Error(`${at}: unknown field "${key}"`)
+      }
     }
     if (typeof entry.id !== 'string' || entry.id.trim() === '') {
       throw new Error(`${at}.id must be a non-empty string`)
     }
-    if (entry.id.startsWith(ROW_PREFIX)) {
-      throw new Error(`${at}.id "${entry.id}" uses the reserved plugin row prefix`)
-    }
     if (seen.has(entry.id)) throw new Error(`${at}.id "${entry.id}" is not unique`)
     seen.add(entry.id)
-    if (!isRecord(entry.config)) throw new Error(`${at}.config must be a mapping`)
-    return { id: entry.id, config: entry.config }
+    const parsed: DefaultsEntry = { id: entry.id }
+    if (entry.config !== undefined) {
+      if (!isRecord(entry.config)) throw new Error(`${at}.config must be a mapping`)
+      parsed.config = entry.config
+    }
+    if (entry.disabled !== undefined) {
+      if (typeof entry.disabled !== 'boolean') {
+        throw new Error(`${at}.disabled must be a boolean`)
+      }
+      parsed.disabled = entry.disabled
+    }
+    if (parsed.config === undefined && parsed.disabled === undefined) {
+      throw new Error(`${at} needs "config" or "disabled"`)
+    }
+    return parsed
   })
+}
+
+/** Check that every setup-row default names a row the setup actually inserts. */
+export function validateDefaultsTargets(
+  defaults: readonly DefaultsEntry[],
+  rowIds: ReadonlySet<string>,
+): string[] {
+  const problems: string[] = []
+  for (const entry of defaults) {
+    if (entry.id.startsWith('dsh-setup-') && !rowIds.has(entry.id)) {
+      problems.push(`"${entry.id}" does not match a plugin row id`)
+    }
+  }
+  return problems
 }
 
 /** Build the setup bundle manifest from the plugin packages it vendors. */
@@ -287,8 +332,11 @@ export function computeGenerated(
 
   // The vendored plugin copies cannot resolve their own dependencies from the
   // setup's node_modules, so small runtime dependency trees are vendored beside
-  // them. @openai/codex is installed by the profile instead: its platform binary
-  // is not committed and must come from the registry.
+  // them. A large registry-only tree is declared in the setup manifest and
+  // installed by the profile instead: @openai/codex ships a platform binary, and
+  // the MCP client SDK tree is large third-party code.
+  const registryInstalled = (name: string): boolean =>
+    name.startsWith('@openai/') || name.startsWith('@modelcontextprotocol/')
   const runtimeDependencies = new Map<string, string>()
   const storeCandidates = (name: string): string[] => {
     const store = join('node_modules', '.pnpm')
@@ -312,7 +360,7 @@ export function computeGenerated(
       readFileSync(join(resolved, 'package.json'), 'utf8'),
     ) as PackageManifest
     for (const child of Object.keys(manifest.dependencies ?? {})) {
-      if (child.startsWith('@openai/')) continue
+      if (registryInstalled(child)) continue
       addRuntimeDependency(
         child,
         [
@@ -326,7 +374,7 @@ export function computeGenerated(
   }
   for (const { pkg } of pluginRows) {
     for (const name of Object.keys(pkg.manifest.dependencies ?? {})) {
-      if (name.startsWith('@openai/')) continue
+      if (registryInstalled(name)) continue
       addRuntimeDependency(
         name,
         [join(pkg.dir, 'node_modules', name), join('node_modules', name)],

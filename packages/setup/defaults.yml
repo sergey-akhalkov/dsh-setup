@@ -1,10 +1,11 @@
 # Owner defaults for the setup bundle.
 #
-# Each entry targets a shipped composition row by id and restates that row's
-# complete configuration: a patch replaces the whole `config` object rather than
-# merging into it. These values are the baseline every machine receives when it
-# installs the setup bundle; a profile's own cordis.patch.yml still wins over
-# them, so machine-local preferences remain the user's.
+# An entry targets a composition row by id, shipped or inserted by this setup, and
+# carries either the row's complete configuration (a patch replaces the whole
+# `config` object rather than merging into it), an explicit `disabled` toggle, or
+# both. These values are the baseline every machine receives when it installs the
+# setup bundle; a profile's own cordis.patch.yml still wins over them, so
+# machine-local preferences remain the user's.
 #
 # Order is precedence within this layer: keep rows independent.
 - id: agent-default-model
@@ -23,3 +24,17 @@
   config:
     default: standard
     selectedDefault: cordis
+# Nuphus ships dormant behind the lazy proxy; the static adapter row stays off.
+# A profile restores the static adapter with `disabled: false` and an empty lazy
+# `servers` list (see docs/install.md and docs/lazy-mcp.md).
+- id: dsh-setup-mcp-lazy
+  config:
+    servers:
+      - serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args:
+          - --confirm-write
+        toolCallTimeoutMs: 120000
+- id: dsh-setup-nuphus-mcp
+  disabled: true

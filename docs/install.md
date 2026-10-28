@@ -253,11 +253,12 @@ To keep the tools but drop only the always-on rule, set `alwaysOn: false` on the
 
 ## Nuphus MCP
 
-The setup also ships the Nuphus adapter bundle, which adds `nuphus-mcp` desktop automation through the
-Harness MCP client: screen and window control, mouse and keyboard, accessibility-driven UI actions,
-local OCR plus BYOK vision, and a Chrome/Edge session over CDP. The tools register as
-`mcp__nuphus-mcp__*`. It is optional and can be disabled (see below). The bundle also ships a
-`nuphus-discipline` skill in the catalog; the adapter row works without it.
+The setup ships Nuphus behind the lazy MCP proxy by default: `nuphus-mcp` desktop automation (screen
+and window control, mouse and keyboard, accessibility-driven UI actions, local OCR plus BYOK vision,
+and a Chrome/Edge session over CDP) is reached through `mcp_tools` and `mcp_call` with
+`server: nuphus-mcp`. No `mcp__nuphus-mcp__*` tool schema is sent in each request; the static adapter
+row ships disabled. The bundle also ships a `nuphus-discipline` skill whose text covers both access
+paths. It is optional and can be restored to the static adapter or turned off (see below).
 
 Prerequisite: install the server yourself and keep its command on the PATH of the Harness process:
 
@@ -266,54 +267,75 @@ npm install -g @nuphus/nuphus-mcp
 nuphus-mcp   # prints nothing and exits on stdin EOF — that is the expected smoke test
 ```
 
-Without the binary, the Harness still starts and logs the failed connection; no desktop tools are
-added. The adapter does not install, pin, or update the server: it launches whichever `nuphus-mcp`
-the PATH resolves (tested with 0.2.2), so a server upgrade changes the tool set.
+Without the binary the Harness still starts: the lazy row starts nothing until a call targets it,
+and that first `mcp_tools`/`mcp_call` fails naming the server and the cause. The setup does not
+install, pin, or update the server: it launches whichever `nuphus-mcp` the PATH resolves (tested with
+0.2.2), so a server upgrade changes the tool set.
 
 The tools act on the machine that runs the Harness, in its interactive session: a remote `dsh web`
 and a Desktop window control the machine hosting the Host process, not the viewer's. Browser tools
 need Chrome or Edge. Platform support follows the server: full desktop control on Windows,
 accessibility plus mouse and keyboard on macOS (grant Accessibility permission), partial on Linux.
-The first `desktop_perceive` call downloads the local OCR models, so it can exceed the adapter's
-two-minute tool-call timeout — retry once the download finishes. One server instance serves the whole
-profile, so concurrent sessions share the same browser and input state.
+One server instance serves the whole profile, so concurrent sessions share the same browser and input
+state. The first lazy call pays the server's startup; later calls reuse that process until the plugin
+unloads. The first `desktop_perceive` also downloads the local OCR models, so it can exceed the
+two-minute tool-call timeout — retry once the download finishes. `desktop_screenshot` without a
+`path` returns an image, which the lazy proxy does not project in this version; pass `path`, save the
+PNG, and read it with `read_image`.
 
-Write tools confirm by default: the adapter passes `--confirm-write`, so a machine-mutating tool call
-needs the call's explicit confirmation argument and is rejected otherwise. To relax that, override the
-row in the profile's own `cordis.patch.yml` and restate the complete configuration — a patch replaces
-the `config` object rather than merging it:
+Write tools confirm by default: the setup's lazy entry passes `--confirm-write`, so a machine-mutating
+tool call needs the call's explicit confirmation argument and is rejected otherwise. To relax that,
+override the lazy row in the profile's own `cordis.patch.yml` and restate the complete entry — a patch
+replaces the `config` object rather than merging it:
 
 ```yaml
-- id: dsh-setup-nuphus-mcp
+- id: dsh-setup-mcp-lazy
   config:
-    serverName: nuphus-mcp
-    transport: stdio
-    command: nuphus-mcp
-    args: []
-    toolCallTimeoutMs: 120000
-    failOnStartupError: false
+    servers:
+      - serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args: []
+        toolCallTimeoutMs: 120000
 ```
 
 The BYOK vision key is not inherited from the Harness environment, because the MCP client scrubs
-credential-shaped variables before it spawns the server. Pass it explicitly in the same override:
+credential-shaped variables before it spawns the server. Pass it explicitly in the lazy entry:
 
 ```yaml
-- id: dsh-setup-nuphus-mcp
+- id: dsh-setup-mcp-lazy
   config:
-    # … the complete row configuration from above …
-    env:
-      NUPHUS_MCP_VISION_API_KEY: !!js process.env.NUPHUS_MCP_VISION_API_KEY
+    servers:
+      - serverName: nuphus-mcp
+        # … the complete entry from above …
+        env:
+          NUPHUS_MCP_VISION_API_KEY: !!js process.env.NUPHUS_MCP_VISION_API_KEY
 ```
 
-To disable the adapter entirely:
+To restore the static adapter, re-enable its row and empty the lazy list:
 
 ```yaml
 - id: dsh-setup-nuphus-mcp
-  disabled: true
+  disabled: false
+- id: dsh-setup-mcp-lazy
+  config:
+    servers: []
 ```
+
+To keep Nuphus off after the migration, empty the lazy list (the static row already ships disabled):
+
+```yaml
+- id: dsh-setup-mcp-lazy
+  config:
+    servers: []
+```
+
+A profile that explicitly enables the static row keeps both paths until one is removed; the lazy
+call fails with a one-home error naming the adapter row and starts no second process. The setup never
+edits the profile patch.
 
 Do not install the upstream `dsh-nuphus-mcp` plugin together with the setup: both would mount a row
-that spawns the same server.
+that spawns the same server. The same one-home rule applies inside the profile.
 
 ## OpenSpec
 

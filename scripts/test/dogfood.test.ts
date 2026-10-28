@@ -5,6 +5,7 @@ import {
   checkSetupDefaults,
   checkSetupRows,
   dumpEntryBlock,
+  patchExplicitDisabled,
   patchRowIds,
   readBundles,
   scalarPairs,
@@ -106,6 +107,37 @@ describe('checkOwnerRowsPreserved', () => {
       'owner row "ui-theme" is missing from both dumps',
     ])
   })
+
+  it('allows a setup-added disable when the owner did not set it', () => {
+    const before =
+      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: nuphus-mcp\n"
+    const after =
+      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: true\n  config:\n    serverName: nuphus-mcp\n"
+    expect(checkOwnerRowsPreserved(['dsh-setup-nuphus-mcp'], before, after)).toEqual([])
+    expect(
+      checkOwnerRowsPreserved(
+        ['dsh-setup-nuphus-mcp'],
+        before,
+        after,
+        new Set(['dsh-setup-nuphus-mcp']),
+      ),
+    ).toContain('owner row "dsh-setup-nuphus-mcp" changed after installation')
+    expect(
+      checkOwnerRowsPreserved(
+        ['dsh-setup-nuphus-mcp'],
+        before,
+        after.replace('serverName: nuphus-mcp', 'serverName: other'),
+      ),
+    ).toContain('owner row "dsh-setup-nuphus-mcp" changed after installation')
+  })
+})
+
+describe('patchExplicitDisabled', () => {
+  it('finds only rows whose entry sets disabled', () => {
+    const patch =
+      '- id: dsh-setup-nuphus-mcp\n  config:\n    serverName: nuphus-mcp\n- id: dsh-setup-other\n  disabled: false\n'
+    expect([...patchExplicitDisabled(patch)]).toEqual(['dsh-setup-other'])
+  })
 })
 
 describe('scalarPairs', () => {
@@ -163,6 +195,32 @@ describe('checkSetupDefaults', () => {
     expect(checkSetupDefaults(defaults, ['ui-theme'], DUMP)).toEqual([
       'setup default row "agent-default-model" is missing from the composed profile',
     ])
+  })
+
+  it('checks an explicit disable default against the composed row', () => {
+    const disabledDump =
+      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: true\n"
+    const enabledDump = "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n"
+    expect(
+      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: true }], [], disabledDump),
+    ).toEqual([])
+    expect(
+      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: true }], [], enabledDump),
+    ).toContain('setup default "dsh-setup-nuphus-mcp" is not disabled in the composed profile')
+    expect(
+      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: false }], [], disabledDump),
+    ).toContain('setup default "dsh-setup-nuphus-mcp" is disabled in the composed profile')
+  })
+
+  it('ignores a nested config disabled value', () => {
+    const mixed =
+      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: false\n  config:\n    disabled: true\n"
+    expect(
+      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: true }], [], mixed),
+    ).toContain('setup default "dsh-setup-nuphus-mcp" is not disabled in the composed profile')
+    expect(
+      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: false }], [], mixed),
+    ).toEqual([])
   })
 })
 

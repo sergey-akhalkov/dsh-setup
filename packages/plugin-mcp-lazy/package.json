@@ -1,0 +1,48 @@
+{
+  "name": "@dsh-setup/plugin-mcp-lazy",
+  "version": "0.7.0",
+  "description": "Lazy MCP: dormant stdio MCP servers behind two proxy tools, so a session pays no tool-schema cost for servers it never uses",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./cordis.fragment.yml": "./cordis.fragment.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml",
+    "cordis.fragment.yml"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

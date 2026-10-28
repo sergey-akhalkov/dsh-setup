@@ -8,7 +8,9 @@ description: >
 
 # Nuphus discipline
 
-These rules cover the Nuphus browser tools (`mcp__nuphus-mcp__browser_*`).
+These rules cover the Nuphus browser tools, whether they appear directly as
+`mcp__nuphus-mcp__browser_*` or through the lazy MCP proxy (`mcp_tools`, then `mcp_call` with
+`server: nuphus-mcp`).
 
 1. **Snapshot after every change.** Take a fresh `browser_snapshot` after navigation or a DOM change;
    element refs from an earlier snapshot go stale.

@@ -266,9 +266,11 @@ the hosted-shell desktop case itself, so a stray attempt fails before changing a
 
 ## 7. Change owner defaults
 
-Edit `packages/setup/defaults.yml` (only `id` + `config`; the id must target a shipped row, must not
-start with `dsh-setup-`, and must be unique). A patch **replaces the whole `config` object**, never
-merges, so restate the complete configuration each row needs. Then `pnpm gen`, commit the regenerated
+Edit `packages/setup/defaults.yml`: an entry carries `id` plus `config` and/or `disabled`, and its id
+may target a shipped row or a row the setup inserts (a `dsh-setup-*` id must name an inserted row;
+ids must be unique). A configuration patch **replaces the whole `config` object**, never merges, so
+restate the complete configuration; a setup-row `disabled` is folded into that row's insert entry
+because the Loader ignores a same-layer disable override. Then `pnpm gen`, commit the regenerated
 `packages/setup/cordis.patch.yml`, and run `pnpm validate:repo` (and `pnpm validate:composition` when
 possible). The profile's own `cordis.patch.yml` always outranks these defaults; machine-local values
 (credentials, proxy, personal model list) belong there, never in this repo.
@@ -463,11 +465,13 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
   the market need no build approval.
 - **`engines.dsh` must equal `dsh.json` -> `enginesDsh` exactly** (not merely cover it); that rule is
   enforced by `validate:repo` for every plugin.
-- **Row ids are global** and match `^dsh-setup-...$`; defaults must not use the prefix or collide with
-  row ids. Plugin fragments cannot mount another package's code, except the approved
-  `@deepseek-ai/dsh-mcp-client` adapter row, which a code-bearing package may declare beside its own.
-- **A patch replaces the entire `config` object.** Every `defaults.yml` entry must restate the full
-  config for its row.
+- **Row ids are global** and match `^dsh-setup-...$`; a `defaults.yml` id may name a setup row only if
+  that row exists, and ids must be unique. Plugin fragments cannot mount another package's code,
+  except the approved `@deepseek-ai/dsh-mcp-client` adapter row, which a code-bearing package may
+  declare beside its own.
+- **A configuration patch replaces the entire `config` object.** Every configuration default must
+  restate the full config for its row; a disable default carries no config, and a setup-row disable
+  is folded into the row's insert entry.
 - **The setup bundle stays pure**: it does not select shipped bundles or duplicate shipped rows.
   `install.ps1` performs the selection (setup bundle last, so its defaults outrank shipped layers) and
   never edits the profile's `cordis.patch.yml` (verified by SHA-256).

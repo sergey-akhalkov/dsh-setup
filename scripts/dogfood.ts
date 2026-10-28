@@ -21,6 +21,7 @@ import {
   DOGFOOD_PROFILE,
   type DogfoodProfileManifest,
   PROFILE_COPY_FILES,
+  patchExplicitDisabled,
   patchRowIds,
   readBundles,
   SETUP_BUNDLE,
@@ -231,9 +232,9 @@ function main(): number {
   }
   const ownerManifest = readJson<DogfoodProfileManifest>(ownerManifestPath)
   const ownerBundles = readBundles(ownerManifest)
-  const ownerIds = existsSync(ownerPatchPath)
-    ? patchRowIds(readFileSync(ownerPatchPath, 'utf8'))
-    : []
+  const ownerPatchText = existsSync(ownerPatchPath) ? readFileSync(ownerPatchPath, 'utf8') : ''
+  const ownerIds = patchRowIds(ownerPatchText)
+  const ownerExplicitDisabled = patchExplicitDisabled(ownerPatchText)
 
   for (const name of PROFILE_COPY_FILES) {
     const source = join(ownerDir, name)
@@ -384,7 +385,12 @@ function main(): number {
       if (baselineDump === undefined || installedDump === undefined) {
         throw new Error('the baseline or installed dump is unavailable')
       }
-      const problems = checkOwnerRowsPreserved(ownerIds, baselineDump, installedDump)
+      const problems = checkOwnerRowsPreserved(
+        ownerIds,
+        baselineDump,
+        installedDump,
+        ownerExplicitDisabled,
+      )
       if (problems.length > 0) throw new Error(problems.join('; '))
     })
     step('the live profile was not modified', () => {

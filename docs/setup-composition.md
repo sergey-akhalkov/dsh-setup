@@ -46,6 +46,12 @@ dependencies, so the generator hoists every plugin's runtime `dependencies` into
 manifest's regular `dependencies` (outside `bundleDependencies`). The profile install then fetches
 them, including the platform-specific Codex package, from the registry.
 
+A linked checkout skips that profile install, so its vendored copy resolves a registry-only runtime
+dependency from the checkout's own root install instead. The repository therefore declares
+`@modelcontextprotocol/client` (the lazy MCP bundle's runtime dependency) in its root
+`devDependencies`: `pnpm install` makes it resolvable from `packages/setup/node_modules`, and no
+large third-party tree is committed.
+
 The copies are generated from the plugin packages and never edited by hand. `pnpm gen:check` also
 reports stale or extra files under `packages/setup/node_modules`, so a removed plugin cannot leave a
 dead copy behind.
@@ -55,11 +61,13 @@ dead copy behind.
 The generated setup patch is applied as one bundle layer:
 
 1. one `insert` block containing every plugin row;
-2. one override entry per owner default, each targeting a shipped row by id.
+2. one override entry per owner default, targeting a shipped row or a row the setup inserts.
 
-A profile's own `cordis.patch.yml` is applied after the bundle layer and still wins, so local
-preferences remain the user's. A patch replaces the whole `config` object rather than merging it:
-every default must restate the complete configuration its row needs.
+An entry may carry `config`, `disabled`, or both. A configuration override replaces the whole
+`config` object (restate every key); a setup-row disable is baked into that row's insert entry,
+because the Loader ignores a `disabled` override that targets a row the same patch inserts. A
+profile's own `cordis.patch.yml` is applied after the bundle layer and still wins, so local
+preferences remain the user's.
 
 ## Shipping a row disabled
 
@@ -71,12 +79,17 @@ documentation and market card must state the default and the override. The Seren
 current example: `dsh-setup-serena` and `dsh-setup-serena-guidance` ship disabled, and a profile
 enables them with `disabled: false` on each row.
 
+A setup default may also disable a setup-contributed row; the generator folds the flag into the
+row's insert entry. The Nuphus migration uses this: `dsh-setup-mcp-lazy` carries the Nuphus entry and
+`dsh-setup-nuphus-mcp` ships disabled. A profile restores the static adapter with `disabled: false`
+on that row and an empty lazy `servers` list.
+
 ## Changing defaults
 
 1. Edit `packages/setup/defaults.yml`.
 2. Run `pnpm gen` and commit the regenerated setup patch.
-3. Run `pnpm check`. The defaults must only name shipped rows (plugin row ids use the reserved
-   `dsh-setup-` prefix) and must not collide with each other.
+3. Run `pnpm check`. An entry may target a shipped row or a row the setup inserts, and may carry
+   `config`, `disabled`, or both; a `dsh-setup-*` id must name an inserted row, and ids are unique.
 
 Defaults describe the baseline every machine receives. Machine-specific values — credentials, proxy
 settings, a personal model list — stay in the profile's own patch and are never committed.

@@ -66,6 +66,21 @@ export function patchRowIds(patchText: string): string[] {
   return ids
 }
 
+/** Row ids whose owner patch entry sets the row-level `disabled` flag explicitly. */
+export function patchExplicitDisabled(patchText: string): Set<string> {
+  const ids = new Set<string>()
+  let current: string | undefined
+  for (const line of patchText.split(/\r?\n/)) {
+    const match = /^-[ \t]+id:[ \t]*(?:'((?:[^']|'')+)'|"([^"]+)"|([^\s#'"]+))[ \t]*$/.exec(line)
+    if (match !== null) {
+      current = (match[1]?.replaceAll("''", "'") ?? match[2] ?? match[3] ?? '').trim()
+      continue
+    }
+    if (current !== undefined && /^ {2}disabled:/.test(line)) ids.add(current)
+  }
+  return ids
+}
+
 /**
  * Extract the composed dump block for one top-level row id.
  *
@@ -100,11 +115,16 @@ function quoteOrBare(value: string): string {
  * A row the baseline dump does not contain (for example a row supplied by a
  * shipped bundle the profile had not selected yet) cannot be compared to a
  * baseline; it only has to survive the installation.
+ *
+ * A setup migration may add a row-level `disabled: true` that the owner patch
+ * did not set; that inherited state change alone is allowed. An explicit
+ * owner `disabled` value, and every other field, must still survive unchanged.
  */
 export function checkOwnerRowsPreserved(
   ownerRows: readonly string[],
   baselineDump: string,
   installedDump: string,
+  explicitDisabled: ReadonlySet<string> = new Set(),
 ): string[] {
   const problems: string[] = []
   for (const row of ownerRows) {
@@ -117,10 +137,21 @@ export function checkOwnerRowsPreserved(
     if (after === undefined) {
       problems.push(`owner row "${row}" disappeared after installation`)
     } else if (before !== after) {
-      problems.push(`owner row "${row}" changed after installation`)
+      const inheritedDisable =
+        !explicitDisabled.has(row) && withoutRowDisabled(before) === withoutRowDisabled(after)
+      if (!inheritedDisable) problems.push(`owner row "${row}" changed after installation`)
     }
   }
   return problems
+}
+
+/** The block without its row-level `disabled` line, for migration-only comparisons. */
+function withoutRowDisabled(block: string): string {
+  return block
+    .split(/\r?\n/)
+    .filter((line) => !/^ {2}disabled:/.test(line))
+    .join('\n')
+    .trimEnd()
 }
 
 /**
@@ -148,13 +179,24 @@ export function scalarPairs(config: unknown): string[] {
   return pairs
 }
 
+/** Read the row-level `disabled` property, ignoring nested configuration values. */
+function rowDisabled(block: string): boolean | undefined {
+  const match = /^ {2}disabled:\s*(true|false)\s*$/m.exec(block)
+  if (match === null) return undefined
+  return match[1] === 'true'
+}
+
 /**
  * Check that setup defaults still take effect where the owner patch does not
  * override the row. An owner patched row replaces the whole setup config, so it
  * is the owner's block, not this check, that proves precedence there.
  */
 export function checkSetupDefaults(
-  defaults: ReadonlyArray<{ id: string; config: Record<string, unknown> }>,
+  defaults: ReadonlyArray<{
+    id: string
+    config?: Record<string, unknown>
+    disabled?: boolean
+  }>,
   ownerRows: readonly string[],
   installedDump: string,
 ): string[] {
@@ -167,10 +209,18 @@ export function checkSetupDefaults(
       problems.push(`setup default row "${entry.id}" is missing from the composed profile`)
       continue
     }
-    for (const pair of scalarPairs(entry.config)) {
-      if (!block.includes(pair)) {
-        problems.push(`setup default "${entry.id}" lacks effective value "${pair}"`)
+    if (entry.config !== undefined) {
+      for (const pair of scalarPairs(entry.config)) {
+        if (!block.includes(pair)) {
+          problems.push(`setup default "${entry.id}" lacks effective value "${pair}"`)
+        }
       }
+    }
+    if (entry.disabled === true && rowDisabled(block) !== true) {
+      problems.push(`setup default "${entry.id}" is not disabled in the composed profile`)
+    }
+    if (entry.disabled === false && rowDisabled(block) === true) {
+      problems.push(`setup default "${entry.id}" is disabled in the composed profile`)
     }
   }
   return problems

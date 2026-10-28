@@ -102,6 +102,12 @@ describe('nuphus guidance half', () => {
     )
   })
 
+  it('describes the static and lazy access paths', () => {
+    expect(skillAsset).toContain('mcp__nuphus-mcp__')
+    expect(skillAsset).toContain('mcp_tools')
+    expect(skillAsset).toContain('mcp_call')
+  })
+
   it('loads the body followed by a note that the adapter row works without it', async () => {
     const plugin = await loadPlugin()
     const { ctx, providers } = createContext()
