@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-mcp-lazy",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Lazy MCP: dormant stdio MCP servers behind two proxy tools, so a session pays no tool-schema cost for servers it never uses",
   "license": "MIT",
   "icon": "./icon.svg",

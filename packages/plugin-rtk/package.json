@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-rtk",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "RTK token-workflow guidance: a default-on routing rule plus an on-demand rtk skill for bulky shell output",
   "license": "MIT",
   "icon": "./icon.svg",
