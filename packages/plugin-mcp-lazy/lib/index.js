@@ -12,7 +12,7 @@ export const inject = ['tools'];
 export const TOOLS_TOOL = 'mcp_tools';
 export const CALL_TOOL = 'mcp_call';
 /** Client identity sent in the MCP handshake. */
-const CLIENT_INFO = { name, version: '0.7.0' };
+const CLIENT_INFO = { name, version: '0.8.0' };
 function defaultCreateClient() {
     // The SDK's client and transport types are wider than the surface used here.
     return new Client(CLIENT_INFO);
@@ -42,7 +42,9 @@ function loaderOf(ctx) {
 }
 /** Resolve a config value that the loader kept as a `!!js` expression. */
 function evaluateValue(entry, value) {
-    if (isRecord(value) && typeof value.__jsExpr === 'string' && typeof entry.evaluate === 'function') {
+    if (isRecord(value) &&
+        typeof value.__jsExpr === 'string' &&
+        typeof entry.evaluate === 'function') {
         try {
             return entry.evaluate(value.__jsExpr);
         }

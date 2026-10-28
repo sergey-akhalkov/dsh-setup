@@ -19,7 +19,7 @@ export const TOOLS_TOOL = 'mcp_tools'
 export const CALL_TOOL = 'mcp_call'
 
 /** Client identity sent in the MCP handshake. */
-const CLIENT_INFO = { name, version: '0.7.0' }
+const CLIENT_INFO = { name, version: '0.8.0' }
 
 /** One dormant server, with the Harness MCP client's field names. */
 export interface ServerConfig {
@@ -123,7 +123,11 @@ function loaderOf(ctx: Context): LoaderLike | undefined {
 
 /** Resolve a config value that the loader kept as a `!!js` expression. */
 function evaluateValue(entry: LoaderEntryLike, value: unknown): unknown {
-  if (isRecord(value) && typeof value.__jsExpr === 'string' && typeof entry.evaluate === 'function') {
+  if (
+    isRecord(value) &&
+    typeof value.__jsExpr === 'string' &&
+    typeof entry.evaluate === 'function'
+  ) {
     try {
       return entry.evaluate(value.__jsExpr)
     } catch {
