@@ -7,6 +7,7 @@ import {
   dumpEntryBlock,
   patchExplicitDisabled,
   patchRowIds,
+  RETIRED_ADAPTER_ROWS,
   readBundles,
   scalarPairs,
 } from '../lib/dogfood.ts'
@@ -110,32 +111,70 @@ describe('checkOwnerRowsPreserved', () => {
 
   it('allows a setup-added disable when the owner did not set it', () => {
     const before =
-      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: nuphus-mcp\n"
+      "- id: dsh-setup-adapter\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: nuphus-mcp\n"
     const after =
-      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: true\n  config:\n    serverName: nuphus-mcp\n"
-    expect(checkOwnerRowsPreserved(['dsh-setup-nuphus-mcp'], before, after)).toEqual([])
+      "- id: dsh-setup-adapter\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: true\n  config:\n    serverName: nuphus-mcp\n"
+    expect(checkOwnerRowsPreserved(['dsh-setup-adapter'], before, after)).toEqual([])
+    expect(
+      checkOwnerRowsPreserved(['dsh-setup-adapter'], before, after, new Set(['dsh-setup-adapter'])),
+    ).toContain('owner row "dsh-setup-adapter" changed after installation')
     expect(
       checkOwnerRowsPreserved(
-        ['dsh-setup-nuphus-mcp'],
-        before,
-        after,
-        new Set(['dsh-setup-nuphus-mcp']),
-      ),
-    ).toContain('owner row "dsh-setup-nuphus-mcp" changed after installation')
-    expect(
-      checkOwnerRowsPreserved(
-        ['dsh-setup-nuphus-mcp'],
+        ['dsh-setup-adapter'],
         before,
         after.replace('serverName: nuphus-mcp', 'serverName: other'),
       ),
-    ).toContain('owner row "dsh-setup-nuphus-mcp" changed after installation')
+    ).toContain('owner row "dsh-setup-adapter" changed after installation')
+  })
+})
+
+describe('checkOwnerRowsPreserved retired adapter rows', () => {
+  const nuphusRow =
+    "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: nuphus-mcp\n"
+  const serenaRow =
+    "- id: dsh-setup-serena\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: serena\n"
+
+  it('allows a retired adapter row to disappear after installation', () => {
+    expect(
+      checkOwnerRowsPreserved(
+        ['dsh-setup-nuphus-mcp'],
+        nuphusRow,
+        '',
+        undefined,
+        RETIRED_ADAPTER_ROWS,
+      ),
+    ).toEqual([])
+  })
+
+  it('allows a retired adapter row that is absent from both dumps', () => {
+    expect(
+      checkOwnerRowsPreserved(['dsh-setup-serena'], '', '', undefined, RETIRED_ADAPTER_ROWS),
+    ).toEqual([])
+  })
+
+  it('still reports a changed retired row that survives', () => {
+    expect(
+      checkOwnerRowsPreserved(
+        ['dsh-setup-serena'],
+        serenaRow,
+        serenaRow.replace('serverName: serena', 'serverName: other'),
+        undefined,
+        RETIRED_ADAPTER_ROWS,
+      ),
+    ).toEqual(['owner row "dsh-setup-serena" changed after installation'])
+  })
+
+  it('still fails when a non-retired owner-patched row disappears', () => {
+    expect(
+      checkOwnerRowsPreserved(['ui-theme'], DUMP, '', undefined, RETIRED_ADAPTER_ROWS),
+    ).toEqual(['owner row "ui-theme" disappeared after installation'])
   })
 })
 
 describe('patchExplicitDisabled', () => {
   it('finds only rows whose entry sets disabled', () => {
     const patch =
-      '- id: dsh-setup-nuphus-mcp\n  config:\n    serverName: nuphus-mcp\n- id: dsh-setup-other\n  disabled: false\n'
+      '- id: dsh-setup-adapter\n  config:\n    serverName: nuphus-mcp\n- id: dsh-setup-other\n  disabled: false\n'
     expect([...patchExplicitDisabled(patch)]).toEqual(['dsh-setup-other'])
   })
 })
@@ -199,28 +238,28 @@ describe('checkSetupDefaults', () => {
 
   it('checks an explicit disable default against the composed row', () => {
     const disabledDump =
-      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: true\n"
-    const enabledDump = "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n"
+      "- id: dsh-setup-adapter\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: true\n"
+    const enabledDump = "- id: dsh-setup-adapter\n  name: '@deepseek-ai/dsh-mcp-client'\n"
     expect(
-      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: true }], [], disabledDump),
+      checkSetupDefaults([{ id: 'dsh-setup-adapter', disabled: true }], [], disabledDump),
     ).toEqual([])
     expect(
-      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: true }], [], enabledDump),
-    ).toContain('setup default "dsh-setup-nuphus-mcp" is not disabled in the composed profile')
+      checkSetupDefaults([{ id: 'dsh-setup-adapter', disabled: true }], [], enabledDump),
+    ).toContain('setup default "dsh-setup-adapter" is not disabled in the composed profile')
     expect(
-      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: false }], [], disabledDump),
-    ).toContain('setup default "dsh-setup-nuphus-mcp" is disabled in the composed profile')
+      checkSetupDefaults([{ id: 'dsh-setup-adapter', disabled: false }], [], disabledDump),
+    ).toContain('setup default "dsh-setup-adapter" is disabled in the composed profile')
   })
 
   it('ignores a nested config disabled value', () => {
     const mixed =
-      "- id: dsh-setup-nuphus-mcp\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: false\n  config:\n    disabled: true\n"
-    expect(
-      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: true }], [], mixed),
-    ).toContain('setup default "dsh-setup-nuphus-mcp" is not disabled in the composed profile')
-    expect(
-      checkSetupDefaults([{ id: 'dsh-setup-nuphus-mcp', disabled: false }], [], mixed),
-    ).toEqual([])
+      "- id: dsh-setup-adapter\n  name: '@deepseek-ai/dsh-mcp-client'\n  disabled: false\n  config:\n    disabled: true\n"
+    expect(checkSetupDefaults([{ id: 'dsh-setup-adapter', disabled: true }], [], mixed)).toContain(
+      'setup default "dsh-setup-adapter" is not disabled in the composed profile',
+    )
+    expect(checkSetupDefaults([{ id: 'dsh-setup-adapter', disabled: false }], [], mixed)).toEqual(
+      [],
+    )
   })
 })
 

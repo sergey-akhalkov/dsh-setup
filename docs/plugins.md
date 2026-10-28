@@ -71,8 +71,8 @@ Rules:
   the package itself.
 - Optional `config` on a row maps to the Loader row configuration.
 - Optional `disabled: true` ships the row mounted but inactive; a profile patch enables it with
-  `disabled: false`. The Serena bundle ships both rows disabled this way; a profile enables them
-  with `disabled: false` on `dsh-setup-serena` and `dsh-setup-serena-guidance`.
+  `disabled: false`. The setup currently ships no disabled row; the field remains for standalone
+  bundles that must stay installable without paying a per-step cost.
 
 `pnpm gen` writes both this package's `cordis.patch.yml` and the aggregated
 `packages/setup/cordis.patch.yml` from every fragment. Run it after changing a fragment.
@@ -90,21 +90,25 @@ come from the browser module table and are never bundled.
 Verify the slot name and props against the running Harness (`cordis_inspect_query` with the Client
 `Slots` provider) before relying on them, and route visible text through the Client locale service.
 
-## MCP adapter bundle
+## MCP adapter and guidance bundles
 
-A bundle that exposes an external MCP server mounts the Harness-provided `@deepseek-ai/dsh-mcp-client`
-row, so the loader never imports the package for that row. In its smallest form the package contains
-`package.json`, `cordis.fragment.yml`, `locale/en.json`, and `icon.svg` and nothing else handwritten:
-the manifest omits `main`, `types`, `dsh.client`, and the `./client` export, lists only those four
-files plus the generated patch in `files`, and keeps the usual `engines.dsh` and `dsh.bundle.patch`.
-The generated `cordis.patch.yml` is the only build artifact.
+A bundle that owns an external MCP server mounts the Harness-provided
+`@deepseek-ai/dsh-mcp-client` row, so the loader never imports the package for that row. In its
+smallest form the package contains `package.json`, `cordis.fragment.yml`, `locale/en.json`, and
+`icon.svg` and nothing else handwritten: the manifest omits `main`, `types`, `dsh.client`, and the
+`./client` export, lists only those four files plus the generated patch in `files`, and keeps the
+usual `engines.dsh` and `dsh.bundle.patch`. The generated `cordis.patch.yml` is the only build
+artifact.
 
-A bundle may also ship a Host module that contributes guidance for the server it connects to. It then
-keeps `main`, `types`, and a TypeScript project like any other plugin, and its fragment carries two
-rows. The rows are independent, so the adapter keeps working when the guidance row is disabled.
-[`packages/plugin-serena`](../packages/plugin-serena) and
-[`packages/plugin-nuphus-mcp`](../packages/plugin-nuphus-mcp) have this shape: an adapter row naming
-the approved package, and a guidance row mounting their own module.
+The adapter capability remains available, but the setup no longer uses it: a bundle may ship a Host
+module that contributes guidance while the server itself is configured elsewhere. That is the shape
+of [`packages/plugin-serena`](../packages/plugin-serena) and
+[`packages/plugin-nuphus-mcp`](../packages/plugin-nuphus-mcp): one guidance row mounting their own
+module, the `serena-discipline` / `nuphus-discipline` skill (and, for Serena, the always-on trigger),
+and no adapter row. The setup's `dsh-setup-mcp-lazy` row carries the servers; a standalone user adds
+a lazy entry or a static adapter row. A bundle that owns its server may still combine the two row
+shapes: the adapter row mounts the approved package and the guidance row mounts its own module, and
+the rows stay independent.
 
 The adapter's configuration is static and machine-independent: it names the executable and arguments,
 not a project path. Project activation happens at runtime, and the shared MCP client instance serves
@@ -114,16 +118,17 @@ adapter that needs an external runtime documents it in its locale description an
 install-time script, and its configuration must keep the Harness bootable when the runtime is
 unavailable.
 
-To change the configuration or turn the adapter off, override its row in the profile's own
+To change the configuration or turn an adapter row off, override its row in the profile's own
 `cordis.patch.yml`; a patch replaces the whole `config` object, so restate every field the row needs.
 Disabling it takes only the row id:
 
 ```yaml
-- id: dsh-setup-serena
+- id: dsh-setup-my-adapter
   disabled: true
 ```
 
-Do not install both the setup bundle and the individual adapter bundle: the row id would mount twice.
+Do not install the setup bundle and an individual plugin bundle for the same plugin at once: the same
+row id would mount twice.
 
 A server that should stay dormant until the model needs it has its own bundle instead of a static
 adapter row: [`packages/plugin-mcp-lazy`](../packages/plugin-mcp-lazy) mounts no per-server tools and

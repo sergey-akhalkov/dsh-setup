@@ -24,9 +24,11 @@
   config:
     default: standard
     selectedDefault: cordis
-# Nuphus ships dormant behind the lazy proxy; the static adapter row stays off.
-# A profile restores the static adapter with `disabled: false` and an empty lazy
-# `servers` list (see docs/install.md and docs/lazy-mcp.md).
+# Both shipped MCP servers are dormant behind the lazy proxy; the setup mounts no
+# static adapter row. A profile that wants a static adapter adds its own
+# `@deepseek-ai/dsh-mcp-client` row and empties the lazy `servers` list (see
+# docs/install.md and docs/lazy-mcp.md). A profile override replaces this whole
+# list, so restate every server it needs.
 - id: dsh-setup-mcp-lazy
   config:
     servers:
@@ -36,5 +38,15 @@
         args:
           - --confirm-write
         toolCallTimeoutMs: 120000
-- id: dsh-setup-nuphus-mcp
-  disabled: true
+      - serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - --from
+          - serena-agent==1.7.0
+          - serena
+          - start-mcp-server
+          - --context=vscode
+          - --enable-web-dashboard=false
+          - --enable-gui-log-window=false
+        toolCallTimeoutMs: 120000

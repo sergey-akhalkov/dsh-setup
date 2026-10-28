@@ -1,39 +1,8 @@
 # Composition fragment for @dsh-setup/plugin-serena.
 #
-# Two rows: the adapter row mounts the Harness-provided MCP client instead of
-# this package, and the guidance row mounts this package's own Host module,
-# which registers the `serena-discipline` skill. The rows are independent, so
-# the adapter keeps working when the guidance row is disabled.
-#
-# Both rows ship disabled: a default installation pays neither the tool schemas
-# nor the always-on rule. Enable them in the profile's cordis.patch.yml with
-# `disabled: false` on each row.
+# One row: the guidance row mounts this package's own Host module, which
+# registers the always-on code-surface trigger and the `serena-discipline`
+# skill. The server itself is configured by the setup's lazy MCP entry
+# (`dsh-setup-mcp-lazy`), not by a static `@deepseek-ai/dsh-mcp-client` row.
 rows:
-  - id: dsh-setup-serena
-    name: "@deepseek-ai/dsh-mcp-client"
-    disabled: true
-    config:
-      serverName: serena
-      transport: stdio
-      command: uvx
-      # Pin the tested release: its built-in context and prompt are part of the
-      # adapter behavior, so bump both together.
-      args:
-        - "--from"
-        - "serena-agent==1.7.0"
-        - serena
-        - start-mcp-server
-        # The vscode context keeps the same basic-tool exclusions as `ide`
-        # (no Serena read/write/shell/list tools) and tells the agent to
-        # activate the working directory and read the initial instructions.
-        - "--context=vscode"
-        # No dashboard server and no browser/GUI log window inside the Harness process.
-        - "--enable-web-dashboard=false"
-        - "--enable-gui-log-window=false"
-      # The first symbolic call may wait for a language server to start.
-      toolCallTimeoutMs: 120000
-      # A missing uv or a slow first download must not reject the row; the
-      # Harness starts without Serena tools and logs the failed connection.
-      failOnStartupError: false
   - id: dsh-setup-serena-guidance
-    disabled: true

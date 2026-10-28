@@ -96,6 +96,32 @@ describe('serena guidance half', () => {
     )
   })
 
+  it('carries the lazy invocation and the bounded symbol procedure', () => {
+    for (const required of [
+      'mcp_tools',
+      'mcp_call',
+      'activate_project',
+      'get_current_config',
+      'get_symbols_overview',
+      'find_symbol',
+      'find_referencing_symbols',
+      'find_implementations',
+      'find_declaration',
+      'replace_symbol_body',
+      'insert_before_symbol',
+      'insert_after_symbol',
+      'rename_symbol',
+      'safe_delete_symbol',
+      'max_matches',
+      'max_answer_chars',
+    ]) {
+      expect(skillAsset).toContain(required)
+    }
+    expect(skillAsset).toContain('Small files')
+    expect(skillAsset).toContain('generated outputs')
+    expect(skillAsset).toContain('unavailable')
+  })
+
   it('keeps the catalog description identical to the asset frontmatter', async () => {
     const plugin = await loadPlugin()
     const { ctx, providers } = createContext()

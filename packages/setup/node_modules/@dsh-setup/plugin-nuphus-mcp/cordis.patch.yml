@@ -1,15 +1,5 @@
 # Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
-# Bundle layer for @deepseek-ai/dsh-mcp-client.
+# Bundle layer for @dsh-setup/plugin-nuphus-mcp.
 - insert:
-    - id: dsh-setup-nuphus-mcp
-      name: "@deepseek-ai/dsh-mcp-client"
-      config:
-        serverName: nuphus-mcp
-        transport: stdio
-        command: nuphus-mcp
-        args:
-          - --confirm-write
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
     - id: dsh-setup-nuphus-guidance
       name: "@dsh-setup/plugin-nuphus-mcp"

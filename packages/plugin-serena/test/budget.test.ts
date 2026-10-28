@@ -15,9 +15,9 @@ const rules = readFileSync(rulesPath, 'utf8')
 const bytes = Buffer.byteLength(rules, 'utf8')
 const estimatedTokens = bytes / 4
 
-const BUDGET_TOKENS = 400
-const MINIMUM_BYTES = 1400
-const MAXIMUM_BYTES = 1600
+const BUDGET_TOKENS = 200
+const MINIMUM_BYTES = 650
+const MAXIMUM_BYTES = 800
 
 describe('always-on Serena rule budget', () => {
   it('stays inside the documented per-step budget', () => {

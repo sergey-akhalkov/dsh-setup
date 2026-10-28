@@ -124,7 +124,10 @@ existing package shape (`packages/plugin-rust` for a Host-only bundle) and renam
 only connects an external MCP server can skip the TypeScript project entirely: keep `package.json`,
 `cordis.fragment.yml`, `locale/en.json`, and `icon.svg`, and skip `main`/`types`/`dsh.client`, `src/`,
 `lib/`, `tsconfig.json`, and the Client test. That shape may add a Host module later for an on-demand skill; see
-[docs/plugins.md](docs/plugins.md).
+[docs/plugins.md](docs/plugins.md). Since the `lazy-only-mcp-servers` change, `packages/plugin-serena`
+and `packages/plugin-nuphus-mcp` are the guidance-only variety: one enabled guidance row, no adapter
+row, and the server configured by the setup's `dsh-setup-mcp-lazy` row; a bundle that owns its server
+may still declare the adapter row alone or beside its own guidance row.
 Checklist:
 
 1. **Manifest** `packages/plugin-<name>/package.json`
@@ -163,7 +166,8 @@ Checklist:
    `^dsh-setup-[a-z0-9]+(?:-[a-z0-9]+)*$` and be globally unique. Omit `name` — the module specifier
    is derived from the owning package. A row may instead name the approved Harness adapter
    `@deepseek-ai/dsh-mcp-client`, on a configuration-only adapter or beside a code-bearing package's
-   own row; generation rejects any other foreign name.
+   own row; generation rejects any other foreign name. The setup's Nuphus and Serena bundles mount
+   only their guidance row; the adapter capability stays available for a bundle that owns its server.
 3. **Host half** `src/host/index.ts`: export `name` (equal to the package name) and
    `apply(ctx: Context)`; no module-scope side effects. An inert `apply` is correct when all behavior
    is Client-side.
@@ -380,8 +384,13 @@ artifacts out of the worktree digest into a per-change hint that names the chang
 archived 2026-10-28 change added the optional `disabled` fragment row field and amended
 `session-guidance` and `mcp-adapters`, and the archived `2026-10-28-add-goal-continuity` change added
 `goal-continuity`, the loop-guard machine-readable abort cause, and the goal-round guidance in
-`session-guidance`. Cite `openspec/specs/` for accepted requirements and an archived change's delta
-specs for its history.
+`session-guidance`. The archived `2026-10-28-lazy-only-mcp-servers` change made both MCP bundles
+guidance-only and configured `nuphus-mcp` and `serena` in the shipped lazy row: no static
+`@deepseek-ai/dsh-mcp-client` row is mounted, the dogfood check treats the retired
+`dsh-setup-nuphus-mcp`/`dsh-setup-serena` rows as absentable, and the Serena trigger is narrowed to
+large-file/cross-file refactors at 200 estimated tokens. Its live one-home guard check (task 6.4)
+is deferred to a future throwaway-profile session. Cite `openspec/specs/` for accepted
+requirements and an archived change's delta specs for its history.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
 data` as MODIFIED with the current main-spec text (the later amendments), so the archive applied
@@ -478,7 +487,8 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - **Row ids are global** and match `^dsh-setup-...$`; a `defaults.yml` id may name a setup row only if
   that row exists, and ids must be unique. Plugin fragments cannot mount another package's code,
   except the approved `@deepseek-ai/dsh-mcp-client` adapter row, which a code-bearing package may
-  declare beside its own.
+  declare beside its own. The setup ships no static adapter row: its Nuphus and Serena bundles mount
+  one guidance row each and both servers come from `dsh-setup-mcp-lazy`.
 - **A configuration patch replaces the entire `config` object.** Every configuration default must
   restate the full config for its row; a disable default carries no config, and a setup-row disable
   is folded into the row's insert entry.

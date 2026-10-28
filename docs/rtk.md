@@ -66,10 +66,10 @@ The always-on rule is a hard budget, not a preference. The package test measures
 | Contribution                         | Size        | Cost per model step |
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
-| Working contract                     | 4,876 bytes | ~1.2k tokens        |
+| Working contract                     | 5,257 bytes | ~1.3k tokens        |
 | RTK routing rule                     | 884 bytes   | ~0.2k tokens        |
-| Serena code-surface rule             | 1,597 bytes | ~0.4k tokens        |
-| **All four, active**                 |             | **~2.5k tokens**    |
+| Serena code-surface trigger          | 733 bytes   | ~0.2k tokens        |
+| **All four, active**                 |             | **~2.4k tokens**    |
 
 The `rtk` skill body is 3,618 bytes and loads only when invoked, so it is not in the per-step table.
 The measured values come from the package budget test and the asset files; update this table when the

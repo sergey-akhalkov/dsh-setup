@@ -72,17 +72,43 @@ preferences remain the user's.
 ## Shipping a row disabled
 
 A plugin fragment may mark a row `disabled: true`. Generation carries the flag into the plugin patch
-and the aggregated setup patch, so the row stays mounted and inactive, and a profile patch enables
-it with `disabled: false` (a row override sets only that flag and does not restate the config). Use
-this when a plugin stays installable but must not pay a per-request cost by default; the plugin
-documentation and market card must state the default and the override. The Serena bundle is the
-current example: `dsh-setup-serena` and `dsh-setup-serena-guidance` ship disabled, and a profile
-enables them with `disabled: false` on each row.
+and the aggregated setup patch, so the row stays mounted and inactive, and a profile patch enables it
+with `disabled: false` (a row override sets only that flag and does not restate the config). Use this
+when a plugin stays installable but must not pay a per-request cost by default; the plugin
+documentation and market card must state the default and the override.
 
-A setup default may also disable a setup-contributed row; the generator folds the flag into the
-row's insert entry. The Nuphus migration uses this: `dsh-setup-mcp-lazy` carries the Nuphus entry and
-`dsh-setup-nuphus-mcp` ships disabled. A profile restores the static adapter with `disabled: false`
-on that row and an empty lazy `servers` list.
+The setup currently ships no disabled row: the Nuphus and Serena guidance rows are enabled, and both
+servers come from the lazy row. A setup default may also disable a setup-contributed row; the
+generator folds the flag into the row's insert entry. The shipped lazy default configures both
+servers:
+
+```yaml
+- id: dsh-setup-mcp-lazy
+  config:
+    servers:
+      - serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args:
+          - --confirm-write
+        toolCallTimeoutMs: 120000
+      - serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - --from
+          - serena-agent==1.7.0
+          - serena
+          - start-mcp-server
+          - --context=vscode
+          - --enable-web-dashboard=false
+          - --enable-gui-log-window=false
+        toolCallTimeoutMs: 120000
+```
+
+A profile that wants a static adapter instead inserts its own `@deepseek-ai/dsh-mcp-client` row and
+removes the server from the lazy `servers` list; the lazy one-home guard fails the lazy call while
+both homes exist. The setup never reads or rewrites the profile patch.
 
 ## Changing defaults
 

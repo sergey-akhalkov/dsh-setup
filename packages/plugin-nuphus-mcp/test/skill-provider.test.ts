@@ -102,10 +102,13 @@ describe('nuphus guidance half', () => {
     )
   })
 
-  it('describes the static and lazy access paths', () => {
-    expect(skillAsset).toContain('mcp__nuphus-mcp__')
+  it('describes only the lazy access path', () => {
+    expect(skillAsset).not.toContain('mcp__nuphus-mcp__')
     expect(skillAsset).toContain('mcp_tools')
     expect(skillAsset).toContain('mcp_call')
+    expect(skillAsset).toContain('--confirm-write')
+    expect(skillAsset).toContain('120000')
+    expect(skillAsset).toContain('read_image')
   })
 
   it('loads the body followed by a note that the adapter row works without it', async () => {

@@ -1,25 +1,8 @@
 # Composition fragment for @dsh-setup/plugin-nuphus-mcp.
 #
-# Two rows: the adapter row mounts the Harness-provided MCP client instead of
-# this package, and the guidance row mounts this package's own Host module,
-# which registers the `nuphus-discipline` skill. The rows are independent, so
-# the adapter keeps working when the guidance row is disabled.
+# One row: the guidance row mounts this package's own Host module, which
+# registers the `nuphus-discipline` skill. The server itself is configured by
+# the setup's lazy MCP entry (`dsh-setup-mcp-lazy`), not by a static
+# `@deepseek-ai/dsh-mcp-client` row.
 rows:
-  - id: dsh-setup-nuphus-mcp
-    name: "@deepseek-ai/dsh-mcp-client"
-    config:
-      serverName: nuphus-mcp
-      transport: stdio
-      # The npm global install puts this command on the PATH; the server is not
-      # vendored and is not installed by the bundle. See docs/install.md.
-      command: nuphus-mcp
-      args:
-        # Strict confirmation: machine-mutating tools need the call's explicit
-        # confirmation argument. Relaxing it is a profile-level override.
-        - "--confirm-write"
-      # Screenshots and the first local-OCR call exceed the 60s bridge default.
-      toolCallTimeoutMs: 120000
-      # A missing binary must not reject the row; the Harness starts without the
-      # desktop tools and logs the failed connection.
-      failOnStartupError: false
   - id: dsh-setup-nuphus-guidance

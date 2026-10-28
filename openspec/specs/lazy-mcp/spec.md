@@ -157,27 +157,35 @@ enabled row that is still initializing, failed, or retrying counts as a conflict
 - **WHEN** a lazy call targets a server whose enabled static adapter row exists but has registered no tools yet because it is initializing, failed, or retrying
 - **THEN** the call fails with a one-home error naming the adapter row, and no server process starts
 
-### Requirement: Shipped Nuphus migration
+### Requirement: Shipped lazy MCP servers
 
-The setup bundle SHALL ship the Nuphus server as its configured lazy entry and SHALL disable the
-static Nuphus adapter row by default, so a fresh setup session receives no `mcp__nuphus-mcp__*`
-tool schema. The lazy entry MUST carry the static row's command, confirmation argument, and
-tool-call timeout. The guidance skill SHALL describe the static and lazy access paths, and the
-documentation MUST state how a profile restores the static adapter.
+The setup bundle SHALL configure `nuphus-mcp` and `serena` as the `dsh-setup-mcp-lazy` servers,
+carrying each server's command, arguments (including `--confirm-write` for Nuphus), working directory
+and tool-call timeout. It MUST NOT mount a static `@deepseek-ai/dsh-mcp-client` row for either server.
+The Nuphus and Serena guidance bundles SHALL ship only their enabled guidance row and state that the
+server is reached through the lazy proxy, not static `mcp__<serverName>__*` tools.
 
 #### Scenario: Fresh setup composition
 
-- **WHEN** the setup is installed with no Nuphus override in the profile patch
-- **THEN** `dsh-setup-mcp-lazy` lists `nuphus-mcp` and `dsh-setup-nuphus-mcp` is disabled
-- **AND** the model-facing request contains `mcp_tools`/`mcp_call` but no `mcp__nuphus-mcp__*`
+- **WHEN** the setup is installed with no override
+- **THEN** the lazy row lists `nuphus-mcp` and `serena`, no static adapter row for either server is mounted, the guidance rows are enabled, and the model-facing request contains `mcp_tools`/`mcp_call` but no `mcp__nuphus-mcp__*` or `mcp__serena__*`
 
-#### Scenario: Nuphus on demand
+#### Scenario: Nuphus confirmation
 
-- **WHEN** the model lists the configured `nuphus-mcp` tools and then calls one of them
-- **THEN** the server starts on the first call, its listing and text result reach the model, and
-  later calls reuse the same process
+- **WHEN** a lazy Nuphus call reaches a machine-mutating tool without the confirmation argument
+- **THEN** the server rejects the call, the model sees the failure, and no machine action occurs
 
-#### Scenario: Restore the static adapter
+#### Scenario: Serena on demand
 
-- **WHEN** a profile patch enables `dsh-setup-nuphus-mcp` and empties the lazy `servers` list
-- **THEN** the static adapter is effective again and the lazy row starts no second Nuphus process
+- **WHEN** the model lists and calls the `serena` server through `mcp_tools`/`mcp_call`
+- **THEN** the server starts on the first call, its text result reaches the model, later calls reuse the process, and the symbol tools are available after `activate_project`
+
+#### Scenario: No static home
+
+- **WHEN** a profile mounts a static `@deepseek-ai/dsh-mcp-client` row for `nuphus-mcp` or `serena`
+- **THEN** the lazy call fails with the one-home error naming the server and the static row or tool, and no second process starts
+
+#### Scenario: Profile override
+
+- **WHEN** a profile patch adds, removes, or replaces a lazy server entry
+- **THEN** the profile patch restates the complete `servers` list, and the setup's shipped list is unchanged

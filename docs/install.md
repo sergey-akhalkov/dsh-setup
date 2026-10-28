@@ -222,43 +222,50 @@ shell hosted by the running app.
 
 ## Serena MCP
 
-The setup also ships the Serena adapter bundle, which adds Serena's symbol-level code tools through
-the Harness MCP client. It is optional and can be disabled (see below). The bundle also ships an
-always-on code-surface rule and a `serena-discipline` skill; the adapter row works without either.
-See [Serena code guidance](serena.md) for the rule, its prompt cost and its opt-out.
+The setup configures Serena's symbol-level code tools as a lazy MCP server: `serena` is one of the two
+servers in the `dsh-setup-mcp-lazy` row, reached through `mcp_tools` and `mcp_call` (see
+[lazy-mcp.md](lazy-mcp.md)). No static adapter row is mounted, so no `mcp__serena__*` tool schema is
+sent in each request. The `@dsh-setup/plugin-serena` bundle ships the always-on trigger and the
+`serena-discipline` skill that describe the lazy path; see [Serena code guidance](serena.md) for the
+rule, its prompt cost and its opt-out.
 
-Prerequisite: `uv`/`uvx` must be on the PATH of the Harness process. The adapter runs
-`uvx --from serena-agent==1.7.0 serena start-mcp-server ...`; the first start downloads that pinned
-release, so the first connection can be slow. If the tools do not appear after the first start,
-restart DeepSeek Harness once, or pre-warm the download with
-`uvx --from serena-agent==1.7.0 serena --version`. Without `uv`, the Harness still starts and logs the
-failed connection; no Serena tools are added.
+Prerequisite: `uv`/`uvx` must be on the PATH of the Harness process. The lazy entry runs
+`uvx --from serena-agent==1.7.0 serena start-mcp-server ...`; the first call starts the server and
+downloads that pinned release, so it can be slow. If a call fails, retry once the download finishes,
+or pre-warm it with `uvx --from serena-agent==1.7.0 serena --version`. Without `uv`, the call fails
+naming the server and the cause; the Harness and the other lazy servers keep working.
 
-Serena works with a project: the always-on rule makes the agent call `get_current_config` first and
-`activate_project` on the session's working directory when no project is active (the adapter's
-built-in instructions point at the same steps). One Serena instance serves the whole profile, so
-switching the active project in one session changes it for the others, and a restarted server starts
-with no project. Serena's tools run in its own process and edit the activated project directly; the
-MCP tool call is the approval gate.
+Serena works with a project: the trigger directs the agent to call `get_current_config` first and
+`activate_project` on the session's working directory when no project is active. One Serena instance
+serves the whole profile, so switching the active project in one session changes it for the others,
+and a restarted server starts with no project. Serena's tools run in its own process and edit the
+activated project directly; the MCP tool call is the approval gate.
 
-To disable the adapter, add this to the profile's own `cordis.patch.yml`:
+To stop the Serena server, override the lazy row without `serena`; a patch replaces the whole
+`servers` list, so restate the entries you keep:
 
 ```yaml
-- id: dsh-setup-serena
-  disabled: true
+- id: dsh-setup-mcp-lazy
+  config:
+    servers:
+      - serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args: ["--confirm-write"]
+        toolCallTimeoutMs: 120000
 ```
 
-To keep the tools but drop only the always-on rule, set `alwaysOn: false` on the
+To keep the server but drop only the always-on trigger, set `alwaysOn: false` on the
 `dsh-setup-serena-guidance` row in the same file; the `serena-discipline` skill stays cataloged.
 
 ## Nuphus MCP
 
-The setup ships Nuphus behind the lazy MCP proxy by default: `nuphus-mcp` desktop automation (screen
+The setup ships Nuphus behind the lazy MCP proxy: `nuphus-mcp` desktop automation (screen
 and window control, mouse and keyboard, accessibility-driven UI actions, local OCR plus BYOK vision,
 and a Chrome/Edge session over CDP) is reached through `mcp_tools` and `mcp_call` with
-`server: nuphus-mcp`. No `mcp__nuphus-mcp__*` tool schema is sent in each request; the static adapter
-row ships disabled. The bundle also ships a `nuphus-discipline` skill whose text covers both access
-paths. It is optional and can be restored to the static adapter or turned off (see below).
+`server: nuphus-mcp`. No `mcp__nuphus-mcp__*` tool schema is sent in each request, and the setup
+mounts no static adapter row. The bundle also ships a `nuphus-discipline` skill for the lazy path. It
+is optional and can be turned off (see below).
 
 Prerequisite: install the server yourself and keep its command on the PATH of the Harness process:
 
@@ -285,8 +292,8 @@ PNG, and read it with `read_image`.
 
 Write tools confirm by default: the setup's lazy entry passes `--confirm-write`, so a machine-mutating
 tool call needs the call's explicit confirmation argument and is rejected otherwise. To relax that,
-override the lazy row in the profile's own `cordis.patch.yml` and restate the complete entry — a patch
-replaces the `config` object rather than merging it:
+override the lazy row in the profile's own `cordis.patch.yml` and restate the complete `servers` list —
+a patch replaces the `config` object rather than merging it:
 
 ```yaml
 - id: dsh-setup-mcp-lazy
@@ -297,42 +304,61 @@ replaces the `config` object rather than merging it:
         command: nuphus-mcp
         args: []
         toolCallTimeoutMs: 120000
+      - serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - "--from"
+          - "serena-agent==1.7.0"
+          - serena
+          - start-mcp-server
+          - "--context=vscode"
+          - "--enable-web-dashboard=false"
+          - "--enable-gui-log-window=false"
+        toolCallTimeoutMs: 120000
 ```
 
 The BYOK vision key is not inherited from the Harness environment, because the MCP client scrubs
-credential-shaped variables before it spawns the server. Pass it explicitly in the lazy entry:
+credential-shaped variables before it spawns the server. Add `env` to the `nuphus-mcp` entry in the
+complete `servers` list from [lazy-mcp.md](lazy-mcp.md#configuration):
 
 ```yaml
-- id: dsh-setup-mcp-lazy
-  config:
-    servers:
-      - serverName: nuphus-mcp
-        # … the complete entry from above …
-        env:
-          NUPHUS_MCP_VISION_API_KEY: !!js process.env.NUPHUS_MCP_VISION_API_KEY
+- serverName: nuphus-mcp
+  # … the rest of the Nuphus entry …
+  env:
+    NUPHUS_MCP_VISION_API_KEY: !!js process.env.NUPHUS_MCP_VISION_API_KEY
 ```
 
-To restore the static adapter, re-enable its row and empty the lazy list:
+To use the static adapter instead of the lazy entry, insert an `@deepseek-ai/dsh-mcp-client` row in
+the profile's own patch and remove the Nuphus entry from the lazy list (restate the remaining
+servers):
 
 ```yaml
-- id: dsh-setup-nuphus-mcp
-  disabled: false
+- insert:
+    - id: dsh-setup-nuphus-static
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args: ["--confirm-write"]
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+```
+
+To keep Nuphus off, remove its entry from the lazy list and restate the servers you keep — the Serena
+entry, or an empty list:
+
+```yaml
 - id: dsh-setup-mcp-lazy
   config:
     servers: []
 ```
 
-To keep Nuphus off after the migration, empty the lazy list (the static row already ships disabled):
-
-```yaml
-- id: dsh-setup-mcp-lazy
-  config:
-    servers: []
-```
-
-A profile that explicitly enables the static row keeps both paths until one is removed; the lazy
-call fails with a one-home error naming the adapter row and starts no second process. The setup never
-edits the profile patch.
+A profile that adds a static row and leaves the lazy Nuphus entry in place has two homes: the lazy
+call fails with a one-home error naming the adapter row or the conflicting tool and starts no second
+process. The setup never edits the profile patch, and a stale override on the retired
+`dsh-setup-nuphus-mcp` or `dsh-setup-serena` row is a no-op because that row no longer exists.
 
 Do not install the upstream `dsh-nuphus-mcp` plugin together with the setup: both would mount a row
 that spawns the same server. The same one-home rule applies inside the profile.
@@ -358,9 +384,9 @@ packaged definitions win. See [openspec.md](openspec.md) for the full workflow a
 ## What is not included
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
-- Runtime prerequisites such as `uv` for the Serena adapter, `@nuphus/nuphus-mcp` for the Nuphus
-  adapter, or `@fission-ai/openspec` for the OpenSpec skills: install them yourself; the setup does
-  not run system installers.
+- Runtime prerequisites such as `uv` for the Serena lazy server, `@nuphus/nuphus-mcp` for the Nuphus
+  lazy server, or `@fission-ai/openspec` for the OpenSpec skills: install them yourself; the setup
+  does not run system installers.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship packaged third-party content: the Ponytail prompt, whose vendored bytes and

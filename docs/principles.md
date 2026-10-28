@@ -24,12 +24,12 @@ one prompt section and one skill provider over the Markdown files that ship insi
 | Contribution                         | Size        | Cost per model step |
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
-| This working contract                | 4,876 bytes | ~1.2k tokens        |
-| **Both, active (this page)**         |             | **~1.9k tokens**    |
+| This working contract                | 5,257 bytes | ~1.3k tokens        |
+| **Both, active (this page)**         |             | **~2.0k tokens**    |
 
 The setup also ships the [RTK token workflow](rtk.md) routing rule and the [Serena code
-guidance](serena.md) rule, which add about 0.2k and 0.4k tokens per step; with both active the combined
-cost is about 2.5k. The table above counts only the two contributions this page owns.
+guidance](serena.md) trigger, which add about 0.2k tokens each per step; with both active the combined
+cost is about 2.4k. The table above counts only the two contributions this page owns.
 
 The contract is a hard budget, not a preference: `packages/plugin-working-principles/test/budget.test.ts`
 fails when the section exceeds 1500 estimated tokens, where a token is estimated as one quarter of the

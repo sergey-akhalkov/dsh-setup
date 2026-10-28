@@ -103,17 +103,6 @@
       name: "@dsh-setup/plugin-mcp-lazy"
       config:
         servers: []
-    - id: dsh-setup-nuphus-mcp
-      name: "@deepseek-ai/dsh-mcp-client"
-      config:
-        serverName: nuphus-mcp
-        transport: stdio
-        command: nuphus-mcp
-        args:
-          - --confirm-write
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
-      disabled: true
     - id: dsh-setup-nuphus-guidance
       name: "@dsh-setup/plugin-nuphus-mcp"
     - id: dsh-setup-openspec
@@ -124,26 +113,8 @@
       name: "@dsh-setup/plugin-rtk"
     - id: dsh-setup-rust
       name: "@dsh-setup/plugin-rust"
-    - id: dsh-setup-serena
-      name: "@deepseek-ai/dsh-mcp-client"
-      config:
-        serverName: serena
-        transport: stdio
-        command: uvx
-        args:
-          - --from
-          - serena-agent==1.7.0
-          - serena
-          - start-mcp-server
-          - --context=vscode
-          - --enable-web-dashboard=false
-          - --enable-gui-log-window=false
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
-      disabled: true
     - id: dsh-setup-serena-guidance
       name: "@dsh-setup/plugin-serena"
-      disabled: true
     - id: dsh-setup-working-principles
       name: "@dsh-setup/plugin-working-principles"
 - id: agent-default-model
@@ -170,4 +141,16 @@
         command: nuphus-mcp
         args:
           - --confirm-write
+        toolCallTimeoutMs: 120000
+      - serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - --from
+          - serena-agent==1.7.0
+          - serena
+          - start-mcp-server
+          - --context=vscode
+          - --enable-web-dashboard=false
+          - --enable-gui-log-window=false
         toolCallTimeoutMs: 120000

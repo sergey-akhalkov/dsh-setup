@@ -45,12 +45,12 @@ describe('parseCompositionFragment', () => {
 
   it('accepts the approved adapter target instead of the owning package', () => {
     const fragment = parseCompositionFragment(
-      "rows:\n  - id: dsh-setup-serena\n    name: '@deepseek-ai/dsh-mcp-client'\n    config:\n      serverName: serena\n",
-      '@dsh-setup/plugin-serena',
+      "rows:\n  - id: dsh-setup-adapter\n    name: '@deepseek-ai/dsh-mcp-client'\n    config:\n      serverName: serena\n",
+      '@dsh-setup/plugin-example',
     )
     expect(fragment.rows).toEqual([
       {
-        id: 'dsh-setup-serena',
+        id: 'dsh-setup-adapter',
         name: '@deepseek-ai/dsh-mcp-client',
         config: { serverName: 'serena' },
       },
@@ -60,7 +60,7 @@ describe('parseCompositionFragment', () => {
   it('rejects an unapproved adapter target', () => {
     expect(() =>
       parseCompositionFragment(
-        "rows:\n  - id: dsh-setup-serena\n    name: '@deepseek-ai/dsh-tools'\n",
+        "rows:\n  - id: dsh-setup-adapter\n    name: '@deepseek-ai/dsh-tools'\n",
         PACKAGE,
       ),
     ).toThrow(/not an approved adapter target/)
@@ -68,7 +68,7 @@ describe('parseCompositionFragment', () => {
 
   it('rejects a non-string row name', () => {
     expect(() =>
-      parseCompositionFragment('rows:\n  - id: dsh-setup-serena\n    name: 5\n', PACKAGE),
+      parseCompositionFragment('rows:\n  - id: dsh-setup-adapter\n    name: 5\n', PACKAGE),
     ).toThrow(/name must be a string/)
   })
 

@@ -78,7 +78,7 @@ to and rewriting a checkout
 and an inherited trusted activation hook cannot run. The GUI log window is
 disabled, and the home is removed on dispose.
 
-They mirror the `packages/plugin-serena` adapter row, contain no credentials, and
+They mirror the setup's lazy `serena` entry, contain no credentials, and
 never rewrite `~/.codex/config.toml`. The child explicitly unsets `CODEX_HOME`,
 so the existing `~/.codex` login and config apply. `enabled=true` wins over an
 inherited `enabled=false`, and `required=true` makes a missing Serena runtime

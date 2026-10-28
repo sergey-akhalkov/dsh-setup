@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Lazy MCP",
-    "description": "Dormant stdio MCP servers reached on demand through the fixed proxy tools mcp_tools and mcp_call, so a session pays no tool-schema cost for servers it never uses; the setup configures Nuphus as its first lazy server; remote transports are not supported"
+    "description": "Dormant stdio MCP servers reached on demand through the fixed proxy tools mcp_tools and mcp_call, so a session pays no tool-schema cost for servers it never uses; the setup configures nuphus-mcp and serena as its lazy servers; remote transports are not supported"
   }
 }

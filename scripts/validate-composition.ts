@@ -172,15 +172,18 @@ function main(): number {
       step('compose the setup rows and owner defaults', () => {
         if (dump.status !== 0) throw failure(dump)
         for (const marker of [
-          'dsh-setup-serena',
-          'dsh-setup-nuphus-mcp',
+          'dsh-setup-mcp-lazy',
+          'dsh-setup-nuphus-guidance',
+          'dsh-setup-serena-guidance',
           'dsh-setup-goal-continuity',
-          '@deepseek-ai/dsh-mcp-client',
           'reasoningEffort: high',
           'preference: dark',
           'selectedDefault: cordis',
         ]) {
           if (!dump.stdout.includes(marker)) throw new Error(`composed dump lacks "${marker}"`)
+        }
+        if (dump.stdout.includes('@deepseek-ai/dsh-mcp-client')) {
+          throw new Error('the setup composed a static MCP adapter row')
         }
       })
 
@@ -205,18 +208,29 @@ function main(): number {
         }
       })
 
-      step('ship Nuphus dormant in the lazy row and disable its static adapter', () => {
+      step('ship both lazy servers with enabled guidance rows and no static adapter', () => {
         const lazy = rowBlock(dump.stdout, 'dsh-setup-mcp-lazy')
         for (const expected of [
           'serverName: nuphus-mcp',
+          'serverName: serena',
           'command: nuphus-mcp',
+          'command: uvx',
           '--confirm-write',
+          'serena-agent==1.7.0',
+          '--context=vscode',
           'toolCallTimeoutMs: 120000',
         ]) {
           if (!lazy.includes(expected)) throw new Error(`lazy row lacks "${expected}"`)
         }
-        if (!rowBlock(dump.stdout, 'dsh-setup-nuphus-mcp').includes('disabled: true')) {
-          throw new Error('static Nuphus adapter row is not disabled')
+        for (const id of ['dsh-setup-nuphus-guidance', 'dsh-setup-serena-guidance']) {
+          const row = rowBlock(dump.stdout, id)
+          if (row === '') throw new Error(`${id} row is missing`)
+          if (rowHasLine(row, 'disabled: true')) throw new Error(`${id} row is disabled`)
+        }
+        for (const id of ['dsh-setup-nuphus-mcp', 'dsh-setup-serena']) {
+          if (rowBlock(dump.stdout, id) !== '') {
+            throw new Error(`static adapter row "${id}" is mounted`)
+          }
         }
       })
 
@@ -225,7 +239,7 @@ function main(): number {
         writeFileSync(path, text, 'utf8')
         return path
       }
-      const explicitEnable = run(
+      const staleEnable = run(
         base,
         [
           '--profile',
@@ -236,13 +250,13 @@ function main(): number {
         ],
         env,
       )
-      step('compose an explicit static enable alongside the lazy default', () => {
-        if (explicitEnable.status !== 0) throw failure(explicitEnable)
-        if (rowBlock(explicitEnable.stdout, 'dsh-setup-nuphus-mcp').includes('disabled: true')) {
-          throw new Error('profile disabled:false did not enable the static row')
+      step('compose a stale static-row override as a no-op', () => {
+        if (staleEnable.status !== 0) throw failure(staleEnable)
+        if (rowBlock(staleEnable.stdout, 'dsh-setup-nuphus-mcp') !== '') {
+          throw new Error('the removed static row reappeared from a profile override')
         }
         if (
-          !rowBlock(explicitEnable.stdout, 'dsh-setup-mcp-lazy').includes('serverName: nuphus-mcp')
+          !rowBlock(staleEnable.stdout, 'dsh-setup-mcp-lazy').includes('serverName: nuphus-mcp')
         ) {
           throw new Error('lazy Nuphus entry was lost')
         }
@@ -263,8 +277,8 @@ function main(): number {
         if (optOut.status !== 0) throw failure(optOut)
         const lazy = rowBlock(optOut.stdout, 'dsh-setup-mcp-lazy')
         if (!lazy.includes('servers: []')) throw new Error('lazy servers list is not empty')
-        if (lazy.includes('serverName: nuphus-mcp'))
-          throw new Error('Nuphus stayed in the lazy list')
+        if (lazy.includes('serverName: nuphus-mcp') || lazy.includes('serverName: serena'))
+          throw new Error('a server stayed in the lazy list')
       })
 
       const goalContinuityDisabled = run(

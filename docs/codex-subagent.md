@@ -100,7 +100,7 @@ diagnostic carries the same login command as the next action.
 ## Serena MCP configuration
 
 Every app-server starts with fixed `-c` overrides that configure the Serena MCP
-server, mirroring the `packages/plugin-serena` adapter row:
+server, mirroring the setup's lazy `serena` entry (plus the run's project path):
 
 ```text
 -c mcp_servers.serena.command=uvx

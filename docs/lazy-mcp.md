@@ -3,7 +3,7 @@
 `@dsh-setup/plugin-mcp-lazy` (row `dsh-setup-mcp-lazy`) keeps stdio MCP servers configured but
 dormant. A session reaches them through two fixed proxy tools, so the model-facing tool set stays at
 two entries no matter how many servers the profile carries. The plugin's own fragment ships an empty
-list; the setup bundle configures Nuphus as its first lazy server and disables Nuphus' static adapter
+list; the setup bundle configures `nuphus-mcp` and `serena` and mounts no static adapter row
 (section [Configuration](#configuration)). A bundle that shipped servers on its own would reintroduce
 the always-on schema cost this plugin removes.
 
@@ -40,8 +40,7 @@ static adapter row and this bundle unchanged:
 | `cwd`               | Working directory                                                |
 | `toolCallTimeoutMs` | Per-call timeout forwarded to the MCP client request             |
 
-The plugin's own fragment ships an empty list. The setup bundle configures the first migration —
-Nuphus — and disables its static adapter:
+The plugin's own fragment ships an empty list. The setup configures both shipped servers:
 
 ```yaml
 - id: dsh-setup-mcp-lazy
@@ -52,36 +51,50 @@ Nuphus — and disables its static adapter:
         command: nuphus-mcp
         args: ["--confirm-write"]
         toolCallTimeoutMs: 120000
-- id: dsh-setup-nuphus-mcp
-  disabled: true
+      - serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - "--from"
+          - "serena-agent==1.7.0"
+          - serena
+          - start-mcp-server
+          - "--context=vscode"
+          - "--enable-web-dashboard=false"
+          - "--enable-gui-log-window=false"
+        toolCallTimeoutMs: 120000
 ```
 
-A fresh setup session therefore sees only `mcp_tools`/`mcp_call` for Nuphus: the first call starts
-the server, later calls reuse it, and unload terminates it. The Nuphus guidance skill describes both
-the static and lazy access paths.
+A fresh setup session therefore sees only `mcp_tools`/`mcp_call`: the first call starts a server,
+later calls reuse it, and unload terminates it. `--confirm-write` keeps Nuphus machine writes behind
+the call's explicit confirmation argument, and both entries allow 120000 ms per call because a cold
+Nuphus OCR download or Serena language server can be slow. The Nuphus and Serena guidance bundles
+ship the `nuphus-discipline` and `serena-discipline` skills and mount no adapter row of their own.
 
-To restore the static Nuphus adapter, re-enable it and empty the lazy list in the profile patch:
-
-```yaml
-- id: dsh-setup-nuphus-mcp
-  disabled: false
-- id: dsh-setup-mcp-lazy
-  config:
-    servers: []
-```
-
-To keep Nuphus off after the setup migration, a profile that previously disabled the static row must
-also empty the lazy list. A profile that explicitly enables the static row keeps it active alongside
-the setup's lazy entry; the lazy call fails with the one-home error naming the adapter row instead of
-starting a second process, so remove one path. The setup never reads or rewrites the profile patch.
-
-Adopt another server by adding its entry. A profile patch replaces the whole `config` object, so
-restate every server the row needs:
+A profile override replaces the whole `config` object, including the whole `servers` list, so
+restate every server you keep. This example adds a server and keeps both shipped entries:
 
 ```yaml
 - id: dsh-setup-mcp-lazy
   config:
     servers:
+      - serverName: nuphus-mcp
+        transport: stdio
+        command: nuphus-mcp
+        args: ["--confirm-write"]
+        toolCallTimeoutMs: 120000
+      - serverName: serena
+        transport: stdio
+        command: uvx
+        args:
+          - "--from"
+          - "serena-agent==1.7.0"
+          - serena
+          - start-mcp-server
+          - "--context=vscode"
+          - "--enable-web-dashboard=false"
+          - "--enable-gui-log-window=false"
+        toolCallTimeoutMs: 120000
       - serverName: my-server
         transport: stdio
         command: my-mcp-server
@@ -92,6 +105,18 @@ restate every server the row needs:
 An entry whose executable is missing does not keep the Harness from starting: the server is started
 only on demand, and a failed start fails that call with the server name and the cause while other
 servers stay usable.
+
+### One home per server
+
+A profile that wants the static adapter instead adds its own `@deepseek-ai/dsh-mcp-client` row for
+that server and removes the lazy entry. The setup ships no such row, never reads or rewrites the
+profile patch, and a stale override on the retired `dsh-setup-nuphus-mcp` or `dsh-setup-serena` row
+is a no-op whose row id no longer exists.
+
+A server that is mounted as a static adapter row and also listed here has two homes. The lazy call
+fails with a one-home error naming the static adapter row (or the conflicting tool) and starts no
+second process, even while that adapter is initializing or retrying; use either the static row or a
+lazy entry, never both.
 
 ## Lifecycle
 
@@ -116,3 +141,5 @@ server-side state established by an earlier call still applies.
 - **Nuphus screenshots.** `desktop_screenshot` without `path` returns an image, which this version
   drops. Pass `path`, save the PNG, and read it with `read_image`. The first `desktop_perceive` also
   downloads OCR models, so keep a two-minute `toolCallTimeoutMs` for Nuphus.
+- **Serena startup.** The pinned `serena-agent==1.7.0` release downloads on first use and a cold
+  language server can take seconds, so the Serena entry also keeps a two-minute timeout.

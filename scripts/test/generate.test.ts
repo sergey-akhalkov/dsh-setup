@@ -84,11 +84,11 @@ describe('defaults', () => {
     ])
     expect(
       parseDefaults(
-        '- id: dsh-setup-mcp-lazy\n  config:\n    servers: []\n- id: dsh-setup-nuphus-mcp\n  disabled: true\n',
+        '- id: dsh-setup-mcp-lazy\n  config:\n    servers: []\n- id: dsh-setup-adapter\n  disabled: true\n',
       ),
     ).toEqual([
       { id: 'dsh-setup-mcp-lazy', config: { servers: [] } },
-      { id: 'dsh-setup-nuphus-mcp', disabled: true },
+      { id: 'dsh-setup-adapter', disabled: true },
     ])
   })
 
@@ -172,10 +172,10 @@ describe('patch rendering', () => {
 
   it('bakes a setup-row disable into its insert and omits the duplicate entry', () => {
     const patch = renderSetupPatch(
-      [{ id: 'dsh-setup-nuphus-mcp', name: '@deepseek-ai/dsh-mcp-client' }],
-      [{ id: 'dsh-setup-nuphus-mcp', disabled: true }],
+      [{ id: 'dsh-setup-adapter', name: '@deepseek-ai/dsh-mcp-client' }],
+      [{ id: 'dsh-setup-adapter', disabled: true }],
     )
-    expect(patch.match(/- id: dsh-setup-nuphus-mcp/g)).toHaveLength(1)
+    expect(patch.match(/- id: dsh-setup-adapter/g)).toHaveLength(1)
     expect(patch).toContain('disabled: true')
   })
 

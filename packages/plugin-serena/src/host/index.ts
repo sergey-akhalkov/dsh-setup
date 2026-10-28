@@ -7,11 +7,11 @@ import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill'
 import type { PromptSection } from '@deepseek-ai/dsh-system-prompt'
 
 /**
- * Serena plugin: the adapter row mounts the Harness MCP client from the
- * composition fragment, and this module contributes the always-on code-surface
- * rule and the guidance skill that describes how to use that server well. The
- * two rows are independent, so disabling this one leaves the Serena tools
- * working.
+ * Serena plugin: this module contributes the always-on code-surface trigger and
+ * the guidance skill that describes how to use the `serena` server well. The
+ * server itself is configured by the setup's lazy MCP row, so a session reaches
+ * it through `mcp_tools`/`mcp_call` rather than static `mcp__serena__*` tools; a
+ * profile may still add its own static adapter row.
  */
 
 /** Cordis plugin name, equal to the package name. */
@@ -40,7 +40,7 @@ const SECTION_ORDER = 130
 
 /** Catalog text; a test keeps it identical to the asset's frontmatter. */
 const SKILL_DESCRIPTION =
-  "Serena code work: symbol-level retrieval and editing before whole-file reads or line surgery, with bounded scope and answer sizes, and the project's own checks after every symbol edit. Use when Serena's code tools are available and the task touches source files."
+  "Serena code work through the setup's lazy serena server: project activation, symbol-level retrieval and editing with exact callers, bounded calls, and the repository's checks after every symbol edit. Use only for large-file or cross-file refactors where exact callers matter."
 
 const assetsDirectory = fileURLToPath(new URL('../assets/serena-discipline', import.meta.url))
 const skillFile = join(assetsDirectory, 'SKILL.md')
@@ -59,7 +59,7 @@ function skillAdapterNote(): string {
     '',
     '---',
     '',
-    "DeepSeek Harness adapter: this skill ships inside @dsh-setup/plugin-serena as first-party guidance adapted for this Harness; it is not pinned upstream text. The Serena MCP server itself is configured by the bundle's separate adapter row and keeps working when this guidance row is disabled.",
+    "DeepSeek Harness adapter: this skill ships inside @dsh-setup/plugin-serena as first-party guidance adapted for this Harness; it is not pinned upstream text. The Serena MCP server itself is configured by the setup's lazy MCP row as `serena` (or by a profile's own static adapter row) and keeps working when this guidance row is disabled.",
   ].join('\n')
 }
 

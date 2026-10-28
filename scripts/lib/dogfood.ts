@@ -17,6 +17,16 @@
 /** The setup bundle name appended last by the installer. */
 export const SETUP_BUNDLE = '@dsh-setup/setup'
 
+/**
+ * Adapter rows the setup retired: a profile that still targets one may compose
+ * without the row, and the owner-row check reports that retirement instead of
+ * failing on the disappearance.
+ */
+export const RETIRED_ADAPTER_ROWS: ReadonlySet<string> = new Set([
+  'dsh-setup-nuphus-mcp',
+  'dsh-setup-serena',
+])
+
 /** Profile directory name used for the throwaway copy. Never `desktop`. */
 export const DOGFOOD_PROFILE = 'owner-copy'
 
@@ -119,23 +129,28 @@ function quoteOrBare(value: string): string {
  * A setup migration may add a row-level `disabled: true` that the owner patch
  * did not set; that inherited state change alone is allowed. An explicit
  * owner `disabled` value, and every other field, must still survive unchanged.
+ * A retired adapter row may disappear (or be absent from both dumps): the
+ * caller reports the retirement instead of treating it as a lost owner row.
  */
 export function checkOwnerRowsPreserved(
   ownerRows: readonly string[],
   baselineDump: string,
   installedDump: string,
   explicitDisabled: ReadonlySet<string> = new Set(),
+  retiredRows: ReadonlySet<string> = new Set(),
 ): string[] {
   const problems: string[] = []
   for (const row of ownerRows) {
     const before = dumpEntryBlock(baselineDump, row)
     const after = dumpEntryBlock(installedDump, row)
     if (before === undefined) {
-      if (after === undefined) problems.push(`owner row "${row}" is missing from both dumps`)
+      if (after === undefined && !retiredRows.has(row)) {
+        problems.push(`owner row "${row}" is missing from both dumps`)
+      }
       continue
     }
     if (after === undefined) {
-      problems.push(`owner row "${row}" disappeared after installation`)
+      if (!retiredRows.has(row)) problems.push(`owner row "${row}" disappeared after installation`)
     } else if (before !== after) {
       const inheritedDisable =
         !explicitDisabled.has(row) && withoutRowDisabled(before) === withoutRowDisabled(after)

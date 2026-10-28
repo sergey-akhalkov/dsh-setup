@@ -82,8 +82,10 @@ describe('vendored setup imports', () => {
       ),
       'utf8',
     )
-    expect(skill).toContain('mcp__nuphus-mcp__')
+    expect(skill).not.toContain('mcp__nuphus-mcp__')
     expect(skill).toContain('mcp_tools')
     expect(skill).toContain('mcp_call')
+    expect(skill).toContain('--confirm-write')
+    expect(skill).toContain('read_image')
   })
 })

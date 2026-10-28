@@ -23,6 +23,7 @@ import {
   PROFILE_COPY_FILES,
   patchExplicitDisabled,
   patchRowIds,
+  RETIRED_ADAPTER_ROWS,
   readBundles,
   SETUP_BUNDLE,
 } from './lib/dogfood.ts'
@@ -235,6 +236,10 @@ function main(): number {
   const ownerPatchText = existsSync(ownerPatchPath) ? readFileSync(ownerPatchPath, 'utf8') : ''
   const ownerIds = patchRowIds(ownerPatchText)
   const ownerExplicitDisabled = patchExplicitDisabled(ownerPatchText)
+  const retiredOwnerRows = ownerIds.filter((id) => RETIRED_ADAPTER_ROWS.has(id))
+  if (retiredOwnerRows.length > 0) {
+    console.log(`dogfood: retired adapter rows in the owner patch: ${retiredOwnerRows.join(', ')}`)
+  }
 
   for (const name of PROFILE_COPY_FILES) {
     const source = join(ownerDir, name)
@@ -390,6 +395,7 @@ function main(): number {
         baselineDump,
         installedDump,
         ownerExplicitDisabled,
+        RETIRED_ADAPTER_ROWS,
       )
       if (problems.length > 0) throw new Error(problems.join('; '))
     })
