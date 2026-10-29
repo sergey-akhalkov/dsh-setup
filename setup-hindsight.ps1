@@ -435,10 +435,12 @@ function Start-HindsightDaemon([string]$EmbedPath, [int]$Port, [string]$CertPath
   $env:SSL_CERT_FILE = $CertPath
   $env:REQUESTS_CA_BUNDLE = $CertPath
   $env:HINDSIGHT_EMBED_DAEMON_STARTUP_TIMEOUT = '300'
-  $started = Invoke-NativeCapture $EmbedPath @('daemon', 'start')
-  if ($started.ExitCode -ne 0) {
-    throw "hindsight-embed daemon start failed. See $DaemonLogPath."
-  }
+  # `pg0 start` leaves the PostgreSQL child holding inherited stdio handles on
+  # Windows; capturing the command blocks setup forever. Start it detached and
+  # poll /health instead.
+  $startOutput = Join-Path $HindsightHome 'daemon-start.out'
+  $startError = Join-Path $HindsightHome 'daemon-start.err'
+  $startProcess = Start-Process -FilePath $EmbedPath -ArgumentList @('daemon', 'start') -WindowStyle Hidden -PassThru -RedirectStandardOutput $startOutput -RedirectStandardError $startError
   $deadline = (Get-Date).AddMinutes(5)
   while ((Get-Date) -lt $deadline) {
     if (Test-HindsightHealth $Port) {
@@ -452,6 +454,13 @@ function Start-HindsightDaemon([string]$EmbedPath, [int]$Port, [string]$CertPath
       }
       Write-Ok "Daemon healthy on 127.0.0.1:$Port"
       return
+    }
+    if ($startProcess.HasExited -and $startProcess.ExitCode -ne 0) {
+      $tail = ''
+      if (Test-Path -LiteralPath $DaemonLogPath) {
+        $tail = ((Get-Content -LiteralPath $DaemonLogPath -Tail 15) -join "`n")
+      }
+      throw "hindsight-embed daemon start failed (exit $($startProcess.ExitCode)). See $DaemonLogPath.`n$tail"
     }
     Start-Sleep -Seconds 3
   }
