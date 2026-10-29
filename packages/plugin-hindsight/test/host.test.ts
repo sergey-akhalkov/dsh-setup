@@ -73,6 +73,8 @@ afterEach(() => {
   else process.env.HINDSIGHT_DISABLED = originalDisabled
   if (originalConfig === undefined) delete process.env.HINDSIGHT_CONFIG
   else process.env.HINDSIGHT_CONFIG = originalConfig
+  if (originalExportConfig === undefined) delete process.env.HINDSIGHT_EXPORT_CONFIG
+  else process.env.HINDSIGHT_EXPORT_CONFIG = originalExportConfig
   vi.unstubAllGlobals()
 })
 
