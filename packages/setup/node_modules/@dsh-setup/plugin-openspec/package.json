@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-openspec",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "OpenSpec spec-driven workflow: the six core OpenSpec skills packaged on demand from a pinned upstream release, with the openspec CLI as a documented prerequisite",
   "license": "MIT",
   "icon": "./icon.svg",
