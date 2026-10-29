@@ -11,7 +11,15 @@
 
   The DeepSeek key is read from -DeepSeekApiKey, DEEPSEEK_API_KEY,
   ~/.hindsight/deepseek.key, the existing profile, or a secure prompt. It is
-  never printed and never written to the repository.
+  never printed and never written to the repository. The script verifies the key
+  against the DeepSeek API before changing anything.
+
+  It then asks for the durable memory export location: a local directory (empty
+  or a Git repository; a plain folder is fine and exports stay local) and an
+  optional private Git remote. When a remote is configured, push access is
+  verified with a dry-run push and the ACL-restricted machine-local
+  ~/.dsh/hindsight-export.json is written. A rejected key, an invalid URL, or a
+  failed push check refuses the setup.
 
 .EXAMPLE
   $env:DEEPSEEK_API_KEY = '...'
@@ -23,6 +31,8 @@
 [CmdletBinding()]
 param(
   [string]$DeepSeekApiKey,
+  [string]$ExportDir,
+  [string]$ExportRemote,
   [string]$ApiPort = '8888',
   [string]$Model = 'deepseek-chat',
   [switch]$NoLogonTask,
@@ -35,6 +45,8 @@ $ErrorActionPreference = 'Stop'
 $ToolVersion = '1.1.0'
 $ApiVersion = '1.1.0'
 $HindsightHome = Join-Path $env:USERPROFILE '.hindsight'
+$DshHome = if (-not [string]::IsNullOrWhiteSpace($env:DSH_HOME)) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
+$ExportConfigPath = Join-Path $DshHome 'hindsight-export.json'
 $ProfilePath = Join-Path $HindsightHome 'embed'
 $KeyFilePath = Join-Path $HindsightHome 'deepseek.key'
 $AgentConfigPath = Join-Path $HindsightHome 'coding-agent.json'
@@ -462,6 +474,238 @@ function Write-AgentConfig([string]$Path, [int]$Port) {
   Write-Ok "Wrote $Path"
 }
 
+function Resolve-ExportPath([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return ''
+  }
+  $expanded = [Environment]::ExpandEnvironmentVariables($Value.Trim())
+  if ($expanded -eq '~') {
+    $expanded = $env:USERPROFILE
+  }
+  elseif ($expanded.StartsWith('~\') -or $expanded.StartsWith('~/')) {
+    $expanded = Join-Path $env:USERPROFILE $expanded.Substring(2)
+  }
+  if (-not [System.IO.Path]::IsPathRooted($expanded)) {
+    $expanded = Join-Path (Get-Location).Path $expanded
+  }
+  return [System.IO.Path]::GetFullPath($expanded)
+}
+
+function Resolve-ExportDirectory([string]$CurrentDirectory) {
+  if (-not [string]::IsNullOrWhiteSpace($ExportDir)) {
+    return Resolve-ExportPath $ExportDir
+  }
+  $default = if (-not [string]::IsNullOrWhiteSpace($CurrentDirectory)) { $CurrentDirectory } else { Join-Path $env:USERPROFILE 'hindsight-export' }
+  if (-not [Environment]::UserInteractive) {
+    return Resolve-ExportPath $default
+  }
+  $answer = Read-Host ("Durable Hindsight export directory (local folder or Git repository) [{0}]" -f $default)
+  if ([string]::IsNullOrWhiteSpace($answer)) {
+    return Resolve-ExportPath $default
+  }
+  return Resolve-ExportPath $answer
+}
+
+function Assert-ExportDirectory([string]$Directory) {
+  if ($Directory -match '^(https?|ssh|file)://' -or $Directory -match '^[^@\s]+@[^:\s]+:') {
+    throw "The export directory looks like a Git remote URL: $Directory. Enter a local folder here and provide the remote on the next prompt."
+  }
+  $target = [System.IO.Path]::GetFullPath($Directory).TrimEnd([char[]]@('\', '/'))
+  $roots = @($DshHome, (Join-Path $env:USERPROFILE '.pg0'))
+  foreach ($root in $roots) {
+    $prefix = [System.IO.Path]::GetFullPath($root).TrimEnd([char[]]@('\', '/'))
+    if ($target.Equals($prefix, [StringComparison]::OrdinalIgnoreCase) -or $target.StartsWith($prefix + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+      throw "The export directory must stay outside the Harness home and the Hindsight database: $Directory"
+    }
+  }
+  if (-not (Test-Path -LiteralPath $Directory)) {
+    New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+  }
+  if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+    throw "The export path is not a directory: $Directory"
+  }
+  $isRepository = Test-Path -LiteralPath (Join-Path $Directory '.git')
+  if (-not $isRepository) {
+    $existing = @(Get-ChildItem -LiteralPath $Directory -Force -ErrorAction Stop)
+    if ($existing.Count -gt 0) {
+      throw "The export directory is not empty and is not a Git repository: $Directory. Choose an empty directory or an existing repository, or move its contents aside."
+    }
+  }
+  $probe = Join-Path $Directory ('.hindsight-write-check-' + [guid]::NewGuid().ToString('N') + '.tmp')
+  try {
+    Write-Utf8NoBom $probe 'ok'
+  }
+  catch {
+    throw "The export directory is not writable: $Directory ($($_.Exception.Message))"
+  }
+  finally {
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+  }
+  return $isRepository
+}
+
+function Get-ExportRepoOrigin([string]$Directory) {
+  if (-not (Test-Path -LiteralPath (Join-Path $Directory '.git'))) {
+    return ''
+  }
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($null -eq $git) {
+    return ''
+  }
+  $origin = Invoke-NativeCapture $git.Source @('-C', $Directory, 'remote', 'get-url', 'origin')
+  if ($origin.ExitCode -ne 0) {
+    return ''
+  }
+  return $origin.Output.Trim()
+}
+
+function Hide-RemoteSecret([string]$Remote) {
+  if ([string]::IsNullOrWhiteSpace($Remote)) {
+    return ''
+  }
+  return [regex]::Replace($Remote, '(?i)(://)[^/@\s]+@', '$1***@')
+}
+
+function Test-ExportRemoteUrl([string]$Remote) {
+  if ([string]::IsNullOrWhiteSpace($Remote)) {
+    return $false
+  }
+  $value = $Remote.Trim()
+  if ($value -match '[\r\n\t]' -or $value.StartsWith('-')) {
+    return $false
+  }
+  if ($value -match '^(https?|ssh|file)://[^\s]+$') {
+    return $true
+  }
+  if ($value -match '^[^@\s]+@[^:\s]+:[^\s]+$') {
+    return $true
+  }
+  return $false
+}
+
+function Resolve-ExportRemote([string]$CurrentRemote, [string]$RepoOrigin) {
+  if (-not [string]::IsNullOrWhiteSpace($ExportRemote)) {
+    if ($ExportRemote.Trim() -eq '-') {
+      return ''
+    }
+    return $ExportRemote.Trim()
+  }
+  $proposed = if (-not [string]::IsNullOrWhiteSpace($CurrentRemote)) { $CurrentRemote } elseif (-not [string]::IsNullOrWhiteSpace($RepoOrigin)) { $RepoOrigin } else { '' }
+  if (-not [Environment]::UserInteractive) {
+    return $proposed
+  }
+  if ([string]::IsNullOrWhiteSpace($proposed)) {
+    return Read-Host 'Private Git remote for the export (leave empty for local-only; no push)'
+  }
+  return Read-Host ("Private Git remote for the export [{0}] (Enter keeps it, '-' removes it)" -f (Hide-RemoteSecret $proposed))
+}
+
+function Read-ExportConfig([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return @{}
+  }
+  try {
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+      throw 'the file is empty'
+    }
+    $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    throw "Cannot read the machine-local export configuration at ${Path}: $($_.Exception.Message). Fix or remove the file and rerun."
+  }
+  if ($null -eq $parsed -or $parsed -isnot [pscustomobject]) {
+    throw "The machine-local export configuration at ${Path} must be a JSON object."
+  }
+  $result = @{}
+  foreach ($property in $parsed.PSObject.Properties) {
+    $result[$property.Name] = $property.Value
+  }
+  return $result
+}
+
+function Write-ExportConfig([string]$Path, [string]$Directory, [string]$Remote) {
+  $config = Read-ExportConfig $Path
+  $config['dir'] = $Directory
+  if ([string]::IsNullOrWhiteSpace($Remote)) {
+    if ($config.ContainsKey('remote')) {
+      [void]$config.Remove('remote')
+    }
+  }
+  else {
+    $config['remote'] = $Remote
+  }
+  $parent = Split-Path -Parent $Path
+  if (-not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  }
+  $json = ($config | ConvertTo-Json -Depth 8) + "`n"
+  Write-Utf8NoBom $Path $json
+  Restrict-File $Path
+}
+
+function Test-DeepSeekApiKey([string]$Key) {
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  }
+  catch {
+    # Older Windows builds may not expose the symbol; the request below still reports the real failure.
+  }
+  try {
+    Invoke-RestMethod -Method Get -Uri 'https://api.deepseek.com/models' -Headers @{ Authorization = "Bearer $Key" } -TimeoutSec 20 | Out-Null
+  }
+  catch {
+    $detail = $_.Exception.Message
+    if ($detail -match '401|Unauthorized') {
+      throw 'The DeepSeek API key was rejected (HTTP 401). Check the key and rerun; nothing was changed.'
+    }
+    throw "Could not verify the DeepSeek API key at https://api.deepseek.com/models: $detail. Nothing was changed."
+  }
+}
+
+function Test-ExportPushAccess([string]$Remote) {
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($null -eq $git) {
+    throw 'git is required to verify the export remote. Install Git for Windows and rerun.'
+  }
+  $temp = Join-Path $env:TEMP ('hindsight-export-access-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path $temp | Out-Null
+  try {
+    $initialized = Invoke-NativeCapture $git.Source @('-C', $temp, 'init', '-q', '-b', 'main')
+    if ($initialized.ExitCode -ne 0) {
+      throw "Could not create a temporary Git repository: $($initialized.Output)"
+    }
+    $committed = Invoke-NativeCapture $git.Source @('-C', $temp, '-c', 'user.name=Hindsight Export Check', '-c', 'user.email=hindsight-export@localhost', 'commit', '--allow-empty', '-q', '-m', 'export access check')
+    if ($committed.ExitCode -ne 0) {
+      throw "Could not create the export access probe commit: $($committed.Output)"
+    }
+    $registered = Invoke-NativeCapture $git.Source @('-C', $temp, 'remote', 'add', 'origin', $Remote)
+    if ($registered.ExitCode -ne 0) {
+      throw "Could not register the export remote: $(Hide-RemoteSecret $registered.Output)"
+    }
+    $push = Invoke-NativeCapture $git.Source @('-C', $temp, 'push', '--dry-run', 'origin', 'HEAD:refs/heads/main')
+    if ($push.ExitCode -eq 0) {
+      return
+    }
+    if ($push.Output -match 'non-fast-forward|fetch first|\[rejected\]') {
+      $probeRef = 'refs/heads/hindsight-export-access-' + [guid]::NewGuid().ToString('N')
+      $probe = Invoke-NativeCapture $git.Source @('-C', $temp, 'push', '--dry-run', 'origin', ("HEAD:{0}" -f $probeRef))
+      if ($probe.ExitCode -eq 0) {
+        return
+      }
+      $push = $probe
+    }
+    $safe = (Hide-RemoteSecret $push.Output).Trim()
+    if ($safe.Length -gt 1200) {
+      $safe = $safe.Substring(0, 1200) + '...'
+    }
+    throw "Push access to the export remote was refused or unavailable: $safe"
+  }
+  finally {
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Invoke-Verify([int]$Port) {
   if ($SkipVerify) {
     Write-Skip 'Verification disabled by -SkipVerify'
@@ -620,6 +864,114 @@ if ($SelfTest) {
     throw 'Unused-port discovery self-test reported a listener after the probe stopped.'
   }
   Write-Ok 'Unused-port discovery self-test passed'
+  $remoteUrlCases = @(
+    @{ Url = 'https://git.example.invalid/owner/private.git'; Expected = $true },
+    @{ Url = 'ssh://git@git.example.invalid/owner/private.git'; Expected = $true },
+    @{ Url = 'git@git.example.invalid:owner/private.git'; Expected = $true },
+    @{ Url = ('file:///' + ($env:TEMP -replace '\\', '/') + '/hindsight-remote.git'); Expected = $true },
+    @{ Url = ''; Expected = $false },
+    @{ Url = '--upload-pack=evil'; Expected = $false },
+    @{ Url = ($env:SystemDrive + '\repos\export.git'); Expected = $false }
+  )
+  foreach ($case in $remoteUrlCases) {
+    if ((Test-ExportRemoteUrl $case.Url) -ne $case.Expected) {
+      throw "Remote URL self-test failed for: $($case.Url)"
+    }
+  }
+  if ((Hide-RemoteSecret 'https://user:token@git.example.invalid/x.git') -ne 'https://***@git.example.invalid/x.git') {
+    throw 'Remote URL redaction self-test failed.'
+  }
+  Write-Ok 'Export remote URL self-test passed'
+  $configProbe = Join-Path $env:TEMP ('hindsight-export-config-' + [guid]::NewGuid().ToString('N') + '.json')
+  try {
+    Write-Utf8NoBom $configProbe '{"enabled":false,"remote":"https://git.example.invalid/old.git"}'
+    Write-ExportConfig $configProbe (Join-Path $env:TEMP 'hindsight-export-self-test') 'https://git.example.invalid/new.git'
+    $written = Read-ExportConfig $configProbe
+    if ($written['enabled'] -ne $false -or $written['remote'] -ne 'https://git.example.invalid/new.git' -or $written['dir'] -notlike '*hindsight-export-self-test*') {
+      throw 'Export config merge self-test failed.'
+    }
+    Write-ExportConfig $configProbe (Join-Path $env:TEMP 'hindsight-export-self-test') ''
+    $removed = Read-ExportConfig $configProbe
+    if ($removed.ContainsKey('remote')) {
+      throw 'Export config removal self-test failed.'
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $configProbe -Force -ErrorAction SilentlyContinue
+  }
+  Write-Ok 'Export config self-test passed'
+  $dirProbe = Join-Path $env:TEMP ('hindsight-export-dir-' + [guid]::NewGuid().ToString('N'))
+  try {
+    New-Item -ItemType Directory -Force -Path $dirProbe | Out-Null
+    if (Assert-ExportDirectory $dirProbe) {
+      throw 'An empty directory self-test was mistaken for a Git repository.'
+    }
+    Write-Utf8NoBom (Join-Path $dirProbe 'keep.txt') 'keep'
+    $nonEmptyRefused = $false
+    try {
+      $null = Assert-ExportDirectory $dirProbe
+    }
+    catch {
+      $nonEmptyRefused = $true
+    }
+    if (-not $nonEmptyRefused) {
+      throw 'A non-empty plain export directory was accepted.'
+    }
+    Remove-Item -LiteralPath (Join-Path $dirProbe 'keep.txt') -Force
+    $dirGit = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -ne $dirGit) {
+      $gitInit = Invoke-NativeCapture $dirGit.Source @('-C', $dirProbe, 'init', '-q', '-b', 'main')
+      if ($gitInit.ExitCode -ne 0) {
+        throw 'Could not create the export directory repository fixture.'
+      }
+      if (-not (Assert-ExportDirectory $dirProbe)) {
+        throw 'A Git export directory self-test was not recognized as a repository.'
+      }
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $dirProbe -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  $homeRefused = $false
+  try {
+    $null = Assert-ExportDirectory (Join-Path $DshHome 'hindsight-export-self-test')
+  }
+  catch {
+    $homeRefused = $true
+  }
+  if (-not $homeRefused) {
+    throw 'The Harness home was accepted as an export directory.'
+  }
+  Write-Ok 'Export directory self-test passed'
+  $bareRemote = Join-Path $env:TEMP ('hindsight-remote-' + [guid]::NewGuid().ToString('N') + '.git')
+  $gitCheck = Get-Command git -ErrorAction SilentlyContinue
+  if ($null -ne $gitCheck) {
+    try {
+      $bare = Invoke-NativeCapture $gitCheck.Source @('init', '--bare', '-q', $bareRemote)
+      if ($bare.ExitCode -ne 0) {
+        throw 'Could not create the local bare remote fixture.'
+      }
+      $fileUrl = 'file:///' + ($bareRemote -replace '\\', '/')
+      Test-ExportPushAccess $fileUrl
+      $refused = $false
+      try {
+        Test-ExportPushAccess ($fileUrl + '-missing')
+      }
+      catch {
+        $refused = $true
+      }
+      if (-not $refused) {
+        throw 'Push access self-test accepted a missing remote.'
+      }
+    }
+    finally {
+      Remove-Item -LiteralPath $bareRemote -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Ok 'Export remote push self-test passed'
+  }
+  else {
+    Write-Skip 'git is not installed; export remote push self-test skipped'
+  }
   return
 }
 
@@ -629,15 +981,78 @@ Write-Ok "uv: $uvPath"
 $lines = Get-EnvLines $ProfilePath
 $profileBefore = @($lines)
 $key = Resolve-DeepSeekKey $lines (-not $DryRun)
+$exportConfig = Read-ExportConfig $ExportConfigPath
+if (-not $DryRun) {
+  if (-not $SkipVerify) {
+    Write-Step 'Verifying the DeepSeek API key'
+    Test-DeepSeekApiKey $key
+    Write-Ok 'DeepSeek API key verified'
+  }
+  else {
+    Write-Skip 'DeepSeek API key verification skipped by -SkipVerify'
+  }
+  $configureExport = [Environment]::UserInteractive -or -not [string]::IsNullOrWhiteSpace($ExportDir) -or -not [string]::IsNullOrWhiteSpace($ExportRemote) -or (Test-Path -LiteralPath $ExportConfigPath)
+  if ($configureExport) {
+    Write-Step 'Configuring the durable memory export'
+    $exportDirectory = Resolve-ExportDirectory ([string]$exportConfig['dir'])
+    $null = Assert-ExportDirectory $exportDirectory
+    $repoOrigin = Get-ExportRepoOrigin $exportDirectory
+    $exportRemote = Resolve-ExportRemote ([string]$exportConfig['remote']) $repoOrigin
+    if (-not [string]::IsNullOrWhiteSpace($exportRemote)) {
+      if (-not (Test-ExportRemoteUrl $exportRemote)) {
+        throw "The export remote is not a supported Git URL: $(Hide-RemoteSecret $exportRemote). Use https://, ssh://, git@host:path, or file://."
+      }
+      if (-not $SkipVerify) {
+        Write-Step 'Verifying push access to the export remote'
+        Test-ExportPushAccess $exportRemote
+        Write-Ok ("Export remote push access verified: " + (Hide-RemoteSecret $exportRemote))
+      }
+      else {
+        Write-Warn 'Export remote push access not verified (-SkipVerify)'
+      }
+    }
+    else {
+      Write-Skip 'No export remote configured; exports stay local'
+    }
+    Write-ExportConfig $ExportConfigPath $exportDirectory $exportRemote
+    Write-Ok "Export directory: $exportDirectory"
+    if ([string]::IsNullOrWhiteSpace($exportRemote)) {
+      Write-Skip 'Export remote: none (local Git repository only)'
+    }
+    else {
+      Write-Ok ("Export remote: " + (Hide-RemoteSecret $exportRemote))
+    }
+  }
+  else {
+    Write-Skip 'Export configuration unchanged (non-interactive; pass -ExportDir and/or -ExportRemote)'
+  }
+}
 $databaseUrl = Resolve-DatabaseUrl $lines
 $embedPath = Get-EmbedCommand $uvPath (-not $DryRun)
 
 if ($DryRun) {
+  $plannedDir = if (-not [string]::IsNullOrWhiteSpace($ExportDir)) { Resolve-ExportPath $ExportDir } elseif (-not [string]::IsNullOrWhiteSpace([string]$exportConfig['dir'])) { Resolve-ExportPath ([string]$exportConfig['dir']) } else { Resolve-ExportPath (Join-Path $env:USERPROFILE 'hindsight-export') }
+  $plannedRemote = if ($ExportRemote -eq '-') { '' } elseif (-not [string]::IsNullOrWhiteSpace($ExportRemote)) { $ExportRemote } elseif (-not [string]::IsNullOrWhiteSpace([string]$exportConfig['remote'])) { [string]$exportConfig['remote'] } else { '' }
+  if ([string]::IsNullOrWhiteSpace($plannedRemote) -and (Test-Path -LiteralPath (Join-Path $plannedDir '.git'))) {
+    $plannedRemote = Get-ExportRepoOrigin $plannedDir
+  }
+  $plannedRemoteLabel = if ([string]::IsNullOrWhiteSpace($plannedRemote)) {
+    'local only (no push)'
+  }
+  elseif ($SkipVerify) {
+    (Hide-RemoteSecret $plannedRemote) + ' (push check would be skipped)'
+  }
+  else {
+    (Hide-RemoteSecret $plannedRemote) + ' (push access would be verified)'
+  }
   Write-Step 'Dry run: no changes will be made'
   Write-Host "    profile:      $ProfilePath"
   Write-Host "    database:     $databaseUrl"
   Write-Host "    endpoint:     http://127.0.0.1:$ApiPort"
   Write-Host "    tool:         $(if ($null -eq $embedPath) { "will install hindsight-embed $ToolVersion" } else { $embedPath })"
+  Write-Host "    export dir:   $plannedDir"
+  Write-Host "    export remote: $plannedRemoteLabel"
+  Write-Host "    key check:    $(if ($SkipVerify) { 'skip' } else { 'DeepSeek API' })"
   Write-Host "    logon task:   $(if ($NoLogonTask) { 'skip' } else { $TaskName })"
   Write-Host "    verification: $(if ($SkipVerify) { 'skip' } else { 'retain/recall' })"
   return

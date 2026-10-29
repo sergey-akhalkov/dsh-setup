@@ -272,15 +272,23 @@ the target directory and the private remote are machine-local inputs
 (`~/.dsh/hindsight-export.json`). `export.remote` is read only from that file; `export.dir` may also
 come from a machine-local profile patch, and the file's `dir` wins when both are set.
 
+The one-click `setup-hindsight.ps1` asks for the same directory and remote, verifies the DeepSeek key
+and push access before changing anything, and writes the ACL-restricted file. Use
+`-ExportDir`/`-ExportRemote` for scripted runs (`-ExportRemote -` keeps the export local); the
+script's `-SelfTest` covers the URL, config-merge, directory, and push fixtures without a daemon or
+a real remote.
+
 Verify without a live daemon or a real private repository:
 
 ```sh
+pwsh -NoProfile -File setup-hindsight.ps1 -SelfTest
 pnpm exec vitest run packages/plugin-hindsight/test/export-end-to-end.test.ts
 pnpm exec vitest run packages/plugin-hindsight/test/export-scheduler.test.ts
 pnpm exec vitest run scripts/test/restore-hindsight.test.ts
 ```
 
-The first two drive the real snapshot writer, Git repository, and push path against a fake Hindsight
+The first command exercises the setup prompts' pure validation and the throwaway-repository push
+probe; the next two drive the real snapshot writer, Git repository, and push path against a fake Hindsight
 HTTP server (commit/push counted through a real `pre-push` hook); the last runs
 `restore-hindsight.ps1` as a real PowerShell process against fixture trees, a fake API, a bare
 remote, and a stubbed `hindsight-admin`. A change to the archive layout or the export metadata is

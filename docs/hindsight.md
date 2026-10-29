@@ -51,17 +51,24 @@ irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hinds
 
 The script:
 
-1. installs the pinned `hindsight-embed==1.1.0` tool if it is missing or at another version;
-2. discovers an existing default-profile database, or uses `pg0://hindsight-embed-default` on a
+1. verifies the DeepSeek key against `https://api.deepseek.com/models` and refuses a rejected key
+   before changing anything;
+2. asks for the durable export directory (an empty folder, a new path, or an existing Git
+   repository) and an optional private Git remote, verifies push access with a `git push --dry-run`,
+   and writes the ACL-restricted `%USERPROFILE%\.dsh\hindsight-export.json`; an empty remote keeps
+   the export local, a non-empty plain directory is refused instead of being committed by accident,
+   and a failed push check refuses the setup;
+3. installs the pinned `hindsight-embed==1.1.0` tool if it is missing or at another version;
+4. discovers an existing default-profile database, or uses `pg0://hindsight-embed-default` on a
    fresh machine;
-3. writes the default profile to `%USERPROFILE%\.hindsight\embed` with the DeepSeek provider,
+5. writes the default profile to `%USERPROFILE%\.hindsight\embed` with the DeepSeek provider,
    `deepseek-chat` model, loopback endpoint, and idle exit disabled;
-4. exports the Windows root/CA certificates to `%USERPROFILE%\.hindsight\windows-certs.pem` and
+6. exports the Windows root/CA certificates to `%USERPROFILE%\.hindsight\windows-certs.pem` and
    passes that bundle to the daemon, so a corporate TLS chain works without disabling
    certificate verification;
-5. starts the daemon, registers the `Hindsight embed daemon` logon task, and writes
+7. starts the daemon, registers the `Hindsight embed daemon` logon task, and writes
    `%USERPROFILE%\.hindsight\coding-agent.json` only when it is absent;
-6. verifies a real retain/recall round-trip through the local REST API.
+8. verifies a real retain/recall round-trip through the local REST API.
 
 The default profile carries these settings (the key is the only secret):
 
@@ -92,17 +99,21 @@ Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/ma
 & $installer -DryRun
 ```
 
-| Option                | Effect                                                      |
-| --------------------- | ----------------------------------------------------------- |
-| `-DryRun`             | Report the plan and change nothing.                         |
-| `-ApiPort <port>`     | Local API port; default `8888`.                             |
-| `-NoLogonTask`        | Do not create or update the logon task.                     |
-| `-SkipVerify`         | Skip the retain/recall verification.                        |
-| `-DeepSeekApiKey <k>` | Scripted key input; prefer the environment or the key file. |
+| Option                | Effect                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `-DryRun`             | Report the plan (including the export location) and change nothing.                 |
+| `-ApiPort <port>`     | Local API port; default `8888`.                                                     |
+| `-NoLogonTask`        | Do not create or update the logon task.                                             |
+| `-ExportDir <path>`   | Local export directory; an empty folder, a new path, or an existing Git repository. |
+| `-ExportRemote <url>` | Private export remote; `-` removes it and keeps exports local.                      |
+| `-SkipVerify`         | Skip the API-key, push-access, and retain/recall verification.                      |
+| `-DeepSeekApiKey <k>` | Scripted key input; prefer the environment or the key file.                         |
 
-The key is never printed, is not placed in the repository, and is written only to the
-ACL-restricted machine-local profile. The daemon receives it as a process environment variable,
-so `%USERPROFILE%\.hindsight\embed` is machine-local state, not a portable file.
+The key is verified with the DeepSeek API, never printed, not placed in the repository, and written
+only to the ACL-restricted machine-local profile. The daemon receives it as a process environment
+variable, so `%USERPROFILE%\.hindsight\embed` is machine-local state, not a portable file. The export
+remote is written only to the ACL-restricted `%USERPROFILE%\.dsh\hindsight-export.json`; it never
+enters a tracked file.
 
 ## Data and operation
 
@@ -330,6 +341,12 @@ git -C "$env:USERPROFILE\hindsight-export" push origin HEAD
 
 If that works without a prompt, the exporter will push too. A push that fails for authentication or
 network reasons is retried later; the local commits are kept.
+
+The one-click script performs the same check when it configures a remote: it runs a
+`git push --dry-run` from a throwaway repository and refuses the setup if the remote rejects it. The
+dry run writes nothing to the remote, but it does exercise the credential helper or SSH agent, so a
+credential cached during setup lets the headless exporter push without a prompt. `-SkipVerify`
+bypasses this check together with the key and retain/recall checks.
 
 ## Restore from the export
 
