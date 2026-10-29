@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { apply as applyHindsight } from '@vectorize-io/hindsight-coding-agents/dsh';
+export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,
  * recall, injection, retention, native tools, companion skill) to the official

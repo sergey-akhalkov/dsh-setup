@@ -2,7 +2,7 @@
 
 ## 1. Configuration and defaults
 
-- [ ] 1.1 Extend the plugin config type with the `export` block (`enabled`, `dir`, `intervalMinutes`, `autoCommit`, `autoPush`, `includeHistory`, `includeAttachments`, `importOnEmpty`) and read the machine-local `~/.dsh/hindsight-export.json` for `dir` and `remote`; verify unit tests cover the default (enabled, target outside the DSH home), explicit disable, and machine-local precedence.
+- [x] 1.1 Extend the plugin config type with the `export` block (`enabled`, `dir`, `intervalMinutes`, `autoCommit`, `autoPush`, `includeHistory`, `includeAttachments`, `importOnEmpty`) and read the machine-local `~/.dsh/hindsight-export.json` for `dir` and `remote`; verify unit tests cover the default (enabled, target outside the DSH home), explicit disable, and machine-local precedence.
 - [ ] 1.2 Add the default `export` block to `packages/plugin-hindsight/cordis.fragment.yml` and the setup defaults, run `pnpm gen`, and verify the generated plugin and setup patches contain `export.enabled: true` and `pnpm gen:check` passes.
 
 ## 2. Archive round trip

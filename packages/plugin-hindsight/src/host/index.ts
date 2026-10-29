@@ -4,6 +4,17 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply as applyHindsight } from '@vectorize-io/hindsight-coding-agents/dsh'
+import type { ExportConfig } from './export-config.js'
+
+export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './export-config.js'
+export {
+  DEFAULT_EXPORT_CONFIG,
+  EXPORT_CONFIG_FILE,
+  isForbiddenExportDir,
+  machineExportConfigPath,
+  readMachineExportConfig,
+  resolveExportConfig,
+} from './export-config.js'
 
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,
@@ -24,6 +35,8 @@ export interface HindsightConfig {
   apiUrl?: string
   /** Start the installed local daemon when a local self-hosted server is down. Default true. */
   autostart?: boolean
+  /** Durable JSON export of every memory bank; on by default. */
+  export?: ExportConfig
 }
 
 export interface MachineConfig {
