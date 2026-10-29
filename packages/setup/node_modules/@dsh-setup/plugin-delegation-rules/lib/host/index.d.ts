@@ -25,7 +25,7 @@ export declare const toolDescriptions: {
     readonly task_progress: "Record an explicit in-progress or blocked note for one unchecked task, with the reason and the current worktree digest. Use it when a task spans turns instead of ticking `tasks.md`: it runs no model and costs nothing. The note lets a code-changing turn close only while the worktree still matches it; after any further change it is stale and a fresh note or the tick plus `delegate` task review is required. A checked task never accepts a note, and a note never counts as a task-review PASS.";
     readonly delegation_status: "Report registered DSH subagent providers and capabilities, configured delegation targets and rules, each active change's involvement by this session (created, spec changed, checked tasks), per-change task/progress-note state, review record state (matching, stale, missing, malformed), and missing-target diagnostics with the next action. It never attributes a change. Use it when a `delegate` call reports a target problem or before configuring rules.";
 };
-export type Trigger = 'manual' | 'spec-ready' | 'spec-task-ready' | 'implementation-work' | 'implementation-complete' | 'failure-streak';
+export type Trigger = 'manual' | 'spec-ready' | 'spec-task-ready' | 'implementation-work' | 'lane-boundary' | 'implementation-complete' | 'failure-streak';
 export type Contract = 'review' | 'answer' | 'patch' | 'note';
 export type Gate = 'strict' | 'soft' | 'none';
 export type ReviewScope = 'whole' | 'task';

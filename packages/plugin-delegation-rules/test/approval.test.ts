@@ -6,11 +6,13 @@ import {
   approvalSummaryLine,
   computeApprovalCoverage,
   formatApprovalGapLines,
+  laneOfTask,
   localTaskRecordPath,
   normalizeCheckboxes,
   type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
   parseReviewApprovalMarker,
+  parseTaskLanes,
   parseTasksText,
   portableRecordFromLocal,
   recognizeArchiveCommands,
@@ -90,6 +92,72 @@ describe('numbered task parser', () => {
     ].join('\n')
     expect(unparseableCheckedLines(markdown).map((line) => line.line)).toEqual([1, 2, 3, 4])
     expect(unparseableCheckedLines(markdown)[0]?.text).toBe('- [x] no number')
+  })
+})
+
+describe('task lanes', () => {
+  const markdown = [
+    '# Tasks',
+    '',
+    '- [x] 0.1 Before the lanes',
+    '',
+    '## 1. Code (`packages/x/**`, `docs/a.md`)',
+    '',
+    '- [x] 1.1 First',
+    '- [ ] 1.2 Second',
+    '',
+    '### 1a. Detail',
+    '',
+    '- [ ] 1.3 Nested detail',
+    '',
+    '## 2. Serial tail: generated output',
+    '',
+    '- [ ] 2.1 Gate',
+  ].join('\n')
+
+  it('groups tasks by level-2 heading with their owned paths', () => {
+    const lanes = parseTaskLanes(markdown)
+    expect(lanes.map((lane) => lane.title)).toEqual([
+      '',
+      '1. Code (`packages/x/**`, `docs/a.md`)',
+      '2. Serial tail: generated output',
+    ])
+    expect(lanes[0]?.tasks.map((task) => task.number)).toEqual(['0.1'])
+    expect(lanes[1]?.owns).toEqual(['packages/x/**', 'docs/a.md'])
+    expect(lanes[1]?.tasks.map((task) => task.number)).toEqual(['1.1', '1.2', '1.3'])
+    expect(lanes[1]?.tasks.map((task) => task.checked)).toEqual([true, false, false])
+    expect(lanes[2]?.tasks.map((task) => task.number)).toEqual(['2.1'])
+  })
+
+  it('returns one untitled lane for a plan without headings', () => {
+    const lanes = parseTaskLanes('- [ ] 1.1 One\n- [x] 1.2 Two\n')
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0]?.title).toBe('')
+    expect(lanes[0]?.owns).toEqual([])
+    expect(lanes[0]?.tasks).toHaveLength(2)
+  })
+
+  it('keeps a heading without backticks as a lane with no owned path', () => {
+    const lanes = parseTaskLanes('## 1. Code\n\n- [ ] 1.1 One\n')
+    expect(lanes[0]?.title).toBe('1. Code')
+    expect(lanes[0]?.owns).toEqual([])
+  })
+
+  it('parses CRLF input and returns no lane for a plan without tasks', () => {
+    const lanes = parseTaskLanes('# Tasks\r\n\r\n## 1. Code (`a/**`)\r\n\r\n- [x] 1.1 One\r\n')
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0]?.owns).toEqual(['a/**'])
+    expect(lanes[0]?.tasks[0]?.checked).toBe(true)
+    expect(parseTaskLanes('# Tasks\n')).toEqual([])
+  })
+
+  it('looks a task id up across lanes, including the untitled prefix', () => {
+    const lanes = parseTaskLanes(markdown)
+    expect(laneOfTask(lanes, taskIdOf('Second'))?.title).toBe(
+      '1. Code (`packages/x/**`, `docs/a.md`)',
+    )
+    expect(laneOfTask(lanes, taskIdOf('Before the lanes'))?.title).toBe('')
+    expect(laneOfTask(lanes, taskIdOf('Missing'))).toBeUndefined()
   })
 })
 

@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-lane-boundary-gate",
+  "scope": "task",
+  "taskId": "b65a2391fda3c47f",
+  "digest": "edabe9d5b266fd98fa2009c13d531ba11029781395a4febf13e892fd5136dfc5",
+  "worktreeDigest": "d193f72ca7353aa7283e8c67f55549687dcea09d768fab7d632da429d7a4e63e",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-10-29T22:05:23.581Z"
+}

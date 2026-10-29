@@ -62,6 +62,14 @@ distinguishes vendored upstream content from plugin-owned runtime additions, and
 9/9 portable task approvals. The temporary project-local lane rule in `openspec/config.yaml` was
 removed.
 
+The active `add-lane-boundary-gate` change carries 8 tasks and extends
+`@dsh-setup/plugin-delegation-rules` inside the existing plugin rather than adding a row or a
+plugin: `lane-boundary` becomes the seventh trigger, the shipped `lane-fanout` note rule turns a
+completed `tasks.md` lane into a fan-out decision, the steer prints one ready `subagent` call per
+remaining lane, and the ordinary `task_progress` note is the serial escape. Lane shape comes from
+the level-2 headings the task-lane guidance already requires, and parsing fails open on a plan
+without lanes. The setup composition is unchanged.
+
 The 2026-10-29 changes archived with release v0.13.2 are `add-review-approval-gate`, which added
 portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
 (`review-approval` spec and `delegation-rules` amendments; 24/24 portable PASS records),

@@ -53,6 +53,7 @@ describe('configuration validation', () => {
       'spec-review',
       'task-review',
       'task-progress',
+      'lane-fanout',
       'blocker',
       'research',
       'advisor',
@@ -113,6 +114,24 @@ describe('configuration validation', () => {
       ],
     }
     expect(validateConfig(config).rules.map((rule) => rule.id)).toContain('extra-spec-review')
+  })
+
+  it('accepts the lane-boundary note rule and rejects a review contract for it', () => {
+    const laneRule = { id: 'lane-fanout', when: 'lane-boundary', contract: 'note', gate: 'strict' }
+    expect(validateConfig(configWithRule(laneRule)).rules[0]).toMatchObject(laneRule)
+    expect(() =>
+      validateConfig(
+        configWithRule({
+          id: 'lane-fanout',
+          when: 'lane-boundary',
+          contract: 'review',
+          scope: 'task',
+          to: 'codex',
+          gate: 'strict',
+          instruction: 'bundled:review-task',
+        }),
+      ),
+    ).toThrow(/lane-boundary is satisfied only by a task progress note/)
   })
 
   const invalid: Array<[string, Record<string, unknown>, RegExp]> = [

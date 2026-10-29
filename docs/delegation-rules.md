@@ -65,6 +65,9 @@ result contract is a code extension.
 - `implementation-work` — this session's turn changed implementation files in an involved change
   and has neither a newly checked-and-reviewed task nor a `task_progress` note matching the
   current worktree digest.
+- `lane-boundary` — a task this session ticked in this turn completed the last unchecked task of a
+  `tasks.md` lane, another non-tail lane still has an unchecked task, and the turn started no
+  parallel worker; satisfied by a worker start or by a progress note in a remaining lane.
 - `implementation-complete` — this session completed the change's task list and the optional
   integration review has no matching `PASS`/`ERROR` record for the current worktree digest.
 - `failure-streak` — the configured number of consecutive failed tool calls with no intervening
@@ -369,6 +372,7 @@ The shipped defaults live in this package's composition fragment:
 | `spec-review`        | `spec-ready`              | review, whole, phase `spec`        | strict |
 | `task-review`        | `spec-task-ready`         | review, task                       | strict |
 | `task-progress`      | `implementation-work`     | note                               | strict |
+| `lane-fanout`        | `lane-boundary`           | note                               | strict |
 | `blocker`            | `failure-streak`          | answer                             | soft   |
 | `research`           | `manual`                  | answer                             | none   |
 | `advisor`            | `manual`                  | answer                             | none   |
@@ -461,7 +465,52 @@ digest, so decide ownership before the work starts:
   default ceremony.
 
 The review records, digests, triggers, and turn-stopping gate are unchanged by this guidance; it
-describes how to assign write-capable work.
+describes how to assign write-capable work. The `lane-boundary` rule below is what makes the
+assignment happen at the moment the work is split, rather than at the start of the change.
+
+### The lane boundary
+
+A long goal tends to parallelize once, while the spec is being cut, and then run serially for the
+rest of its life: the loop only ever asks for the next unchecked task, so a lane that becomes free
+never shows up as a decision. The `lane-boundary` trigger turns a completed lane into that decision
+point.
+
+A lane is the set of numbered tasks under the nearest preceding level-2 heading of `tasks.md`, and
+its owned paths are the backticked segments of that heading — the shape the task-lane guidance in
+`openspec-propose` already asks for:
+
+```markdown
+## 1. Plugin package (lane 1, owns `packages/plugin/**`)
+
+- [ ] 1.1 Add the parser
+```
+
+The trigger reports at turn close only when all of these hold:
+
+- a task this session ticked in this turn was the last unchecked task of its lane;
+- at least one other lane still has an unchecked task and is not the serial tail;
+- the turn started no parallel worker — a successful `subagent`, `subagent_fork`,
+  `spawn_teammate`, or `workflow` tool result settles it;
+- no `task_progress` note names a task in a remaining lane and matches the current worktree digest.
+
+The steer names each remaining lane, its owned paths, a ready `subagent` call that takes the lane
+in its own worktree and branch, and the `task_progress` call that records a serial decision. The
+payload also prints a checkpoint commit: a new checkout contains only commits, so the session that
+fans out commits the current plan and worktree first, force-adding the change directory so a change
+that matches a Git ignore rule still reaches the worker. Owned paths come from the change and no
+machine path is printed, because the child inherits the working directory. The serial escape is the
+ordinary progress note: writing it records _why_ the lane stays serial, and the note is what makes
+the decay auditable after the fact.
+
+A heading containing `serial` (case-insensitive) is the integration tail and never counts as
+remaining parallel work, because generated output and the full repository gate cannot run
+concurrently. The trigger fails open: an unreadable `tasks.md`, a change without level-2 headings,
+any remaining lane without owned paths, a completion task that no longer appears in `tasks.md`, a
+lane reopened before the turn closes, a renamed lane, and a write that only deletes a lane's last
+unchecked task all report nothing. A completion therefore stands only while the plan still holds
+the lane complete and every task that carried it. Mid-lane turns never report, so a change reaches
+only a handful of
+boundaries.
 
 ## Digests and records
 
@@ -521,7 +570,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
   (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 13160 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 14172 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`

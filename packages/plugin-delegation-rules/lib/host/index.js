@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
+import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -52,6 +52,12 @@ const TOOL_OUTPUT_SCHEMA = {
 const GATE_SOURCE_KIND = 'delegation-rules';
 const DELEGATION_DIR = '.dsh/delegation';
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/**
+ * Tool calls that start a parallel worker. The set is deliberately broad: the
+ * lane-boundary rule measures that parallel work happened in the turn, not
+ * which lane it covered.
+ */
+const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
 const DEFAULT_TIMEOUTS = { review: 600_000, answer: 300_000, patch: 1_800_000 };
 const DEFAULT_FAILURE_STREAK = 3;
 const MAX_ANSWER_CHARS = 12_000;
@@ -84,6 +90,7 @@ const TRIGGERS = new Set([
     'spec-ready',
     'spec-task-ready',
     'implementation-work',
+    'lane-boundary',
     'implementation-complete',
     'failure-streak',
 ]);
@@ -237,7 +244,7 @@ function validateRule(raw, index, targets) {
     const where = `rule "${id}"`;
     const when = raw.when;
     if (typeof when !== 'string' || !TRIGGERS.has(when)) {
-        fail(`${where}: unknown trigger ${JSON.stringify(when)}; use manual, spec-ready, spec-task-ready, implementation-work, implementation-complete, or failure-streak`);
+        fail(`${where}: unknown trigger ${JSON.stringify(when)}; use manual, spec-ready, spec-task-ready, implementation-work, lane-boundary, implementation-complete, or failure-streak`);
     }
     const contract = raw.contract;
     if (typeof contract !== 'string' || !CONTRACTS.has(contract)) {
@@ -268,6 +275,11 @@ function validateRule(raw, index, targets) {
             fail(`${where}: implementation-work is satisfied only by a task progress note; set contract: note`);
         }
     }
+    else if (when === 'lane-boundary') {
+        if (contract !== 'note') {
+            fail(`${where}: lane-boundary is satisfied only by a task progress note; set contract: note`);
+        }
+    }
     else if (when === 'implementation-complete') {
         if (contract !== 'review' || raw.scope !== 'whole') {
             fail(`${where}: implementation-complete drives a whole-worktree review; set contract: review and scope: whole`);
@@ -296,8 +308,8 @@ function validateRule(raw, index, targets) {
             if (raw[forbidden] !== undefined)
                 fail(`${where}: a note rule takes no "${forbidden}"`);
         }
-        if (raw.when !== 'implementation-work') {
-            fail(`${where}: only the implementation-work trigger uses a note rule`);
+        if (raw.when !== 'implementation-work' && raw.when !== 'lane-boundary') {
+            fail(`${where}: only the implementation-work and lane-boundary triggers use a note rule`);
         }
     }
     else {
@@ -1606,6 +1618,7 @@ class DelegationState {
                 steered: new Set(),
                 turn: -1,
                 evidence: new Map(),
+                workerStarted: false,
             };
             this.agents.set(agentId, state);
         }
@@ -1632,6 +1645,7 @@ class DelegationState {
         state.steered.clear();
         state.baseline = undefined;
         state.evidence = new Map();
+        state.workerStarted = false;
         return true;
     }
     evidenceFor(agentId, change) {
@@ -1648,6 +1662,12 @@ class DelegationState {
     }
     failuresOf(agentId) {
         return this.of(agentId).failures;
+    }
+    markWorkerStarted(agentId) {
+        this.of(agentId).workerStarted = true;
+    }
+    hasWorkerStart(agentId) {
+        return this.of(agentId).workerStarted;
     }
     markConsulted(agentId) {
         const state = this.of(agentId);
@@ -2673,6 +2693,33 @@ function softIssue(deps, agentId, key, ruleId, text, call) {
     deps.state.markSteered(agentId, key);
     return { ruleId, text, call, soft: true };
 }
+/** Group a change's task plan into lanes; an unreadable plan fails open. */
+async function readTaskLanes(changeDir) {
+    try {
+        return parseTaskLanes(await readFile(join(changeDir, 'tasks.md'), 'utf8'));
+    }
+    catch {
+        return [];
+    }
+}
+/** An argument value safe to print inside a double-quoted suggested call. */
+function quotedArg(text) {
+    return text.replace(/"/gu, "'");
+}
+/** One ready-to-paste worker call that takes a remaining lane in its own worktree. */
+function laneWorkerCall(changeName, lane, index) {
+    const worktree = `wt-${changeName}-${index + 1}`;
+    const branch = `lane-${changeName}-${index + 1}`;
+    const heading = `the heading '${lane.title}'`;
+    const prompt = `Implement the unchecked tasks under ${heading} in openspec/changes/${changeName}/tasks.md. ` +
+        `Work in your own worktree: create ../${worktree} on a new branch ${branch} ` +
+        `(git worktree add ../${worktree} -b ${branch}; pick another suffix if that path already exists), ` +
+        'then run pnpm install --frozen-lockfile inside it. ' +
+        `Read that change's proposal.md, design.md, and spec deltas first. ` +
+        `Work only inside ${lane.owns.join(', ')}. ` +
+        `Do not tick tasks.md; report the branch ${branch}, the files changed, and the commands you ran.`;
+    return `subagent(description: "${quotedArg(`Lane: ${lane.title}`.slice(0, 80))}", prompt: "${quotedArg(prompt)}")`;
+}
 /**
  * Evaluate every gated rule and steer the agent once when something is unmet.
  * This function never starts a target and returns no value; the caller (the
@@ -2914,6 +2961,93 @@ async function evaluateGate(deps, agent, turn, signal) {
                         pushSoft(`implementation-work:${change.name}:${current.implementationFingerprint ?? 'none'}`, ruleId, text, call);
                 }
             }
+            // A completed lane is a decision point: fan out the lanes that remain, or
+            // record the serial decision. Everything here fails open.
+            const laneRules = deps.config.rules.filter((rule) => rule.when === 'lane-boundary' && rule.contract === 'note' && rule.gate !== 'none');
+            if (laneRules.length > 0 && !deps.state.hasWorkerStart(agentId)) {
+                // Lane completion comes from this session's own canonical write pair, so
+                // another session's final tick can never gate this one.
+                const evidence = deps.state.evidenceOf(agentId).get(change.name);
+                const completions = [];
+                for (const write of evidence?.taskWrites ?? []) {
+                    const before = parseTaskLanes(write.before ?? '');
+                    for (const lane of parseTaskLanes(write.after)) {
+                        if (lane.tasks.length === 0)
+                            continue;
+                        if (!lane.tasks.every((task) => task.checked))
+                            continue;
+                        // A matching before-write lane with an unchecked task is the only
+                        // evidence that this write completed the lane; a renamed or newly
+                        // supplied lane has no such evidence and fails open. A deletion that
+                        // leaves the lane checked carries no checked-off transition, so it is
+                        // not a completion either.
+                        const previous = before.find((entry) => entry.title === lane.title);
+                        if (previous === undefined)
+                            continue;
+                        const uncheckedBefore = new Set(previous.tasks.filter((task) => !task.checked).map((task) => task.id));
+                        const completedTask = lane.tasks.some((task) => task.checked && uncheckedBefore.has(task.id));
+                        if (!completedTask)
+                            continue;
+                        completions.push({ title: lane.title, taskIds: lane.tasks.map((task) => task.id) });
+                    }
+                }
+                if (completions.length > 0) {
+                    const lanes = await readTaskLanes(change.dir);
+                    // A completion only stands while the current plan still holds the lane
+                    // complete and every task that carried it; a removed or reopened task
+                    // invalidates the evidence instead of gating the turn.
+                    const completedTitles = new Set(completions
+                        .filter(({ title, taskIds }) => {
+                        const lane = lanes.find((entry) => entry.title === title);
+                        return (lane !== undefined &&
+                            lane.tasks.length > 0 &&
+                            lane.tasks.every((task) => task.checked) &&
+                            taskIds.every((id) => lane.tasks.some((task) => task.id === id)));
+                    })
+                        .map(({ title }) => title));
+                    const firstTitle = [...completedTitles][0];
+                    if (firstTitle !== undefined) {
+                        // Any remaining unchecked lane without owned paths means the plan does
+                        // not follow the lane convention, so the whole boundary fails open.
+                        const candidates = lanes.filter((lane) => !/serial/iu.test(lane.title) &&
+                            !completedTitles.has(lane.title) &&
+                            lane.tasks.some((task) => !task.checked));
+                        const remaining = candidates.filter((lane) => lane.owns.length > 0);
+                        if (remaining.length > 0 && remaining.length === candidates.length) {
+                            const note = await inspectNote(cwd, change.name);
+                            const noteTask = note.kind === 'note' ? note.note.taskId : undefined;
+                            const escaped = noteTask !== undefined &&
+                                current.digest !== undefined &&
+                                note.kind === 'note' &&
+                                note.note.worktreeDigest === current.digest &&
+                                laneOfTask(remaining, noteTask) !== undefined;
+                            if (!escaped) {
+                                const ruleId = laneRules.find((rule) => rule.gate === 'strict')?.id ??
+                                    laneRules[0]?.id ??
+                                    'lane-fanout';
+                                const titles = remaining.map((lane) => `"${lane.title}"`).join(', ');
+                                const next = remaining[0]?.tasks.find((task) => !task.checked);
+                                const call = [
+                                    'commit the current worktree first, because a new checkout only sees commits;',
+                                    'the :/ and :(top) pathspecs keep both commands anchored to the repository root:',
+                                    `  git add -A :/; git add -f ":(top)openspec/changes/${change.name}"; git commit -m "lane checkpoint before fan-out"`,
+                                    'start one worker per lane (they run in parallel):',
+                                    ...remaining.map((lane, index) => `  ${laneWorkerCall(change.name, lane, index)}`),
+                                    'or record the serial decision:',
+                                    next === undefined
+                                        ? '  delegation_status'
+                                        : `  task_progress(task: "${next.number} ${next.text}", status: "in-progress", reason: "why this lane stays serial")`,
+                                ].join('\n');
+                                const text = `rule "${ruleId}": lane "${firstTitle}" is complete and ${remaining.length} other lane(s) still have unchecked tasks (${titles}); this turn started no parallel worker in change "${change.name}".`;
+                                if (laneRules.some((rule) => rule.gate === 'strict'))
+                                    pushStrict(ruleId, text, call);
+                                else
+                                    pushSoft(`lane-boundary:${change.name}:${firstTitle}`, ruleId, text, call);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     if (openspecRoot !== undefined && current.digestError !== undefined && involved.length > 0) {
@@ -3070,6 +3204,9 @@ function attachGate({ ctx, deps }) {
                 deps.state.recordToolResult(agentId, result.isError);
                 const cwd = deps.services.workingDirectory.get(exec.agent.session);
                 recordWriteEvidence(deps.state, agentId, cwd, exec, result);
+                if (!result.isError && WORKER_TOOLS.has(exec.name)) {
+                    deps.state.markWorkerStarted(agentId);
+                }
             }
         }
         catch {

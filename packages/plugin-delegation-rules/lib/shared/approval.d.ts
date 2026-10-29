@@ -26,6 +26,22 @@ export interface NumberedTask {
 export declare function normalizeTaskText(text: string): string;
 export declare function taskIdOf(text: string): string;
 export declare function parseTasksText(markdown: string): NumberedTask[];
+/** One level-2 task group parsed from `tasks.md`. */
+export interface TaskLane {
+    /** Heading title without `##`; empty for tasks that precede the first heading. */
+    title: string;
+    /** Backticked path segments named by the heading, in order. */
+    owns: string[];
+    tasks: NumberedTask[];
+}
+/**
+ * Group numbered tasks by their level-2 heading. A lane's owned paths are the
+ * backticked segments of its heading; tasks before the first heading form an
+ * untitled lane. Parsing is total: an input without headings yields one lane.
+ */
+export declare function parseTaskLanes(markdown: string): TaskLane[];
+/** The lane that contains the task id, if any. */
+export declare function laneOfTask(lanes: readonly TaskLane[], taskId: string): TaskLane | undefined;
 /** Checkbox state only: a task tick alone never changes this normalized text. */
 export declare function normalizeCheckboxes(markdown: string): string;
 /** One checked markdown line that is not a numbered task; approval fails closed on it. */

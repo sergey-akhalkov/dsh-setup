@@ -1309,3 +1309,348 @@ describe('gate safety', () => {
     expect(steerTexts(broken).join('\n')).toContain('could not evaluate this turn')
   })
 })
+
+describe('lane-boundary gate', () => {
+  function laneOnly(gate: 'strict' | 'soft' = 'strict'): BundleConfigLike {
+    return {
+      targets: codexTargets,
+      rules: [{ id: 'lane-fanout', when: 'lane-boundary', contract: 'note', gate }],
+    }
+  }
+
+  type Section = [heading: string, tasks: Array<[number: string, text: string, checked: boolean]>]
+
+  function plan(sections: Section[]): string {
+    const lines = ['# Tasks', '']
+    for (const [heading, tasks] of sections) {
+      lines.push(`## ${heading}`, '')
+      for (const [number, text, checked] of tasks) {
+        lines.push(`- [${checked ? 'x' : ' '}] ${number} ${text}`)
+      }
+      lines.push('')
+    }
+    return `${lines.join('\n')}\n`
+  }
+
+  function lanePlan(code1: boolean, code2: boolean, docs = false): string {
+    return plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', code1],
+          ['1.2', 'Second code', code2],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', docs]]],
+      ['3. Serial tail (owns `packages/setup/**`)', [['3.1', 'Run the gate', false]]],
+    ])
+  }
+
+  const FIXTURE = [
+    { number: '1.1', text: 'First code' },
+    { number: '1.2', text: 'Second code' },
+    { number: '2.1', text: 'Write docs' },
+    { number: '3.1', text: 'Run the gate' },
+  ]
+
+  /** Write the plan on disk before the turn starts, then tick one task in the turn. */
+  async function tickedTurn(
+    root: string,
+    dir: string,
+    before: string,
+    after: string,
+    turn = 1,
+  ): Promise<ReturnType<typeof harnessFor>> {
+    await writeFile(join(dir, 'tasks.md'), before)
+    const harness = harnessFor(root, laneOnly())
+    await harness.preStep(turn)
+    await harness.writeResult(join(dir, 'tasks.md'), before, after, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), after)
+    return harness
+  }
+
+  it('does not treat a renamed completed lane as a completion', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', true],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+    ])
+    const after = plan([
+      [
+        '1. Implementation (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', true],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+    ])
+    const harness = await tickedTurn(root, dir, before, after)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('does not gate a session whose own write left the lane unfinished', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = lanePlan(false, false)
+    const other = createAgent('agent-b')
+    await writeFile(join(dir, 'tasks.md'), before)
+    const harness = harnessFor(root, laneOnly())
+    await harness.preStep(1)
+    const firstTick = lanePlan(true, false)
+    await harness.writeResult(join(dir, 'tasks.md'), before, firstTick, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), firstTick)
+    const finalTick = lanePlan(true, true)
+    await harness.writeResult(join(dir, 'tasks.md'), firstTick, finalTick, other, 'edit')
+    await writeFile(join(dir, 'tasks.md'), finalTick)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('steers with the remaining lane, its paths, and the exact fan-out and escape calls', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(root, dir, lanePlan(true, false), lanePlan(true, true))
+    await harness.turnStopping(1)
+    const message = combinedSteers(harness.agent)
+    expect(message).toContain('rule "lane-fanout"')
+    expect(message).toContain('lane "1. Code (owns `src/**`)" is complete')
+    expect(message).toContain('"2. Docs (owns `docs/a.md`)"')
+    expect(message).toContain('subagent(description: "Lane: 2. Docs')
+    expect(message).toContain('git worktree add ../wt-change-a-1 -b lane-change-a-1')
+    expect(message).toContain(
+      'git add -A :/; git add -f ":(top)openspec/changes/change-a"; git commit -m "lane checkpoint before fan-out"',
+    )
+    expect(message).toContain('Do not tick tasks.md')
+    expect(message).toContain('src/**')
+    expect(message).toContain('task_progress(task: "2.1 Write docs"')
+    expect(message).not.toContain(root)
+  })
+
+  it('does not steer mid-lane', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(root, dir, lanePlan(false, false), lanePlan(true, false))
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('does not steer when the turn started a parallel worker', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(root, dir, lanePlan(true, false), lanePlan(true, true))
+    await harness.toolOutcome('subagent', { description: 'lane 2' }, { id: 'child-1' })
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('does not count a failed worker start and does not carry a worker across turns', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(root, dir, lanePlan(true, false), lanePlan(true, true))
+    await harness.toolOutcome('subagent', { description: 'lane 2' }, {}, harness.agent, true)
+    await harness.turnStopping(1)
+    expect(combinedSteers(harness.agent)).toContain('lane-fanout')
+
+    const root2 = await workspace()
+    const dir2 = await writeChange(root2, 'change-a', FIXTURE)
+    const before = lanePlan(true, false)
+    const after = lanePlan(true, true)
+    await writeFile(join(dir2, 'tasks.md'), before)
+    const harness2 = harnessFor(root2, laneOnly())
+    await harness2.preStep(1)
+    await harness2.toolOutcome('spawn_teammate', { name: 'lane-2' }, { target: 'lane-2' })
+    await harness2.preStep(2)
+    await harness2.writeResult(join(dir2, 'tasks.md'), before, after, harness2.agent, 'edit')
+    await writeFile(join(dir2, 'tasks.md'), after)
+    await harness2.turnStopping(2)
+    expect(combinedSteers(harness2.agent)).toContain('lane-fanout')
+  })
+
+  it('accepts a progress note naming a task in a remaining lane as the serial decision', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(root, dir, lanePlan(true, false), lanePlan(true, true))
+    await harness.callTool('task_progress', {
+      task: '2.1 Write docs',
+      status: 'in-progress',
+      reason: 'the docs describe the code this lane just wrote',
+    })
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('ignores a serial tail and treats a change without headings as fail-open', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(
+      root,
+      dir,
+      lanePlan(true, false, true),
+      lanePlan(true, true, true),
+    )
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+
+    const root2 = await workspace()
+    const dir2 = await writeChange(root2, 'change-b', [
+      { number: '1.1', text: 'First task' },
+      { number: '1.2', text: 'Second task' },
+    ])
+    const before = '# Tasks\n\n- [x] 1.1 First task\n- [ ] 1.2 Second task\n'
+    const after = '# Tasks\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n'
+    await writeFile(join(dir2, 'tasks.md'), before)
+    const harness2 = harnessFor(root2, laneOnly())
+    await harness2.preStep(1)
+    await harness2.writeResult(join(dir2, 'tasks.md'), before, after, harness2.agent, 'edit')
+    await writeFile(join(dir2, 'tasks.md'), after)
+    await harness2.turnStopping(1)
+    expect(steerTexts(harness2.agent)).toHaveLength(0)
+  })
+
+  it('does not steer when the remaining lane owns no path', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', false],
+        ],
+      ],
+      ['2. Docs', [['2.1', 'Write docs', false]]],
+    ])
+    const after = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', true],
+        ],
+      ],
+      ['2. Docs', [['2.1', 'Write docs', false]]],
+    ])
+    const harness = await tickedTurn(root, dir, before, after)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('does not treat deleting the last unchecked task as a completion', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', false],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+    ])
+    const after = plan([
+      ['1. Code (owns `src/**`)', [['1.1', 'First code', true]]],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+    ])
+    const harness = await tickedTurn(root, dir, before, after)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('does not steer when one of two remaining lanes owns no path', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', false],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+      ['3. Notes', [['3.1', 'Run the gate', false]]],
+    ])
+    const after = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', true],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+      ['3. Notes', [['3.1', 'Run the gate', false]]],
+    ])
+    const harness = await tickedTurn(root, dir, before, after)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('fails open when the task plan becomes unreadable', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await tickedTurn(root, dir, lanePlan(true, false), lanePlan(true, true))
+    await rm(join(dir, 'tasks.md'))
+    await harness.turnStopping(1)
+    const message = combinedSteers(harness.agent)
+    expect(message).not.toContain('lane-fanout')
+    expect(message).toContain('Soft hint')
+  })
+
+  it('does not steer when a later write reopens the completed lane', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = lanePlan(true, false)
+    const completed = lanePlan(true, true)
+    const reopened = plan([
+      [
+        '1. Code (owns `src/**`)',
+        [
+          ['1.1', 'First code', true],
+          ['1.2', 'Second code', true],
+          ['1.3', 'Follow-up in the same lane', false],
+        ],
+      ],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+      ['3. Serial tail', [['3.1', 'Run the gate', false]]],
+    ])
+    await writeFile(join(dir, 'tasks.md'), before)
+    const harness = harnessFor(root, laneOnly())
+    await harness.preStep(1)
+    await harness.writeResult(join(dir, 'tasks.md'), before, completed, harness.agent, 'edit')
+    await harness.writeResult(join(dir, 'tasks.md'), completed, reopened, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), reopened)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('does not steer when the completion task is removed before the turn closes', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const before = lanePlan(true, false)
+    const completed = lanePlan(true, true)
+    const trimmed = plan([
+      ['1. Code (owns `src/**`)', [['1.1', 'First code', true]]],
+      ['2. Docs (owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+      ['3. Serial tail', [['3.1', 'Run the gate', false]]],
+    ])
+    await writeFile(join(dir, 'tasks.md'), before)
+    const harness = harnessFor(root, laneOnly())
+    await harness.preStep(1)
+    await harness.writeResult(join(dir, 'tasks.md'), before, completed, harness.agent, 'edit')
+    await harness.writeResult(join(dir, 'tasks.md'), completed, trimmed, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), trimmed)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+})

@@ -61,12 +61,17 @@ A session with no involvement is not steered for the change. To opt in, edit the
 | `spec-ready` | A change this session created or whose spec artifacts it changed is review-ready and its whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
 | `spec-task-ready` | A task this session checked has no task-review PASS/ERROR record. | `review` scope `task` |
 | `implementation-work` | The turn changed implementation files in a change this session is involved in and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
+| `lane-boundary` | A task this session ticked in this turn completed the last unchecked task of a `tasks.md` lane, another non-`serial` lane with owned paths still has an unchecked task, and the turn started no parallel worker (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`). Satisfied by a worker start or by a matching progress note in a remaining lane. | `note` |
 | `implementation-complete` | This session completed the change's task list and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
 | `failure-streak` | The configured number of consecutive failed tool calls has no intervening success and no consultation attempt for that streak. | `answer` (soft) |
 
 `manual` rules must use `gate: none`. `failure-streak` rules must not be `strict` (an `answer`
 writes no record). `spec-*` and `implementation-complete` require `review` with the matching
-scope; `implementation-work` requires `note`.
+scope; `implementation-work` and `lane-boundary` require `note`. A lane is the numbered tasks under
+the nearest level-2 heading of `tasks.md`, its owned paths are the backticked segments of that
+heading, and a heading containing `serial` is the integration tail and never counts as remaining
+parallel work. The trigger fails open: no headings, a lane without owned paths, an unreadable
+`tasks.md`, and a ticked task that no longer appears in it report nothing.
 
 ## Contracts
 
@@ -123,8 +128,10 @@ digest. Before handing work to more than one write-capable agent at once:
 - A single writer doing sequential work needs no worktree; adding one only makes the return path
   longer.
 
-Triggers, records, digests, and the turn-stopping gate are unchanged: this section describes how to
-assign write-capable work, not a new trigger.
+Triggers, records, and digests are unchanged by this section: it describes how to assign
+write-capable work. The `lane-fanout` rule is what makes the assignment happen at a lane boundary;
+when it steers, start one worker per remaining lane before continuing, or record the serial
+decision with `task_progress`.
 
 ## Default rules
 
@@ -133,6 +140,7 @@ assign write-capable work, not a new trigger.
 | `spec-review` | `spec-ready` | review, whole, phase `spec` | strict |
 | `task-review` | `spec-task-ready` | review, task | strict |
 | `task-progress` | `implementation-work` | note | strict |
+| `lane-fanout` | `lane-boundary` | note | strict |
 | `blocker` | `failure-streak` | answer | soft |
 | `research` | `manual` | answer | none |
 | `advisor` | `manual` | answer | none |

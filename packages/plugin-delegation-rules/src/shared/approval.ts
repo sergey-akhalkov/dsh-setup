@@ -49,6 +49,56 @@ export function parseTasksText(markdown: string): NumberedTask[] {
   return tasks
 }
 
+/** One level-2 task group parsed from `tasks.md`. */
+export interface TaskLane {
+  /** Heading title without `##`; empty for tasks that precede the first heading. */
+  title: string
+  /** Backticked path segments named by the heading, in order. */
+  owns: string[]
+  tasks: NumberedTask[]
+}
+
+/**
+ * Group numbered tasks by their level-2 heading. A lane's owned paths are the
+ * backticked segments of its heading; tasks before the first heading form an
+ * untitled lane. Parsing is total: an input without headings yields one lane.
+ */
+export function parseTaskLanes(markdown: string): TaskLane[] {
+  const headings: Array<{ at: number; lane: TaskLane }> = []
+  for (const match of markdown.matchAll(/^##[ \t]+(.+?)[ \t]*\r?$/gmu)) {
+    const heading = match[1] ?? ''
+    headings.push({
+      at: match.index ?? 0,
+      lane: {
+        title: normalizeTaskText(heading),
+        owns: [...heading.matchAll(/`([^`]+)`/gu)]
+          .map((segment) => normalizeTaskText(segment[1] ?? ''))
+          .filter((segment) => segment !== ''),
+        tasks: [],
+      },
+    })
+  }
+  const lanes = headings.map((heading) => heading.lane)
+  const untitled: NumberedTask[] = []
+  let cursor = 0
+  for (const task of parseTasksText(markdown)) {
+    let heading = headings[cursor]
+    while (heading !== undefined && heading.at < task.at) {
+      cursor += 1
+      heading = headings[cursor]
+    }
+    const lane = cursor === 0 ? undefined : lanes[cursor - 1]
+    if (lane === undefined) untitled.push(task)
+    else lane.tasks.push(task)
+  }
+  return untitled.length === 0 ? lanes : [{ title: '', owns: [], tasks: untitled }, ...lanes]
+}
+
+/** The lane that contains the task id, if any. */
+export function laneOfTask(lanes: readonly TaskLane[], taskId: string): TaskLane | undefined {
+  return lanes.find((lane) => lane.tasks.some((task) => task.id === taskId))
+}
+
 /** Checkbox state only: a task tick alone never changes this normalized text. */
 export function normalizeCheckboxes(markdown: string): string {
   return markdown.replace(/^(\s*-\s*)\[[xX]\]/gm, '$1[ ]')
