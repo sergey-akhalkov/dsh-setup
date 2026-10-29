@@ -312,6 +312,13 @@ describe('change-level approval in delegation_status', () => {
     expect(text).toContain(
       'task approval: task-review PASS 1/3, ERROR 1, missing 1; archive-ready: no',
     )
+    const missingId = taskIdFor('Third task')
+    expect(text).toContain(
+      `missing 1.3 "Third task" -> delegate(rule: "task-review", change: "change-a", task: "${missingId}")`,
+    )
+    expect(text).toContain(`record: openspec/changes/change-a/reviews/${missingId}.json`)
+    const failedId = taskIdFor('Second task')
+    expect(text).toContain(`record at openspec/changes/change-a/reviews/${failedId}.json`)
     expect(text).not.toContain('Open task')
   })
 
@@ -364,7 +371,7 @@ describe('change-level approval in delegation_status', () => {
     const text = await harness.toolText('delegation_status', {})
     expect(text).toContain('archive-ready: no')
     expect(text).toContain(
-      'approval problem: checked line 4 "- [x] stray line" is not a numbered task',
+      'checked line 4 "- [x] stray line" is not a numbered task; the approval cannot be proven',
     )
   })
 

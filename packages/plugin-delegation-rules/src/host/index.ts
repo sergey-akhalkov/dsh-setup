@@ -24,6 +24,7 @@ import {
   CHANGE_PATTERN,
   computeApprovalCoverage,
   DIGEST_PATTERN,
+  formatApprovalGapLines,
   isReviewFinding,
   type NumberedTask,
   normalizeCheckboxes,
@@ -3313,11 +3314,7 @@ class DelegationEngine {
         } else {
           const coverage = approval.coverage
           lines.push(`  task approval: ${approvalSummaryLine(coverage)}`)
-          for (const line of coverage.unparseable) {
-            lines.push(
-              `  approval problem: checked line ${line.line} "${line.text}" is not a numbered task`,
-            )
-          }
+          for (const gap of formatApprovalGapLines(coverage)) lines.push(`  ${gap}`)
         }
         const note = await inspectNote(cwd, change.name)
         if (note.kind === 'note') {
