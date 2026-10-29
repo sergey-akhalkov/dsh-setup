@@ -34,7 +34,7 @@
 
 ## 7. Documentation
 
-- [ ] 7.1 Document the export layout, the default-on flag, the machine-local `dir`/`remote` file, the private-repository and privacy boundary, Git credential requirements, and the restore procedure in `docs/hindsight.md`; verify every documented command runs as written and the page contains no credential, remote URL, or machine path.
+- [x] 7.1 Document the export layout, the default-on flag, the machine-local `dir`/`remote` file, the private-repository and privacy boundary, Git credential requirements, and the restore procedure in `docs/hindsight.md`; verify every documented command runs as written and the page contains no credential, remote URL, or machine path.
 - [ ] 7.2 Add the export/restore operations to `docs/contributing.md` or the page that owns repository operations; verify the Markdown lint passes and `pnpm validate:repo` reports no new problem.
 
 ## 8. Integration verification

@@ -481,6 +481,42 @@ describe.skipIf(!hasPwsh)('restore-hindsight.ps1', () => {
     }
   })
 
+  it('restores one bank under a new id with history and skips the count check', async () => {
+    const root = tempDir()
+    writeFixture(root, [
+      { folder: 'bank-one', bankId: 'coding-agent::one' },
+      { folder: 'bank-two', bankId: 'coding-agent::two' },
+    ])
+    // A mismatched count would fail verification; -SkipVerify must ignore it.
+    const api = await startFakeApi({ banks: [], counts: { documents_imported: 9 } })
+    try {
+      const result = await runScript([
+        '-From',
+        root,
+        '-ApiUrl',
+        api.url,
+        '-Bank',
+        'coding-agent::one',
+        '-TargetBank',
+        'coding-agent::one-restored',
+        '-IncludeHistory',
+        '-SkipVerify',
+      ])
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.stdout).toContain(
+        "restored bank 'coding-agent::one' -> 'coding-agent::one-restored'",
+      )
+      expect(result.stdout).not.toContain('coding-agent::two')
+      const imports = api.requests.filter((request) => request.path.endsWith('/transfer/import'))
+      expect(imports).toHaveLength(1)
+      expect(imports[0]?.query.get('mode')).toBe('restore')
+      expect(imports[0]?.query.get('target_bank_id')).toBe('coding-agent::one-restored')
+      expect(imports[0]?.query.get('include_history')).toBe('true')
+    } finally {
+      await api.close()
+    }
+  })
+
   it('paginates the bank listing when the existing target is past the first page', async () => {
     const root = tempDir()
     writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])

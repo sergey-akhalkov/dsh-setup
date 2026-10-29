@@ -12,6 +12,10 @@ local `hindsight-embed` daemon. No Hindsight Cloud account or Docker is used.
   tools, and the companion skill.
 - The row `dsh-setup-hindsight` defaults to `serverMode: self-hosted` at
   `http://127.0.0.1:8888`. A machine-local `%USERPROFILE%\.hindsight\coding-agent.json` still wins.
+- The same plugin exports every bank as JSON into a private Git repository (on by default), and the
+  setup ships `restore-hindsight.ps1` for the way back; see
+  [Durable memory export](#durable-memory-export) and
+  [Restore from the export](#restore-from-the-export).
 - The root `setup-hindsight.ps1` script provisions the local daemon on a PC. It is separate from
   `install.ps1`: the setup installer installs the DSH bundle row, and the one-click script installs
   the local runtime.
@@ -179,6 +183,231 @@ the plugin logs the failure; the default-on autostart below tries to bring it ba
 `& "$env:USERPROFILE\.hindsight\start-hindsight.ps1"` or the one-click script remain the manual
 paths.
 
+## Durable memory export
+
+Every bank is exported as JSON into a private Git repository, on by default. The 2026-10-29
+incident that emptied the Harness home and the local database is what this protects against: the
+repository lives outside both, and its Git history keeps every committed snapshot.
+
+The exporter is part of `@dsh-setup/plugin-hindsight` and deliberately small:
+
+- it runs every `export.intervalMinutes` minutes (default 5), after a session goes idle, and once
+  best-effort when the Host disposes the plugin;
+- it asks the local Hindsight API for the native bank transfer archive, unpacks it, and stores the
+  entries verbatim under one folder per bank;
+- it never blocks or fails a session: a missing server, a failed export, or a failed push is logged
+  as `hindsight export: ...` and the next cycle retries;
+- it registers no tool, command, or prompt section.
+
+### Where it writes
+
+The default target is `%USERPROFILE%\hindsight-export`. A target inside the Harness home or the
+`pg0` database directory is refused, because the wipe that motivated the export took both.
+
+The target directory and the remote are machine-local and never live in this repository. Write
+`%USERPROFILE%\.dsh\hindsight-export.json`:
+
+```json
+{
+  "dir": "<absolute target directory>",
+  "remote": "<private remote URL>"
+}
+```
+
+`dir` and `remote` are the machine-specific keys; the export switches below may also be set there
+and win over the row. A tracked fragment or setup default that carries `export.dir` or
+`export.remote` is rejected by `pnpm validate:repo`, so the file (or a machine-local profile patch)
+is the only place they can come from.
+
+The layout is one folder per bank plus an index:
+
+```text
+<target>/
+  .git/
+  index.json
+  banks/<sanitized-bank>-<hash>/
+    export.json
+    manifest.json
+    documents/000000.json
+    documents/000001.json
+    observations.json
+    mental_models.json
+    knowledge_pages.json
+    data/<table>.json
+    history/<table>.json      # only with includeHistory
+    attachments.json          # only with includeAttachments
+    blobs/<ordinal>           # only with includeAttachments
+```
+
+- `index.json` lists every bank folder, its export time and operation, and the normalized content
+  hash of the last snapshot.
+- `export.json` is the exporter's metadata: the original bank id, export time and operation id,
+  counts, archive schema version, the requested scope, and a SHA-256 for every stored entry. The
+  folder name is a reversible sanitization plus an id hash because bank ids contain `:`; restore
+  reads the original id from `export.json`, never from the folder name.
+- Archive entries are stored byte for byte (`manifest.json` is the transfer manifest), so an import
+  consumes exactly what Hindsight produced.
+- Embeddings are never exported. Hindsight recomputes them on import, so a restore costs CPU time
+  but no model tokens.
+- History (audit log and LLM request log) and attachments are off by default. Attachments travel
+  with the data section on the wire, so the exporter strips `attachments.json` and `blobs/**`
+  unless `includeAttachments` is on.
+
+### Git behavior
+
+- A dedicated repository: the exporter runs `git init` (and adds the remote) when the target is
+  empty, or clones the configured remote when the directory is missing.
+- Commits use the fixed identity `Hindsight Export <hindsight-export@localhost>`; your own Git
+  identity is never borrowed.
+- A snapshot is committed only when its normalized content changes (key order and array order are
+  normalized, `exported_at` is ignored), so an unchanged bank produces no commit and no push.
+- With a remote configured and `autoPush` on, the commit is pushed without force. A failed push
+  keeps the local commit and is retried on a later cycle, including cycles where the content did
+  not change. A diverged remote is reconciled with fetch and rebase; a conflict stops the push and
+  is reported.
+- Git runs headless: `GIT_TERMINAL_PROMPT=0`, Git Credential Manager in non-interactive mode, and a
+  failing askpass helper, so no credential dialog can block a cycle. Authentication comes from the
+  existing Git credential helper or SSH agent.
+- One writer at a time: a lock file inside the repository serializes cycles across Host processes,
+  and an abandoned lock is taken over after fifteen minutes.
+
+### Configuration
+
+| Key                  | Default | Meaning                                                           |
+| -------------------- | ------- | ----------------------------------------------------------------- |
+| `enabled`            | `true`  | Export at all; `false` stops every write and Git command.         |
+| `dir`                | -       | Target directory; machine-local file and profile patch only.      |
+| `intervalMinutes`    | `5`     | Minutes between automatic cycles.                                 |
+| `autoCommit`         | `true`  | Commit a changed snapshot.                                        |
+| `autoPush`           | `true`  | Push after a commit when a remote is configured.                  |
+| `includeHistory`     | `false` | Also carry the audit log and LLM request log.                     |
+| `includeAttachments` | `false` | Also carry attachment rows and bytes.                             |
+| `importOnEmpty`      | `false` | Log a restore hint when the server lists no banks; never imports. |
+
+The row configuration is a complete object, so a profile override restates every key it keeps:
+
+```yaml
+- id: dsh-setup-hindsight
+  config:
+    serverMode: self-hosted
+    apiUrl: http://127.0.0.1:8888
+    autostart: true
+    export:
+      enabled: true
+      intervalMinutes: 15
+      autoCommit: true
+      autoPush: false
+      includeHistory: false
+      includeAttachments: false
+      importOnEmpty: false
+```
+
+To turn the export off without touching the row, add `"enabled": false` to
+`%USERPROFILE%\.dsh\hindsight-export.json`. Nothing is written, no Git command runs, and memory
+keeps working.
+
+### Privacy boundary
+
+Memory contains conversation text, code, and whatever else a session retained, and it can contain
+secrets. The export is a copy of that data:
+
+- keep the remote **private**; there is no automatic push without a configured remote;
+- history and attachments stay off unless you enable them;
+- the remote URL and Git credentials never enter this repository; they live in the machine-local
+  file and your Git credential store;
+- the target directory holds plain JSON: anyone who can read it, or the remote, can read the
+  memory. Full-disk or repository access control is the protection.
+
+### Credentials
+
+The exporter never asks for a credential and never stores one. Before enabling auto-push, make sure
+the Git credential helper or SSH agent already authorizes the private remote for your user, for
+example by pushing a commit by hand once:
+
+```powershell
+git -C "$env:USERPROFILE\hindsight-export" push origin HEAD
+```
+
+If that works without a prompt, the exporter will push too. A push that fails for authentication or
+network reasons is retried later; the local commits are kept.
+
+## Restore from the export
+
+`restore-hindsight.ps1` rebuilds each bank's transfer archive from the stored JSON, verifies the
+manifest and every checksum, imports it through the local API, and compares the imported counts
+with the manifest. It never touches the live Harness home; it only reads the export tree and talks
+to the daemon you point it at.
+
+Restore is deliberately manual. A deliberately deleted bank must not silently return, so nothing
+imports automatically.
+
+### Procedure
+
+```powershell
+# 1. Inspect. Rebuilds and validates every archive, changes no bank, sends no request.
+pwsh -NoProfile -File restore-hindsight.ps1 -From "$env:USERPROFILE\hindsight-export" -DryRun
+
+# 2. Restore every bank into a fresh database from the local copy.
+pwsh -NoProfile -File restore-hindsight.ps1 -From "$env:USERPROFILE\hindsight-export"
+
+# 3. Or restore from the private remote when the local copy is gone.
+pwsh -NoProfile -File restore-hindsight.ps1 -Repo "<private remote URL>"
+
+# 4. One bank, under a different id.
+pwsh -NoProfile -File restore-hindsight.ps1 -From "$env:USERPROFILE\hindsight-export" `
+  -Bank "coding-agent::repo" -TargetBank "coding-agent::repo-restored"
+
+# 5. Recover the documents of one bank into an existing bank.
+pwsh -NoProfile -File restore-hindsight.ps1 -From "$env:USERPROFILE\hindsight-export" `
+  -Bank "coding-agent::repo" -Mode merge
+```
+
+`restore` (the default) needs an absent target bank: the script refuses to write over an existing
+one and names the merge option instead. The import is recorded against a temporary
+`hindsight-restore-*` operation bank, which is deleted afterwards. `merge` imports documents into an
+existing bank and skips conflicting document ids; it carries no bank configuration, mental models,
+or knowledge pages.
+
+| Option            | Meaning                                                                     |
+| ----------------- | --------------------------------------------------------------------------- |
+| `-From`           | Exported tree directory.                                                    |
+| `-Repo`           | Private remote cloned to a temporary directory when the local copy is gone. |
+| `-Bank`           | One or more bank ids; default is every bank in the tree.                    |
+| `-Mode`           | `restore` (absent bank) or `merge` (existing bank, documents only).         |
+| `-TargetBank`     | Restore target id; defaults to the archive's source bank. One bank only.    |
+| `-DryRun`         | Verify, rebuild, and report only; no request, no bank change.               |
+| `-IncludeHistory` | Also restore history when the archive carries it.                           |
+| `-SkipVerify`     | Skip the post-import count comparison.                                      |
+| `-ApiUrl`         | Endpoint; defaults to `HINDSIGHT_API_URL` or `http://127.0.0.1:8888`.       |
+| `-ArchiveOut`     | With `-DryRun`, write each rebuilt `.zip` there for inspection or hand-off. |
+
+Exit codes: `0` success, `1` usage or validation error, `2` target bank already exists (use
+merge), `3` imported counts differ from the manifest, `4` daemon down and no `hindsight-admin`,
+`5` import failure or timeout.
+
+### When the daemon cannot start
+
+The script checks `/health` first. When the daemon is down it runs the documented
+`setup-hindsight.ps1` only if `hindsight-embed` is already installed (it never installs silently).
+If that fails or the tool is missing, it falls back to the offline importer:
+
+```powershell
+hindsight-admin import-bank --archive "<kept archive>" --target-bank "<bank id>"
+```
+
+Without `hindsight-admin` the script prints that command together with the path of a kept archive
+and exits `4`. Point it at the `pg0` instance's configured database like the other `hindsight-admin`
+commands.
+
+### Limitations
+
+- `restore` restores whole banks only; `merge` recovers documents only.
+- Facts are re-embedded on import: CPU time, no LLM tokens, no new facts.
+- History and attachments are restored only if they were exported and requested.
+- The daemon must be reachable, or `hindsight-admin` must be installed for the offline path.
+- A failed push delays the remote copy; the local repository still has the snapshot.
+- A very large bank makes a large repository; move the target or prune its history if needed.
+
 ## Autostart
 
 The Hindsight row defaults to `autostart: true`. When Harness loads the plugin and the effective
@@ -220,8 +449,11 @@ seeded.
 2. Explicit `HINDSIGHT_*` environment variables.
 3. The setup row defaults (`self-hosted`, `127.0.0.1:8888`).
 
-The row configuration is a complete object; a profile override must restate both `serverMode` and
-`apiUrl`:
+For the export, `%USERPROFILE%\.dsh\hindsight-export.json` outranks the row's `export` block, which
+outranks the defaults.
+
+The row configuration is a complete object; a profile override must restate every key it keeps, for
+example both `serverMode` and `apiUrl` (and the `export` block when the row sets one):
 
 ```yaml
 - id: dsh-setup-hindsight
@@ -252,6 +484,11 @@ wanted.
 The row can also be disabled through the machine-local config with `"disabled": true`, or left
 mounted but inert while another server is used.
 
+The export has its own switch: `"enabled": false` in `%USERPROFILE%\.dsh\hindsight-export.json`
+(or the row's `export.enabled`) stops all writes and Git commands without affecting memory. Moving
+or deleting the target directory only removes the export copy; the database is untouched. There is
+no database migration to roll back.
+
 ## Cost and privacy
 
 The daemon is local and loopback-bound; memory data stays on this PC. Fact extraction and
@@ -260,6 +497,10 @@ and page refreshes consume DeepSeek tokens. A repo's first seed may also run the
 set `codebaseSurvey` or the other upstream cost knobs in `coding-agent.json` if you want a quieter
 profile. No Hindsight Cloud endpoint is used by the shipped default.
 
+The export copies whatever memory holds — conversation text included — into a Git repository. It
+consumes disk and Git history rather than tokens, and it is only as private as that repository and
+directory. Keep the remote private and see [Privacy boundary](#privacy-boundary).
+
 ## Updating
 
 The local runtime is pinned in `setup-hindsight.ps1` by `$ToolVersion = '1.1.0'` and
@@ -267,6 +508,10 @@ The local runtime is pinned in `setup-hindsight.ps1` by `$ToolVersion = '1.1.0'`
 To update the runtime, change both constants together, rerun the one-click script, and repeat the
 retain/restart/recall persistence check. Rerunning keeps the pin and does not switch an existing
 database.
+
+The exporter writes metadata schema version `1` (`export.json` and `index.json`), and
+`restore-hindsight.ps1` refuses any other version instead of guessing. A future archive layout change
+therefore needs a restore-side migration before old snapshots are dropped.
 
 The DSH plugin package is pinned at `@vectorize-io/hindsight-coding-agents@0.8.2`. The canonical
 pin validation treats `packages/plugin-hindsight/package.json` as the source of truth, requires the
