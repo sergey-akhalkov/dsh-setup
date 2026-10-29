@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-delegation-rules",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Model-agnostic delegation rules: configurable triggers, targets, contracts, and a turn-stopping gate",
   "license": "MIT",
   "icon": "./icon.svg",

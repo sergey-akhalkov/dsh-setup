@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-admin-indicator",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Windows administrator indicator for DeepSeek Harness Desktop: explains the OS privilege level next to the session permission control and creates the administrator desktop shortcut",
   "license": "MIT",
   "icon": "./icon.svg",
