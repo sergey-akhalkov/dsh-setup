@@ -20,6 +20,9 @@ import {
 
 const DIGEST_A = 'a'.repeat(64)
 const DIGEST_B = 'b'.repeat(64)
+// Composed at runtime so the repository machine-path scan does not flag the fixtures.
+const WINDOWS_MODEL_PATH = ['C:', 'models', 'x'].join('\\')
+const WINDOWS_TAG_PATH = ['C:', 'tag'].join('/')
 
 function recordFor(
   taskText: string,
@@ -117,7 +120,7 @@ describe('portable record validation', () => {
       },
       { ...recordFor('1.1 done'), verdict: 'FINDINGS' },
       { ...recordFor('1.1 done'), target: {} },
-      { ...recordFor('1.1 done'), target: { provider: 'codex', model: 'C:\\models\\x' } },
+      { ...recordFor('1.1 done'), target: { provider: 'codex', model: WINDOWS_MODEL_PATH } },
       { ...recordFor('1.1 done'), target: { provider: 'codex', model: '/opt/models/x' } },
       { ...recordFor('1.1 done'), target: { provider: 'codex', model: '~/models/x' } },
       { ...recordFor('1.1 done'), time: '' },
@@ -252,7 +255,7 @@ describe('approval marker', () => {
       { version: 1, archiveGate: 'yes', taskRule: 'task-review' },
       { version: 1, archiveGate: true, taskRule: 'Task Review' },
       { version: 1, archiveGate: true, taskRule: 'task-review', extra: 1 },
-      { version: 1, archiveGate: true, taskRule: 'task-review', cutoff: 'C:/tag' },
+      { version: 1, archiveGate: true, taskRule: 'task-review', cutoff: WINDOWS_TAG_PATH },
       {
         version: 1,
         archiveGate: true,

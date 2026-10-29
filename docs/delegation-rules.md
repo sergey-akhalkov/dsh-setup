@@ -231,6 +231,44 @@ The export copies only a local task-scope `PASS` whose rule, change, and task id
 task; it refuses `ERROR`/`FINDINGS`, a foreign change, and a task-id mismatch, and it cannot invent
 an approval.
 
+### Change-level approval and the archive gate
+
+`delegation_status` and `pnpm reviews:check` compute approval from the change, not from the session
+that wrote it. Every checked `tasks.md` task needs a committed `reviews/<taskId>.json` PASS whose
+rule, change, and task id match; `ERROR`, `FINDINGS`, a missing or malformed record, and a checked
+line that is not a numbered task are unapproved, while unchecked tasks are reported but not
+required. The status line is
+`task-review PASS x/y, ERROR z, missing n; archive-ready: yes|no`, followed by each missing task's
+number, text, task id, expected record path, and exact review call.
+
+A repository opts in with a tracked `openspec/review-approval.json`:
+
+```json
+{
+  "version": 1,
+  "archiveGate": true,
+  "taskRule": "task-review",
+  "cutoff": "v0.12.0",
+  "grandfathered": { "<change>": "<reason it is reported, not enforced>" }
+}
+```
+
+With `archiveGate: true`, a `tools/pre-execute` guard refuses `openspec archive <change>` and
+`mv`/`Move-Item`/`git mv` from `openspec/changes/<change>` into `changes/archive/` **before** the
+command runs: it names every missing task and the exact `delegate` calls and leaves the change
+active. It applies to subagents too, and it fails closed on an unreadable `tasks.md` or record, an
+invalid marker rule, or any evaluation failure. Without the marker, or with `archiveGate: false`,
+nothing changes. The guard recognizes the documented forms only; the push audit and CI are the
+backstop for another form.
+
+Audit commands:
+
+- `pnpm reviews:check --change <name>` — one active change;
+- `pnpm reviews:check --all` — every archived change, reporting the marker's exception and the
+  pre-cutoff historical baseline without enforcing either;
+- `pnpm reviews:check --push` — the archived changes a push adds or modifies (read from stdin; the
+  pre-push hook runs this and fails closed on an unknown range).
+
 ### Targets
 
 A target names a registered `ctx.subagents` provider and may add `model`, `reasoningEffort`, and
@@ -340,6 +378,9 @@ The turn-stopping gate refuses a code-changing turn close unless:
 
 - every checked task that this session attributed (the task ids in its involvement file) has a
   task-review `PASS`/`ERROR` record;
+- when the session's tick makes the task list fully checked, every checked task in the change has a
+  portable task-review `PASS` (not only the tasks this session attributed); before completion the
+  per-task scope is unchanged, so parallel writers do not review each other's work early;
 - the turn has a newly checked-and-reviewed task or a progress note matching the current worktree
   digest;
 - every strict whole-spec rule applies with a matching record for the current spec digest when
