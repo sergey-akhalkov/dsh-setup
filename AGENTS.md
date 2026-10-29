@@ -132,6 +132,11 @@ the merge; `release.yml` repeats the gate on tags. Detail and local reproduction
 
 ## 11. Hard rules and gotchas
 
+- **Never clear the Harness home**: do not delete, move, or recursively reset `~/.dsh`, `~/.pg0`,
+  `~/.hindsight`, or the `desktop` profile, and do not run recursive deletes outside the workspace.
+  A clean-state test uses a throwaway `DSH_HOME`; touching live data needs explicit owner
+  confirmation plus a completed Hindsight export or backup first. The 2026-10-29 incident wiped
+  every session and the Hindsight database this way.
 - **Never hand-edit generated files** (`packages/*/cordis.patch.yml`, `packages/*/lib/**`,
   `packages/setup/{package.json,cordis.patch.yml,node_modules/**}`). Run `pnpm gen` and/or
   `pnpm build` and commit the result. `pnpm check` does not run `gen:check`. The one exception is

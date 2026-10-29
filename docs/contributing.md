@@ -324,6 +324,12 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 
 ## Hard rules and gotchas
 
+- **Protect the Harness home.** An agent command must never delete, move, or wholesale reset
+  `~/.dsh`, `~/.pg0`, `~/.hindsight`, or the desktop profile, and must not run recursive deletes
+  outside the workspace. A clean-state test sets a throwaway `DSH_HOME` (the `pnpm dogfood` path).
+  Any destructive operation against live data requires explicit owner confirmation and a completed
+  Hindsight export or backup first. On 2026-10-29 a careless recursive delete destroyed every session
+  and the local Hindsight database; `docs/hindsight.md` owns the export and restore procedure.
 - **Never hand-edit generated files** (`packages/*/cordis.patch.yml`, `packages/*/lib/**`,
   `packages/setup/package.json`, `packages/setup/cordis.patch.yml`,
   `packages/setup/node_modules/**`). Run `pnpm gen` and/or `pnpm build`, then commit the result.

@@ -7,13 +7,15 @@ import { fileURLToPath } from 'node:url';
 export const name = '@dsh-setup/plugin-goal-continuity';
 /** Services the supervisor needs. */
 export const inject = ['agents', 'goals'];
+/** Id of the setup-declared reviewer preset; the composition fragment repeats it. */
+const REVIEWER_PRESET_ID = 'goal-reviewer';
 /** Documented block-review defaults; the composition fragment repeats them. */
 export const DEFAULT_BLOCK_REVIEW_CONFIG = Object.freeze({
     enabled: true,
     provider: 'spawn',
     model: 'deepseek-flash',
     reasoningEffort: 'max',
-    reviewerPreset: 'goal-reviewer',
+    reviewerPreset: REVIEWER_PRESET_ID,
     blockedAfterConsecutiveRounds: 3,
     timeoutMs: 300_000,
     maxReviewsPerGoal: 3,
@@ -1072,6 +1074,33 @@ function installBlockReview(ctx, config) {
     }
 }
 /**
+ * Keep the reviewer preset out of the human mode roster. The Web client builds
+ * its picker from `agentPresets/list`, while the gate starts the reviewer
+ * through the registry's `retain`/`resolve` path, so filtering this one Remote
+ * projection hides the mode without touching the mounted composition.
+ *
+ * shortcut: this wraps the registry's dynamic Remote method; upgrade when DSH
+ * ships a hidden-preset flag. A changed dispatch only reveals the preset again.
+ */
+function installReviewerPresetHiding(ctx) {
+    ctx.inject(['agentPresets'], (scope) => {
+        const service = scope.get('agentPresets');
+        const original = service?.remoteExportList;
+        if (service === undefined || typeof original !== 'function')
+            return;
+        service.remoteExportList = async function () {
+            const roster = await original.call(this);
+            return {
+                ...roster,
+                presets: roster.presets.filter((preset) => preset.id !== REVIEWER_PRESET_ID),
+            };
+        };
+        scope.effect(() => () => {
+            service.remoteExportList = original;
+        });
+    });
+}
+/**
  * Install the supervisor and the block-review gate. The configuration is
  * validated at load, so a bad profile fails loudly; supervision itself fails
  * open and the review failures follow their configured policies.
@@ -1081,6 +1110,7 @@ export function apply(ctx, config) {
     if (!resolved.enabled)
         return;
     installBlockReview(ctx, resolved.blockReview);
+    installReviewerPresetHiding(ctx);
     const mountedAt = Date.now();
     const states = new WeakMap();
     function stateFor(agent) {

@@ -42,6 +42,11 @@ fragment declares that preset with `@deepseek-ai/dsh-agent-preset`: a persona, `
 when the child is announced through `agent/created`, the gate calls
 `agent.ctx.tools.restrict({ allow: ['read', 'grep', 'glob'] })` on the reviewer child's own scope.
 
+The preset is not a human choice, so the plugin keeps it out of the Web mode roster: it filters the
+`agentPresets/list` Remote projection that the client's picker reads, while the registry keeps the
+mounted preset for the gate's `retain`/`resolve` path. Disabling the plugin row stops filtering and
+the declaration becomes visible again.
+
 That scope inherits the preset tools and the global tool layer, so the allowlist keeps the preset's
 read tools and filters inherited globals such as `mcp_call`, `delegate`, the shell, and the goal
 tools. A restriction in the preset's shared scope would see its own tools as current registrations
