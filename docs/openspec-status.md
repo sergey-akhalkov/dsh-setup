@@ -55,7 +55,7 @@ verification), `add-loop-guard`, `fix-delegation-session-scope`, `fix-delegation
 `publish-first-market-index`. Cite `openspec/specs/` for accepted requirements and an archived
 change's delta specs for its history.
 
-The 2026-10-29 changes archived with release v0.13.0 are `add-review-approval-gate`, which added
+The 2026-10-29 changes archived with release v0.13.1 are `add-review-approval-gate`, which added
 portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
 (`review-approval` spec and `delegation-rules` amendments; 24/24 portable PASS records),
 `add-hindsight-export`, which added the default-on durable export to a private Git repository and the
@@ -63,7 +63,12 @@ manual restore path (`hindsight-memory` amendments; 18/18 records), and `add-cod
 which added the manual advisor rule and the shipped strong Codex targets (`delegation-rules`
 amendments; 6/6 records). The Hindsight change's owner acceptance used a throwaway Hindsight home and
 a dedicated pg0 database, and the live configuration exported and pushed three banks; the installed
-desktop profile remains at 0.12.0 until the owner installs 0.13.0.
+desktop profile remains at 0.12.0 until the owner installs 0.13.1.
+
+The first v0.13.0 tag's release workflow failed in the CI unit tests: the restore checksum walk
+mixed short and long Windows paths, and the push rebase lacked the exporter's fixed Git identity.
+v0.13.1 carries those fixes plus the installer setup-last fix and is the published release; the
+v0.13.0 tag remains as a failed, unpublished tag.
 
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
 data` as MODIFIED with the current main-spec text (the later amendments), so the archive applied
@@ -184,17 +189,17 @@ task-review delegations while `cargo check` runs and confirm two `PASS` results 
 from its record.
 
 The archived `2026-10-29-add-review-approval-gate` tasks record 24/24; the full audit, the portable
-records, the hook installer, and the CI steps are committed. After installing 0.13.0 externally, run
+records, the hook installer, and the CI steps are committed. After installing 0.13.1 externally, run
 the live archive-gate acceptance in a throwaway workspace (deny without a portable PASS, allow with
 one, and confirm the pre-push/CI refusal), then archive the next change through the live guard.
 
 The archived `2026-10-29-add-hindsight-export` tasks record 18/18. The first real export and push are
 recorded at export-repository commit `8178372` (three banks); the owner acceptance used a throwaway
-Hindsight home and a dedicated pg0 database and passed. After installing 0.13.0, confirm the automatic
+Hindsight home and a dedicated pg0 database and passed. After installing 0.13.1, confirm the automatic
 exporter runs in a real session and pushes the project bank; the machine-local export configuration
 and the private remote are already validated.
 
-The archived `2026-10-29-add-codex-advisor-rule` tasks record 6/6. After installing 0.13.0, smoke-test
+The archived `2026-10-29-add-codex-advisor-rule` tasks record 6/6. After installing 0.13.1, smoke-test
 one `delegate(rule: "advisor", ...)` call and confirm the account can use the shipped `codex` /
 `codex-write` defaults (`gpt-6-astra`, `xhigh`); override those targets in the profile if the model is
 unavailable, leaving `codex-astra` for the advisor.
