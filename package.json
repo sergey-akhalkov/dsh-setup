@@ -1,6 +1,6 @@
 {
   "name": "dsh-setup",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
@@ -40,6 +40,7 @@
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/semver": "7.8.0",
+    "@vectorize-io/hindsight-coding-agents": "0.8.2",
     "esbuild": "0.28.2",
     "semver": "7.8.5",
     "typescript": "5.9.3",

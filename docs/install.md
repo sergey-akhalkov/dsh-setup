@@ -381,12 +381,33 @@ First use in a workspace runs `openspec init --tools none` at the workspace root
 already has `.dsh/skills/openspec-*` copies from an earlier skill-installing init, delete them so the
 packaged definitions win. See [openspec.md](openspec.md) for the full workflow and update contract.
 
+## Hindsight memory
+
+The setup ships `@dsh-setup/plugin-hindsight`, which mounts the official native
+`@vectorize-io/hindsight-coding-agents@0.8.2` DSH entry point and defaults it to a local
+`hindsight-embed` daemon at `http://127.0.0.1:8888`. The setup installer does not install that
+local runtime; a separate one-click script does, per PC.
+
+Prerequisites: Windows PowerShell 5.1+, `uv` on `PATH`, network access, and a DeepSeek API key.
+With the key in `DEEPSEEK_API_KEY` (or `%USERPROFILE%\.hindsight\deepseek.key`), run:
+
+```powershell
+irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hindsight.ps1 | iex
+```
+
+The script installs the pinned `hindsight-embed`, configures the local daemon and TLS trust,
+registers the logon start, and verifies a retain/recall round-trip. It is idempotent; rerunning it
+repairs the runtime without discarding memory data. See [Hindsight](hindsight.md) for the options,
+data locations, opt-out, costs, and the official-installer alternative that must not be combined
+with this row.
+
 ## What is not included
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
 - Runtime prerequisites such as `uv` for the Serena lazy server, `@nuphus/nuphus-mcp` for the Nuphus
   lazy server, or `@fission-ai/openspec` for the OpenSpec skills: install them yourself; the setup
-  does not run system installers.
+  does not run system installers. The local Hindsight daemon is provisioned by the separate
+  one-click `setup-hindsight.ps1` script when you opt in; the setup installer does not start it.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship packaged third-party content: the Ponytail prompt, whose vendored bytes and

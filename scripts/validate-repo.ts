@@ -3,6 +3,11 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import { parseCompositionFragment } from './lib/fragments.ts'
 import { parseDefaults, validateDefaultsTargets, validateSetupManifest } from './lib/generate.ts'
+import {
+  HINDSIGHT_PACKAGE,
+  HINDSIGHT_PLUGIN_PACKAGE,
+  validateHindsightPin,
+} from './lib/hindsight.ts'
 import { validatePackageManifest } from './lib/manifest.ts'
 import { readRepositoryFiles, scanMachinePaths, scanSecrets } from './lib/scan.ts'
 import {
@@ -94,6 +99,20 @@ function checkManifests(problems: string[]): void {
     plugins.map((pkg) => pkg.manifest),
   )) {
     problems.push(`packages/setup/package.json: ${problem}`)
+  }
+
+  const hindsight = plugins.find((pkg) => pkg.manifest.name === HINDSIGHT_PLUGIN_PACKAGE)
+  if (hindsight === undefined) {
+    problems.push(`package ${HINDSIGHT_PLUGIN_PACKAGE} is missing`)
+  } else {
+    const rootManifest = readJson<PackageManifest>(join(rootDir, 'package.json'))
+    for (const problem of validateHindsightPin(
+      hindsight.manifest.dependencies?.[HINDSIGHT_PACKAGE],
+      rootManifest.devDependencies?.[HINDSIGHT_PACKAGE],
+      setupManifest.dependencies?.[HINDSIGHT_PACKAGE],
+    )) {
+      problems.push(`Hindsight pin: ${problem}`)
+    }
   }
 }
 

@@ -9,8 +9,15 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join, relative } from 'node:path'
+import { HINDSIGHT_PACKAGE } from './lib/hindsight.ts'
 import { type RepositoryFile, scanMachinePaths } from './lib/scan.ts'
-import { readDshVersions, readJson, rootDir, setupDir } from './lib/workspace.ts'
+import {
+  type PackageManifest,
+  readDshVersions,
+  readJson,
+  rootDir,
+  setupDir,
+} from './lib/workspace.ts'
 
 /**
  * Compose a throwaway profile with the published DSH CLI and prove the setup
@@ -38,11 +45,16 @@ function quote(arg: string): string {
   return `"${arg.replaceAll('"', '\\"')}"`
 }
 
-function run(base: string, args: string[], env: NodeJS.ProcessEnv): RunResult {
+function run(
+  base: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string = rootDir,
+): RunResult {
   const command = [base, ...args.map(quote)].join(' ')
   const result = spawnSync(command, {
     shell: true,
-    cwd: rootDir,
+    cwd,
     env,
     encoding: 'utf8',
     timeout: 600_000,
@@ -83,6 +95,31 @@ function failure(result: RunResult): Error {
 function readBundles(profileDir: string): string[] {
   const manifest = readJson<ProfileManifest>(join(profileDir, 'package.json'))
   return manifest.dsh?.profile?.bundles ?? []
+}
+
+/** Find an installed package manifest in the profile's pnpm layout. */
+function findPackageManifest(profileDir: string, name: string): string | undefined {
+  const direct = join(profileDir, 'node_modules', name, 'package.json')
+  if (existsSync(direct)) return direct
+  const nested = join(
+    profileDir,
+    'node_modules',
+    '@dsh-setup',
+    'setup',
+    'node_modules',
+    name,
+    'package.json',
+  )
+  if (existsSync(nested)) return nested
+  const store = join(profileDir, 'node_modules', '.pnpm')
+  if (!existsSync(store)) return undefined
+  const prefix = `${name.replace('/', '+')}@`
+  for (const entry of readdirSync(store)) {
+    if (!entry.startsWith(prefix)) continue
+    const candidate = join(store, entry, 'node_modules', name, 'package.json')
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
 }
 
 function walkTextFiles(directory: string): string[] {
@@ -152,9 +189,24 @@ function main(): number {
     })
     if (failures.length === 0 && existsSync(join(profileDir, 'package.json'))) {
       const bundlesBefore = readBundles(profileDir)
+      const packDir = join(home, 'pack')
+      mkdirSync(packDir, { recursive: true })
+      const pack = run('pnpm', ['pack', '--pack-destination', packDir], env, setupDir)
+      let setupTarball = ''
+      step('pack the setup bundle outside the checkout', () => {
+        if (pack.status !== 0) throw failure(pack)
+        const tarballName = existsSync(packDir)
+          ? readdirSync(packDir).find((name) => name.endsWith('.tgz'))
+          : undefined
+        if (tarballName === undefined) throw new Error('pnpm pack produced no tarball')
+        setupTarball = join(packDir, tarballName)
+      })
 
-      const install = run(base, ['plugin', '--profile', 'ci', 'add', setupDir], env)
-      step('install the setup bundle by absolute path', () => {
+      const install =
+        setupTarball === ''
+          ? { status: 1, stdout: '', stderr: '', command: '' }
+          : run(base, ['plugin', '--profile', 'ci', 'add', setupTarball], env)
+      step('install the packed setup bundle', () => {
         if (install.status !== 0) throw failure(install)
       })
 
@@ -305,6 +357,37 @@ function main(): number {
           if (!rowHasLine(row, expected)) {
             throw new Error(`disabled goal-continuity row lacks "${expected}"`)
           }
+        }
+      })
+
+      step('compose the Hindsight row with local defaults', () => {
+        const row = rowBlock(dump.stdout, 'dsh-setup-hindsight')
+        if (row === '') throw new Error('Hindsight row is missing')
+        if (rowHasLine(row, 'disabled: true')) throw new Error('Hindsight row is disabled')
+        for (const expected of [
+          'serverMode: self-hosted',
+          'apiUrl: http://127.0.0.1:8888',
+          'autostart: true',
+        ]) {
+          if (!rowHasLine(row, expected)) throw new Error(`Hindsight row lacks "${expected}"`)
+        }
+      })
+
+      step('resolve the exact pinned Hindsight runtime dependency', () => {
+        const setupManifest = readJson<PackageManifest>(
+          join(profileDir, 'node_modules', '@dsh-setup', 'setup', 'package.json'),
+        )
+        const declared = setupManifest.dependencies?.[HINDSIGHT_PACKAGE]
+        if (declared === undefined || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(declared)) {
+          throw new Error(`setup dependency is not an exact pin: ${String(declared)}`)
+        }
+        const installedPath = findPackageManifest(profileDir, HINDSIGHT_PACKAGE)
+        if (installedPath === undefined) {
+          throw new Error(`${HINDSIGHT_PACKAGE} is not installed in the profile`)
+        }
+        const installed = readJson<{ version?: string }>(installedPath)
+        if (installed.version !== declared) {
+          throw new Error(`installed ${String(installed.version)} does not match ${declared}`)
         }
       })
 

@@ -9,10 +9,12 @@ import {
   parseDefaults,
   renderBundlePatch,
   renderSetupPatch,
+  SETUP_MANIFEST_FILE,
   SETUP_PATCH_FILE,
   validateDefaultsTargets,
   validateSetupManifest,
 } from '../lib/generate.ts'
+import { HINDSIGHT_PACKAGE } from '../lib/hindsight.ts'
 import { validatePackageManifest } from '../lib/manifest.ts'
 import type { DshVersions, PackageManifest, WorkspacePackage } from '../lib/workspace.ts'
 
@@ -316,6 +318,31 @@ describe('setup manifest', () => {
     expect(validateSetupManifest(stripped, owners)).toEqual([
       'missing runtime dependency @openai/codex',
     ])
+  })
+
+  it('hoists the Hindsight runtime dependency without vendoring it', () => {
+    const files = computeGenerated(
+      [
+        {
+          pkg: workspacePackage('@dsh-setup/plugin-hindsight', {
+            dependencies: { [HINDSIGHT_PACKAGE]: '0.8.2' },
+          }),
+          rows: [{ id: 'dsh-setup-hindsight', name: '@dsh-setup/plugin-hindsight' }],
+        },
+      ],
+      [],
+      '0.1.0',
+      VERSIONS,
+    )
+    const manifest = JSON.parse(
+      files.get(SETUP_MANIFEST_FILE)?.toString() ?? '{}',
+    ) as PackageManifest
+    expect(manifest.dependencies?.[HINDSIGHT_PACKAGE]).toBe('0.8.2')
+    expect(
+      [...files.keys()].some((path) =>
+        path.replaceAll('\\', '/').includes(`${HINDSIGHT_PACKAGE}/`),
+      ),
+    ).toBe(false)
   })
 
   it('changes when the plugin set changes, so drift cannot go unnoticed', () => {

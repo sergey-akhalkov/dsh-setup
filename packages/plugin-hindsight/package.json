@@ -1,0 +1,46 @@
+{
+  "name": "@dsh-setup/plugin-hindsight",
+  "version": "0.11.0",
+  "description": "Hindsight long-term memory: the official native DSH plugin with a local-only default endpoint",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./cordis.fragment.yml": "./cordis.fragment.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml",
+    "cordis.fragment.yml"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "dependencies": {
+    "@vectorize-io/hindsight-coding-agents": "0.8.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

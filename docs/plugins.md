@@ -42,6 +42,10 @@ A configuration-only MCP adapter omits `src/`, `lib/`, `test/`, and `tsconfig.js
   asset paths (for example a vendored upstream prompt); the setup generator vendors those files the
   same way.
 - No `prepare`, `preinstall`, `install`, or `postinstall` scripts: git installs cannot run them.
+- A plugin may declare an exact-pinned third-party runtime dependency. The generator hoists it into
+  the setup manifest and does not vendor it; the profile installation fetches that exact version.
+  See [`packages/plugin-hindsight`](../packages/plugin-hindsight) and
+  [Hindsight](hindsight.md).
 
 ## Composition fragment
 

@@ -29,6 +29,9 @@ importers:
       '@types/semver':
         specifier: 7.8.0
         version: 7.8.0
+      '@vectorize-io/hindsight-coding-agents':
+        specifier: 0.8.2
+        version: 0.8.2
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -153,6 +156,16 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: 0.2.1-rc.3
         version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
+
+  packages/plugin-hindsight:
+    dependencies:
+      '@vectorize-io/hindsight-coding-agents':
+        specifier: 0.8.2
+        version: 0.8.2
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.5
+        version: 4.0.5
 
   packages/plugin-loop-guard:
     devDependencies:
@@ -946,6 +959,10 @@ packages:
 
   '@types/semver@7.8.0':
     resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
+
+  '@vectorize-io/hindsight-coding-agents@0.8.2':
+    resolution: {integrity: sha512-MNBBXLQRFzFzIfR5tGgFSUDReJwEFzuu9szSiHqSL9EOy47VG96gcdffN6bCw59o6lLbTOjL5HjpNVNV2YccJg==}
+    hasBin: true
 
   '@vitest/mocker@5.0.5':
     resolution: {integrity: sha512-xLL3lkDegJZw+MGoGaCCsFayDZthGgpAtr3Vziyfc4p7xH89K7KRPcRBBh/kEYm0Aqkt5DtTmkYpBtRV/FrHZg==}
@@ -1812,6 +1829,8 @@ snapshots:
       csstype: 3.2.3
 
   '@types/semver@7.8.0': {}
+
+  '@vectorize-io/hindsight-coding-agents@0.8.2': {}
 
   '@vitest/mocker@5.0.5(vite@8.3.5(@types/node@24.19.2)(esbuild@0.28.2)(yaml@2.9.1))':
     dependencies:

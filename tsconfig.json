@@ -4,6 +4,7 @@
     { "path": "./packages/plugin-admin-indicator" },
     { "path": "./packages/plugin-delegation-rules" },
     { "path": "./packages/plugin-goal-continuity" },
+    { "path": "./packages/plugin-hindsight" },
     { "path": "./packages/plugin-loop-guard" },
     { "path": "./packages/plugin-mcp-lazy" },
     { "path": "./packages/plugin-nuphus-mcp" },

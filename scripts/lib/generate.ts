@@ -10,6 +10,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { ADAPTER_ROW_NAMES, type FragmentRow } from './fragments.ts'
+import { HINDSIGHT_PACKAGE } from './hindsight.ts'
 import type { DshVersions, PackageManifest, WorkspacePackage } from './workspace.ts'
 import { SETUP_PACKAGE_NAME, setupDir } from './workspace.ts'
 
@@ -336,7 +337,9 @@ export function computeGenerated(
   // installed by the profile instead: @openai/codex ships a platform binary, and
   // the MCP client SDK tree is large third-party code.
   const registryInstalled = (name: string): boolean =>
-    name.startsWith('@openai/') || name.startsWith('@modelcontextprotocol/')
+    name.startsWith('@openai/') ||
+    name.startsWith('@modelcontextprotocol/') ||
+    name === HINDSIGHT_PACKAGE
   const runtimeDependencies = new Map<string, string>()
   const storeCandidates = (name: string): string[] => {
     const store = join('node_modules', '.pnpm')

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Hindsight memory",
+    "description": "Local, per-repository long-term memory through the official Hindsight plugin: automatic recall and retention, knowledge pages, hindsight_* tools, and default-on autostart of the installed local hindsight-embed daemon at 127.0.0.1:8888; disable the row or autostart to opt out."
+  }
+}

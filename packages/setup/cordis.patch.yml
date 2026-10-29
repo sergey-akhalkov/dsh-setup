@@ -85,6 +85,12 @@
         roundExtension: 1000
         maxRoundExtensions: 2
         hardMaxGoalRounds: 5000
+    - id: dsh-setup-hindsight
+      name: "@dsh-setup/plugin-hindsight"
+      config:
+        serverMode: self-hosted
+        apiUrl: http://127.0.0.1:8888
+        autostart: true
     - id: dsh-setup-loop-guard
       name: "@dsh-setup/plugin-loop-guard"
       config:

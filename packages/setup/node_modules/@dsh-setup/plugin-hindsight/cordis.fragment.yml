@@ -1,0 +1,12 @@
+# Composition fragment for @dsh-setup/plugin-hindsight.
+#
+# One row mounts this package's Host module, which delegates the memory
+# lifecycle to the official Hindsight DSH plugin. The connection defaults are
+# the owner's local hindsight-embed daemon; a machine-local
+# `~/.hindsight/coding-agent.json` still wins over them.
+rows:
+  - id: dsh-setup-hindsight
+    config:
+      serverMode: self-hosted
+      apiUrl: http://127.0.0.1:8888
+      autostart: true

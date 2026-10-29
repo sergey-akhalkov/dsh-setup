@@ -1,0 +1,9 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-hindsight.
+- insert:
+    - id: dsh-setup-hindsight
+      name: "@dsh-setup/plugin-hindsight"
+      config:
+        serverMode: self-hosted
+        apiUrl: http://127.0.0.1:8888
+        autostart: true
