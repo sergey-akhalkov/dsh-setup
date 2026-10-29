@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import {
   portableTaskRecordPath,
   taskIdOf,
@@ -522,5 +523,28 @@ describe('reviews:check --push', () => {
     })
     expect(failed.status).toBe(1)
     expect(failed.stdout).toContain('refusing the push')
+  })
+})
+
+describe('CI approval audit', () => {
+  it('runs the audit with full history in both Windows workflows', async () => {
+    const root = join(import.meta.dirname, '..', '..')
+    for (const file of ['validate.yml', 'release.yml']) {
+      const text = await readFile(join(root, '.github', 'workflows', file), 'utf8')
+      const document = parse(text) as {
+        jobs?: Record<
+          string,
+          { steps?: Array<{ uses?: string; with?: Record<string, unknown>; run?: string }> }
+        >
+      }
+      const validate = document.jobs?.validate
+      expect(validate, file).toBeDefined()
+      const checkout = validate?.steps?.find((step) => step.uses === 'actions/checkout@v4')
+      expect(checkout?.with?.['fetch-depth'], file).toBe(0)
+      expect(
+        validate?.steps?.some((step) => step.run === 'pnpm reviews:check --all'),
+        file,
+      ).toBe(true)
+    }
   })
 })

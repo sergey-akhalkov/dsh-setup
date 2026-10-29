@@ -30,7 +30,7 @@
 ## 5. Push hook and CI
 
 - [x] 5.1 Add the checked-in `.githooks/pre-push` hook and `scripts/install-hooks.ts` with `pnpm hooks:install`; the hook runs `pnpm reviews:check --push` and fails closed on an unknown range. Verify the hook file has LF endings, the install sets `core.hooksPath`, and a manual `--push` run with a fixture blocks a missing approval and allows a complete one.
-- [ ] 5.2 Add the approval audit step to `.github/workflows/validate.yml` (and the release workflow) with the v0.12.0 exception, the pre-cutoff baseline, and the cutoff; verify the workflow YAML parses, the full audit passes with the baseline and exception, and a fixture archive after the cutoff fails.
+- [x] 5.2 Add the approval audit step to `.github/workflows/validate.yml` (and the release workflow) with the v0.12.0 exception, the pre-cutoff baseline, and the cutoff; verify the workflow YAML parses, the full audit passes with the baseline and exception, and a fixture archive after the cutoff fails.
 - [ ] 5.3 Update `docs/contributing.md` and `AGENTS.md` with the hook install, the push result, the CI step, and the manual full-audit fallback; verify `pnpm lint`.
 
 ## 6. Repository approval documentation and specs
