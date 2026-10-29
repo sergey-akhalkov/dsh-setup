@@ -228,6 +228,8 @@ function main(): number {
           'dsh-setup-nuphus-guidance',
           'dsh-setup-serena-guidance',
           'dsh-setup-goal-continuity',
+          'preset-goal-reviewer',
+          'dsh-setup-verification-gate',
           'reasoningEffort: high',
           'preference: dark',
           'selectedDefault: cordis',
@@ -247,6 +249,17 @@ function main(): number {
         'roundExtension: 1000',
         'maxRoundExtensions: 2',
         'hardMaxGoalRounds: 5000',
+        'blockReview:',
+        'provider: spawn',
+        'model: deepseek-flash',
+        'reasoningEffort: max',
+        'reviewerPreset: goal-reviewer',
+        'blockedAfterConsecutiveRounds: 3',
+        'timeoutMs: 300000',
+        'maxReviewsPerGoal: 3',
+        'onReviewError: deny',
+        'onUnavailable: allow',
+        'onExhausted: deny',
       ]
 
       step('compose the goal-continuity row enabled with its defaults', () => {
@@ -257,6 +270,43 @@ function main(): number {
           if (!rowHasLine(row, expected)) {
             throw new Error(`goal-continuity row lacks "${expected}"`)
           }
+        }
+      })
+
+      step('mount the read-only goal reviewer preset', () => {
+        const row = rowBlock(dump.stdout, 'preset-goal-reviewer')
+        if (row === '') throw new Error('preset-goal-reviewer row is missing')
+        if (rowHasLine(row, 'disabled: true'))
+          throw new Error('preset-goal-reviewer row is disabled')
+        for (const expected of [
+          '@deepseek-ai/dsh-agent-preset',
+          'id: goal-reviewer',
+          'read: true',
+          'write: false',
+          'edit: false',
+        ]) {
+          if (!row.includes(expected)) {
+            throw new Error(`preset-goal-reviewer row lacks "${expected}"`)
+          }
+        }
+        for (const forbidden of [
+          '@deepseek-ai/dsh-tool-shell',
+          'write: true',
+          'edit: true',
+          'pwsh',
+        ]) {
+          if (row.includes(forbidden)) {
+            throw new Error(`preset-goal-reviewer row exposes "${forbidden}"`)
+          }
+        }
+      })
+
+      step('compose the verification-gate row with no configuration', () => {
+        const row = rowBlock(dump.stdout, 'dsh-setup-verification-gate')
+        if (row === '') throw new Error('verification-gate row is missing')
+        if (rowHasLine(row, 'disabled: true')) throw new Error('verification-gate row is disabled')
+        if (row.includes('config:') || row.includes('commands:')) {
+          throw new Error('the setup shipped verification-gate configuration')
         }
       })
 

@@ -156,6 +156,15 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: 0.2.1-rc.3
         version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
+      '@deepseek-ai/dsh-subagent':
+        specifier: 0.2.1-rc.3
+        version: 0.2.1-rc.3(5487cbc56a449674bfac2ba4dedd5cbf)
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.2.1-rc.3
+        version: 0.2.1-rc.3(feb2bdf2b5aa7796dc34c4fe1195cdbf)
+      '@deepseek-ai/dsh-working-directory':
+        specifier: 0.2.1-rc.3
+        version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-agent@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-system-prompt@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)))(@deepseek-ai/dsh-typert-protocol@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-util-values@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)))(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-system-prompt@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)))
 
   packages/plugin-hindsight:
     dependencies:
@@ -260,6 +269,21 @@ importers:
       '@deepseek-ai/dsh-system-prompt':
         specifier: 0.2.1-rc.3
         version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))
+
+  packages/plugin-verification-gate:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.5
+        version: 4.0.5
+      '@deepseek-ai/dsh-agent':
+        specifier: 0.2.1-rc.3
+        version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-session@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-system-prompt@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)(@deepseek-ai/dsh-llm@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)))(@deepseek-ai/dsh-typert-protocol@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))(@deepseek-ai/dsh-util-values@0.2.1-rc.3(@deepseek-ai/cordis@4.0.5))
+      '@deepseek-ai/dsh-session':
+        specifier: 0.2.1-rc.3
+        version: 0.2.1-rc.3(@deepseek-ai/cordis@4.0.5)
+      '@deepseek-ai/dsh-tools':
+        specifier: 0.2.1-rc.3
+        version: 0.2.1-rc.3(feb2bdf2b5aa7796dc34c4fe1195cdbf)
 
   packages/plugin-working-principles:
     devDependencies:

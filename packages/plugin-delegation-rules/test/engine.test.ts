@@ -1,12 +1,16 @@
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  type BundleConfigLike,
   createAgent,
   defaultTestConfig,
+  FakeGit,
   FakeSubagents,
+  type GitRunner,
   Harness,
   makeWorkspace,
   passResponder,
@@ -76,6 +80,66 @@ function harnessFor(
   subagents = new FakeSubagents(),
 ): Harness {
   return new Harness({ cwd: root, config, agents: subagents })
+}
+
+function taskReviewConfig(): BundleConfigLike {
+  return {
+    targets: { codex: { provider: 'codex-subagent' } },
+    rules: [
+      {
+        id: 'task-review',
+        when: 'spec-task-ready',
+        to: 'codex',
+        contract: 'review',
+        scope: 'task',
+        gate: 'strict',
+        instruction: 'bundled:review-task',
+      },
+    ],
+  }
+}
+
+function integrationReviewConfig(): BundleConfigLike {
+  return {
+    targets: { codex: { provider: 'codex-subagent' } },
+    rules: [
+      {
+        id: 'integration-review',
+        when: 'implementation-complete',
+        to: 'codex',
+        contract: 'review',
+        phase: 'integration',
+        scope: 'whole',
+        gate: 'soft',
+        instruction: 'bundled:review-integration',
+      },
+    ],
+  }
+}
+
+/** Real git, for the temporary-repository integration case. */
+function realGit(): GitRunner {
+  return (args, cwd, signal) =>
+    new Promise<Buffer>((done, failed) => {
+      execFile(
+        'git',
+        [...args],
+        { cwd, signal, encoding: 'buffer', maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+        (error, stdout) => {
+          if (error !== null) failed(error)
+          else done(stdout)
+        },
+      )
+    })
+}
+
+async function taskRecord(root: string): Promise<{ verdict: string; error?: string }> {
+  const tasksDir = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
+  const [name] = await readdir(tasksDir)
+  return JSON.parse(await readFile(join(tasksDir, name as string), 'utf8')) as {
+    verdict: string
+    error?: string
+  }
 }
 
 describe('target resolution', () => {
@@ -1620,24 +1684,9 @@ describe('asynchronous review runs', () => {
     const subagents = new FakeSubagents()
     const pending = deferred()
     subagents.addProvider('codex-subagent', {}, pending.responder)
-    const harness = harnessFor(
-      root,
-      {
-        targets: { codex: { provider: 'codex-subagent' } },
-        rules: [
-          {
-            id: 'task-review',
-            when: 'spec-task-ready',
-            to: 'codex',
-            contract: 'review',
-            scope: 'task',
-            gate: 'strict',
-            instruction: 'bundled:review-task',
-          },
-        ],
-      },
-      subagents,
-    )
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    // The reviewed input set is the git-visible list, so declare the file git exposes.
+    harness.git.files = ['src/engine.ts']
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     expect(subagents.startCalls).toBe(1)
     // Edit, read, restore: content ends identical and a digest re-check would pass.
@@ -1647,13 +1696,180 @@ describe('asynchronous review runs', () => {
     await writeFile(file, 'original content\n', 'utf8')
     pending.releases.shift()?.()
     expect(await harness.waitForRun(runId)).toContain('state=failed')
-    const tasksDir = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
-    const [recordName] = await readdir(tasksDir)
-    const record = JSON.parse(await readFile(join(tasksDir, recordName as string), 'utf8')) as {
-      verdict: string
-      error: string
-    }
+    const record = await taskRecord(root)
     expect(record.verdict).toBe('ERROR')
-    expect(record.error).toContain('reviewed inputs changed during the run')
+    expect(record.error).toContain(
+      'reviewed inputs changed during the run (1 changed: src/engine.ts)',
+    )
+    expect(record.error).toContain('a write inside the reviewed scope happened during the run')
+    expect(record.error).toContain('finish the writes, then re-run the review')
+  })
+
+  it('reports a tracked input deleted during the run instead of failing the workspace read', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    const file = join(root, 'src', 'tracked.ts')
+    await writeFile(file, 'tracked content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/tracked.ts']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await rm(file)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = await taskRecord(root)
+    // The git list still names the path; it is recorded as [missing] and reported as changed.
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('1 changed: src/tracked.ts')
+    expect(record.error).toContain('finish the writes, then re-run the review')
+  })
+
+  it('reports a new untracked file created during the run as a changed input', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    // The git list grows when a new untracked, non-ignored file appears during the run.
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'added.ts'), 'export const added = true\n', 'utf8')
+    harness.git.files.push('src/added.ts')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = await taskRecord(root)
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('src/added.ts')
+  })
+
+  it('publishes no PASS when a gitignored change artifact changes during a task review', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', [
+      { number: '1.1', text: 'Reviewed task', checked: true },
+    ])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    // The change directory is not in the git list: these artifacts are gitignored here.
+    harness.git.files = ['src/engine.ts']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await writeFile(join(dir, 'proposal.md'), '# Proposal\n\nEdited during the run.\n', 'utf8')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = await taskRecord(root)
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('openspec/changes/change-a/proposal.md')
+  })
+
+  it('discards the verdict when a git-visible file under a formerly excluded directory changes', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'node_modules', 'vendor'), { recursive: true })
+    const file = join(root, 'node_modules', 'vendor', 'tracked.js')
+    await writeFile(file, 'module.exports = 1\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['node_modules/vendor/tracked.js']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await writeFile(file, 'module.exports = 2\n', 'utf8')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = await taskRecord(root)
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('node_modules/vendor/tracked.js')
+  })
+
+  it('publishes PASS and reuses the digest when ignored build output changes', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, integrationReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    const recordPath = join(
+      root,
+      '.dsh',
+      'delegation',
+      'integration-review',
+      'change-a',
+      'integration.json',
+    )
+    const runId = await harness.startReview({ rule: 'integration-review', change: 'change-a' })
+    // An ignored build/flycheck write is not a reviewed input and must not change the digest.
+    await mkdir(join(root, 'target', 'flycheck0'), { recursive: true })
+    await writeFile(join(root, 'target', 'flycheck0', 'stderr'), 'build noise\n', 'utf8')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const first = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      digest: string
+      worktreeDigest: string
+      verdict: string
+    }
+    expect(first.verdict).toBe('PASS')
+    expect(first.worktreeDigest).toBe(first.digest)
+
+    // Implementation-complete reuse requires a matching digest: the ignored write left it intact.
+    const reused = text(
+      await harness.callTool('delegate', { rule: 'integration-review', change: 'change-a' }),
+    )
+    expect(reused).toContain('reused record')
+    expect(subagents.startCalls).toBe(1)
+
+    // Control: a visible source change changes the digest and forces a new run.
+    harness.git.status = ' M src/engine.ts\0'
+    const controlRun = await harness.startReview({
+      rule: 'integration-review',
+      change: 'change-a',
+    })
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(controlRun)).toContain('state=completed')
+    expect(subagents.startCalls).toBe(2)
+    const control = JSON.parse(await readFile(recordPath, 'utf8')) as { digest: string }
+    expect(control.digest).not.toBe(first.digest)
+  })
+
+  it('keeps ignored build output out of the inputs with a real git repository', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await writeFile(join(root, '.gitignore'), 'target/\n', 'utf8')
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'fn main() {}\n', 'utf8')
+    const git = realGit()
+    await git(['init', '-q'], root)
+    await git(['config', 'user.name', 'Delegation Test'], root)
+    await git(['config', 'user.email', 'delegation@example.com'], root)
+    await git(['add', '-A'], root)
+    await git(['commit', '-q', '-m', 'init'], root)
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const fakeGit = new FakeGit()
+    fakeGit.run = git
+    const harness = new Harness({
+      cwd: root,
+      config: taskReviewConfig(),
+      agents: subagents,
+      git: fakeGit,
+    })
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await mkdir(join(root, 'target', 'flycheck0'), { recursive: true })
+    await writeFile(join(root, 'target', 'flycheck0', 'stderr'), 'build noise\n', 'utf8')
+    await writeFile(join(root, 'target', '.rustc_info.json'), '{"noise":true}\n', 'utf8')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const record = await taskRecord(root)
+    expect(record.verdict).toBe('PASS')
   })
 })

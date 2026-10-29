@@ -168,8 +168,9 @@ second call while that identity is pending returns the existing run handle. Diff
 same change/task queue over one conversation key and each writes its own record. Task-scoped reviews
 accept an explicit `task` (id or task text), so parallel task reviews for different tasks do not
 collapse onto the engine's next-task choice. A run reviews stable inputs bound to its digest; any
-reviewed-input change during the run (including edit-read-restore) discards the verdict and reports
-a retry instead of publishing a `PASS`.
+reviewed-input change during the run (a git-visible worktree file, a tracked file that disappears,
+or an included change artifact, including edit-read-restore) discards the verdict and reports a
+retry instead of publishing a `PASS`.
 
 **`answer`** is the read-only blocker/research contract. It returns the answer with evidence and,
 for research, sources and dates. It writes no gate record; a failed answer is reported and
@@ -328,6 +329,25 @@ accepts a note and a note never counts as a task-review `PASS`. A note may be wr
 session, and it attributes the change to that session; task lookup skips an unrelated change whose
 `tasks.md` is unreadable and validates the selected readable task.
 
+## Parallel writers
+
+More than one write-capable agent on one checkout races on the same files and on the same worktree
+digest, so decide ownership before the work starts:
+
+- **Name the files each writer owns.** The handoff states the paths; a writer does not edit outside
+  them.
+- **Isolate concurrent writers in separate worktrees** when their file sets are disjoint and neither
+  consumes the other's output, then review and merge the results.
+- **Serialize overlapping writers in one checkout** (one finishes before the next starts), or isolate
+  each in its own worktree as above.
+- **The patch contract already isolates itself:** a `bug-fix` run executes in its own worktree. This
+  section governs agents and teammates you start directly.
+- **A single writer doing sequential work needs no worktree.** Isolation is for concurrency, not a
+  default ceremony.
+
+The review records, digests, triggers, and turn-stopping gate are unchanged by this guidance; it
+describes how to assign write-capable work.
+
 ## Digests and records
 
 - The whole-spec digest hashes every file in the change directory except `.openspec.yaml`, with
@@ -339,6 +359,15 @@ session, and it attributes the change to that session; task lookup skips an unre
   diff against `HEAD`, and untracked file bytes, ignoring `.dsh/` and `.tmp/`. Git runs with
   fixed argument arrays and no shell; a git failure becomes a visible gate issue, not a silent
   pass.
+- The worktree inputs a running review tracks are exactly the git-visible set
+  (`git ls-files --cached --others --exclude-standard`) minus `.dsh/` and `.tmp/`. Each file is
+  signed by size plus nanosecond mtime/ctime; a git-listed path that cannot be stat'ed is recorded
+  as changed instead of failing the run. Build output and other scratch trees MUST therefore be
+  gitignored: an unignored `target/` or `dist/` folder lets a concurrent build invalidate a review.
+  A task-scope review tracks the union of that set and the reviewed change's artifacts because its
+  digest includes both; a whole-spec review tracks exactly the change artifacts. Do not edit a
+  change artifact while one of its reviews is pending — the edit invalidates the pending verdict
+  by design.
 - A whole-scope record is valid only while its digest matches; a task-scope record is keyed by
   the stable task id and remains historical.
 - Records contain the rule, change, scope, phase, task id when task-scoped, digest, verdict,
@@ -371,7 +400,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2298 UTF-8 bytes
   (~575 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 10998 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 12033 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise.
@@ -389,6 +418,10 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
   `agentOptions` from that target, or use a provider with `agentOptions` capability.
 - **"verdict digest does not match"** — the target answered about a different revision; re-run on
   the current artifacts.
+- **"reviewed inputs changed during the run"** — a git-visible worktree file or the reviewed
+  change's artifacts changed while the review ran; the error names the count and paths. Finish the
+  writes, then re-run the review. Gitignore build output so a concurrent build does not count as a
+  reviewed input.
 - **"no fenced JSON verdict"** — the target returned prose or an invalid block; an `ERROR` record
   was written, so the gate can close with the failure visible and a later run retries.
 - **The gate keeps steering** — a strict rule has no matching record for the current digest; run

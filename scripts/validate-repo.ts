@@ -11,6 +11,8 @@ import {
 import { validatePackageManifest } from './lib/manifest.ts'
 import { readRepositoryFiles, scanMachinePaths, scanSecrets } from './lib/scan.ts'
 import {
+  checkInstructionBudget,
+  type InstructionBudget,
   listPluginPackages,
   type PackageManifest,
   readDshVersions,
@@ -21,6 +23,13 @@ import {
 
 /** The standalone installer duplicates release metadata; this check keeps it honest. */
 const INSTALLER_FILE = join(rootDir, 'install.ps1')
+
+/** The workspace instruction file is injected on every request; its budget is enforced. */
+function checkInstructionFile(problems: string[]): InstructionBudget {
+  const budget = checkInstructionBudget(readFileSync(join(rootDir, 'AGENTS.md'), 'utf8'))
+  if (budget.problem !== undefined) problems.push(budget.problem)
+  return budget
+}
 
 function readInstallerArray(text: string, name: string): string[] {
   const block = new RegExp(`\\$${name}\\s*=\\s*@\\(([\\s\\S]*?)\\)`, 'u').exec(text)
@@ -172,6 +181,7 @@ function main(): number {
   checkManifests(problems)
   checkComposition(problems)
   checkInstaller(problems)
+  const instructionFile = checkInstructionFile(problems)
 
   const files = readRepositoryFiles()
   for (const problem of scanMachinePaths(files)) {
@@ -187,7 +197,7 @@ function main(): number {
     return 1
   }
   console.log(
-    `validate-repo: ${files.length} file(s) scanned, ${listPluginPackages().length} plugin package(s), no problems`,
+    `validate-repo: ${files.length} file(s) scanned, ${listPluginPackages().length} plugin package(s), ${instructionFile.file} ${instructionFile.bytes} bytes (budget ${instructionFile.budget}), no problems`,
   )
   return 0
 }

@@ -57,6 +57,35 @@ describe('parseCompositionFragment', () => {
     ])
   })
 
+  it('accepts an approved Harness preset declaration with a preset- id', () => {
+    const fragment = parseCompositionFragment(
+      "rows:\n  - id: preset-goal-reviewer\n    name: '@deepseek-ai/dsh-agent-preset'\n    config:\n      id: goal-reviewer\n      plugins: []\n",
+      '@dsh-setup/plugin-example',
+    )
+    expect(fragment.rows).toEqual([
+      {
+        id: 'preset-goal-reviewer',
+        name: '@deepseek-ai/dsh-agent-preset',
+        config: { id: 'goal-reviewer', plugins: [] },
+      },
+    ])
+  })
+
+  it('requires a preset- id for a Harness preset declaration', () => {
+    expect(() =>
+      parseCompositionFragment(
+        "rows:\n  - id: dsh-setup-reviewer\n    name: '@deepseek-ai/dsh-agent-preset'\n",
+        PACKAGE,
+      ),
+    ).toThrow(/does not match \^preset-/)
+  })
+
+  it('rejects a preset- id on a row that is not a Harness preset declaration', () => {
+    expect(() => parseCompositionFragment('rows:\n  - id: preset-example\n', PACKAGE)).toThrow(
+      /does not match \^dsh-setup-/,
+    )
+  })
+
   it('rejects an unapproved adapter target', () => {
     expect(() =>
       parseCompositionFragment(

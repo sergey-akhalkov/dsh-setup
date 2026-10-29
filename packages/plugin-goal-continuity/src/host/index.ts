@@ -1,9 +1,20 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { mkdir, readdir, rename, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { GoalRef, GoalView } from '@deepseek-ai/dsh-goal'
 import type { ContextFormed, MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, TurnEndReason } from '@deepseek-ai/dsh-session'
+import type {
+  SubagentActivation,
+  SubagentProvider,
+  SubagentRuntime,
+} from '@deepseek-ai/dsh-subagent'
+import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -18,6 +29,32 @@ export const name = '@dsh-setup/plugin-goal-continuity'
 
 /** Services the supervisor needs. */
 export const inject = ['agents', 'goals']
+
+/** Independent block-review policy nested under `blockReview`. */
+export interface BlockReviewConfig {
+  /** Review proposed blocks at all (default true); the supervisor keeps running when false. */
+  enabled?: boolean
+  /** Registered subagent provider that starts the reviewer (default `spawn`). */
+  provider?: string
+  /** Reviewer model; omitted provider options fall back to the provider defaults. */
+  model?: string
+  /** Reviewer reasoning effort; same fallback as `model`. */
+  reasoningEffort?: string
+  /** Read-only preset the reviewer child joins (default `goal-reviewer`). */
+  reviewerPreset?: string
+  /** The goal tool's `blockedAfterConsecutiveRounds`; the gate reviews at this round (default 3). */
+  blockedAfterConsecutiveRounds?: number
+  /** One review's wall-clock bound in milliseconds (default 300000). */
+  timeoutMs?: number
+  /** Reviews a single goal may start (default 3); a reused verdict is free. */
+  maxReviewsPerGoal?: number
+  /** Policy for a target error, timeout, or malformed verdict (default `deny`). */
+  onReviewError?: 'deny' | 'allow'
+  /** Policy for a missing provider, preset, or child-scope restriction (default `allow`). */
+  onUnavailable?: 'deny' | 'allow'
+  /** Policy once `maxReviewsPerGoal` is reached (default `deny`). */
+  onExhausted?: 'deny' | 'allow'
+}
 
 /** Row configuration. Every field is optional; omission selects the documented default. */
 export interface Config {
@@ -35,6 +72,23 @@ export interface Config {
   maxRoundExtensions?: number
   /** Upper bound for a goal's round cap (default 5000). */
   hardMaxGoalRounds?: number
+  /** Independent review of a proposed goal block (enabled by default). */
+  blockReview?: BlockReviewConfig
+}
+
+/** Fully resolved block-review policy; the plugin never runs on partial values. */
+export interface ResolvedBlockReviewConfig {
+  readonly enabled: boolean
+  readonly provider: string
+  readonly model: string
+  readonly reasoningEffort: string
+  readonly reviewerPreset: string
+  readonly blockedAfterConsecutiveRounds: number
+  readonly timeoutMs: number
+  readonly maxReviewsPerGoal: number
+  readonly onReviewError: 'deny' | 'allow'
+  readonly onUnavailable: 'deny' | 'allow'
+  readonly onExhausted: 'deny' | 'allow'
 }
 
 /** Fully resolved configuration; the plugin never runs on partial values. */
@@ -46,7 +100,23 @@ export interface ResolvedConfig {
   readonly roundExtension: number
   readonly maxRoundExtensions: number
   readonly hardMaxGoalRounds: number
+  readonly blockReview: ResolvedBlockReviewConfig
 }
+
+/** Documented block-review defaults; the composition fragment repeats them. */
+export const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig = Object.freeze({
+  enabled: true,
+  provider: 'spawn',
+  model: 'deepseek-flash',
+  reasoningEffort: 'max',
+  reviewerPreset: 'goal-reviewer',
+  blockedAfterConsecutiveRounds: 3,
+  timeoutMs: 300_000,
+  maxReviewsPerGoal: 3,
+  onReviewError: 'deny',
+  onUnavailable: 'allow',
+  onExhausted: 'deny',
+})
 
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
 export const DEFAULT_CONFIG: ResolvedConfig = Object.freeze({
@@ -57,6 +127,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = Object.freeze({
   roundExtension: 1000,
   maxRoundExtensions: 2,
   hardMaxGoalRounds: 5000,
+  blockReview: DEFAULT_BLOCK_REVIEW_CONFIG,
 })
 
 /** Bound for one notice summary, matching the harness context-summary bound. */
@@ -81,6 +152,73 @@ type IntegerField = keyof typeof INTEGER_RANGES
 /** Render one field diagnostic that names the field and its accepted range. */
 function fieldError(field: string, requirement: string): Error {
   return new Error(`goal-continuity: \`${field}\` ${requirement}`)
+}
+
+/** Integer block-review fields and their accepted inclusive range. */
+const BLOCK_REVIEW_INTEGER_RANGES = {
+  blockedAfterConsecutiveRounds: [1, 1000],
+  timeoutMs: [50, 3_600_000],
+  maxReviewsPerGoal: [0, 100],
+} as const satisfies Record<string, readonly [number, number]>
+
+/** Validate one nested block-review policy and apply the documented defaults. */
+function resolveBlockReview(raw: unknown): ResolvedBlockReviewConfig {
+  const input = raw === undefined ? {} : raw
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw fieldError('blockReview', 'must be an object')
+  }
+  const record = input as Record<string, unknown>
+  for (const key of Object.keys(record)) {
+    if (!Object.hasOwn(DEFAULT_BLOCK_REVIEW_CONFIG, key)) {
+      throw new Error(`goal-continuity: unknown config field "blockReview.${key}"`)
+    }
+  }
+
+  const boolean = (field: 'enabled'): boolean => {
+    const value = record[field]
+    if (value === undefined) return DEFAULT_BLOCK_REVIEW_CONFIG[field]
+    if (typeof value !== 'boolean') throw fieldError(`blockReview.${field}`, 'must be a boolean')
+    return value
+  }
+  const text = (field: 'provider' | 'model' | 'reasoningEffort' | 'reviewerPreset'): string => {
+    const value = record[field]
+    if (value === undefined) return DEFAULT_BLOCK_REVIEW_CONFIG[field]
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw fieldError(`blockReview.${field}`, 'must be a non-empty string')
+    }
+    return value
+  }
+  const integer = (field: keyof typeof BLOCK_REVIEW_INTEGER_RANGES): number => {
+    const value = record[field]
+    if (value === undefined) return DEFAULT_BLOCK_REVIEW_CONFIG[field]
+    const [min, max] = BLOCK_REVIEW_INTEGER_RANGES[field]
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) {
+      throw fieldError(`blockReview.${field}`, `must be an integer between ${min} and ${max}`)
+    }
+    return value
+  }
+  const policy = (field: 'onReviewError' | 'onUnavailable' | 'onExhausted'): 'deny' | 'allow' => {
+    const value = record[field]
+    if (value === undefined) return DEFAULT_BLOCK_REVIEW_CONFIG[field]
+    if (value !== 'deny' && value !== 'allow') {
+      throw fieldError(`blockReview.${field}`, 'must be "deny" or "allow"')
+    }
+    return value
+  }
+
+  return Object.freeze({
+    enabled: boolean('enabled'),
+    provider: text('provider'),
+    model: text('model'),
+    reasoningEffort: text('reasoningEffort'),
+    reviewerPreset: text('reviewerPreset'),
+    blockedAfterConsecutiveRounds: integer('blockedAfterConsecutiveRounds'),
+    timeoutMs: integer('timeoutMs'),
+    maxReviewsPerGoal: integer('maxReviewsPerGoal'),
+    onReviewError: policy('onReviewError'),
+    onUnavailable: policy('onUnavailable'),
+    onExhausted: policy('onExhausted'),
+  })
 }
 
 /**
@@ -134,6 +272,7 @@ export function resolveConfig(raw: unknown): ResolvedConfig {
     roundExtension: integer('roundExtension'),
     maxRoundExtensions: integer('maxRoundExtensions'),
     hardMaxGoalRounds: integer('hardMaxGoalRounds'),
+    blockReview: resolveBlockReview(record.blockReview),
   })
 }
 
@@ -296,14 +435,1068 @@ function createNotice(text: string, summary: string): UserMessage {
   })
 }
 
+/** Deliver one non-waking notice; a disposed agent fails open. */
+function deliverNotice(agent: Agent, text: string, summary: string): void {
+  try {
+    agent.inject(createNotice(text, summary))
+  } catch {
+    // A disposed agent simply receives no notice.
+  }
+}
+
 /**
- * Install the supervisor. The configuration is validated at load, so a bad
- * profile fails loudly; supervision itself fails open.
+ * Independent block review: the only model call in this plugin. It reviews one
+ * proposed `blocked` update and returns a tool-call decision; it never starts,
+ * continues, or cancels a turn and never mutates the goal.
+ */
+
+/** Read-only tools the reviewer preset mounts and the child-scope allowlist admits. */
+const REVIEWER_TOOLS = Object.freeze(['read', 'grep', 'glob'])
+
+/** Local workspace state: goal-scoped review records and the machine-local grant ledger. */
+const BLOCK_REVIEW_DIR = join('.dsh', 'goal-continuity', 'block-review')
+const GRANTS_PATH = join('.dsh', 'goal-continuity', 'grants.json')
+
+/** Bounds for the evidence bundle and the model-facing strings. */
+const MAX_TOOL_ARGUMENT_CHARS = 400
+const MAX_TOOL_RESULT_CHARS = 500
+const MAX_TOOL_CALLS_PER_ROUND = 8
+const EVIDENCE_ROUNDS = 3
+const MAX_EVIDENCE_USER_MESSAGES = 5
+const MAX_USER_MESSAGE_CHARS = 800
+const MAX_RUNTIME_POLICY_CHARS = 600
+const MAX_INSTRUCTIONS_CHARS = 6000
+const MAX_GRANTS_CHARS = 4000
+const MAX_REVIEW_PROMPT_CHARS = 24_000
+const MAX_VERDICT_EVIDENCE = 5
+const MAX_VERDICT_EVIDENCE_CHARS = 300
+const MAX_REVIEW_ACTION_CHARS = 400
+const MAX_DENY_REASON_CHARS = 1200
+
+/** Visible error codes: a denial names its cause and the record. */
+const REJECTED_CODE = 'GOAL_BLOCK_REVIEW_REJECTED'
+const UNAVAILABLE_CODE = 'GOAL_BLOCK_REVIEW_UNAVAILABLE'
+const REVIEW_ERROR_CODE = 'GOAL_BLOCK_REVIEW_ERROR'
+const EXHAUSTED_CODE = 'GOAL_BLOCK_REVIEW_EXHAUSTED'
+
+/** The reviewer's read-only preset id, selected only by this gate. */
+const REVIEW_LABEL = 'goal-block-review'
+
+/** Scope-restriction failures are configuration problems, not review errors. */
+const SCOPE_FAILURE_PREFIX = 'goal-continuity: reviewer scope restriction failed'
+
+/** Bundled reviewer instructions; resolved beside `lib/index.js`, read lazily. */
+const assetsDirectory = fileURLToPath(new URL('../assets', import.meta.url))
+
+/** One reviewer execution target, kept in the record without machine paths. */
+interface ReviewTarget {
+  readonly provider: string
+  readonly model?: string
+  readonly reasoningEffort?: string
+  readonly preset: string
+}
+
+/** The strict verdict the reviewer must return. */
+interface ReviewVerdict {
+  readonly verdict: 'blocker' | 'not-blocker'
+  readonly userAction?: string
+  readonly nextStep?: string
+  readonly evidence: readonly string[]
+  readonly confidence?: string
+}
+
+/** The outcome of one attempted review. */
+type ReviewOutcome =
+  | { readonly kind: 'reviewed'; readonly verdict: ReviewVerdict; readonly target: ReviewTarget }
+  | { readonly kind: 'unavailable'; readonly detail: string }
+  | { readonly kind: 'error'; readonly detail: string; readonly started: boolean }
+
+/** One tool call and its bounded result inside one goal round. */
+interface EvidenceCall {
+  readonly name: string
+  readonly arguments: string
+  result: string
+}
+
+/** One of the last goal rounds admitted before the block proposal. */
+interface EvidenceRound {
+  readonly round: number
+  readonly calls: readonly EvidenceCall[]
+}
+
+/** The bounded, redacted evidence bundle; never contains the raw workspace path. */
+interface ReviewEvidence {
+  readonly objective: string
+  readonly blockReason: string
+  readonly rounds: readonly EvidenceRound[]
+  readonly userMessages: readonly string[]
+  readonly runtimePolicy: string
+  readonly workspaceInstructions: string
+  readonly grants: string
+}
+
+/** What the current open turn says about the block proposal. */
+interface OpenTurn {
+  readonly directMessages: readonly string[]
+  readonly goalRound: boolean
+}
+
+/** One written review record. Local state: never a tracked file. */
+interface BlockReviewRecord {
+  version: 1
+  goal: string
+  revision: number
+  objective: string
+  digest: string
+  verdict: 'blocker' | 'not-blocker' | 'unavailable' | 'review-error' | 'exhausted'
+  verified: boolean
+  reviewed: boolean
+  userAction?: string
+  nextStep?: string
+  evidence: readonly string[]
+  evidenceSummary: {
+    rounds: number
+    toolCalls: number
+    userMessages: number
+    runtimePolicy: string
+    grantsPresent: boolean
+    instructionsChars: number
+  }
+  target: ReviewTarget
+  policy?: 'onUnavailable' | 'onReviewError' | 'onExhausted'
+  detail?: string
+  time: string
+  session: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** One line of failure detail, bounded for a record or a notice. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Read one optional service without failing the host when it is not mounted. */
+function optionalService<T>(ctx: Context, name: string): T | undefined {
+  try {
+    return (ctx as unknown as { get(key: string): unknown }).get(name) as T | undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Read the current goal without letting a goal-domain failure reach the gate. */
+function readCurrentGoal(ctx: Context, agent: Agent): GoalView | undefined {
+  try {
+    return ctx.goals.get(agent)
+  } catch {
+    return undefined
+  }
+}
+
+/** Text of one model-facing message. */
+function messageText(message: UserMessage): string {
+  return message.content.map((block) => (block.type === 'text' ? block.text : '')).join('\n')
+}
+
+/** The session's committed events, or an empty list when the log is unavailable. */
+function sessionEvents(agent: Agent): readonly SessionEvent[] {
+  try {
+    return agent.session.snapshotEvents()
+  } catch {
+    return []
+  }
+}
+
+/** The current workspace directory, with the session header as the fallback. */
+function workspaceFor(ctx: Context, agent: Agent): string {
+  const service = optionalService<WorkingDirectoryService>(ctx, 'workingDirectory')
+  if (service !== undefined) {
+    try {
+      return service.get(agent.session)
+    } catch {
+      // Fall through to the durable header.
+    }
+  }
+  return agent.session.header.cwd ?? process.cwd()
+}
+
+/** Replace machine paths and obvious credentials before any evidence leaves the workspace. */
+function redact(text: string, workspace: string): string {
+  let output = text
+  for (const candidate of [workspace, workspace.replaceAll('\\', '/')]) {
+    if (candidate !== '') output = output.split(candidate).join('[workspace]')
+  }
+  return output
+    .replace(/[A-Za-z]:[\\/][^\s"'`<>|]*/gu, '[path]')
+    .replace(/\\\\[^\s"'`<>|]+/gu, '[path]')
+    .replace(/\/(?:home|Users)\/[^\s"'`<>|]*/gu, '[path]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, '[redacted]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [redacted]')
+    .replace(/\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu,
+      '[redacted private key]',
+    )
+}
+
+/** Read a bounded text file; a missing file is a named absence, not an error. */
+function readBoundedFile(path: string, max: number): string {
+  try {
+    return readFileSync(path, 'utf8').slice(0, max)
+  } catch {
+    return '(missing)'
+  }
+}
+
+/** The current open turn's direct user messages and whether this is the exact goal round. */
+function openTurn(agent: Agent, goal: GoalView): OpenTurn {
+  const events = sessionEvents(agent)
+  let start = 0
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.type === 'turn/start') {
+      start = index
+      break
+    }
+  }
+  const directMessages: string[] = []
+  let goalRound = false
+  for (let index = start; index < events.length; index += 1) {
+    const event = events[index]
+    if (event === undefined || event.type !== 'user/message') continue
+    const source = event.data.source
+    if (source.kind === 'user') {
+      directMessages.push(bound(messageText(event.data), MAX_USER_MESSAGE_CHARS))
+    } else if (
+      source.kind === 'goal' &&
+      source.goalId === goal.id &&
+      source.revision === goal.revision &&
+      source.round === goal.roundsStarted
+    ) {
+      goalRound = true
+    }
+  }
+  return { directMessages: directMessages.slice(-3), goalRound }
+}
+
+/** Bounded explicit block-request vocabulary; anything else is reviewed. */
+const EXPLICIT_BLOCK_PATTERNS = [
+  /\b(?:please\s+)?(?:mark|report|declare|call|set)\s+(?:(?:the|this|it|my|our)\s+)*(?:goal\s+)?(?:as\s+)?(?:blocked|a blocker)\b/iu,
+  /\b(?:the|this)\s+goal\s+(?:is|should be|can be)\s+(?:marked\s+)?(?:blocked|a blocker)\b/iu,
+  /\byou\s+(?:can|may|should)\s+(?:mark|report|declare)\s+(?:it|the goal)\s+(?:as\s+)?blocked\b/iu,
+  /\b(?:block|stop)\s+(?:the|this)\s+goal\b/iu,
+]
+
+/** Whether the open turn explicitly requested the block (a bounded text check). */
+function explicitBlockRequest(messages: readonly string[]): boolean {
+  return messages.some((message) =>
+    EXPLICIT_BLOCK_PATTERNS.some((pattern) => pattern.test(message)),
+  )
+}
+
+/** Format one tool result's text blocks. */
+function toolResultText(event: Extract<SessionEvent, { type: 'tool/result' }>): string {
+  return event.data.message.content
+    .map((block) => (block.type === 'text' ? block.text : ''))
+    .join('\n')
+}
+
+/** The runtime permission policy from one runtime-context snapshot message. */
+function runtimePolicyFrom(message: UserMessage, workspace: string): string {
+  const source = message.source as unknown as {
+    form?: string
+    sections?: ReadonlyArray<{ name?: string; text?: string }>
+  }
+  if (source.form === 'snapshot' && Array.isArray(source.sections)) {
+    const parts = source.sections
+      .filter((section) =>
+        /sandbox|permission|policy|approval|file/iu.test(
+          `${section.name ?? ''} ${section.text ?? ''}`,
+        ),
+      )
+      .map((section) => section.text ?? '')
+      .filter((text) => text !== '')
+    if (parts.length > 0) {
+      return bound(redact(parts.join('\n'), workspace), MAX_RUNTIME_POLICY_CHARS)
+    }
+  }
+  return bound(redact(messageText(message), workspace), MAX_RUNTIME_POLICY_CHARS)
+}
+
+/** Build the bounded, redacted evidence bundle from the session log and workspace files. */
+function buildEvidence(
+  agent: Agent,
+  goal: GoalView,
+  blockReason: string,
+  workspace: string,
+): ReviewEvidence {
+  const events = sessionEvents(agent)
+  const buckets = new Map<number, EvidenceCall[]>()
+  const called = new Map<string, EvidenceCall>()
+  let round: number | undefined
+  const userMessages: string[] = []
+  let runtimePolicy = '(not found)'
+
+  for (const event of events) {
+    if (event.type === 'turn/start') {
+      round = undefined
+      continue
+    }
+    if (event.type === 'user/message') {
+      const source = event.data.source
+      const sourceKind = (source as { kind: string }).kind
+      if (sourceKind === 'runtime-context') {
+        runtimePolicy = runtimePolicyFrom(event.data, workspace)
+        continue
+      }
+      if (source.kind === 'goal') {
+        if (source.goalId !== goal.id) {
+          round = undefined
+          continue
+        }
+        round = source.round
+        if (!buckets.has(round)) buckets.set(round, [])
+        continue
+      }
+      if (source.kind === 'user') {
+        round = undefined
+        userMessages.push(bound(redact(messageText(event.data), workspace), MAX_USER_MESSAGE_CHARS))
+      }
+      continue
+    }
+    if (event.type === 'tool/call' && round !== undefined) {
+      const calls = buckets.get(round)
+      if (calls !== undefined) {
+        const call: EvidenceCall = {
+          name: bound(event.data.name, 80),
+          arguments: bound(redact(event.data.arguments, workspace), MAX_TOOL_ARGUMENT_CHARS),
+          result: '',
+        }
+        calls.push(call)
+        called.set(event.data.callId, call)
+      }
+      continue
+    }
+    if (event.type === 'tool/result') {
+      const call = called.get(event.data.message.toolCallId)
+      if (call !== undefined && call.result === '') {
+        call.result = bound(redact(toolResultText(event), workspace), MAX_TOOL_RESULT_CHARS)
+      }
+    }
+  }
+
+  const rounds = [...buckets.entries()]
+    .filter(([number]) => number <= goal.roundsStarted)
+    .sort(([left], [right]) => left - right)
+    .slice(-EVIDENCE_ROUNDS)
+    .map(([number, calls]) => ({
+      round: number,
+      calls: calls.slice(-MAX_TOOL_CALLS_PER_ROUND),
+    }))
+
+  return {
+    objective: bound(redact(goal.objective, workspace), 2000),
+    blockReason: bound(redact(blockReason, workspace), 2000),
+    rounds,
+    userMessages: userMessages.slice(-MAX_EVIDENCE_USER_MESSAGES),
+    runtimePolicy,
+    workspaceInstructions: redact(
+      readBoundedFile(join(workspace, 'AGENTS.md'), MAX_INSTRUCTIONS_CHARS),
+      workspace,
+    ),
+    grants: redact(readBoundedFile(join(workspace, GRANTS_PATH), MAX_GRANTS_CHARS), workspace),
+  }
+}
+
+/** SHA-256 over the objective, block reason, and the redacted evidence bundle. */
+function evidenceDigest(objective: string, blockReason: string, evidence: ReviewEvidence): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        objective,
+        blockReason,
+        rounds: evidence.rounds,
+        userMessages: evidence.userMessages,
+        runtimePolicy: evidence.runtimePolicy,
+        workspaceInstructions: evidence.workspaceInstructions,
+        grants: evidence.grants,
+      }),
+    )
+    .digest('hex')
+}
+
+/** One filesystem-safe goal directory name. */
+function goalDirectoryName(goalId: string): string {
+  const safe = goalId.replace(/[^A-Za-z0-9._-]+/gu, '_').slice(0, 80)
+  return safe === '' ? createHash('sha256').update(goalId).digest('hex').slice(0, 16) : safe
+}
+
+/** Goal-scoped record directory under the workspace's local state. */
+function recordDirectory(workspace: string, goalId: string): string {
+  return join(workspace, BLOCK_REVIEW_DIR, goalDirectoryName(goalId))
+}
+
+/** The digest-addressed record path for one proposal. */
+function recordPathFor(workspace: string, goalId: string, digest: string): string {
+  return join(recordDirectory(workspace, goalId), `${digest}.json`)
+}
+
+/** The workspace-relative record path shown in model-facing text (never an absolute path). */
+function displayRecordPath(workspace: string, goalId: string, digest: string): string {
+  const path = recordPathFor(workspace, goalId, digest)
+  return path.slice(workspace.length).replaceAll('\\', '/').replace(/^\//u, '')
+}
+
+/** Read one record object; an absent or malformed file is no record. */
+function readRecordFile(path: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!isRecord(value) || value.version !== 1) return undefined
+    return value
+  } catch {
+    return undefined
+  }
+}
+
+/** A stored reviewed verdict for this exact proposal, if one exists. */
+function cachedVerdict(
+  workspace: string,
+  goalId: string,
+  digest: string,
+): ReviewVerdict | undefined {
+  const record = readRecordFile(recordPathFor(workspace, goalId, digest))
+  if (record === undefined || record.digest !== digest) return undefined
+  if (record.verified !== true) return undefined
+  const evidence = Array.isArray(record.evidence)
+    ? record.evidence.filter((item): item is string => typeof item === 'string')
+    : []
+  if (record.verdict === 'blocker') {
+    if (typeof record.userAction !== 'string' || record.userAction === '') return undefined
+    return { verdict: 'blocker', userAction: record.userAction, evidence }
+  }
+  if (record.verdict === 'not-blocker') {
+    if (typeof record.nextStep !== 'string' || record.nextStep === '') return undefined
+    return { verdict: 'not-blocker', nextStep: record.nextStep, evidence }
+  }
+  return undefined
+}
+
+/** Count the reviews this goal has actually spent; policy records do not count. */
+async function countReviews(workspace: string, goalId: string): Promise<number> {
+  let names: string[]
+  try {
+    names = await readdir(recordDirectory(workspace, goalId))
+  } catch {
+    return 0
+  }
+  let count = 0
+  for (const name of names.slice(0, 500)) {
+    if (!name.endsWith('.json')) continue
+    const record = readRecordFile(join(recordDirectory(workspace, goalId), name))
+    if (record !== undefined && record.reviewed === true) count += 1
+  }
+  return count
+}
+
+/** Write one local record atomically; the gate never fails a session on an audit write. */
+async function writeRecord(path: string, record: BlockReviewRecord): Promise<void> {
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    const temporary = `${path}.${randomUUID()}.tmp`
+    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+    await rename(temporary, path)
+  } catch {
+    // Audit state is best-effort: the tool decision is already determined.
+  }
+}
+
+/** Parse exactly one strict verdict; anything else is a review error. */
+function parseVerdict(text: string, workspace: string): ReviewVerdict {
+  const blocks: string[] = []
+  const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/gu
+  for (const match of text.matchAll(fence)) blocks.push(match[1] ?? '')
+  if (blocks.length === 0) throw new Error('the reviewer returned no fenced JSON verdict')
+  if (blocks.length > 1) {
+    throw new Error(
+      `the reviewer returned ${blocks.length} fenced blocks; exactly one verdict is required`,
+    )
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(blocks[0] as string)
+  } catch (error) {
+    throw new Error(`the fenced verdict is not valid JSON: ${errorMessage(error)}`)
+  }
+  if (!isRecord(value)) throw new Error('the fenced verdict must be a JSON object')
+  const allowed = new Set(['verdict', 'userAction', 'nextStep', 'evidence', 'confidence'])
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new Error(`the verdict has unknown field "${key}"`)
+  }
+
+  const nonEmpty = (field: string, raw: unknown): string => {
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      throw new Error(`the verdict "${field}" must be a non-empty string`)
+    }
+    return bound(redact(raw.trim(), workspace), MAX_REVIEW_ACTION_CHARS)
+  }
+  const optionalEvidence = (raw: unknown): string[] => {
+    if (raw === undefined) return []
+    if (!Array.isArray(raw)) throw new Error('the verdict "evidence" must be a list')
+    if (raw.length > MAX_VERDICT_EVIDENCE) {
+      throw new Error(`the verdict "evidence" must list at most ${MAX_VERDICT_EVIDENCE} items`)
+    }
+    return raw.map((item) => {
+      if (typeof item !== 'string' || item.trim() === '') {
+        throw new Error('every verdict evidence item must be a non-empty string')
+      }
+      return bound(redact(item.trim(), workspace), MAX_VERDICT_EVIDENCE_CHARS)
+    })
+  }
+
+  const evidence = optionalEvidence(value.evidence)
+  const confidence =
+    value.confidence === undefined ? undefined : nonEmpty('confidence', value.confidence)
+  if (value.verdict === 'blocker') {
+    if (value.nextStep !== undefined && value.nextStep !== null) {
+      throw new Error('a blocker verdict cannot also carry a nextStep')
+    }
+    return {
+      verdict: 'blocker',
+      userAction: nonEmpty('userAction', value.userAction),
+      evidence,
+      ...(confidence === undefined ? {} : { confidence }),
+    }
+  }
+  if (value.verdict === 'not-blocker') {
+    if (value.userAction !== undefined && value.userAction !== null) {
+      throw new Error('a not-blocker verdict cannot also carry a userAction')
+    }
+    return {
+      verdict: 'not-blocker',
+      nextStep: nonEmpty('nextStep', value.nextStep),
+      evidence,
+      ...(confidence === undefined ? {} : { confidence }),
+    }
+  }
+  throw new Error('the verdict must be "blocker" or "not-blocker"')
+}
+
+/** The bundled reviewer instructions; a missing asset is a review error. */
+let reviewerInstructions: string | undefined
+function loadReviewerInstructions(): string {
+  if (reviewerInstructions === undefined) {
+    reviewerInstructions = readFileSync(join(assetsDirectory, 'blocker-review.md'), 'utf8').trim()
+  }
+  return reviewerInstructions
+}
+
+/** Render the bounded reviewer prompt: instructions first, then the evidence bundle. */
+function composeReviewPrompt(evidence: ReviewEvidence, workspace: string, goal: GoalView): string {
+  const lines = [
+    loadReviewerInstructions(),
+    '',
+    '## Review evidence',
+    '',
+    `- Workspace (read-only): ${workspace}`,
+    `- Objective: ${evidence.objective}`,
+    `- Rounds started: ${goal.roundsStarted} of ${goal.maxGoalRounds}`,
+    `- Block reason: ${evidence.blockReason}`,
+    '',
+    '### Last goal rounds',
+  ]
+  if (evidence.rounds.length === 0) lines.push('(no goal-round tool activity recorded)')
+  for (const round of evidence.rounds) {
+    lines.push('', `Round ${round.round}:`)
+    if (round.calls.length === 0) lines.push('- (no tool calls)')
+    for (const call of round.calls) {
+      lines.push(`- ${call.name} ${call.arguments}`)
+      if (call.result !== '') lines.push(`  result: ${call.result}`)
+    }
+  }
+  lines.push('', '### User messages (most recent last)')
+  if (evidence.userMessages.length === 0) lines.push('(none recorded)')
+  for (const message of evidence.userMessages) lines.push('', message)
+  lines.push(
+    '',
+    '### Runtime permission policy',
+    '',
+    evidence.runtimePolicy,
+    '',
+    '### Workspace instructions (AGENTS.md)',
+    '',
+    evidence.workspaceInstructions,
+    '',
+    '### Standing grants (.dsh/goal-continuity/grants.json)',
+    '',
+    evidence.grants,
+    '',
+    'Return exactly one fenced JSON block in the schema the instructions require.',
+  )
+  return bound(lines.join('\n'), MAX_REVIEW_PROMPT_CHARS)
+}
+
+/** Output text of one settled subagent run. */
+function outputText(output: readonly { type: string; text?: string }[]): string {
+  const blocks: string[] = []
+  for (const block of output) {
+    if (block.type === 'text' && typeof block.text === 'string') blocks.push(block.text)
+  }
+  return blocks.join('\n').trim()
+}
+
+/** Await one review with a wall-clock bound and caller cancellation. */
+async function awaitReview(
+  activation: SubagentActivation,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<
+  | { readonly kind: 'result'; readonly value: Awaited<SubagentActivation['result']> }
+  | { readonly kind: 'timeout' }
+  | { readonly kind: 'aborted' }
+  | { readonly kind: 'threw'; readonly error: unknown }
+> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let abort: (() => void) | undefined
+  try {
+    return await Promise.race([
+      activation.result.then(
+        (value) => ({ kind: 'result' as const, value }),
+        (error: unknown) => ({ kind: 'threw' as const, error }),
+      ),
+      new Promise<{ kind: 'timeout' }>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs)
+      }),
+      new Promise<{ kind: 'aborted' }>((resolve) => {
+        abort = () => resolve({ kind: 'aborted' })
+        if (signal.aborted) abort()
+        else signal.addEventListener('abort', abort, { once: true })
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    if (abort !== undefined) signal.removeEventListener('abort', abort)
+  }
+}
+
+/** Start and settle one read-only reviewer child. */
+async function runReview(
+  ctx: Context,
+  agent: Agent,
+  workspace: string,
+  prompt: string,
+  config: ResolvedBlockReviewConfig,
+  signal: AbortSignal,
+): Promise<ReviewOutcome> {
+  const target: ReviewTarget = {
+    provider: config.provider,
+    model: config.model,
+    reasoningEffort: config.reasoningEffort,
+    preset: config.reviewerPreset,
+  }
+  const subagents = optionalService<SubagentRuntime>(ctx, 'subagents')
+  if (subagents === undefined) {
+    return { kind: 'unavailable', detail: 'the subagent service is not mounted' }
+  }
+  let provider: SubagentProvider | undefined
+  try {
+    provider = subagents.getProvider(config.provider)
+  } catch (error) {
+    return {
+      kind: 'unavailable',
+      detail: `the provider registry failed: ${errorMessage(error)}`,
+    }
+  }
+  if (provider === undefined) {
+    let registered: string[] = []
+    try {
+      registered = subagents.list()
+    } catch {
+      // Keep the diagnostic after the provider lookup.
+    }
+    return {
+      kind: 'unavailable',
+      detail: `provider "${config.provider}" is not registered (registered: ${registered.join(', ') || 'none'})`,
+    }
+  }
+  if (provider.capabilities?.agentPreset !== true) {
+    return {
+      kind: 'unavailable',
+      detail: `provider "${provider.name}" does not support an independent agent preset`,
+    }
+  }
+  if (provider.inheritsParentContext === true) {
+    return {
+      kind: 'unavailable',
+      detail: `provider "${provider.name}" inherits the parent context; the reviewer needs a fresh context`,
+    }
+  }
+
+  const agentOptions: { model?: string; reasoningEffort?: AgentOptions['reasoningEffort'] } = {}
+  if (provider.capabilities.agentOptions === true) {
+    agentOptions.model = config.model
+    agentOptions.reasoningEffort = config.reasoningEffort as AgentOptions['reasoningEffort']
+  }
+  let activation: SubagentActivation
+  try {
+    activation = await subagents.startActivation({
+      provider: provider.name,
+      label: REVIEW_LABEL,
+      request: {
+        prompt: [{ type: 'text', text: prompt }],
+        parent: agent,
+        cwd: workspace,
+        agentPreset: config.reviewerPreset,
+        ...(Object.keys(agentOptions).length === 0 ? {} : { agentOptions }),
+      },
+      signal,
+      delivery: 'caller',
+    })
+  } catch (error) {
+    const message = errorMessage(error)
+    if (message.startsWith(SCOPE_FAILURE_PREFIX)) return { kind: 'unavailable', detail: message }
+    // A missing or disabled preset is a configuration problem; the manager's
+    // mount diagnostic names it, so follow the unavailable policy.
+    if (/agent preset|agentPreset|preset/iu.test(message)) {
+      return { kind: 'unavailable', detail: message }
+    }
+    return { kind: 'error', detail: `the reviewer could not start: ${message}`, started: false }
+  }
+
+  try {
+    const settled = await awaitReview(activation, config.timeoutMs, signal)
+    if (settled.kind === 'timeout') {
+      return {
+        kind: 'error',
+        detail: `the review did not finish within ${config.timeoutMs} ms`,
+        started: true,
+      }
+    }
+    if (settled.kind === 'aborted') {
+      return { kind: 'error', detail: 'the review was cancelled', started: true }
+    }
+    if (settled.kind === 'threw') {
+      return {
+        kind: 'error',
+        detail: `the review failed: ${errorMessage(settled.error)}`,
+        started: true,
+      }
+    }
+    if (settled.value.stopReason !== 'completed') {
+      const diagnostic =
+        settled.value.diagnostic === undefined ? '' : `: ${settled.value.diagnostic}`
+      return {
+        kind: 'error',
+        detail: `the reviewer stopped with "${settled.value.stopReason}"${diagnostic}`,
+        started: true,
+      }
+    }
+    let verdict: ReviewVerdict
+    try {
+      verdict = parseVerdict(outputText(settled.value.output), workspace)
+    } catch (error) {
+      return {
+        kind: 'error',
+        detail: `the reviewer verdict is invalid: ${errorMessage(error)}`,
+        started: true,
+      }
+    }
+    return { kind: 'reviewed', verdict, target }
+  } finally {
+    await activation.dispose().catch(() => undefined)
+  }
+}
+
+/** Deny with the reviewer's next action and a visible code. */
+function denyWith(reason: string, code: string): PreToolDecision {
+  return {
+    kind: 'deny',
+    reason: bound(reason, MAX_DENY_REASON_CHARS),
+    info: { name: 'goal-block-review', code },
+  }
+}
+
+/** The tool decision for one strict verdict; a verified blocker gets a notice. */
+function verdictDecision(
+  agent: Agent,
+  verdict: ReviewVerdict,
+  reused: boolean,
+  recordPath: string,
+): PreToolDecision | undefined {
+  if (verdict.verdict === 'not-blocker') {
+    return denyWith(
+      `The independent block review rejected this goal block: ${verdict.nextStep} The goal stays active. Do that next step now; do not ask the user for permission this review already covers. Record: ${recordPath}.`,
+      REJECTED_CODE,
+    )
+  }
+  deliverNotice(
+    agent,
+    `Block review ${reused ? '(cached) ' : ''}confirmed a user-only blocker. The closing message must name exactly this user action: ${verdict.userAction}. Record: ${recordPath}.`,
+    'goal-continuity: block review confirmed a blocker',
+  )
+  return undefined
+}
+
+/** Record one policy decision without pretending it is a review verdict. */
+async function recordPolicy(
+  agent: Agent,
+  workspace: string,
+  goal: GoalView,
+  digest: string,
+  verdict: 'unavailable' | 'review-error' | 'exhausted',
+  policy: 'onUnavailable' | 'onReviewError' | 'onExhausted',
+  detail: string,
+  target: ReviewTarget,
+  reviewed: boolean,
+  evidence: ReviewEvidence | undefined,
+): Promise<string> {
+  await writeRecord(recordPathFor(workspace, goal.id, digest), {
+    version: 1,
+    goal: goal.id,
+    revision: goal.revision,
+    objective: bound(redact(goal.objective, workspace), 500),
+    digest,
+    verdict,
+    verified: false,
+    reviewed,
+    evidence: [],
+    evidenceSummary: {
+      rounds: evidence?.rounds.length ?? 0,
+      toolCalls: evidence?.rounds.reduce((total, round) => total + round.calls.length, 0) ?? 0,
+      userMessages: evidence?.userMessages.length ?? 0,
+      runtimePolicy: bound(evidence?.runtimePolicy ?? '', 200),
+      grantsPresent: evidence !== undefined && evidence.grants !== '(missing)',
+      instructionsChars: evidence?.workspaceInstructions.length ?? 0,
+    },
+    target,
+    policy,
+    detail: bound(redact(detail, workspace), 1000),
+    time: new Date().toISOString(),
+    session: agent.session.id,
+  })
+  return displayRecordPath(workspace, goal.id, digest)
+}
+
+/** Visible notice for a policy-allowed unverified block. */
+function notifyUnverified(
+  agent: Agent,
+  record: string,
+  policy: 'onUnavailable' | 'onReviewError' | 'onExhausted',
+  detail: string,
+): void {
+  deliverNotice(
+    agent,
+    `Block review allowed this goal block UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The goal will block without a confirmed user-only action.`,
+    `goal-continuity: unverified block allowed (${policy})`,
+  )
+}
+
+/** Install the pre-execute gate and the reviewer child-scope allowlist. */
+function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): void {
+  if (!config.enabled) return
+  ctx.on('agent/created', ({ agent }) => {
+    if (agent.session.header.origin !== 'subagent') return undefined
+    if (agent.session.header.agentPreset !== config.reviewerPreset) return undefined
+    try {
+      const tools = agent.ctx.tools
+      if (typeof tools?.restrict !== 'function') {
+        throw new Error('the reviewer child scope has no tools service')
+      }
+      const dispose = tools.restrict({ allow: [...REVIEWER_TOOLS] })
+      if (typeof dispose !== 'function') {
+        throw new Error('the child-scope restriction returned no disposer')
+      }
+    } catch (error) {
+      // Fail creation: the child must not run a single step without the allowlist.
+      throw new Error(`${SCOPE_FAILURE_PREFIX}: ${errorMessage(error)}`)
+    }
+    return undefined
+  })
+
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    try {
+      return await decide(exec, next)
+    } catch {
+      // An unexpected gate failure must not mask every tool call in the session.
+      return next()
+    }
+  })
+
+  async function decide(
+    exec: ToolExecution,
+    next: () => Promise<PreToolDecision>,
+  ): Promise<PreToolDecision> {
+    const agent = exec.agent
+    if (agent === undefined || !isRootAgent(agent)) return next()
+    if (exec.name !== 'update_goal') return next()
+    const args = exec.arguments
+    if (!isRecord(args) || args.action !== 'blocked') return next()
+    const goal = readCurrentGoal(ctx, agent)
+    if (goal === undefined || goal.phase !== 'active') return next()
+    if (args.goal_id !== goal.id || args.revision !== goal.revision) return next()
+    const blockReason = typeof args.blocked_reason === 'string' ? args.blocked_reason : ''
+    if (blockReason.trim() === '') return next()
+    const turn = openTurn(agent, goal)
+    if (explicitBlockRequest(turn.directMessages)) return next()
+    if (turn.goalRound && goal.roundsStarted < config.blockedAfterConsecutiveRounds) return next()
+
+    const workspace = workspaceFor(ctx, agent)
+    const evidence = buildEvidence(agent, goal, blockReason, workspace)
+    const digest = evidenceDigest(goal.objective, blockReason, evidence)
+    const record = displayRecordPath(workspace, goal.id, digest)
+    const cached = cachedVerdict(workspace, goal.id, digest)
+    if (cached !== undefined) return verdictDecision(agent, cached, true, record) ?? next()
+
+    const target: ReviewTarget = {
+      provider: config.provider,
+      model: config.model,
+      reasoningEffort: config.reasoningEffort,
+      preset: config.reviewerPreset,
+    }
+    const reviewed = await countReviews(workspace, goal.id)
+    if (reviewed >= config.maxReviewsPerGoal) {
+      const detail = `the per-goal review budget (${config.maxReviewsPerGoal}) is exhausted`
+      const written = await recordPolicy(
+        agent,
+        workspace,
+        goal,
+        digest,
+        'exhausted',
+        'onExhausted',
+        detail,
+        target,
+        false,
+        evidence,
+      )
+      if (config.onExhausted === 'allow') {
+        notifyUnverified(agent, written, 'onExhausted', detail)
+        return next()
+      }
+      return denyWith(
+        `Block review rejected this proposal: ${detail}. The goal stays active. Continue the objective with another authorized route, or record why only the user can proceed; raising maxReviewsPerGoal allows another review. Record: ${record}.`,
+        EXHAUSTED_CODE,
+      )
+    }
+
+    let prompt: string
+    try {
+      prompt = composeReviewPrompt(evidence, workspace, goal)
+    } catch (error) {
+      const detail = `the reviewer prompt could not be built: ${errorMessage(error)}`
+      const written = await recordPolicy(
+        agent,
+        workspace,
+        goal,
+        digest,
+        'review-error',
+        'onReviewError',
+        detail,
+        target,
+        false,
+        evidence,
+      )
+      if (config.onReviewError === 'allow') {
+        notifyUnverified(agent, written, 'onReviewError', detail)
+        return next()
+      }
+      return denyWith(
+        `Block review could not run (${detail}) and onReviewError is "deny". The goal stays active. Fix the review target or set blockReview.onReviewError to "allow". Record: ${record}.`,
+        REVIEW_ERROR_CODE,
+      )
+    }
+
+    const outcome = await runReview(ctx, agent, workspace, prompt, config, exec.signal)
+    if (outcome.kind === 'unavailable') {
+      const detail = redact(outcome.detail, workspace)
+      const written = await recordPolicy(
+        agent,
+        workspace,
+        goal,
+        digest,
+        'unavailable',
+        'onUnavailable',
+        detail,
+        target,
+        false,
+        evidence,
+      )
+      if (config.onUnavailable === 'allow') {
+        notifyUnverified(agent, written, 'onUnavailable', detail)
+        return next()
+      }
+      return denyWith(
+        `Block review is unavailable (${detail}) and onUnavailable is "deny". The goal stays active. Fix the reviewer provider or preset, or set blockReview.onUnavailable to "allow". Record: ${record}.`,
+        UNAVAILABLE_CODE,
+      )
+    }
+    if (outcome.kind === 'error') {
+      const detail = redact(outcome.detail, workspace)
+      const written = await recordPolicy(
+        agent,
+        workspace,
+        goal,
+        digest,
+        'review-error',
+        'onReviewError',
+        detail,
+        target,
+        outcome.started,
+        evidence,
+      )
+      if (config.onReviewError === 'allow') {
+        notifyUnverified(agent, written, 'onReviewError', detail)
+        return next()
+      }
+      return denyWith(
+        `Block review failed (${detail}) and onReviewError is "deny". The goal stays active. Fix the reviewer target or set blockReview.onReviewError to "allow". Record: ${record}.`,
+        REVIEW_ERROR_CODE,
+      )
+    }
+
+    const calls = evidence.rounds.reduce((total, round) => total + round.calls.length, 0)
+    await writeRecord(recordPathFor(workspace, goal.id, digest), {
+      version: 1,
+      goal: goal.id,
+      revision: goal.revision,
+      objective: bound(redact(goal.objective, workspace), 500),
+      digest,
+      verdict: outcome.verdict.verdict,
+      verified: true,
+      reviewed: true,
+      ...(outcome.verdict.userAction === undefined
+        ? {}
+        : { userAction: outcome.verdict.userAction }),
+      ...(outcome.verdict.nextStep === undefined ? {} : { nextStep: outcome.verdict.nextStep }),
+      evidence: outcome.verdict.evidence,
+      evidenceSummary: {
+        rounds: evidence.rounds.length,
+        toolCalls: calls,
+        userMessages: evidence.userMessages.length,
+        runtimePolicy: bound(evidence.runtimePolicy, 200),
+        grantsPresent: evidence.grants !== '(missing)',
+        instructionsChars: evidence.workspaceInstructions.length,
+      },
+      target: outcome.target,
+      time: new Date().toISOString(),
+      session: agent.session.id,
+    })
+    const decision = verdictDecision(agent, outcome.verdict, false, record)
+    return decision ?? next()
+  }
+}
+
+/**
+ * Install the supervisor and the block-review gate. The configuration is
+ * validated at load, so a bad profile fails loudly; supervision itself fails
+ * open and the review failures follow their configured policies.
  */
 export function apply(ctx: Context, config?: Config): void {
   const resolved = resolveConfig(config)
   if (!resolved.enabled) return
+  installBlockReview(ctx, resolved.blockReview)
   const mountedAt = Date.now()
+
   const states = new WeakMap<Agent, AgentState>()
 
   function stateFor(agent: Agent): AgentState {
@@ -332,15 +1525,6 @@ export function apply(ctx: Context, config?: Config): void {
       return ctx.goals.get(agent)
     } catch {
       return undefined
-    }
-  }
-
-  /** Deliver one non-waking notice; a disposed agent fails open. */
-  function deliverNotice(agent: Agent, text: string, summary: string): void {
-    try {
-      agent.inject(createNotice(text, summary))
-    } catch {
-      // A disposed agent simply receives no notice.
     }
   }
 

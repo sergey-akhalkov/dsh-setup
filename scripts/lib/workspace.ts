@@ -5,6 +5,38 @@ import { fileURLToPath } from 'node:url'
 /** Repository root, resolved from this file's location. */
 export const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
+/**
+ * Documented cap for the workspace instruction file (`AGENTS.md`): 16,000
+ * bytes, about 4,000 estimated tokens at the repository's bytes / 4 metric.
+ * The file is injected on every request, so detail belongs in `docs/`.
+ */
+export const INSTRUCTION_FILE_BUDGET_BYTES = 16_000
+
+/** One workspace instruction file measured against its documented budget. */
+export interface InstructionBudget {
+  file: string
+  bytes: number
+  budget: number
+  /** Set only when the file exceeds the budget. */
+  problem?: string
+}
+
+/**
+ * Measure a workspace instruction file against the documented cap. Counts
+ * UTF-8 bytes, not characters, so a non-ASCII file is held to the same size.
+ */
+export function checkInstructionBudget(text: string, file = 'AGENTS.md'): InstructionBudget {
+  const bytes = Buffer.byteLength(text, 'utf8')
+  const budget = INSTRUCTION_FILE_BUDGET_BYTES
+  if (bytes <= budget) return { file, bytes, budget }
+  return {
+    file,
+    bytes,
+    budget,
+    problem: `${file} is ${bytes} bytes, over the ${budget}-byte workspace instruction budget; move detail into docs/`,
+  }
+}
+
 export interface ClientManifest {
   platform?: string
   immediately?: boolean

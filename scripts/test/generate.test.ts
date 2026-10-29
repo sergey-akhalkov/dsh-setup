@@ -276,6 +276,34 @@ describe('adapter rows', () => {
   })
 })
 
+describe('preset rows', () => {
+  it('generates the Harness preset declaration without duplicating its packages', () => {
+    const preset = {
+      id: 'preset-goal-reviewer',
+      name: '@deepseek-ai/dsh-agent-preset',
+      config: {
+        id: 'goal-reviewer',
+        plugins: [{ id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' }],
+      },
+    }
+    const files = computeGenerated(
+      [{ pkg: workspacePackage('@dsh-setup/plugin-a'), rows: [preset] }],
+      [],
+      '0.1.0',
+      VERSIONS,
+    )
+    const patch = files.get(SETUP_PATCH_FILE)?.toString() ?? ''
+    expect(patch).toContain('preset-goal-reviewer')
+    expect(patch).toContain('@deepseek-ai/dsh-agent-preset')
+    expect(patch).toContain('@deepseek-ai/dsh-tool-fs')
+    const manifest = JSON.parse(files.get(SETUP_MANIFEST_FILE)?.toString() ?? '{}') as {
+      dependencies?: Record<string, string>
+    }
+    expect(manifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-agent-preset')
+    expect(manifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-tool-fs')
+  })
+})
+
 describe('setup manifest', () => {
   it('declares every plugin as an exact dependency and bundled dependency', () => {
     const manifest = buildSetupManifest(

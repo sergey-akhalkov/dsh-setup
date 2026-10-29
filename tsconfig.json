@@ -13,6 +13,7 @@
     { "path": "./packages/plugin-rtk" },
     { "path": "./packages/plugin-rust" },
     { "path": "./packages/plugin-serena" },
+    { "path": "./packages/plugin-verification-gate" },
     { "path": "./packages/plugin-working-principles" }
   ]
 }

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Verification gate",
+    "description": "Turn-close gate: a code-changing turn cannot close until one configured check command succeeded after the last edit; inert until configured and capped after maxBlocks consecutive refusals"
+  }
+}

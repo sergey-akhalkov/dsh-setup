@@ -9,7 +9,7 @@ import {
 } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
-import { ADAPTER_ROW_NAMES, type FragmentRow } from './fragments.ts'
+import { type FragmentRow, isHarnessRowName } from './fragments.ts'
 import { HINDSIGHT_PACKAGE } from './hindsight.ts'
 import type { DshVersions, PackageManifest, WorkspacePackage } from './workspace.ts'
 import { SETUP_PACKAGE_NAME, setupDir } from './workspace.ts'
@@ -309,7 +309,7 @@ export function computeGenerated(
 
   for (const { pkg, rows } of pluginRows) {
     for (const row of rows) {
-      if (row.name !== pkg.manifest.name && !ADAPTER_ROW_NAMES.has(row.name)) {
+      if (row.name !== pkg.manifest.name && !isHarnessRowName(row.name)) {
         throw new Error(
           `${pkg.relativeDir}: adapter row "${row.id}" names "${row.name}", which is not an approved adapter target`,
         )

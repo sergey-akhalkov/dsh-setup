@@ -132,6 +132,26 @@ Codex subagents come from the setup bundle's `@dsh-setup/plugin-codex-subagent`;
 The list is the single source in [`dsh.json`](../dsh.json) (`installBundles`); the standalone installer
 contains its own copy, and repository validation fails if the two disagree.
 
+### Setup-provided plugin bundles
+
+In addition to the shipped DSH bundles above, the setup bundle mounts its own `@dsh-setup/plugin-*`
+rows; the root `README.md` plugin table lists them all. The verification gate is inert until an owner
+configures it:
+
+- **Verification gate** — `@dsh-setup/plugin-verification-gate` (row `dsh-setup-verification-gate`).
+  It refuses to close a code-changing turn until one exact check command succeeds after the last
+  edit. The shipped row has no `commands`, so every turn closes as before. To use it, name the check
+  in the profile's `cordis.patch.yml` (a patch replaces the whole config, so restate it):
+
+  ```yaml
+  - id: dsh-setup-verification-gate
+    config:
+      commands:
+        - pnpm check
+  ```
+
+  `maxBlocks` defaults to 8. See [verification-gate.md](verification-gate.md).
+
 ## Manual install
 
 Use this path when you cannot run the installer, for example on a CLI-only machine.

@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 /**
  * Working-principles plugin: registers a first-party working contract as an
- * always-on system-prompt section and lists two on-demand skills beside it.
+ * always-on system-prompt section and lists on-demand skills beside it.
  *
  * Both contributions read the vendored assets that ship inside the package, so
  * installation, catalog listing, and prompt assembly never touch the network.

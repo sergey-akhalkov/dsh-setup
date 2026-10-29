@@ -310,9 +310,7 @@ round. A timeout MUST NOT be treated as a blocker; the same job handle is rechec
 
 ### Requirement: Goal blocker and completion evidence
 
-The always-on working contract SHALL state that `blocked` requires three consecutive goal rounds
-with the same checkable obstacle, that difficulty, uncertainty and remaining work are not blockers,
-and that `complete` requires current evidence for every requirement of the objective.
+The always-on working contract SHALL state that `blocked` requires both the runtime round threshold and a user-only obstacle: a next step that only the user can perform, or knowledge only the user has. It SHALL state that difficulty, uncertainty, remaining work, a library or sibling-repository change, a testability or instrumentation change, and a permission the runtime already grants are not blockers. It SHALL state that a blocker names exactly one user-only action and that a menu containing an authorized alternative is not a blocker. It SHALL state that `complete` requires current evidence for every requirement of the objective.
 
 #### Scenario: Premature blocker
 
@@ -323,6 +321,26 @@ and that `complete` requires current evidence for every requirement of the objec
 
 - **WHEN** the agent considers reporting `complete`
 - **THEN** the contract requires each requirement of the objective to be checked against current evidence
+
+#### Scenario: Authorized means
+
+- **WHEN** the obstacle is a library, sibling-repository, test, or testability change within the agent's authority
+- **THEN** the contract rejects the block and directs the agent to make that change
+
+#### Scenario: Permission already granted
+
+- **WHEN** the runtime grants full file access or a standing grant covers the action
+- **THEN** the contract rejects a permission block for that action
+
+#### Scenario: Menu of alternatives
+
+- **WHEN** the block reason lists a code or tool option beside a user-only option
+- **THEN** the contract rejects the block as a menu and selects the authorized option
+
+#### Scenario: User-only obstacle
+
+- **WHEN** the next step is a restart, a credential, a product decision, a publication, or data only the user has
+- **THEN** the contract permits the block and requires the exact user-only action
 
 ### Requirement: Goal round-cap discipline
 
@@ -348,3 +366,137 @@ section, and the contract MUST remain within its documented 1500 estimated-token
 
 - **WHEN** the contract is assembled and repository validation measures it
 - **THEN** the goal guidance appears in the working-principles section and the measured size stays within the documented budget
+
+### Requirement: Standing grant ledger
+
+The always-on working contract SHALL state that a standing user grant is recorded durably in the workspace `AGENTS.md` or a machine-local grant record with its date and scope, and that the agent MUST NOT ask again for an action the grant covers. A grant SHALL cover means only and SHALL NOT authorize a new product requirement, a destructive action, a credential, or a publication unless it names it.
+
+#### Scenario: Grant is recorded
+
+- **WHEN** the user says not to ask for permission and to do what the goal needs
+- **THEN** the agent records the dated grant and its scope in the workspace instruction file or the local grant record, then proceeds
+
+#### Scenario: Covered action
+
+- **WHEN** a block proposal asks for permission for an action the grant covers
+- **THEN** the contract treats the action as authorized and rejects the permission block
+
+#### Scenario: Scope limit
+
+- **WHEN** a destructive action, credential, publication, or new product requirement is outside the grant
+- **THEN** it remains a user decision
+
+#### Scenario: Foreign or stale grant
+
+- **WHEN** the grant belongs to another workspace, task, or an earlier scope that the user narrowed
+- **THEN** the contract does not apply it
+
+### Requirement: Means versus scope
+
+The always-on working contract SHALL distinguish a scope change from a means. A new feature or requirement, a changed public contract, destroyed data, a changed access or credential, and a publication SHALL be user decisions. Editing another repository, adding a helper, a test harness, instrumentation, or test-only activation to achieve the requested outcome SHALL be a means that the agent performs and discloses.
+
+#### Scenario: Sibling repository
+
+- **WHEN** the requested outcome needs a change in a sibling repository
+- **THEN** the contract treats the change as a means, performs it, and discloses it in the report
+
+#### Scenario: Testability
+
+- **WHEN** the requested evidence needs a test-only activation, accessibility hook, or instrumentation
+- **THEN** the contract treats it as a means and prefers a test-only flag without a production behavior change
+
+#### Scenario: Production behavior
+
+- **WHEN** the only route changes production behavior
+- **THEN** the contract treats it as a product decision
+
+#### Scenario: New feature
+
+- **WHEN** the proposed work adds a feature or requirement the user did not ask for
+- **THEN** the contract treats it as a scope change and requires the user's decision
+
+### Requirement: Block review guidance
+
+The always-on working contract SHALL state that a model-proposed goal block is independently reviewed before it takes effect, that a denied block means the agent continues with the review's next action, and that an allowed block names exactly one user-only action. The contract MUST NOT present the review as a reason to ask the user for permission.
+
+#### Scenario: Denied block
+
+- **WHEN** the review rejects a proposed block
+- **THEN** the contract directs the agent to continue with the review's next action and keep the goal active
+
+#### Scenario: Verified block
+
+- **WHEN** the review confirms a blocker
+- **THEN** the closing message names the exact user-only action and what it unblocks
+
+#### Scenario: No permission request
+
+- **WHEN** the review is available
+- **THEN** the contract does not turn the review into a request for the user's approval
+
+### Requirement: Plan checkpoint guidance
+
+The always-on working contract SHALL state that a request which touches more than one file, or whose cause is not yet known, gets a written plan and the user's nod before the first edit, and that a one-line fix needs none. It MUST NOT claim a command or mode the Harness does not provide, and the clause MUST keep the contract within its documented budget.
+
+#### Scenario: Multi-file request
+
+- **WHEN** the assembled contract is read before a request that spans several files
+- **THEN** it directs the agent to write the plan and wait for approval before editing
+
+#### Scenario: One-line fix
+
+- **WHEN** the request is a single localized fix
+- **THEN** the contract does not require a plan
+
+#### Scenario: Plan mode belongs to the user
+
+- **WHEN** the user has plan mode enabled
+- **THEN** the contract directs the agent not to edit while it is active and names no way to enter or leave it
+
+#### Scenario: Budget preserved
+
+- **WHEN** repository validation measures the working contract
+- **THEN** the measured size stays within the documented 1,500 estimated-token budget
+
+### Requirement: Second-mistake rule
+
+The `verify-change` skill SHALL state that a correction needed twice is a durable gap and MUST direct the agent to propose the durable fix — an edit to the workspace instruction file or a hook — naming which one, instead of promising more care.
+
+#### Scenario: Repeated correction
+
+- **WHEN** the agent notices that the same correction was applied twice in a session
+- **THEN** the skill directs it to propose the instruction-file edit or the hook and name the choice
+
+#### Scenario: A single correction
+
+- **WHEN** a correction happened once
+- **THEN** the skill does not require a durable change
+
+### Requirement: Workspace instruction budget
+
+The repository's workspace instruction file SHALL NOT exceed a documented budget of 16,000 bytes, roughly 4,000 estimated tokens at the repository's bytes-per-four convention, and `validate:repo` MUST fail above that budget, reporting the owning file and the measured size. The `instruction-budget` skill SHALL report a workspace instruction file against the same budget and MUST propose moving detail out instead of deleting it.
+
+#### Scenario: Within budget
+
+- **WHEN** `validate:repo` runs with the workspace instruction file at or below the budget
+- **THEN** the check passes and the documentation states the budget and the measured size
+
+#### Scenario: Over budget
+
+- **WHEN** the workspace instruction file grows past the budget
+- **THEN** `validate:repo` fails and names the file and the measured size
+
+#### Scenario: Audit reports duplication
+
+- **WHEN** the `instruction-budget` skill is invoked for a workspace instruction file
+- **THEN** it reports the measured size against the budget and lists the lines that duplicate the repository, its documentation, or its architecture
+
+#### Scenario: Audit moves instead of deleting
+
+- **WHEN** the audit proposes removing a line that carries a fact found nowhere else
+- **THEN** it proposes the destination that will hold the fact and moves it there
+
+#### Scenario: Catalog entry only
+
+- **WHEN** the session starts without invoking `instruction-budget`
+- **THEN** the catalog advertises its description and its body is absent from the assembled prompt

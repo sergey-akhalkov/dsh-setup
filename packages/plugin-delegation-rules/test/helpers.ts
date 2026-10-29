@@ -37,6 +37,8 @@ export interface RunRecord {
 export class FakeGit {
   status = ''
   diff = ''
+  /** `git ls-files` answer: the git-visible worktree paths a test declares. */
+  files: string[] = []
   fail = false
   calls: string[][] = []
 
@@ -47,6 +49,7 @@ export class FakeGit {
     if (command === 'rev-parse') return Buffer.from(cwd)
     if (command === 'status') return Buffer.from(this.status)
     if (command === 'diff') return Buffer.from(this.diff)
+    if (command === 'ls-files') return Buffer.from(this.files.join('\0'))
     return Buffer.alloc(0)
   }
 }

@@ -16,7 +16,7 @@ const estimatedTokens = bytes / 4
 
 const BUDGET_TOKENS = 1500
 const MINIMUM_BYTES = 3200
-const MAXIMUM_BYTES = 5300
+const MAXIMUM_BYTES = 5980
 
 describe('always-on contract budget', () => {
   it('stays inside the documented per-step budget', () => {
@@ -40,10 +40,25 @@ describe('always-on contract budget', () => {
     const text = readFileSync(contractPath, 'utf8')
     const section = text.split('## Recover instead of repeating')[1] ?? ''
     expect(section).toContain('`job_output(wait: true)`')
-    expect(section).toContain('same handle after a timeout')
     expect(section).toContain('three consecutive rounds')
-    expect(section).toContain('difficulty, uncertainty, and remaining work are not blockers')
+    expect(section).toContain('user-only')
+    expect(section).toContain('not a menu')
+    expect(section).toContain('permission the runtime grants')
     expect(section).toContain('evidence for every requirement')
     expect(section).toContain('max_goal_rounds')
+    expect(section).toContain('independently reviewed')
+    expect(section).toContain('continuation')
+    expect(section).toContain('grants.json')
+  })
+
+  it('states the user-only blocker, means, and scope rules', () => {
+    const text = readFileSync(contractPath, 'utf8')
+    const scope = text.split('## Scope belongs to the user')[1]?.split('## Delegate')[0] ?? ''
+    expect(scope).toContain('is a means')
+    expect(scope).toContain('test-only activation')
+    expect(scope).toContain('production behavior change')
+    expect(scope).toContain('scope decision')
+    expect(text).toContain('never converted into a permission request')
+    expect(text).toContain('foreign or stale grant')
   })
 })

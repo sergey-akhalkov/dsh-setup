@@ -57,6 +57,16 @@ When a failure is large or a reproduction is expensive, shrink it methodically:
   first cause.
 - Re-run after the fix in the same conditions as the reproduction, and keep both results.
 
+## A repeated correction is a durable gap
+
+A correction you had to apply twice in one session is evidence that the instruction layer, not the
+model's memory, is missing the rule. Answering it by promising more care is the wrong fix.
+
+- Name the durable fix and its home: an instruction-file edit (the workspace guide, a project doc, or
+  this skill) or a hook/check that fails on the mistake. Say where the text would live or which check
+  would catch it, then propose it.
+- One correction, applied once, is ordinary repair; it does not need a durable change.
+
 ## Long-running and managed processes
 
 - Read stdout and stderr concurrently. Reading one stream to completion while the other fills its

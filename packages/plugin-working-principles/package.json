@@ -1,7 +1,7 @@
 {
   "name": "@dsh-setup/plugin-working-principles",
-  "version": "0.11.0",
-  "description": "First-party working contract, on by default, plus the working-principles and verify-change skills",
+  "version": "0.12.0",
+  "description": "First-party working contract, on by default, plus the working-principles, verify-change, and instruction-budget skills",
   "license": "MIT",
   "icon": "./icon.svg",
   "type": "module",
@@ -27,7 +27,8 @@
     "cordis.fragment.yml",
     "assets/working-principles/contract.md",
     "assets/working-principles/SKILL.md",
-    "assets/verify-change/SKILL.md"
+    "assets/verify-change/SKILL.md",
+    "assets/instruction-budget/SKILL.md"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.3 <0.3.0"

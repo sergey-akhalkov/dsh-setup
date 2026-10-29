@@ -106,6 +106,24 @@ gated; another session's ticks are not imported. A checked task always requires 
 record; a note never counts as a PASS. Ticking tasks in a batch at the end defeats the per-task
 chunk and is refused by the gate.
 
+## Parallel writers
+
+Two writers editing one checkout at the same time race on the same files and on the same worktree
+digest. Before handing work to more than one write-capable agent at once:
+
+- Name each writer's files. A writer may edit only the paths assigned to it; the assignment is part
+  of the handoff, not left to inference.
+- Isolate or serialize. If the file sets are disjoint and neither run reads the other's output, run
+  them in parallel in separate worktrees. If they overlap, either serialize the writes in one
+  checkout or give each its own worktree and merge after review.
+- The patch contract already runs its target in an isolated worktree, so a `bug-fix` delegation
+  needs no extra setup; this guidance applies to agents and teammates you start yourself.
+- A single writer doing sequential work needs no worktree; adding one only makes the return path
+  longer.
+
+Triggers, records, digests, and the turn-stopping gate are unchanged: this section describes how to
+assign write-capable work, not a new trigger.
+
 ## Default rules
 
 | Rule | Trigger | Contract | Gate |

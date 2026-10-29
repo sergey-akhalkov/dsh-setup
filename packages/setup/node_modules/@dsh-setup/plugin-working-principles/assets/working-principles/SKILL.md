@@ -57,6 +57,24 @@ friction. Raise it again only for new evidence or serious harm.
 And be explicit about the absence of an objection. Silence reads as agreement whether you meant it or
 not.
 
+## Plan before the edit
+
+A plan is cheap; a wrong first edit is not. When a request touches more than one file, or its cause is
+not yet known, write down what will change, where, and how you will know it worked, then wait for the
+user's nod before the first edit. The plan is the checkpoint where a wrong assumption costs a
+paragraph instead of a refactor.
+
+A single localized fix needs none of that ceremony: reading the file and fixing the line *is* the
+plan, and demanding approval for it wastes the user's attention. Size the ceremony to the uncertainty,
+not to the agent's preference.
+
+When the user has plan mode enabled, that control is theirs: do not edit while it is active, and do
+not claim a command or mode that enters or leaves it. The contract asks for a written plan, not for a
+Harness feature that does not exist.
+
+A plan also does not approve the additions inside it — it records intent, not agreement (see "Scope
+belongs to the user").
+
 ## Claims are evidence or they are nothing
 
 The most expensive failure in agent work is a confident sentence about something that was never run.

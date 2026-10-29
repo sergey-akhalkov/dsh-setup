@@ -8,6 +8,7 @@ const assetsDir = join(packageDir, 'assets')
 const contractAsset = readFileSync(join(assetsDir, 'working-principles', 'contract.md'), 'utf8')
 const principleAsset = readFileSync(join(assetsDir, 'working-principles', 'SKILL.md'), 'utf8')
 const verifyAsset = readFileSync(join(assetsDir, 'verify-change', 'SKILL.md'), 'utf8')
+const budgetAsset = readFileSync(join(assetsDir, 'instruction-budget', 'SKILL.md'), 'utf8')
 
 interface SkillInvocationShape {
   modelInvocable: boolean
@@ -110,7 +111,7 @@ describe('working-principles plugin', () => {
     expect(plugin.inject).toEqual(['skills', 'systemPrompt'])
   })
 
-  it('lists both candidates under one bundled provider', async () => {
+  it('lists every candidate under one bundled provider', async () => {
     const plugin = await loadPlugin()
     const { ctx, providers } = createContext()
     plugin.apply(ctx)
@@ -122,6 +123,7 @@ describe('working-principles plugin', () => {
     expect(candidates.map((candidate) => candidate.name)).toEqual([
       'working-principles',
       'verify-change',
+      'instruction-budget',
     ])
     for (const candidate of candidates) {
       expect(candidate).toMatchObject({
@@ -143,6 +145,7 @@ describe('working-principles plugin', () => {
     const assets = new Map([
       ['working-principles', principleAsset],
       ['verify-change', verifyAsset],
+      ['instruction-budget', budgetAsset],
     ])
     for (const candidate of candidates) {
       const asset = assets.get(candidate.name)

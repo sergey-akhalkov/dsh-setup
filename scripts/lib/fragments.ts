@@ -19,6 +19,21 @@ export interface FragmentRow {
  */
 export const ADAPTER_ROW_NAMES = new Set(['@deepseek-ai/dsh-mcp-client'])
 
+/**
+ * Harness-provided preset declaration (an ordinary Cordis composition row) a
+ * read-only reviewer fragment may mount. Its child plugin list is configuration
+ * and is deliberately not expanded into setup dependencies.
+ */
+export const PRESET_ROW_NAME = '@deepseek-ai/dsh-agent-preset'
+
+/** Preset rows keep the Loader's `preset-<id>` convention instead of the repository prefix. */
+export const PRESET_ROW_ID_PATTERN = /^preset-[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/** Whether a fragment may name this Harness-provided package instead of its owner. */
+export function isHarnessRowName(name: string): boolean {
+  return ADAPTER_ROW_NAMES.has(name) || name === PRESET_ROW_NAME
+}
+
 /** One package's composition contribution. */
 export interface CompositionFragment {
   rows: FragmentRow[]
@@ -43,9 +58,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *
  * The fragment is intentionally tiny: it names the row ids a package mounts.
  * The row `name` is derived from the owning package; a row may name an approved
- * Harness adapter package instead, whether or not the owner also ships code.
- * Unknown fields fail loudly so a typo does not silently produce a patch that
- * omits a contribution.
+ * Harness adapter package or a Harness-provided preset declaration instead,
+ * whether or not the owner also ships code. A preset declaration keeps the
+ * Loader's `preset-<id>` row id. Unknown fields fail loudly so a typo does not
+ * silently produce a patch that omits a contribution.
  */
 export function parseCompositionFragment(text: string, packageName: string): CompositionFragment {
   const document: unknown = parse(text)
@@ -67,21 +83,22 @@ export function parseCompositionFragment(text: string, packageName: string): Com
       }
     }
     if (typeof row.id !== 'string') throw new FragmentError(`${at}.id must be a string`)
-    if (!ROW_ID_PATTERN.test(row.id)) {
-      throw new FragmentError(`${at}.id "${row.id}" does not match ${ROW_ID_PATTERN.source}`)
-    }
-    if (seen.has(row.id)) throw new FragmentError(`${at}.id "${row.id}" is not unique`)
-    seen.add(row.id)
     let rowName = packageName
     if (row.name !== undefined) {
       if (typeof row.name !== 'string') throw new FragmentError(`${at}.name must be a string`)
-      if (!ADAPTER_ROW_NAMES.has(row.name)) {
+      if (!isHarnessRowName(row.name)) {
         throw new FragmentError(
-          `${at}.name "${row.name}" is not an approved adapter target (${[...ADAPTER_ROW_NAMES].join(', ')})`,
+          `${at}.name "${row.name}" is not an approved adapter target or Harness preset declaration (${[...ADAPTER_ROW_NAMES, PRESET_ROW_NAME].join(', ')})`,
         )
       }
       rowName = row.name
     }
+    const idPattern = rowName === PRESET_ROW_NAME ? PRESET_ROW_ID_PATTERN : ROW_ID_PATTERN
+    if (!idPattern.test(row.id)) {
+      throw new FragmentError(`${at}.id "${row.id}" does not match ${idPattern.source}`)
+    }
+    if (seen.has(row.id)) throw new FragmentError(`${at}.id "${row.id}" is not unique`)
+    seen.add(row.id)
     const generated: FragmentRow = { id: row.id, name: rowName }
     if (row.config !== undefined) {
       if (!isRecord(row.config)) throw new FragmentError(`${at}.config must be a mapping`)

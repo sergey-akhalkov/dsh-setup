@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-verification-gate.
+- insert:
+    - id: dsh-setup-verification-gate
+      name: "@dsh-setup/plugin-verification-gate"

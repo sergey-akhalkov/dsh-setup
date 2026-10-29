@@ -8,7 +8,7 @@ import type { PromptSection } from '@deepseek-ai/dsh-system-prompt'
 
 /**
  * Working-principles plugin: registers a first-party working contract as an
- * always-on system-prompt section and lists two on-demand skills beside it.
+ * always-on system-prompt section and lists on-demand skills beside it.
  *
  * Both contributions read the vendored assets that ship inside the package, so
  * installation, catalog listing, and prompt assembly never touch the network.
@@ -66,6 +66,12 @@ const SKILLS: readonly PackagedSkill[] = [
     description:
       'Verify a change before calling it done: reproduce the failure first, reduce one dimension at a time, and judge a run by whether its original trigger fired. Use for bug fixes, regressions, flaky tests, or any claim that a fix works.',
     directory: 'verify-change',
+  },
+  {
+    name: 'instruction-budget',
+    description:
+      'Audit a workspace instruction file against its documented byte budget and move duplicated or repository-level detail into the docs that own it. Use when AGENTS.md (or an equivalent file) is over budget, feels too long, or a rule keeps being skipped because it is buried in prose.',
+    directory: 'instruction-budget',
   },
 ]
 

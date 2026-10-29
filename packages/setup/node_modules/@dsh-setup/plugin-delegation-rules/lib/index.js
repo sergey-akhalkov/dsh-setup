@@ -1297,18 +1297,19 @@ class DiscardedRun extends DelegationError {
         this.name = 'DiscardedRun';
     }
 }
-/** Heavy/scratch paths that are not reviewed worktree inputs. */
-const WORKTREE_INPUT_EXCLUDES = new Set([
-    '.git',
-    '.dsh',
-    '.tmp',
-    'node_modules',
-    'market',
-    'coverage',
-    '.serena',
-]);
 const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml']);
-/** Stat signature (size + nanosecond mtime/ctime) of every reviewed input. */
+/** Stat signature (size + nanosecond mtime/ctime) for one reviewed path. */
+async function inputStat(path) {
+    try {
+        const info = await stat(path, { bigint: true });
+        return `${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+    }
+    catch {
+        // A deleted tracked file is a changed input, not an unreadable workspace.
+        return '[missing]';
+    }
+}
+/** Stat signature of every file under a walked root. */
 async function inputSignature(root, excludes) {
     const entries = new Map();
     async function walk(directory, prefix) {
@@ -1330,38 +1331,58 @@ async function inputSignature(root, excludes) {
             }
             if (!entry.isFile())
                 continue;
-            let info;
-            try {
-                info = await stat(absolute, { bigint: true });
-            }
-            catch (error) {
-                fail(`could not stat reviewed input ${name}: ${errorMessage(error)}`);
-            }
-            entries.set(name, `${info.size}:${info.mtimeNs}:${info.ctimeNs}`);
+            entries.set(absolute, await inputStat(absolute));
         }
     }
     await walk(root, '');
-    return { root, excludes, entries };
+    return { root, entries };
+}
+/** The git-visible worktree file set the worktree digest covers. */
+async function gitInputSignature(root, services, signal) {
+    let raw;
+    try {
+        raw = await services.runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, signal);
+    }
+    catch (error) {
+        fail(`could not list the reviewed worktree inputs: ${errorMessage(error)}`);
+    }
+    const entries = new Map();
+    for (const path of raw.toString('utf8').split('\0')) {
+        // Keep the digest's two scratch exclusions; everything else git exposes is reviewed.
+        if (path === '' || ignoredForDigest(path))
+            continue;
+        const absolute = resolve(root, path);
+        entries.set(absolute, await inputStat(absolute));
+    }
+    return { root, entries };
 }
 /** Whole-spec reviews track the change artifacts; code reviews track the worktree. */
 async function reviewedInputs(cwd, rule, change, services, signal) {
     if (rule.scope === 'whole' && rule.when !== 'implementation-complete') {
         return inputSignature(change.dir, CHANGE_INPUT_EXCLUDES);
     }
-    return inputSignature(await repositoryRoot(cwd, services.git, signal), WORKTREE_INPUT_EXCLUDES);
+    const root = await repositoryRoot(cwd, services.git, signal);
+    const signature = await gitInputSignature(root, services.git, signal);
+    if (rule.scope !== 'task')
+        return signature;
+    // A task digest also hashes the change artifacts, so they are guarded regardless of git.
+    for (const [path, value] of (await inputSignature(change.dir, CHANGE_INPUT_EXCLUDES)).entries) {
+        signature.entries.set(path, value);
+    }
+    return signature;
 }
 /** Paths whose reviewed input changed (added, removed, or stat/content mutation). */
 function changedInputPaths(signature, current) {
-    const changed = [];
+    const changed = new Set();
     for (const [path, value] of signature.entries) {
         if (current.entries.get(path) !== value)
-            changed.push(path);
+            changed.add(relativePath(signature.root, path));
     }
     for (const path of current.entries.keys()) {
         if (!signature.entries.has(path))
-            changed.push(path);
+            changed.add(relativePath(signature.root, path));
     }
-    return changed.sort();
+    return [...changed].sort();
 }
 /**
  * Publish lock per record: only one completion can decide the authoritative
@@ -2146,8 +2167,8 @@ class DelegationEngine {
             const current = await reviewedInputs(run.context.cwd, run.context.rule, run.context.change, this.services, run.context.signal);
             const changed = changedInputPaths(prepared.signature, current);
             if (changed.length > 0) {
-                const sample = changed.slice(0, 3).join(', ');
-                fail(`reviewed inputs changed during the run (${sample}${changed.length > 3 ? ', …' : ''}); no verdict was published — re-run the review`);
+                const sample = changed.slice(0, 5).join(', ');
+                fail(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
             }
             await this.publishRecord(run, {
                 digest: prepared.digest,
