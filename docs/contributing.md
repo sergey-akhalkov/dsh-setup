@@ -261,6 +261,36 @@ Both CI workflows run `pnpm reviews:check --all` on `windows-latest` with full g
 so a `--no-verify` push is still caught before merge. See
 [review-approval.md](review-approval.md) for the rule, the evidence, and the known limits.
 
+## Memory export and restore operations
+
+The durable export lives in `packages/plugin-hindsight` (`src/host/export-*.ts`) and runs behind
+the row; it has no model-facing surface. Its defaults are the `export` block in the plugin's
+`cordis.fragment.yml` and the matching `dsh-setup-hindsight` entry in `packages/setup/defaults.yml`:
+edit both, run `pnpm gen`, commit the regenerated patches/manifests, then `pnpm validate:repo`.
+Validation rejects `export.dir` and `export.remote` in tracked YAML (`validateExportConfig`), because
+the target directory and the private remote are machine-local inputs
+(`~/.dsh/hindsight-export.json`). `export.remote` is read only from that file; `export.dir` may also
+come from a machine-local profile patch, and the file's `dir` wins when both are set.
+
+Verify without a live daemon or a real private repository:
+
+```sh
+pnpm exec vitest run packages/plugin-hindsight/test/export-end-to-end.test.ts
+pnpm exec vitest run packages/plugin-hindsight/test/export-scheduler.test.ts
+pnpm exec vitest run scripts/test/restore-hindsight.test.ts
+```
+
+The first two drive the real snapshot writer, Git repository, and push path against a fake Hindsight
+HTTP server (commit/push counted through a real `pre-push` hook); the last runs
+`restore-hindsight.ps1` as a real PowerShell process against fixture trees, a fake API, a bare
+remote, and a stubbed `hindsight-admin`. A change to the archive layout or the export metadata is
+incomplete until those pass and `docs/hindsight.md` describes the new layout.
+
+The owner acceptance (retain a marker, export, wipe a throwaway database, restore, recall) needs the
+real runtime and a throwaway database; it is recorded in the change and cannot run on a machine
+without `hindsight-embed` and a DeepSeek key. Never point the acceptance at the live profile or the
+live `pg0` instance.
+
 ## Change DSH support
 
 Update all of these together:

@@ -34,7 +34,8 @@
     "@deepseek-ai/schemastery": "~3.18.5",
     "@modelcontextprotocol/client": "2.2.0",
     "@openai/codex": "0.164.0",
-    "@vectorize-io/hindsight-coding-agents": "0.8.2"
+    "@vectorize-io/hindsight-coding-agents": "0.8.2",
+    "fflate": "0.8.3"
   },
   "bundleDependencies": [
     "@dsh-setup/plugin-admin-indicator",

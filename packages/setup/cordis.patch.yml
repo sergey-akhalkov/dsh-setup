@@ -126,6 +126,14 @@
         serverMode: self-hosted
         apiUrl: http://127.0.0.1:8888
         autostart: true
+        export:
+          enabled: true
+          intervalMinutes: 5
+          autoCommit: true
+          autoPush: true
+          includeHistory: false
+          includeAttachments: false
+          importOnEmpty: false
     - id: dsh-setup-loop-guard
       name: "@dsh-setup/plugin-loop-guard"
       config:
@@ -197,3 +205,16 @@
           - --enable-web-dashboard=false
           - --enable-gui-log-window=false
         toolCallTimeoutMs: 120000
+- id: dsh-setup-hindsight
+  config:
+    serverMode: self-hosted
+    apiUrl: http://127.0.0.1:8888
+    autostart: true
+    export:
+      enabled: true
+      intervalMinutes: 5
+      autoCommit: true
+      autoPush: true
+      includeHistory: false
+      includeAttachments: false
+      importOnEmpty: false

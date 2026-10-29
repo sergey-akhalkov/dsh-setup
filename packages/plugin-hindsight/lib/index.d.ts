@@ -1,4 +1,23 @@
 import type { Context } from '@deepseek-ai/cordis';
+import type { ExportConfig } from './export-config.js';
+export type { ArchiveCounts, ArchiveScopeOptions, BankExportMetadata, RepositoryIndex, RepositoryIndexEntry, } from './export-archive.js';
+export { applyArchiveScope, BANK_METADATA_FILE, BANKS_DIR, bankFolderName, buildBankFiles, buildRepositoryIndex, INDEX_FILE, METADATA_SCHEMA_VERSION, parseBankMetadata, parseRepositoryIndex, sanitizeBankId, sha256Hex, TRANSFER_SCHEMA_VERSION, unsanitizeBankId, } from './export-archive.js';
+export type { BankTransferResult, OperationMetadata, TransferClientOptions, } from './export-client.js';
+export { TransferClient } from './export-client.js';
+export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './export-config.js';
+export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
+export type { ExportCycleOptions, ExportCycleResult } from './export-cycle.js';
+export { runExportCycle } from './export-cycle.js';
+export type { ExportErrorCode } from './export-errors.js';
+export { ExportError, messageOf } from './export-errors.js';
+export type { CommitOptions, GitBootstrapOptions, GitBootstrapResult, GitRunOptions, GitRunResult, PushOptions, PushResult, } from './export-git.js';
+export { bootstrapRepository, commitSnapshot, currentBranch, EXPORT_GIT_IDENTITY, EXPORT_GITIGNORE, gitOutput, hasCommits, hasUnpushedCommits, pushSnapshot, } from './export-git.js';
+export type { ExportScheduler, SchedulerOptions } from './export-scheduler.js';
+export { createExportScheduler } from './export-scheduler.js';
+export type { BankSnapshotInput, LockOptions, SnapshotLock, SnapshotOptions, SnapshotResult, } from './export-snapshot.js';
+export { acquireSnapshotLock, DEFAULT_LOCK_STALE_MS, LOCK_FILE, normalizedContentHash, PENDING_FILE, recoverPendingSnapshot, STAGING_DIR, writeSnapshot, } from './export-snapshot.js';
+export type { ArchiveEntries } from './export-zip.js';
+export { packArchive, unpackArchive } from './export-zip.js';
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,
  * recall, injection, retention, native tools, companion skill) to the official
@@ -15,6 +34,8 @@ export interface HindsightConfig {
     apiUrl?: string;
     /** Start the installed local daemon when a local self-hosted server is down. Default true. */
     autostart?: boolean;
+    /** Durable JSON export of every memory bank; on by default. */
+    export?: ExportConfig;
 }
 export interface MachineConfig {
     serverMode?: string;
@@ -38,6 +59,7 @@ export declare function shouldAutostart(config: HindsightConfig, machine?: Machi
 /**
  * Apply the row's connection defaults as environment fallbacks, then start the
  * official plugin. The upstream config file wins over these values, and an
- * explicit environment variable is never overwritten.
+ * explicit environment variable is never overwritten. The export scheduler is
+ * a timer plus two lifecycle hooks: no tool, command, or prompt surface.
  */
 export declare function apply(ctx: Context, config?: HindsightConfig): void;

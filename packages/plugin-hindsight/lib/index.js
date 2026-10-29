@@ -2,7 +2,19 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { setInterval } from 'node:timers';
 import { apply as applyHindsight } from '@vectorize-io/hindsight-coding-agents/dsh';
+import { resolveExportConfig } from './export-config.js';
+import { createExportScheduler } from './export-scheduler.js';
+export { applyArchiveScope, BANK_METADATA_FILE, BANKS_DIR, bankFolderName, buildBankFiles, buildRepositoryIndex, INDEX_FILE, METADATA_SCHEMA_VERSION, parseBankMetadata, parseRepositoryIndex, sanitizeBankId, sha256Hex, TRANSFER_SCHEMA_VERSION, unsanitizeBankId, } from './export-archive.js';
+export { TransferClient } from './export-client.js';
+export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
+export { runExportCycle } from './export-cycle.js';
+export { ExportError, messageOf } from './export-errors.js';
+export { bootstrapRepository, commitSnapshot, currentBranch, EXPORT_GIT_IDENTITY, EXPORT_GITIGNORE, gitOutput, hasCommits, hasUnpushedCommits, pushSnapshot, } from './export-git.js';
+export { createExportScheduler } from './export-scheduler.js';
+export { acquireSnapshotLock, DEFAULT_LOCK_STALE_MS, LOCK_FILE, normalizedContentHash, PENDING_FILE, recoverPendingSnapshot, STAGING_DIR, writeSnapshot, } from './export-snapshot.js';
+export { packArchive, unpackArchive } from './export-zip.js';
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,
  * recall, injection, retention, native tools, companion skill) to the official
@@ -148,7 +160,8 @@ async function startLocalDaemon(config) {
 /**
  * Apply the row's connection defaults as environment fallbacks, then start the
  * official plugin. The upstream config file wins over these values, and an
- * explicit environment variable is never overwritten.
+ * explicit environment variable is never overwritten. The export scheduler is
+ * a timer plus two lifecycle hooks: no tool, command, or prompt surface.
  */
 export function apply(ctx, config = {}) {
     if (config.serverMode)
@@ -157,4 +170,25 @@ export function apply(ctx, config = {}) {
         process.env.HINDSIGHT_API_URL ??= config.apiUrl;
     void startLocalDaemon(config);
     applyHindsight(ctx);
+    const exportConfig = resolveExportConfig(config.export);
+    if (!exportConfig.enabled)
+        return;
+    const scheduler = createExportScheduler({
+        config: exportConfig,
+        apiUrl: resolvedApiUrl(config, readMachineConfig()) || 'http://127.0.0.1:8888',
+        log: (line) => console.error(line),
+    });
+    ctx.effect(() => {
+        const timer = setInterval(() => void scheduler.run('interval'), exportConfig.intervalMinutes * 60_000);
+        timer.unref();
+        // An idle session is the safe moment to catch up: no turn is waiting.
+        ctx.on('agent/status', (payload) => {
+            if (payload.status === 'idle')
+                void scheduler.run('idle');
+        });
+        return () => {
+            clearInterval(timer);
+            void scheduler.dispose();
+        };
+    });
 }
