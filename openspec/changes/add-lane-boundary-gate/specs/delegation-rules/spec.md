@@ -72,8 +72,9 @@ lane's owned paths MUST be the backticked segments of its heading. A lane whose 
 
 The gate MUST steer with each remaining lane title, its owned paths, a complete `subagent` call, and
 the exact `task_progress` call that records a serial decision. The `subagent` call MUST require the
-worker to create its own git worktree and branch before editing, forbid ticking `tasks.md`, and ask
-for the branch and the changed files back.
+worker to resolve the repository root and create its own git worktree there, so the worktree is a
+sibling of the repository and never inside the parent checkout; it MUST also forbid ticking
+`tasks.md` and ask for the branch and the changed files back.
 
 #### Scenario: Payload is executable
 
@@ -101,7 +102,7 @@ because the started child inherits the session working directory.
 #### Scenario: Nested session working directory
 
 - **WHEN** the session runs in a directory below the repository root
-- **THEN** the checkpoint commands are root-anchored, so they still stage the whole worktree and the ignored change directory
+- **THEN** the checkpoint commands are root-anchored, and the worker instruction resolves the repository root first, so the worktree is a sibling of the repository and never inside the parent checkout
 
 #### Scenario: Payload has no machine path
 

@@ -17,8 +17,8 @@ Lanes: 1 (plugin package and tests) and 2 (documentation) are independent and to
 
 ## 3. Serial tail: generated output and the repository gate
 
-- [ ] 3.1 Run `pnpm gen` and `pnpm build`, then confirm `packages/plugin-delegation-rules/cordis.patch.yml` carries the `lane-fanout` row, `packages/setup/cordis.patch.yml` carries it, the vendored `packages/setup/node_modules/@dsh-setup/plugin-delegation-rules` tree matches the package, and `lib/**` is current; verify `pnpm gen:check` exits 0 and `git diff --exit-code` is clean after the generated and built output is committed.
-- [ ] 3.2 Run `pnpm check`, `pnpm validate:repo`, and `pnpm validate:composition`; verify they all pass and the repository gate finishes with a clean worktree.
+- [x] 3.1 Run `pnpm gen` and `pnpm build`, then confirm `packages/plugin-delegation-rules/cordis.patch.yml` carries the `lane-fanout` row, `packages/setup/cordis.patch.yml` carries it, the vendored `packages/setup/node_modules/@dsh-setup/plugin-delegation-rules` tree matches the package, and `lib/**` is current; verify `pnpm gen:check` exits 0 and `git diff --exit-code` is clean after the generated and built output is committed.
+- [x] 3.2 Run `pnpm check`, `pnpm validate:repo`, and `pnpm validate:composition`; verify they all pass and the repository gate finishes with a clean worktree. The recorded run at implementation commit `a58c1a2` had exit 0 for `pnpm check` (63 files, 900 tests), `pnpm validate:repo` (584 files scanned), `pnpm validate:composition` (setup bundle composes on DSH 0.2.1-rc.3), `pnpm gen:check` (270 generated files match), and an empty `git diff --exit-code`; the evidence table is in the change's `verification.md`.
 
 ## Workflow follow-up
 

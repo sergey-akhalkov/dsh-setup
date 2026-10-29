@@ -78,16 +78,18 @@ The steer prints, per remaining lane, the lane title, its owned paths, and a com
 call whose prompt names the change, the lane heading, the worktree the worker must create for
 itself, the owned paths, the prohibition on ticking `tasks.md`, and the report to return. A worker
 that edits the parent checkout would race another lane on the working tree and would invalidate a
-pending task review, so the prompt requires its own branch and worktree (`git worktree add
-../wt-<change>-<n> -b lane-<change>-<n>`, then an install), and the session merges each branch after
-its checks. A new worktree only contains commits, so the steer also prints the checkpoint command
-(`git add -A :/; git add -f ":(top)openspec/changes/<change>"; git commit -m "lane checkpoint before
-fan-out"`) that makes the current plan and worktree visible to every worker. The force-add is
-required because the engine supports a change directory that matches a Git ignore rule, and both
-pathspecs are rooted (`:/` and `:(top)`) because the session may run in a nested working directory.
-The paths are repository-relative and no machine path is printed, because the child inherits the
-working directory; the payload is rendered in the Host from the parsed `tasks.md`, so it needs no
-asset and no extra package file.
+pending task review, so the prompt requires its own branch and worktree: the worker resolves the
+repository root (`git rev-parse --show-toplevel`), creates a sibling worktree from it (`git worktree
+add ../wt-<change>-<n> -b lane-<change>-<n>`), never a directory inside the checkout, and installs
+there. The session merges each branch after its checks. A new worktree only contains commits, so the
+steer also prints the checkpoint command (`git add -A :/; git add -f
+":(top)openspec/changes/<change>"; git commit -m "lane checkpoint before fan-out"`) that makes the
+current plan and worktree visible to every worker. The force-add is required because the engine
+supports a change directory that matches a Git ignore rule, and both pathspecs are rooted (`:/` and
+`:(top)`) because the session may run in a nested working directory. The paths are
+repository-relative and no machine path is printed, because the child inherits the working
+directory; the payload is rendered in the Host from the parsed `tasks.md`, so it needs no asset and
+no extra package file.
 
 ### D7 — Worker evidence is per turn and deliberately broad
 

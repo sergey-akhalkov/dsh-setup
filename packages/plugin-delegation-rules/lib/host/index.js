@@ -2712,9 +2712,10 @@ function laneWorkerCall(changeName, lane, index) {
     const branch = `lane-${changeName}-${index + 1}`;
     const heading = `the heading '${lane.title}'`;
     const prompt = `Implement the unchecked tasks under ${heading} in openspec/changes/${changeName}/tasks.md. ` +
-        `Work in your own worktree: create ../${worktree} on a new branch ${branch} ` +
-        `(git worktree add ../${worktree} -b ${branch}; pick another suffix if that path already exists), ` +
-        'then run pnpm install --frozen-lockfile inside it. ' +
+        `Work in your own worktree: resolve the repository root with git rev-parse --show-toplevel, ` +
+        `then from that root run git worktree add ../${worktree} -b ${branch} ` +
+        '(pick another suffix if that path already exists; the worktree must be a sibling of the ' +
+        'repository, never inside it), then run pnpm install --frozen-lockfile inside it. ' +
         `Read that change's proposal.md, design.md, and spec deltas first. ` +
         `Work only inside ${lane.owns.join(', ')}. ` +
         `Do not tick tasks.md; report the branch ${branch}, the files changed, and the commands you ran.`;

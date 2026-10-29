@@ -1426,6 +1426,8 @@ describe('lane-boundary gate', () => {
     expect(message).toContain('"2. Docs (owns `docs/a.md`)"')
     expect(message).toContain('subagent(description: "Lane: 2. Docs')
     expect(message).toContain('git worktree add ../wt-change-a-1 -b lane-change-a-1')
+    expect(message).toContain('git rev-parse --show-toplevel')
+    expect(message).toContain('never inside it')
     expect(message).toContain(
       'git add -A :/; git add -f ":(top)openspec/changes/change-a"; git commit -m "lane checkpoint before fan-out"',
     )
