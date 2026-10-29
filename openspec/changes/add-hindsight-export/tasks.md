@@ -28,7 +28,7 @@
 
 ## 6. Restore script
 
-- [ ] 6.1 Add `restore-hindsight.ps1` with `-From`, `-Repo`, `-Bank`, `-Mode restore|merge`, `-TargetBank`, `-DryRun`, `-IncludeHistory`, and `-SkipVerify`; verify a fixture tree rebuilds a valid archive and dry-run changes no bank.
+- [x] 6.1 Add `restore-hindsight.ps1` with `-From`, `-Repo`, `-Bank`, `-Mode restore|merge`, `-TargetBank`, `-DryRun`, `-IncludeHistory`, and `-SkipVerify`; verify a fixture tree rebuilds a valid archive and dry-run changes no bank.
 - [ ] 6.2 Implement restore into an absent bank, merge into an existing bank, count verification against the manifest, and refusal to restore over an existing bank; verify tests cover each outcome and the mismatch exit code.
 - [ ] 6.3 Implement the health check and provisioning handoff, the `hindsight-admin import-bank` offline fallback, and the remote clone path; verify a simulated missing local copy restores from a bare remote and a stopped daemon falls back to the admin import.
 
