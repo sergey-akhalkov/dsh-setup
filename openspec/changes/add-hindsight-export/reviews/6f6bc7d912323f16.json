@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "add-hindsight-export",
+  "scope": "task",
+  "taskId": "6f6bc7d912323f16",
+  "digest": "125c5d17cc3278ce0786bd85cbec08b0b5014a9aa3c272b35813c36bd3fb5baf",
+  "worktreeDigest": "b79cb0584098a1a8e951e8f64902294f8683bd973faf7338712f015347a07d16",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent"
+  },
+  "time": "2026-10-29T13:48:25.802Z"
+}
