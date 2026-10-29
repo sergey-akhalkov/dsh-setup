@@ -55,6 +55,13 @@ verification), `add-loop-guard`, `fix-delegation-session-scope`, `fix-delegation
 `publish-first-market-index`. Cite `openspec/specs/` for accepted requirements and an archived
 change's delta specs for its history.
 
+The `add-task-lane-guidance` change added the portable task-lane guidance addendum to
+`openspec-skills`: the propose, update-change, and apply-change bodies append a plugin-owned asset
+outside the pinned directory before the adapter note, the release-pinned update contract now
+distinguishes vendored upstream content from plugin-owned runtime additions, and the change carries
+9/9 portable task approvals. The temporary project-local lane rule in `openspec/config.yaml` was
+removed.
+
 The 2026-10-29 changes archived with release v0.13.2 are `add-review-approval-gate`, which added
 portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
 (`review-approval` spec and `delegation-rules` amendments; 24/24 portable PASS records),
@@ -114,6 +121,7 @@ was written (2026-10-29). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-29-add-review-approval-gate`                | 24/24          |
 | `2026-10-29-adopt-agent-best-practices`              | 20/21          |
 | `2026-10-29-fix-delegation-review-build-inputs`      | 11/11          |
+| `2026-10-29-add-task-lane-guidance`                  | 9/9            |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -136,8 +144,9 @@ two accepted, non-enforced categories and enforces everything else:
 
 A change archived after the cutoff, or a later modification of any archive, is checked under the
 normal rule and fails without a portable task-review `PASS` for every checked task. The three
-2026-10-29 archives are post-cutoff and carry 24/24, 18/18, and 6/6 portable PASS records. The rule,
-the portable record, and the audit commands are in [review-approval.md](review-approval.md).
+v0.13.2 archives are post-cutoff and carry 24/24, 18/18, and 6/6 portable PASS records; later
+2026-10-29 archives, including `add-task-lane-guidance` (9/9), are checked under the same rule. The
+rule, the portable record, and the audit commands are in [review-approval.md](review-approval.md).
 
 ## Open owner follow-ups
 
@@ -204,3 +213,7 @@ The archived `2026-10-29-add-codex-advisor-rule` tasks record 6/6. After install
 one `delegate(rule: "advisor", ...)` call and confirm the account can use the shipped `codex` /
 `codex-write` defaults (`gpt-6-astra`, `xhigh`); override those targets in the profile if the model is
 unavailable, leaving `codex-astra` for the advisor.
+
+The archived `2026-10-29-add-task-lane-guidance` tasks record 9/9. After installing v0.15.0, load
+`openspec-propose` in a workspace and confirm the task-lane addendum appears before the adapter note;
+this live check remains an owner step.
