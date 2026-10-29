@@ -27,8 +27,8 @@ description, and `lib/**` is generated; the build and validation tail is serial.
 
 ## 5. Verify the behavior in a session
 
-- [ ] 5.1 In a fresh session with the updated package, confirm the catalog advertises `interface-design` and its body is absent until invoked; verify the catalog name and description match the asset.
-- [ ] 5.2 Invoke the skill on a small interface and confirm the review output rates severity and Thinking Cost and names a concrete fix and location; verify the body and references load without network access.
+- [x] 5.1 In a fresh session with the updated package, confirm the catalog advertises `interface-design` and its body is absent until invoked; verify the catalog name and description match the asset.
+- [x] 5.2 Invoke the skill on a small interface and confirm the review output rates severity and Thinking Cost and names a concrete fix and location; verify the body and references load without network access.
 
 ## Workflow follow-up
 

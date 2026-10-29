@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "add-interface-design-skill",
+  "scope": "task",
+  "taskId": "7d688b276228006a",
+  "digest": "6abd57b8dec6228889fa239900eaa641698f516c3628a850c8640a6cbc9bc4ea",
+  "worktreeDigest": "68ef1c916da05d9703c67410a14523bd3f6363e71c8879ddd6b1ff9cece5faf7",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent"
+  },
+  "time": "2026-10-29T19:42:53.764Z"
+}
