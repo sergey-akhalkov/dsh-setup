@@ -13,7 +13,7 @@
 ## 3. Hindsight export client
 
 - [x] 3.1 Implement bank listing, async transfer export submission, operation polling, and archive download against the local REST API; verify tests against a fake HTTP server cover success, a bank-not-found response, an operation failure, and daemon-down isolation.
-- [ ] 3.2 Implement the snapshot writer with a staging directory, verbatim archive entries, normalized content hash, and the single-writer lock; verify tests cover atomic replacement, an unchanged snapshot producing no commit input, and a stale lock taken over.
+- [x] 3.2 Implement the snapshot writer with a staging directory, verbatim archive entries, normalized content hash, and the single-writer lock; verify tests cover atomic replacement, an unchanged snapshot producing no commit input, and a stale lock taken over.
 
 ## 4. Git repository
 

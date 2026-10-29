@@ -46,6 +46,23 @@ export {
 } from './export-config.js'
 export type { ExportErrorCode } from './export-errors.js'
 export { ExportError, messageOf } from './export-errors.js'
+export type {
+  BankSnapshotInput,
+  LockOptions,
+  SnapshotLock,
+  SnapshotOptions,
+  SnapshotResult,
+} from './export-snapshot.js'
+export {
+  acquireSnapshotLock,
+  DEFAULT_LOCK_STALE_MS,
+  LOCK_FILE,
+  normalizedContentHash,
+  PENDING_FILE,
+  recoverPendingSnapshot,
+  STAGING_DIR,
+  writeSnapshot,
+} from './export-snapshot.js'
 export type { ArchiveEntries } from './export-zip.js'
 export { packArchive, unpackArchive } from './export-zip.js'
 

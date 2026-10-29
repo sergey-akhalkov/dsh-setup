@@ -72,7 +72,9 @@ export class TransferClient {
         catch (error) {
             if (error instanceof ExportError)
                 throw error;
-            throw new ExportError('http', `${what} did not return JSON: ${messageOf(error)}`, { cause: error });
+            throw new ExportError('http', `${what} did not return JSON: ${messageOf(error)}`, {
+                cause: error,
+            });
         }
     }
     async #failure(response, what, notFound) {
@@ -90,7 +92,7 @@ export class TransferClient {
             const document = await this.#json(response, 'bank list');
             const listed = Array.isArray(document.banks) ? document.banks : [];
             const ids = listed
-                .map((entry) => (isRecord(entry) && typeof entry.bank_id === 'string' ? entry.bank_id : undefined))
+                .map((entry) => isRecord(entry) && typeof entry.bank_id === 'string' ? entry.bank_id : undefined)
                 .filter((id) => id !== undefined);
             banks.push(...ids);
             const total = typeof document.total === 'number' ? document.total : banks.length;

@@ -2,12 +2,14 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ExportConfig } from './export-config.js';
 export type { ArchiveCounts, ArchiveScopeOptions, BankExportMetadata, RepositoryIndex, RepositoryIndexEntry, } from './export-archive.js';
 export { applyArchiveScope, BANK_METADATA_FILE, BANKS_DIR, bankFolderName, buildBankFiles, buildRepositoryIndex, INDEX_FILE, METADATA_SCHEMA_VERSION, parseBankMetadata, parseRepositoryIndex, sanitizeBankId, sha256Hex, TRANSFER_SCHEMA_VERSION, unsanitizeBankId, } from './export-archive.js';
+export type { BankTransferResult, OperationMetadata, TransferClientOptions, } from './export-client.js';
+export { TransferClient } from './export-client.js';
 export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './export-config.js';
 export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
-export type { BankTransferResult, OperationMetadata, TransferClientOptions } from './export-client.js';
-export { TransferClient } from './export-client.js';
 export type { ExportErrorCode } from './export-errors.js';
 export { ExportError, messageOf } from './export-errors.js';
+export type { BankSnapshotInput, LockOptions, SnapshotLock, SnapshotOptions, SnapshotResult, } from './export-snapshot.js';
+export { acquireSnapshotLock, DEFAULT_LOCK_STALE_MS, LOCK_FILE, normalizedContentHash, PENDING_FILE, recoverPendingSnapshot, STAGING_DIR, writeSnapshot, } from './export-snapshot.js';
 export type { ArchiveEntries } from './export-zip.js';
 export { packArchive, unpackArchive } from './export-zip.js';
 /**

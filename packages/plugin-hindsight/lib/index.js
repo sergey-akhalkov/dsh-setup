@@ -4,9 +4,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { apply as applyHindsight } from '@vectorize-io/hindsight-coding-agents/dsh';
 export { applyArchiveScope, BANK_METADATA_FILE, BANKS_DIR, bankFolderName, buildBankFiles, buildRepositoryIndex, INDEX_FILE, METADATA_SCHEMA_VERSION, parseBankMetadata, parseRepositoryIndex, sanitizeBankId, sha256Hex, TRANSFER_SCHEMA_VERSION, unsanitizeBankId, } from './export-archive.js';
-export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
 export { TransferClient } from './export-client.js';
+export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
 export { ExportError, messageOf } from './export-errors.js';
+export { acquireSnapshotLock, DEFAULT_LOCK_STALE_MS, LOCK_FILE, normalizedContentHash, PENDING_FILE, recoverPendingSnapshot, STAGING_DIR, writeSnapshot, } from './export-snapshot.js';
 export { packArchive, unpackArchive } from './export-zip.js';
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,
