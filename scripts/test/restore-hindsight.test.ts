@@ -185,6 +185,127 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}): Promise<ScriptR
   })
 }
 
+interface RecordedRequest {
+  method: string
+  path: string
+  query: URLSearchParams
+  body: Buffer
+}
+
+interface FakeApi {
+  url: string
+  banks: Set<string>
+  requests: RecordedRequest[]
+  close(): Promise<void>
+}
+
+const DEFAULT_IMPORT_COUNTS = {
+  documents_imported: 1,
+  facts_imported: 2,
+  observations_imported: 0,
+  mental_models_imported: 0,
+  knowledge_pages_imported: 1,
+}
+
+/** A stand-in for the documented Hindsight REST surface used by the restore path. */
+async function startFakeApi(
+  options: {
+    banks?: string[]
+    counts?: Record<string, number>
+    healthy?: boolean
+    pageSize?: number
+  } = {},
+): Promise<FakeApi> {
+  const banks = new Set(options.banks ?? [])
+  const requests: RecordedRequest[] = []
+  const operations = new Map<string, { counts: Record<string, number> }>()
+  const pageSize = options.pageSize ?? 100
+  let sequence = 0
+  const server = createServer((request, response) => {
+    void (async () => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(Buffer.from(chunk))
+      const body = Buffer.concat(chunks)
+      const method = request.method ?? 'GET'
+      requests.push({ method, path: url.pathname, query: url.searchParams, body })
+      const segments = url.pathname.split('/').filter((segment) => segment !== '')
+      const send = (status: number, payload: unknown) => {
+        response.writeHead(status, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(payload))
+      }
+
+      if (method === 'GET' && url.pathname === '/health') {
+        send(200, {
+          status: options.healthy === false ? 'unhealthy' : 'healthy',
+          database: 'connected',
+        })
+        return
+      }
+      if (method === 'GET' && segments.length === 3 && segments[2] === 'banks') {
+        const offset = Number(url.searchParams.get('offset') ?? '0')
+        const ids = [...banks].sort()
+        send(200, {
+          banks: ids.slice(offset, offset + pageSize).map((bank_id) => ({ bank_id })),
+          total: ids.length,
+          limit: pageSize,
+          offset,
+        })
+        return
+      }
+      if (segments[0] === 'v1' && segments[2] === 'banks' && segments[3] !== undefined) {
+        const bank = decodeURIComponent(segments[3] ?? '')
+        if (method === 'PUT' && segments.length === 4) {
+          banks.add(bank)
+          send(200, { bank_id: bank, name: bank, disposition: {}, mission: '' })
+          return
+        }
+        if (method === 'DELETE' && segments.length === 4) {
+          banks.delete(bank)
+          send(200, {})
+          return
+        }
+        if (method === 'POST' && segments[4] === 'transfer' && segments[5] === 'import') {
+          sequence += 1
+          const operationId = `op-${sequence}`
+          operations.set(operationId, {
+            counts: { ...DEFAULT_IMPORT_COUNTS, ...options.counts },
+          })
+          send(202, { operation_id: operationId, status: 'pending' })
+          return
+        }
+        if (method === 'GET' && segments[4] === 'operations' && segments[5] !== undefined) {
+          const operation = operations.get(decodeURIComponent(segments[5] ?? ''))
+          send(200, {
+            operation_id: segments[5],
+            status: 'completed',
+            result_metadata: operation?.counts ?? DEFAULT_IMPORT_COUNTS,
+            error_message: null,
+          })
+          return
+        }
+      }
+      send(404, { detail: `no route for ${method} ${url.pathname}` })
+    })()
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  const port = (server.address() as AddressInfo).port
+  return {
+    url: `http://127.0.0.1:${port}`,
+    banks,
+    requests,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      }),
+  }
+}
+
+function importRequest(api: FakeApi): RecordedRequest | undefined {
+  return api.requests.find((request) => request.path.endsWith('/transfer/import'))
+}
+
 describe.skipIf(!hasPwsh)('restore-hindsight.ps1', () => {
   it('rebuilds each archive, inspects it, and changes no bank in dry-run mode', async () => {
     const root = tempDir()
@@ -277,5 +398,116 @@ describe.skipIf(!hasPwsh)('restore-hindsight.ps1', () => {
     const result = await runScript(['-From', root, '-Bank', 'missing-bank', '-DryRun'])
     expect(result.code).toBe(1)
     expect(result.stderr).toContain('bank(s) not found in the export tree: missing-bank')
+  })
+
+  it('restores an absent bank and verifies the imported counts', async () => {
+    const root = tempDir()
+    writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const api = await startFakeApi({ banks: [] })
+    try {
+      const result = await runScript(['-From', root, '-ApiUrl', api.url])
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.stdout).toContain("restored bank 'coding-agent::one' -> 'coding-agent::one'")
+      const submit = importRequest(api)
+      expect(submit).toBeDefined()
+      expect(submit?.method).toBe('POST')
+      expect(submit?.query.get('mode')).toBe('restore')
+      expect(submit?.query.get('target_bank_id')).toBe('coding-agent::one')
+      // The multipart body carries a real ZIP under the documented `file` field.
+      const body = submit?.body ?? Buffer.alloc(0)
+      expect(/name="?file"?/u.test(body.toString('latin1'))).toBe(true)
+      expect(body.includes(Buffer.from('PK\x03\x04', 'latin1'))).toBe(true)
+      // The operation bank is temporary and leaves no bank behind.
+      const created = api.requests.filter(
+        (request) => request.method === 'PUT' && request.path.startsWith('/v1/default/banks/'),
+      )
+      expect(created).toHaveLength(1)
+      expect(created[0]?.path).toMatch(/^\/v1\/default\/banks\/hindsight-restore-[0-9a-f]{8}$/)
+      expect(api.banks.size).toBe(0)
+      const deleted = api.requests.filter((request) => request.method === 'DELETE')
+      expect(deleted).toHaveLength(1)
+    } finally {
+      await api.close()
+    }
+  })
+
+  it('refuses to restore over an existing bank and names the merge option', async () => {
+    const root = tempDir()
+    writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const api = await startFakeApi({ banks: ['coding-agent::one'] })
+    try {
+      const result = await runScript(['-From', root, '-ApiUrl', api.url])
+      expect(result.code).toBe(2)
+      expect(result.stderr).toContain("target bank 'coding-agent::one' already exists")
+      expect(result.stderr).toContain('-Mode merge')
+      expect(importRequest(api)).toBeUndefined()
+    } finally {
+      await api.close()
+    }
+  })
+
+  it('paginates the bank listing when the existing target is past the first page', async () => {
+    const root = tempDir()
+    writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const filler = Array.from({ length: 100 }, (_, index) => `filler-${index}`)
+    const api = await startFakeApi({ banks: [...filler, 'coding-agent::one'], pageSize: 100 })
+    try {
+      const result = await runScript(['-From', root, '-ApiUrl', api.url])
+      expect(result.code).toBe(2)
+      expect(result.stderr).toContain("target bank 'coding-agent::one' already exists")
+      const listings = api.requests.filter(
+        (request) => request.method === 'GET' && request.path === '/v1/default/banks',
+      )
+      expect(listings.map((request) => request.query.get('offset'))).toEqual(['0', '100'])
+      expect(importRequest(api)).toBeUndefined()
+    } finally {
+      await api.close()
+    }
+  })
+
+  it('exits non-zero when imported counts differ from the manifest', async () => {
+    const root = tempDir()
+    writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const api = await startFakeApi({ banks: [], counts: { documents_imported: 2 } })
+    try {
+      const result = await runScript(['-From', root, '-ApiUrl', api.url])
+      expect(result.code).toBe(3)
+      expect(result.stderr).toContain('imported counts differ from the manifest')
+      expect(result.stderr).toContain('documents: expected 1, imported 2')
+    } finally {
+      await api.close()
+    }
+  })
+
+  it('merges documents into an existing bank without a temporary bank', async () => {
+    const root = tempDir()
+    writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const api = await startFakeApi({ banks: ['coding-agent::one'] })
+    try {
+      const result = await runScript(['-From', root, '-ApiUrl', api.url, '-Mode', 'merge'])
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.stdout).toContain("merged bank 'coding-agent::one': 1 documents imported")
+      const submit = importRequest(api)
+      expect(submit?.query.get('mode')).toBe('merge')
+      expect(submit?.query.get('target_bank_id')).toBeNull()
+      expect(api.requests.some((request) => request.method === 'PUT')).toBe(false)
+      expect(api.requests.some((request) => request.method === 'DELETE')).toBe(false)
+    } finally {
+      await api.close()
+    }
+  })
+
+  it('refuses a merge into a bank that does not exist', async () => {
+    const root = tempDir()
+    writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const api = await startFakeApi({ banks: [] })
+    try {
+      const result = await runScript(['-From', root, '-ApiUrl', api.url, '-Mode', 'merge'])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain("merge target 'coding-agent::one' does not exist")
+      expect(importRequest(api)).toBeUndefined()
+    } finally {
+      await api.close()
+    }
   })
 })

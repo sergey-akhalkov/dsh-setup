@@ -346,6 +346,22 @@ function Test-Daemon {
   }
 }
 
+function Get-ExistingBanks {
+  $ids = @()
+  $offset = 0
+  while ($true) {
+    $listed = Invoke-Api 'Get' "/v1/default/banks?limit=100&offset=$offset" $null
+    $page = @($listed.banks)
+    foreach ($entry in $page) {
+      if ($null -ne $entry) { $ids += [string]$entry.bank_id }
+    }
+    $total = if ($null -ne $listed.total) { [int]$listed.total } else { $ids.Count }
+    if ($page.Count -eq 0 -or $ids.Count -ge $total) { break }
+    $offset += $page.Count
+  }
+  return $ids
+}
+
 function Initialize-Daemon {
   if (Test-Daemon) { return }
   $provisioning = Join-Path $PSScriptRoot 'setup-hindsight.ps1'
@@ -407,12 +423,7 @@ try {
   if (-not $DryRun) {
     Initialize-Daemon | Out-Null
     if (-not (Test-Daemon)) { $daemonAvailable = $false }
-    if ($daemonAvailable) {
-      $listed = Invoke-Api 'Get' '/v1/default/banks?limit=100&offset=0' $null
-      foreach ($entry in @($listed.banks)) {
-        if ($null -ne $entry) { $existing += [string]$entry.bank_id }
-      }
-    }
+    if ($daemonAvailable) { $existing = @(Get-ExistingBanks) }
   }
 
   $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("hindsight-restore-" + [guid]::NewGuid().ToString('N') + '.zip')
