@@ -25,7 +25,7 @@ one prompt section and one skill provider over the Markdown files that ship insi
 | Contribution                         | Size        | Cost per model step |
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
-| This working contract                | 5,971 bytes | ~1.5k tokens        |
+| This working contract (with footer)  | 5,997 bytes | ~1.5k tokens        |
 | **Both, active (this page)**         |             | **~2.2k tokens**    |
 
 The setup also ships the [RTK token workflow](rtk.md) routing rule and the [Serena code
@@ -33,9 +33,9 @@ guidance](serena.md) trigger, which add about 0.2k tokens each per step; with bo
 cost is about 2.4k. The table above counts only the two contributions this page owns.
 
 The contract is a hard budget, not a preference: `packages/plugin-working-principles/test/budget.test.ts`
-fails when the section exceeds 1500 estimated tokens, where a token is estimated as one quarter of the
-UTF-8 byte count. Raise the budget only as a deliberate decision, because it is paid on every step of
-every session.
+fails when the registered section (contract plus its footer) exceeds 1500 estimated tokens, where a
+token is estimated as one quarter of the UTF-8 byte count. Raise the budget only as a deliberate
+decision, because it is paid on every step of every session.
 
 The three skills cost only their catalog descriptions. `working-principles` is 7,889 bytes,
 `verify-change` is 4,547 bytes, and `instruction-budget` is 2,241 bytes, and all load only when

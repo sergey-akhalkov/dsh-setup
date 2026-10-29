@@ -14,6 +14,7 @@ export declare const inject: string[];
 interface BundleConfig {
     alwaysOn?: boolean;
 }
+export declare function alwaysOnFooter(): string;
 /**
  * Register both skills and, unless the row configures `alwaysOn: false`, the
  * always-on contract.

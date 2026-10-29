@@ -414,9 +414,19 @@ const EXPLICIT_BLOCK_PATTERNS = [
     /\byou\s+(?:can|may|should)\s+(?:mark|report|declare)\s+(?:it|the goal)\s+(?:as\s+)?blocked\b/iu,
     /\b(?:block|stop)\s+(?:the|this)\s+goal\b/iu,
 ];
+/**
+ * A negated, conditional, or quoted block phrase is not a request to block:
+ * those turns are reviewed, so only an affirmative unconditional request bypasses.
+ */
+const NON_AFFIRMATIVE_BLOCK_REQUEST = /\b(?:not|never|no|none|unless|if|except|without|avoid|instead|don'?t|doesn'?t|didn'?t|shouldn'?t|mustn'?t|won'?t|can'?t|cannot)\b/iu;
+const QUOTED_SEGMENT = /"[^"]*"|'[^']*'|“[^”]*”|‘[^’]*’|`[^`]*`/gu;
 /** Whether the open turn explicitly requested the block (a bounded text check). */
 function explicitBlockRequest(messages) {
-    return messages.some((message) => EXPLICIT_BLOCK_PATTERNS.some((pattern) => pattern.test(message)));
+    return messages.some((message) => {
+        const text = message.replace(QUOTED_SEGMENT, ' ');
+        return (!NON_AFFIRMATIVE_BLOCK_REQUEST.test(text) &&
+            EXPLICIT_BLOCK_PATTERNS.some((pattern) => pattern.test(text)));
+    });
 }
 /** Format one tool result's text blocks. */
 function toolResultText(event) {
@@ -578,24 +588,32 @@ function cachedVerdict(workspace, goalId, digest) {
     }
     return undefined;
 }
-/** Count the reviews this goal has actually spent; policy records do not count. */
-async function countReviews(workspace, goalId) {
-    let names;
+/**
+ * One file per started review, so the per-goal bound counts attempts rather than
+ * digest records; a repeated failure cannot overwrite its way back into budget.
+ */
+function attemptsDirectory(workspace, goalId) {
+    return join(recordDirectory(workspace, goalId), 'attempts');
+}
+/** Count the reviews this goal has actually started; policy records do not count. */
+async function countReviewAttempts(workspace, goalId) {
     try {
-        names = await readdir(recordDirectory(workspace, goalId));
+        return (await readdir(attemptsDirectory(workspace, goalId))).length;
     }
     catch {
         return 0;
     }
-    let count = 0;
-    for (const name of names.slice(0, 500)) {
-        if (!name.endsWith('.json'))
-            continue;
-        const record = readRecordFile(join(recordDirectory(workspace, goalId), name));
-        if (record !== undefined && record.reviewed === true)
-            count += 1;
+}
+/** Charge one started review against the goal's bounded model-call budget. */
+async function recordReviewAttempt(workspace, goalId) {
+    const directory = attemptsDirectory(workspace, goalId);
+    try {
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, `${Date.now()}-${randomUUID()}`), '1', 'utf8');
     }
-    return count;
+    catch {
+        // Audit state is best-effort; the tool decision is already determined.
+    }
 }
 /** Write one local record atomically; the gate never fails a session on an audit write. */
 async function writeRecord(path, record) {
@@ -689,39 +707,59 @@ function loadReviewerInstructions() {
     }
     return reviewerInstructions;
 }
-/** Render the bounded reviewer prompt: instructions first, then the evidence bundle. */
+/** Render the bounded reviewer prompt: required evidence first, tool history within the rest. */
 function composeReviewPrompt(evidence, workspace, goal) {
-    const lines = [
+    const header = [
         loadReviewerInstructions(),
         '',
         '## Review evidence',
         '',
-        `- Workspace (read-only): ${workspace}`,
+        `- Workspace (read-only): ${bound(workspace, 260)}`,
         `- Objective: ${evidence.objective}`,
         `- Rounds started: ${goal.roundsStarted} of ${goal.maxGoalRounds}`,
         `- Block reason: ${evidence.blockReason}`,
         '',
         '### Last goal rounds',
-    ];
+        '',
+    ].join('\n');
+    const rounds = [];
     if (evidence.rounds.length === 0)
-        lines.push('(no goal-round tool activity recorded)');
+        rounds.push('(no goal-round tool activity recorded)');
     for (const round of evidence.rounds) {
-        lines.push('', `Round ${round.round}:`);
+        rounds.push('', `Round ${round.round}:`);
         if (round.calls.length === 0)
-            lines.push('- (no tool calls)');
+            rounds.push('- (no tool calls)');
         for (const call of round.calls) {
-            lines.push(`- ${call.name} ${call.arguments}`);
+            rounds.push(`- ${call.name} ${call.arguments}`);
             if (call.result !== '')
-                lines.push(`  result: ${call.result}`);
+                rounds.push(`  result: ${call.result}`);
         }
     }
-    lines.push('', '### User messages (most recent last)');
-    if (evidence.userMessages.length === 0)
-        lines.push('(none recorded)');
-    for (const message of evidence.userMessages)
-        lines.push('', message);
-    lines.push('', '### Runtime permission policy', '', evidence.runtimePolicy, '', '### Workspace instructions (AGENTS.md)', '', evidence.workspaceInstructions, '', '### Standing grants (.dsh/goal-continuity/grants.json)', '', evidence.grants, '', 'Return exactly one fenced JSON block in the schema the instructions require.');
-    return bound(lines.join('\n'), MAX_REVIEW_PROMPT_CHARS);
+    const tail = [
+        '',
+        '### User messages (most recent last)',
+        ...(evidence.userMessages.length === 0
+            ? ['(none recorded)']
+            : evidence.userMessages.flatMap((message) => ['', message])),
+        '',
+        '### Runtime permission policy',
+        '',
+        evidence.runtimePolicy,
+        '',
+        '### Workspace instructions (AGENTS.md)',
+        '',
+        evidence.workspaceInstructions,
+        '',
+        '### Standing grants (.dsh/goal-continuity/grants.json)',
+        '',
+        evidence.grants,
+        '',
+        'Return exactly one fenced JSON block in the schema the instructions require.',
+    ].join('\n');
+    // Reserve the permission and grant evidence before spending space on tool history.
+    const room = MAX_REVIEW_PROMPT_CHARS - header.length - tail.length;
+    const history = room > 0 ? bound(rounds.join('\n'), room) : '';
+    return `${header}${history}${tail}`;
 }
 /** Output text of one settled subagent run. */
 function outputText(output) {
@@ -998,7 +1036,7 @@ function installBlockReview(ctx, config) {
             reasoningEffort: config.reasoningEffort,
             preset: config.reviewerPreset,
         };
-        const reviewed = await countReviews(workspace, goal.id);
+        const reviewed = await countReviewAttempts(workspace, goal.id);
         if (reviewed >= config.maxReviewsPerGoal) {
             const detail = `the per-goal review budget (${config.maxReviewsPerGoal}) is exhausted`;
             const written = await recordPolicy(agent, workspace, goal, digest, 'exhausted', 'onExhausted', detail, target, false, evidence);
@@ -1022,6 +1060,10 @@ function installBlockReview(ctx, config) {
             return denyWith(`Block review could not run (${detail}) and onReviewError is "deny". The goal stays active. Fix the review target or set blockReview.onReviewError to "allow". Record: ${record}.`, REVIEW_ERROR_CODE);
         }
         const outcome = await runReview(ctx, agent, workspace, prompt, config, exec.signal);
+        // Charge a review that actually started; an unavailable target spends no model call.
+        if (outcome.kind === 'reviewed' || (outcome.kind === 'error' && outcome.started)) {
+            await recordReviewAttempt(workspace, goal.id);
+        }
         if (outcome.kind === 'unavailable') {
             const detail = redact(outcome.detail, workspace);
             const written = await recordPolicy(agent, workspace, goal, digest, 'unavailable', 'onUnavailable', detail, target, false, evidence);

@@ -121,6 +121,30 @@ describe('block review skip conditions', () => {
     expect(harness.startCalls).toHaveLength(0)
   })
 
+  it('reviews a negated block instruction instead of bypassing the gate', async () => {
+    const harness = await create()
+    humanTurn(harness, 'Do not mark the goal blocked; continue working.')
+    const { decision } = await harness.block()
+    expect(decisionCode(decision)).toBe('GOAL_BLOCK_REVIEW_REJECTED')
+    expect(harness.startCalls).toHaveLength(1)
+  })
+
+  it('reviews a conditional block instruction', async () => {
+    const harness = await create()
+    humanTurn(harness, 'If you cannot find another route, mark the goal blocked.')
+    const { decision } = await harness.block()
+    expect(decisionCode(decision)).toBe('GOAL_BLOCK_REVIEW_REJECTED')
+    expect(harness.startCalls).toHaveLength(1)
+  })
+
+  it('does not treat a quoted block phrase as an explicit request', async () => {
+    const harness = await create()
+    humanTurn(harness, 'The note said "mark the goal blocked", but keep working.')
+    const { decision } = await harness.block()
+    expect(decisionCode(decision)).toBe('GOAL_BLOCK_REVIEW_REJECTED')
+    expect(harness.startCalls).toHaveLength(1)
+  })
+
   it('leaves a premature goal-round call to the goal tool and charges no budget', async () => {
     const harness = await create()
     roundTurn(harness, 1)
@@ -508,6 +532,29 @@ describe('block review record, cache, and budget', () => {
     expect(exhausted).toMatchObject({ verdict: 'exhausted', verified: false, reviewed: false })
   })
 
+  it('charges a failed review against the per-goal bound', async () => {
+    const harness = await create({ respond: () => 'no fenced verdict' }, { maxReviewsPerGoal: 1 })
+    humanTurn(harness)
+    const first = await harness.block()
+    expect(decisionCode(first.decision)).toBe('GOAL_BLOCK_REVIEW_ERROR')
+    const second = await harness.block()
+    expect(decisionCode(second.decision)).toBe('GOAL_BLOCK_REVIEW_EXHAUSTED')
+    // The exhausted policy record overwrites the digest record; the attempt stays charged.
+    const third = await harness.block()
+    expect(decisionCode(third.decision)).toBe('GOAL_BLOCK_REVIEW_EXHAUSTED')
+    expect(harness.startCalls).toHaveLength(1)
+  })
+
+  it('bounds repeated identical review attempts, not distinct digests', async () => {
+    const harness = await create({ respond: () => 'still no verdict' }, { maxReviewsPerGoal: 2 })
+    humanTurn(harness)
+    await harness.block()
+    await harness.block()
+    const third = await harness.block()
+    expect(decisionCode(third.decision)).toBe('GOAL_BLOCK_REVIEW_EXHAUSTED')
+    expect(harness.startCalls).toHaveLength(2)
+  })
+
   it('allows an unverified block when the exhausted policy is allow', async () => {
     const harness = await create({}, { maxReviewsPerGoal: 1, onExhausted: 'allow' })
     humanTurn(harness)
@@ -663,6 +710,36 @@ describe('bounded and redacted evidence', () => {
     const prompt = harness.lastPrompt()
     expect(prompt.length).toBeLessThanOrEqual(24_000)
     expect(prompt.startsWith('You are an independent, read-only reviewer')).toBe(true)
+  })
+
+  it('keeps the runtime policy and standing grants when tool evidence is large', async () => {
+    const harness = await create({ respond: () => validNotBlocker('continue') })
+    await harness.writeFile(
+      'AGENTS.md',
+      '# Workspace\n\n- 2026-10-01 user: standing grant for sibling repository edits, means only.\n',
+    )
+    harness.runtimeContext('Current DSH file policy: danger-full-access.', [
+      { name: 'sandbox-policy', text: 'Current DSH file policy: danger-full-access.' },
+    ])
+    harness.turnStart()
+    for (let index = 0; index < 5; index += 1) harness.directMessage('x'.repeat(800))
+    for (let round = 1; round <= 3; round += 1) {
+      const goal = harness.goal
+      if (goal === undefined) throw new Error('test goal missing')
+      goal.roundsStarted = round
+      harness.goalRound(goal, round)
+      for (let index = 0; index < 8; index += 1) {
+        const call = harness.toolCall('read', { file_path: `src/round-${round}-file-${index}.ts` })
+        harness.toolResult(call, `result ${round}-${index} `.repeat(40))
+      }
+    }
+    await harness.block()
+    const prompt = harness.lastPrompt()
+    expect(prompt.length).toBeLessThanOrEqual(24_000)
+    expect(prompt).toContain('### Runtime permission policy')
+    expect(prompt).toContain('DSH file policy: danger-full-access')
+    expect(prompt).toContain('### Standing grants')
+    expect(prompt).toContain('standing grant for sibling repository edits')
   })
 })
 

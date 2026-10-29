@@ -87,9 +87,11 @@ Each review writes one atomic record under the workspace's local state:
 The digest covers the objective, the block reason, and the evidence bundle. A matching digest reuses
 the recorded verdict without another model call. A per-goal review bound (`maxReviewsPerGoal`,
 default 3) stops unbounded spend; differing evidence does not reset it, only raising the bound does.
-Every step that allows an unverified block (`onUnavailable`, `onReviewError`, or `onExhausted` set to
-`allow`) writes a record marked `verified: false` and injects a visible notice naming the policy.
-An `allow` policy is the only way an unverified block can take effect.
+A review that starts but then fails (timeout, abort, invalid verdict) still consumes one unit of the
+bound; an unavailable target spends no model call and consumes none. Every step that allows an
+unverified block (`onUnavailable`, `onReviewError`, or `onExhausted` set to `allow`) writes a record
+marked `verified: false` and injects a visible notice naming the policy. An `allow` policy is the
+only way an unverified block can take effect.
 
 ## Configuration
 
