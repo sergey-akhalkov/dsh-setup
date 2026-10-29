@@ -1,7 +1,7 @@
 {
   "name": "@dsh-setup/plugin-working-principles",
   "version": "0.13.2",
-  "description": "First-party working contract, on by default, plus the working-principles, verify-change, and instruction-budget skills",
+  "description": "First-party working contract, on by default, plus the working-principles, verify-change, instruction-budget, and interface-design skills",
   "license": "MIT",
   "icon": "./icon.svg",
   "type": "module",
@@ -28,7 +28,13 @@
     "assets/working-principles/contract.md",
     "assets/working-principles/SKILL.md",
     "assets/verify-change/SKILL.md",
-    "assets/instruction-budget/SKILL.md"
+    "assets/instruction-budget/SKILL.md",
+    "assets/interface-design/SKILL.md",
+    "assets/interface-design/references/ui.md",
+    "assets/interface-design/references/cli.md",
+    "assets/interface-design/references/api.md",
+    "assets/interface-design/references/agent-tools.md",
+    "assets/interface-design/references/sources.md"
   ],
   "engines": {
     "dsh": ">=0.2.1-rc.3 <0.3.0"

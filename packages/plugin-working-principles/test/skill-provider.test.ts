@@ -9,6 +9,7 @@ const contractAsset = readFileSync(join(assetsDir, 'working-principles', 'contra
 const principleAsset = readFileSync(join(assetsDir, 'working-principles', 'SKILL.md'), 'utf8')
 const verifyAsset = readFileSync(join(assetsDir, 'verify-change', 'SKILL.md'), 'utf8')
 const budgetAsset = readFileSync(join(assetsDir, 'instruction-budget', 'SKILL.md'), 'utf8')
+const interfaceDesignAsset = readFileSync(join(assetsDir, 'interface-design', 'SKILL.md'), 'utf8')
 
 interface SkillInvocationShape {
   modelInvocable: boolean
@@ -124,6 +125,7 @@ describe('working-principles plugin', () => {
       'working-principles',
       'verify-change',
       'instruction-budget',
+      'interface-design',
     ])
     for (const candidate of candidates) {
       expect(candidate).toMatchObject({
@@ -146,6 +148,7 @@ describe('working-principles plugin', () => {
       ['working-principles', principleAsset],
       ['verify-change', verifyAsset],
       ['instruction-budget', budgetAsset],
+      ['interface-design', interfaceDesignAsset],
     ])
     for (const candidate of candidates) {
       const asset = assets.get(candidate.name)

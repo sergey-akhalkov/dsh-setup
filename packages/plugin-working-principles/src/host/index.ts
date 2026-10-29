@@ -73,6 +73,12 @@ const SKILLS: readonly PackagedSkill[] = [
       'Audit a workspace instruction file against its documented byte budget and move duplicated or repository-level detail into the docs that own it. Use when AGENTS.md (or an equivalent file) is over budget, feels too long, or a rule keeps being skipped because it is buried in prose.',
     directory: 'instruction-budget',
   },
+  {
+    name: 'interface-design',
+    description:
+      'Use when designing, changing, or reviewing any interface: a client UI control, a CLI or installer, an API or function signature, an error message, a README, or a skill or tool definition. Applies the first-time test: a person with no documentation must not have to ask what this is, what the one next action is, what will happen, what happened, or how to recover.',
+    directory: 'interface-design',
+  },
 ]
 
 function skillAdapterNote(): string {
