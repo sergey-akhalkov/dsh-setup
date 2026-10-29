@@ -14,7 +14,12 @@ import type {
   SubagentResult,
   SubagentRuntime,
 } from '@deepseek-ai/dsh-subagent'
-import type { JsonSchemaNode, ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type {
+  JsonSchemaNode,
+  PreToolDecision,
+  ToolDefinition,
+  ToolExecution,
+} from '@deepseek-ai/dsh-tools'
 import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import {
   APPROVAL_MARKER_FILE,
@@ -38,6 +43,7 @@ import {
   REVIEWS_DIRECTORY,
   type ReviewApprovalMarker,
   type ReviewFinding,
+  recognizeArchiveCommands,
   type ShellToken,
   shellSegments,
   TASK_ID_PATTERN,
@@ -3752,6 +3758,120 @@ async function evaluateGate(
   agent.steer(gateMessage(lines.join('\n')))
 }
 
+interface ShellInvocation {
+  command: string
+  cwd?: string
+}
+
+/** The shell command a tool execution runs, if it is one the guard understands. */
+function archiveShellInvocation(exec: ToolExecution): ShellInvocation | undefined {
+  const args = isRecord(exec.arguments) ? exec.arguments : {}
+  if (exec.name === 'terminal_send') {
+    return typeof args.text === 'string' ? { command: args.text } : undefined
+  }
+  if (exec.name !== 'pwsh' && exec.name !== 'bash') return undefined
+  if (typeof args.command !== 'string') return undefined
+  return typeof args.workdir === 'string'
+    ? { command: args.command, cwd: args.workdir }
+    : { command: args.command }
+}
+
+function archiveDenial(reason: string): PreToolDecision {
+  return { kind: 'deny', reason }
+}
+
+/**
+ * The opt-in archive gate: refuses the documented archive forms before they
+ * run when a checked task lacks a portable task-review PASS. It applies to
+ * subagents too; only the turn-stopping gate skips them.
+ */
+async function archiveGateDecision(
+  deps: GateDeps,
+  exec: ToolExecution,
+): Promise<PreToolDecision | undefined> {
+  if (exec.agent === undefined) return undefined
+  const invocation = archiveShellInvocation(exec)
+  if (invocation === undefined) return undefined
+  const sessionCwd = deps.services.workingDirectory.get(exec.agent.session)
+  const executionCwd =
+    invocation.cwd === undefined ? sessionCwd : resolve(sessionCwd, invocation.cwd)
+  const intents = recognizeArchiveCommands(invocation.command, executionCwd)
+  if (intents.length === 0) return undefined
+  const openspecRoot = findOpenSpecRootSync(executionCwd)
+  if (openspecRoot === undefined) return undefined
+  const markerPath = join(openspecRoot, APPROVAL_MARKER_FILE)
+  let raw: string
+  try {
+    raw = await readFile(markerPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    return archiveDenial(
+      `archive refused: the approval marker at ${relativePath(sessionCwd, markerPath)} is unreadable (${errorMessage(error)}); nothing was archived.`,
+    )
+  }
+  let marker: ReviewApprovalMarker
+  try {
+    const parsed = parseReviewApprovalMarker(JSON.parse(raw))
+    if (parsed.marker === undefined) {
+      return archiveDenial(
+        `archive refused: ${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}; nothing was archived.`,
+      )
+    }
+    marker = parsed.marker
+  } catch (error) {
+    return archiveDenial(
+      `archive refused: ${APPROVAL_MARKER_FILE} is not valid JSON (${errorMessage(error)}); nothing was archived.`,
+    )
+  }
+  if (!marker.archiveGate) return undefined
+  const rule = deps.config.rules.find((entry) => entry.id === marker.taskRule)
+  if (rule === undefined) {
+    return archiveDenial(
+      `archive refused: marker taskRule "${marker.taskRule}" is not a configured rule; add it or fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`,
+    )
+  }
+  if (rule.contract !== 'review' || rule.scope !== 'task') {
+    return archiveDenial(
+      `archive refused: marker taskRule "${rule.id}" is not a task-scoped review rule; fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`,
+    )
+  }
+  if (rule.gate !== 'strict') {
+    return archiveDenial(
+      `archive refused: marker taskRule "${rule.id}" is not a strict rule; fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`,
+    )
+  }
+  const gaps: string[] = []
+  for (const intent of intents) {
+    const change = await readChange(openspecRoot, intent.change)
+    if (change === undefined) continue
+    let tasks: TaskInfo[]
+    try {
+      tasks = await readTasks(change.dir)
+    } catch (error) {
+      return archiveDenial(
+        `archive refused: change "${change.name}" has no readable tasks.md (${errorMessage(error)}); nothing was archived.`,
+      )
+    }
+    const approval = await changeApproval(deps.config, change, openspecRoot, tasks)
+    if ('error' in approval) {
+      return archiveDenial(
+        `archive refused: change "${change.name}": ${approval.error}; nothing was archived.`,
+      )
+    }
+    if (approval.coverage.archiveReady) continue
+    gaps.push(
+      `archive refused: change "${change.name}" is not approval-complete (${approvalSummaryLine(approval.coverage)}).`,
+      ...formatApprovalGapLines(approval.coverage).map((line) => `  ${line}`),
+    )
+  }
+  if (gaps.length === 0) return undefined
+  gaps.push(
+    'Nothing was archived: the change remains active. Fix the lines above, run the exact delegate calls, then archive again.',
+    'Full audit: pnpm reviews:check --all',
+  )
+  return archiveDenial(gaps.join('\n'))
+}
+
 interface GateWiring {
   ctx: Context
   deps: GateDeps
@@ -3805,6 +3925,20 @@ function attachGate({ ctx, deps }: GateWiring): void {
         // The gate never throws into the turn.
       }
     }
+  })
+
+  // Archive guard: deny the documented archive forms before any effect. It
+  // applies to subagents too, unlike the turn-stopping gate.
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    try {
+      const decision = await archiveGateDecision(deps, exec)
+      if (decision !== undefined) return decision
+    } catch (error) {
+      return archiveDenial(
+        `archive refused: the delegation-rules archive gate could not evaluate this command (${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}); nothing was archived.`,
+      )
+    }
+    return await next()
   })
 }
 

@@ -23,7 +23,7 @@
 ## 4. Completion and archive gate
 
 - [x] 4.1 Add the completion steer: when the session's checklist write makes the task list fully checked, require a PASS for every checked task; before completion the per-task scope is unchanged. Verify a completion turn with one missing PASS is steered and a non-completion turn is not.
-- [ ] 4.2 Add the `tools/pre-execute` archive gate: read `openspec/review-approval.json`, recognize `openspec archive <change>` and `mv`/`Move-Item`/`git mv` into `changes/archive/`, deny before the move with the missing tasks and the exact review calls, fail closed, and apply to subagents. Verify the harness tests for denied, allowed, marker-absent, invalid-rule, unreadable-evidence, and non-archive commands.
+- [x] 4.2 Add the `tools/pre-execute` archive gate: read `openspec/review-approval.json`, recognize `openspec archive <change>` and `mv`/`Move-Item`/`git mv` into `changes/archive/`, deny before the move with the missing tasks and the exact review calls, fail closed, and apply to subagents. Verify the harness tests for denied, allowed, marker-absent, invalid-rule, unreadable-evidence, and non-archive commands.
 - [ ] 4.3 Add `openspec/review-approval.json` with `archiveGate: true`, `taskRule: task-review`, the v0.12.0 cutoff, and the three grandfathered changes; add the archive operation guidance to `openspec/config.yaml`; verify `openspec validate` and the audit reports the three as an exception and the pre-cutoff archives as the historical baseline.
 - [ ] 4.4 Update `docs/delegation-rules.md`, `docs/contributing.md`, and `AGENTS.md` with the completion/archive gate, the marker, PASS-only approval, and the commands; verify the AGENTS.md instruction-budget check and `pnpm lint` pass.
 

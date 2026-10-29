@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
+import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -2950,6 +2950,100 @@ async function evaluateGate(deps, agent, turn, signal) {
         lines.push(`Digest failure: ${digestNote}`);
     agent.steer(gateMessage(lines.join('\n')));
 }
+/** The shell command a tool execution runs, if it is one the guard understands. */
+function archiveShellInvocation(exec) {
+    const args = isRecord(exec.arguments) ? exec.arguments : {};
+    if (exec.name === 'terminal_send') {
+        return typeof args.text === 'string' ? { command: args.text } : undefined;
+    }
+    if (exec.name !== 'pwsh' && exec.name !== 'bash')
+        return undefined;
+    if (typeof args.command !== 'string')
+        return undefined;
+    return typeof args.workdir === 'string'
+        ? { command: args.command, cwd: args.workdir }
+        : { command: args.command };
+}
+function archiveDenial(reason) {
+    return { kind: 'deny', reason };
+}
+/**
+ * The opt-in archive gate: refuses the documented archive forms before they
+ * run when a checked task lacks a portable task-review PASS. It applies to
+ * subagents too; only the turn-stopping gate skips them.
+ */
+async function archiveGateDecision(deps, exec) {
+    if (exec.agent === undefined)
+        return undefined;
+    const invocation = archiveShellInvocation(exec);
+    if (invocation === undefined)
+        return undefined;
+    const sessionCwd = deps.services.workingDirectory.get(exec.agent.session);
+    const executionCwd = invocation.cwd === undefined ? sessionCwd : resolve(sessionCwd, invocation.cwd);
+    const intents = recognizeArchiveCommands(invocation.command, executionCwd);
+    if (intents.length === 0)
+        return undefined;
+    const openspecRoot = findOpenSpecRootSync(executionCwd);
+    if (openspecRoot === undefined)
+        return undefined;
+    const markerPath = join(openspecRoot, APPROVAL_MARKER_FILE);
+    let raw;
+    try {
+        raw = await readFile(markerPath, 'utf8');
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return undefined;
+        return archiveDenial(`archive refused: the approval marker at ${relativePath(sessionCwd, markerPath)} is unreadable (${errorMessage(error)}); nothing was archived.`);
+    }
+    let marker;
+    try {
+        const parsed = parseReviewApprovalMarker(JSON.parse(raw));
+        if (parsed.marker === undefined) {
+            return archiveDenial(`archive refused: ${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}; nothing was archived.`);
+        }
+        marker = parsed.marker;
+    }
+    catch (error) {
+        return archiveDenial(`archive refused: ${APPROVAL_MARKER_FILE} is not valid JSON (${errorMessage(error)}); nothing was archived.`);
+    }
+    if (!marker.archiveGate)
+        return undefined;
+    const rule = deps.config.rules.find((entry) => entry.id === marker.taskRule);
+    if (rule === undefined) {
+        return archiveDenial(`archive refused: marker taskRule "${marker.taskRule}" is not a configured rule; add it or fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`);
+    }
+    if (rule.contract !== 'review' || rule.scope !== 'task') {
+        return archiveDenial(`archive refused: marker taskRule "${rule.id}" is not a task-scoped review rule; fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`);
+    }
+    if (rule.gate !== 'strict') {
+        return archiveDenial(`archive refused: marker taskRule "${rule.id}" is not a strict rule; fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`);
+    }
+    const gaps = [];
+    for (const intent of intents) {
+        const change = await readChange(openspecRoot, intent.change);
+        if (change === undefined)
+            continue;
+        let tasks;
+        try {
+            tasks = await readTasks(change.dir);
+        }
+        catch (error) {
+            return archiveDenial(`archive refused: change "${change.name}" has no readable tasks.md (${errorMessage(error)}); nothing was archived.`);
+        }
+        const approval = await changeApproval(deps.config, change, openspecRoot, tasks);
+        if ('error' in approval) {
+            return archiveDenial(`archive refused: change "${change.name}": ${approval.error}; nothing was archived.`);
+        }
+        if (approval.coverage.archiveReady)
+            continue;
+        gaps.push(`archive refused: change "${change.name}" is not approval-complete (${approvalSummaryLine(approval.coverage)}).`, ...formatApprovalGapLines(approval.coverage).map((line) => `  ${line}`));
+    }
+    if (gaps.length === 0)
+        return undefined;
+    gaps.push('Nothing was archived: the change remains active. Fix the lines above, run the exact delegate calls, then archive again.', 'Full audit: pnpm reviews:check --all');
+    return archiveDenial(gaps.join('\n'));
+}
 function attachGate({ ctx, deps }) {
     ctx.on('agent/pre-step', async (payload, next) => {
         const decision = await next();
@@ -2995,6 +3089,19 @@ function attachGate({ ctx, deps }) {
                 // The gate never throws into the turn.
             }
         }
+    });
+    // Archive guard: deny the documented archive forms before any effect. It
+    // applies to subagents too, unlike the turn-stopping gate.
+    ctx.on('tools/pre-execute', async (exec, next) => {
+        try {
+            const decision = await archiveGateDecision(deps, exec);
+            if (decision !== undefined)
+                return decision;
+        }
+        catch (error) {
+            return archiveDenial(`archive refused: the delegation-rules archive gate could not evaluate this command (${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}); nothing was archived.`);
+        }
+        return await next();
     });
 }
 function toolOutput(value) {

@@ -1,7 +1,8 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  createAgent,
   defaultTestConfig,
   FakeGit,
   FakeSubagents,
@@ -19,6 +20,35 @@ const TASK_TEXT = 'Add the portable record'
 function digestIn(prompt: string): string {
   const match = /- Digest: ([0-9a-f]{64})/.exec(prompt)
   return match?.[1] ?? '0'.repeat(64)
+}
+
+/** A valid committed approval record for one task. */
+async function writePortablePass(
+  dir: string,
+  change: string,
+  taskText: string,
+  overrides: Record<string, unknown> = {},
+): Promise<string> {
+  const taskId = taskIdFor(taskText)
+  await mkdir(join(dir, 'reviews'), { recursive: true })
+  await writeFile(
+    join(dir, 'reviews', `${taskId}.json`),
+    JSON.stringify({
+      rule: 'task-review',
+      change,
+      scope: 'task',
+      taskId,
+      digest: 'a'.repeat(64),
+      worktreeDigest: 'b'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-10-29T08:55:43.317Z',
+      ...overrides,
+    }),
+    'utf8',
+  )
+  return taskId
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -492,5 +522,140 @@ describe('completion steer', () => {
     await writeFile(join(dir, 'tasks.md'), after, 'utf8')
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent)).toEqual([])
+  })
+})
+
+describe('archive gate', () => {
+  const MARKER = { version: 1, archiveGate: true, taskRule: 'task-review' }
+  const ARCHIVE_TASK = 'Archive task'
+  const taskId = taskIdFor(ARCHIVE_TASK)
+  const ARCHIVE_COMMANDS = [
+    'openspec archive change-a',
+    'mv openspec/changes/change-a openspec/changes/archive',
+    'Move-Item -Path .\\openspec\\changes\\change-a -Destination openspec/changes/archive',
+    'git mv openspec/changes/change-a openspec/changes/archive/2026-10-29-change-a',
+  ]
+
+  async function archiveFixture(options: { marker?: Record<string, unknown> | null } = {}) {
+    const workspace = await makeWorkspace()
+    cleanups.push(workspace.cleanup)
+    const dir = await writeChange(workspace.root, 'change-a', [
+      { number: '1.1', text: ARCHIVE_TASK, checked: true },
+    ])
+    if (options.marker !== null) {
+      await writeFile(
+        join(workspace.root, 'openspec', 'review-approval.json'),
+        JSON.stringify(options.marker ?? MARKER),
+        'utf8',
+      )
+    }
+    const agents = new FakeSubagents()
+    agents.addProvider('codex-subagent')
+    const harness = new Harness({
+      cwd: workspace.root,
+      config: defaultTestConfig(),
+      agents,
+      git: new FakeGit(),
+    })
+    return { root: workspace.root, dir, harness }
+  }
+
+  it('denies the documented archive forms with the missing task and review call', async () => {
+    const { harness } = await archiveFixture()
+    for (const command of ARCHIVE_COMMANDS) {
+      const result = await harness.preExecute('pwsh', { command })
+      expect(result.kind, command).toBe('deny')
+      expect(result.nextCalled).toBe(false)
+      expect(result.reason).toContain('archive refused: change "change-a" is not approval-complete')
+      expect(result.reason).toContain(
+        `missing 1.1 "${ARCHIVE_TASK}" -> delegate(rule: "task-review", change: "change-a", task: "${taskId}")`,
+      )
+      expect(result.reason).toContain(`record: openspec/changes/change-a/reviews/${taskId}.json`)
+      expect(result.reason).toContain('Nothing was archived')
+      expect(result.reason).toContain('pnpm reviews:check --all')
+    }
+  })
+
+  it('allows the archive once every checked task has a portable PASS', async () => {
+    const { dir, harness } = await archiveFixture()
+    await writePortablePass(dir, 'change-a', ARCHIVE_TASK)
+    for (const command of ARCHIVE_COMMANDS) {
+      const result = await harness.preExecute('pwsh', { command })
+      expect(result.kind, command).toBe('allow')
+      expect(result.nextCalled).toBe(true)
+    }
+  })
+
+  it('denies a multi-source move when a later source is unapproved', async () => {
+    const { root, dir, harness } = await archiveFixture()
+    await writeChange(root, 'change-b', [
+      { number: '1.1', text: 'Second archive task', checked: true },
+    ])
+    await writePortablePass(dir, 'change-a', ARCHIVE_TASK)
+    const result = await harness.preExecute('pwsh', {
+      command:
+        'git mv openspec/changes/change-a openspec/changes/change-b openspec/changes/archive',
+    })
+    expect(result.kind).toBe('deny')
+    expect(result.reason).toContain('change "change-b" is not approval-complete')
+    expect(result.reason).toContain('Second archive task')
+    expect(result.reason).not.toContain('change "change-a" is not approval-complete')
+  })
+
+  it('leaves the command unchanged without a marker or with the gate disabled', async () => {
+    const absent = await archiveFixture({ marker: null })
+    expect((await absent.harness.preExecute('pwsh', { command: ARCHIVE_COMMANDS[0] })).kind).toBe(
+      'allow',
+    )
+    const disabled = await archiveFixture({ marker: { ...MARKER, archiveGate: false } })
+    expect((await disabled.harness.preExecute('pwsh', { command: ARCHIVE_COMMANDS[0] })).kind).toBe(
+      'allow',
+    )
+  })
+
+  it('refuses an invalid task rule', async () => {
+    const { harness } = await archiveFixture({
+      marker: { version: 1, archiveGate: true, taskRule: 'missing-rule' },
+    })
+    const result = await harness.preExecute('pwsh', { command: ARCHIVE_COMMANDS[0] })
+    expect(result.kind).toBe('deny')
+    expect(result.reason).toContain('marker taskRule "missing-rule" is not a configured rule')
+  })
+
+  it('refuses unreadable evidence', async () => {
+    const { dir, harness } = await archiveFixture()
+    await rm(join(dir, 'tasks.md'))
+    const result = await harness.preExecute('pwsh', { command: ARCHIVE_COMMANDS[0] })
+    expect(result.kind).toBe('deny')
+    expect(result.reason).toContain('no readable tasks.md')
+  })
+
+  it('ignores non-archive commands', async () => {
+    const { harness } = await archiveFixture()
+    const commands = [
+      'openspec list',
+      'git status',
+      'mv openspec/changes/change-a packages/other',
+      'echo openspec archive change-a',
+    ]
+    for (const command of commands) {
+      const result = await harness.preExecute('pwsh', { command })
+      expect(result.kind, command).toBe('allow')
+    }
+  })
+
+  it('applies to a subagent and to terminal input', async () => {
+    const { harness } = await archiveFixture()
+    const subagent = createAgent('sub-agent', 'subagent')
+    const fromSubagent = await harness.preExecute(
+      'pwsh',
+      { command: ARCHIVE_COMMANDS[0] },
+      subagent,
+    )
+    expect(fromSubagent.kind).toBe('deny')
+    const fromTerminal = await harness.preExecute('terminal_send', {
+      text: ARCHIVE_COMMANDS[0],
+    })
+    expect(fromTerminal.kind).toBe('deny')
   })
 })

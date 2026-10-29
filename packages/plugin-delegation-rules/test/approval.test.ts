@@ -302,6 +302,27 @@ describe('archive command recognition', () => {
     }
   })
 
+  it('recognizes every source of a multi-source move', () => {
+    expect(
+      recognizeArchiveCommands(
+        'git mv openspec/changes/change-a openspec/changes/change-b openspec/changes/archive/',
+        cwd,
+      ),
+    ).toEqual([
+      { kind: 'move', change: 'change-a' },
+      { kind: 'move', change: 'change-b' },
+    ])
+    expect(
+      recognizeArchiveCommands(
+        'Move-Item -Path "openspec/changes/change-a,openspec/changes/change-b" -Destination openspec/changes/archive',
+        cwd,
+      ),
+    ).toEqual([
+      { kind: 'move', change: 'change-a' },
+      { kind: 'move', change: 'change-b' },
+    ])
+  })
+
   it('ignores non-archive operations and previews', () => {
     const commands = [
       'mv openspec/changes/change-a packages/elsewhere',

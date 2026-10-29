@@ -576,8 +576,8 @@ function changePath(
   return undefined
 }
 
-function archiveMoveIntent(cwd: string, tokens: readonly ShellToken[]): ArchiveIntent | undefined {
-  if (hasPreviewSwitch(tokens)) return undefined
+function archiveMoveIntents(cwd: string, tokens: readonly ShellToken[]): ArchiveIntent[] {
+  if (hasPreviewSwitch(tokens)) return []
   const words = tokens.map((token) => token.value)
   const verb = baseName(words[0] ?? '').toLowerCase()
   let args: string[]
@@ -586,18 +586,31 @@ function archiveMoveIntent(cwd: string, tokens: readonly ShellToken[]): ArchiveI
   } else if (verb === 'mv' || verb === 'move-item') {
     args = words.slice(1)
   } else {
-    return undefined
+    return []
   }
-  const source = namedArgument(args, ['-path', '-literalpath']) ?? positionalArguments(args)[0]
-  const positional = positionalArguments(args)
-  const destination = namedArgument(args, ['-destination']) ?? positional[positional.length - 1]
-  if (source === undefined || destination === undefined) return undefined
-  const from = changePath(cwd, source)
+  const positionals = positionalArguments(args)
+  const namedSource = namedArgument(args, ['-path', '-literalpath'])
+  const destination = namedArgument(args, ['-destination']) ?? positionals[positionals.length - 1]
+  if (destination === undefined) return []
+  // Move-Item takes one -Path value (possibly a comma list); mv/git mv take
+  // every positional except the destination as a source.
+  const sources =
+    namedSource !== undefined
+      ? namedSource
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry !== '')
+      : positionals.slice(0, -1)
   const to = changePath(cwd, destination)
-  if (from === undefined || from.kind !== 'source' || to === undefined || to.kind !== 'archive') {
-    return undefined
+  if (to === undefined || to.kind !== 'archive') return []
+  const intents: ArchiveIntent[] = []
+  for (const source of sources) {
+    const from = changePath(cwd, source)
+    if (from !== undefined && from.kind === 'source') {
+      intents.push({ kind: 'move', change: from.change })
+    }
   }
-  return { kind: 'move', change: from.change }
+  return intents
 }
 
 function openSpecArchiveIntent(tokens: readonly ShellToken[]): ArchiveIntent | undefined {
@@ -632,8 +645,12 @@ export function recognizeArchiveCommands(command: string, cwd: string): ArchiveI
     const tokens = segment.tokens
     if (tokens.length === 0) continue
     if ((tokens[0] as ShellToken).quoted) continue
-    const intent = openSpecArchiveIntent(tokens) ?? archiveMoveIntent(cwd, tokens)
-    if (intent !== undefined) intents.push(intent)
+    const openSpec = openSpecArchiveIntent(tokens)
+    if (openSpec !== undefined) {
+      intents.push(openSpec)
+      continue
+    }
+    intents.push(...archiveMoveIntents(cwd, tokens))
   }
   return intents
 }

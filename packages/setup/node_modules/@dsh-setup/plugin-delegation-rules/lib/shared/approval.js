@@ -434,9 +434,9 @@ function changePath(cwd, path) {
     }
     return undefined;
 }
-function archiveMoveIntent(cwd, tokens) {
+function archiveMoveIntents(cwd, tokens) {
     if (hasPreviewSwitch(tokens))
-        return undefined;
+        return [];
     const words = tokens.map((token) => token.value);
     const verb = baseName(words[0] ?? '').toLowerCase();
     let args;
@@ -447,19 +447,32 @@ function archiveMoveIntent(cwd, tokens) {
         args = words.slice(1);
     }
     else {
-        return undefined;
+        return [];
     }
-    const source = namedArgument(args, ['-path', '-literalpath']) ?? positionalArguments(args)[0];
-    const positional = positionalArguments(args);
-    const destination = namedArgument(args, ['-destination']) ?? positional[positional.length - 1];
-    if (source === undefined || destination === undefined)
-        return undefined;
-    const from = changePath(cwd, source);
+    const positionals = positionalArguments(args);
+    const namedSource = namedArgument(args, ['-path', '-literalpath']);
+    const destination = namedArgument(args, ['-destination']) ?? positionals[positionals.length - 1];
+    if (destination === undefined)
+        return [];
+    // Move-Item takes one -Path value (possibly a comma list); mv/git mv take
+    // every positional except the destination as a source.
+    const sources = namedSource !== undefined
+        ? namedSource
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry !== '')
+        : positionals.slice(0, -1);
     const to = changePath(cwd, destination);
-    if (from === undefined || from.kind !== 'source' || to === undefined || to.kind !== 'archive') {
-        return undefined;
+    if (to === undefined || to.kind !== 'archive')
+        return [];
+    const intents = [];
+    for (const source of sources) {
+        const from = changePath(cwd, source);
+        if (from !== undefined && from.kind === 'source') {
+            intents.push({ kind: 'move', change: from.change });
+        }
     }
-    return { kind: 'move', change: from.change };
+    return intents;
 }
 function openSpecArchiveIntent(tokens) {
     const words = tokens.map((token) => token.value);
@@ -500,9 +513,12 @@ export function recognizeArchiveCommands(command, cwd) {
             continue;
         if (tokens[0].quoted)
             continue;
-        const intent = openSpecArchiveIntent(tokens) ?? archiveMoveIntent(cwd, tokens);
-        if (intent !== undefined)
-            intents.push(intent);
+        const openSpec = openSpecArchiveIntent(tokens);
+        if (openSpec !== undefined) {
+            intents.push(openSpec);
+            continue;
+        }
+        intents.push(...archiveMoveIntents(cwd, tokens));
     }
     return intents;
 }
