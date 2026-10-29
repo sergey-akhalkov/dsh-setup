@@ -5,11 +5,15 @@ export declare const EXPORT_GIT_IDENTITY: Readonly<{
 }>;
 /** Ignored scratch and journal paths, written only when the file is absent. */
 export declare const EXPORT_GITIGNORE: string;
+/** Write (or reuse) the failing askpass helper inside the repository. */
+export declare function prepareAskpass(dir: string): string;
 export interface GitRunOptions {
     cwd: string;
     env?: NodeJS.ProcessEnv;
     timeoutMs?: number;
     allowFailure?: boolean;
+    /** Failing askpass program; set for every command that may authenticate. */
+    askpass?: string;
 }
 export interface GitRunResult {
     code: number;
@@ -48,3 +52,18 @@ export declare function commitSnapshot(dir: string, options: CommitOptions): Pro
 export declare function currentBranch(dir: string): Promise<string>;
 /** Whether the repository already has a commit to push. */
 export declare function hasCommits(dir: string): Promise<boolean>;
+export interface PushOptions {
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+}
+export interface PushResult {
+    pushed: boolean;
+    /** Why the push did not happen; the local commits stay for the next cycle. */
+    reason?: string;
+}
+/**
+ * Push the current branch without force. A diverged remote is reconciled with a
+ * fetch and rebase (this runs under the single-writer lock); anything else keeps
+ * the local commit and reports, and the next cycle tries again.
+ */
+export declare function pushSnapshot(dir: string, options?: PushOptions): Promise<PushResult>;

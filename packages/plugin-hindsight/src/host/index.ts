@@ -52,6 +52,8 @@ export type {
   GitBootstrapResult,
   GitRunOptions,
   GitRunResult,
+  PushOptions,
+  PushResult,
 } from './export-git.js'
 export {
   bootstrapRepository,
@@ -61,6 +63,7 @@ export {
   EXPORT_GITIGNORE,
   gitOutput,
   hasCommits,
+  pushSnapshot,
 } from './export-git.js'
 export type {
   BankSnapshotInput,
