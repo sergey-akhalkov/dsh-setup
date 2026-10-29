@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHANGE_PATTERN, DIGEST_PATTERN, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parseTasksText, shellSegments, TASK_ID_PATTERN, } from '../shared/approval.js';
+import { CHANGE_PATTERN, DIGEST_PATTERN, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parseTasksText, portableTaskRecordPath, shellSegments, TASK_ID_PATTERN, } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -2123,6 +2123,29 @@ class DelegationEngine {
                 time: this.now(),
                 ...(fields.error === undefined ? {} : { error: fields.error }),
             };
+            if (record.scope === 'task' && record.verdict === 'PASS' && record.taskId !== undefined) {
+                // The portable approval is committed with the change; write it before
+                // the local PASS so a failed write can never publish an approval.
+                const path = portableTaskRecordPath(run.context.change.dir, record.taskId);
+                const portable = {
+                    rule: record.rule,
+                    change: record.change,
+                    scope: 'task',
+                    taskId: record.taskId,
+                    digest: record.digest,
+                    ...(record.worktreeDigest === undefined ? {} : { worktreeDigest: record.worktreeDigest }),
+                    verdict: 'PASS',
+                    findings: [],
+                    target: record.target,
+                    time: record.time,
+                };
+                try {
+                    await writeJsonAtomic(path, portable);
+                }
+                catch (error) {
+                    fail(`could not write the portable approval record at ${relativePath(run.context.cwd, path)}: ${errorMessage(error)}; no PASS record was published`);
+                }
+            }
             await writeJsonAtomic(run.recordPath, record);
             return record;
         }

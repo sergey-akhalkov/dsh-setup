@@ -23,7 +23,9 @@ import {
   type NumberedTask,
   normalizeCheckboxes,
   normalizeTaskText,
+  type PortableTaskReviewRecord,
   parseTasksText,
+  portableTaskRecordPath,
   type ReviewFinding,
   type ShellToken,
   shellSegments,
@@ -2746,6 +2748,30 @@ class DelegationEngine {
         runId: run.file.id,
         time: this.now(),
         ...(fields.error === undefined ? {} : { error: fields.error }),
+      }
+      if (record.scope === 'task' && record.verdict === 'PASS' && record.taskId !== undefined) {
+        // The portable approval is committed with the change; write it before
+        // the local PASS so a failed write can never publish an approval.
+        const path = portableTaskRecordPath(run.context.change.dir, record.taskId)
+        const portable: PortableTaskReviewRecord = {
+          rule: record.rule,
+          change: record.change,
+          scope: 'task',
+          taskId: record.taskId,
+          digest: record.digest,
+          ...(record.worktreeDigest === undefined ? {} : { worktreeDigest: record.worktreeDigest }),
+          verdict: 'PASS',
+          findings: [],
+          target: record.target,
+          time: record.time,
+        }
+        try {
+          await writeJsonAtomic(path, portable)
+        } catch (error) {
+          fail(
+            `could not write the portable approval record at ${relativePath(run.context.cwd, path)}: ${errorMessage(error)}; no PASS record was published`,
+          )
+        }
       }
       await writeJsonAtomic(run.recordPath, record)
       return record
