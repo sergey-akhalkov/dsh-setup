@@ -206,9 +206,10 @@ function Confirm-BankTree([string]$BankId, [string]$Folder) {
   # Every archive entry must be covered by a checksum, not merely the listed ones.
   $declared = @($metadata.checksums.PSObject.Properties | ForEach-Object { [string]$_.Name })
   $root = (Resolve-Path -LiteralPath $Folder).Path
+  $exportJson = Join-Path $root 'export.json'
   $stored = @(
-    Get-ChildItem -LiteralPath $Folder -Recurse -File |
-      Where-Object { $_.FullName -ne (Join-Path $Folder 'export.json') } |
+    Get-ChildItem -LiteralPath $root -Recurse -File |
+      Where-Object { $_.FullName -ne $exportJson } |
       ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') }
   )
   $undeclared = @($stored | Where-Object { $declared -notcontains $_ })
@@ -219,9 +220,12 @@ function Confirm-BankTree([string]$BankId, [string]$Folder) {
 }
 
 function New-TransferArchive([string]$Folder, [string]$ZipPath) {
-  $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -File | Where-Object { $_.FullName -ne (Join-Path $Folder 'export.json') })
-  if ($files.Count -eq 0) { Stop-WithError 1 "no archive entries found in $Folder" }
+  # Resolve first: Resolve-Path and Get-ChildItem can disagree on short (8.3)
+  # paths, and a Substring over mismatched roots corrupts entry names.
   $root = (Resolve-Path -LiteralPath $Folder).Path
+  $exportJson = Join-Path $root 'export.json'
+  $files = @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { $_.FullName -ne $exportJson })
+  if ($files.Count -eq 0) { Stop-WithError 1 "no archive entries found in $Folder" }
   # ZipArchiveMode.Create refuses an existing file; the temp path is reused per bank.
   if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
   $zip = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)

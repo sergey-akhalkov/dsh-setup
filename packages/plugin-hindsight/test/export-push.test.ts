@@ -169,7 +169,13 @@ describe('automatic push', () => {
 
     writeSnapshotFile(dir, 'content')
     expect((await commitSnapshot(dir, { message: 'local export' })).committed).toBe(true)
-    const result = await pushSnapshot(dir, { timeoutMs: 20_000 })
+    // A runner without a Git user must still rebase with the exporter's fixed identity.
+    const emptyGlobal = join(root, 'empty-gitconfig')
+    writeFileSync(emptyGlobal, '')
+    const result = await pushSnapshot(dir, {
+      timeoutMs: 20_000,
+      env: { GIT_CONFIG_GLOBAL: emptyGlobal, GIT_CONFIG_NOSYSTEM: '1' },
+    })
     expect(result.pushed).toBe(true)
     // Linear history above the other writer's commit: nothing was overwritten.
     expect(gitTry(bare, ['merge-base', '--is-ancestor', remoteHead, 'HEAD'])).not.toBeUndefined()

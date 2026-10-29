@@ -218,7 +218,15 @@ export async function pushSnapshot(dir, options = {}) {
     const run = {
         cwd: dir,
         timeoutMs: options.timeoutMs,
-        env: options.env,
+        // A diverged remote is reconciled with `rebase`, which writes a commit and
+        // therefore needs the fixed identity even when the machine has no Git user.
+        env: {
+            ...options.env,
+            GIT_AUTHOR_NAME: EXPORT_GIT_IDENTITY.name,
+            GIT_AUTHOR_EMAIL: EXPORT_GIT_IDENTITY.email,
+            GIT_COMMITTER_NAME: EXPORT_GIT_IDENTITY.name,
+            GIT_COMMITTER_EMAIL: EXPORT_GIT_IDENTITY.email,
+        },
         askpass: prepareAskpass(dir),
     };
     if ((await originUrl(run)) === undefined)
