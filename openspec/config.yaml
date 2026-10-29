@@ -26,3 +26,10 @@ context: |
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+operations:
+  archive:
+    guidance:
+      - "Run `pnpm reviews:check --change <name>` before archiving: every checked task needs a committed `reviews/<taskId>.json` task-review PASS."
+      - "The delegation-rules archive gate refuses `openspec archive` and `mv`/`Move-Item`/`git mv` into `openspec/changes/archive/` until every checked task is approved; the change stays active."
+      - "`pnpm reviews:check --all` reports the v0.12.0 exception and the pre-cutoff historical baseline; a post-cutoff archive or a later modification of any archive must satisfy the normal rule."

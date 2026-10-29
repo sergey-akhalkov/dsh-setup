@@ -7,7 +7,7 @@ import {
   portableTaskRecordPath,
   taskIdOf,
 } from '../../packages/plugin-delegation-rules/src/shared/approval.ts'
-import { auditActive, auditAll, auditPush, exportChange } from '../reviews-check.ts'
+import { auditActive, auditAll, auditPush, exportChange, readMarker } from '../reviews-check.ts'
 
 const DIGEST_A = 'a'.repeat(64)
 const DIGEST_B = 'b'.repeat(64)
@@ -257,6 +257,33 @@ async function historyFixture(options: { fresh?: boolean } = {}) {
 }
 
 describe('reviews:check --change', () => {
+  it('keeps the repository marker and its v0.12.0 exception', () => {
+    const root = join(import.meta.dirname, '..', '..')
+    const marker = readMarker(join(root, 'openspec'))
+    expect(marker.kind).toBe('marker')
+    if (marker.kind !== 'marker') return
+    expect(marker.marker).toMatchObject({
+      version: 1,
+      archiveGate: true,
+      taskRule: 'task-review',
+      cutoff: 'v0.12.0',
+    })
+    expect(Object.keys(marker.marker.grandfathered ?? {}).sort()).toEqual([
+      'add-goal-block-review',
+      'adopt-agent-best-practices',
+      'fix-delegation-review-build-inputs',
+    ])
+  })
+
+  it('points the OpenSpec archive guidance at the approval audit', async () => {
+    const root = join(import.meta.dirname, '..', '..')
+    const config = await readFile(join(root, 'openspec', 'config.yaml'), 'utf8')
+    expect(config).toContain('operations:')
+    expect(config).toContain('archive:')
+    expect(config).toContain('pnpm reviews:check --change')
+    expect(config).toContain('pnpm reviews:check --all')
+  })
+
   it('fails an unreviewed checked task and passes an approved one', async () => {
     const { root, changeDir } = await fixture()
     const missing = await auditActive(root, 'change-a')
