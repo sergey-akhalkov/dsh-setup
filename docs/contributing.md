@@ -249,10 +249,17 @@ task and the exact `delegate` calls, and leaves the change active. It fails clos
 `archiveGate: false`, nothing changes.
 
 Before archiving run `pnpm reviews:check --change <name>`; before a release run
-`pnpm reviews:check --all` (it reports the v0.12.0 exception and the pre-cutoff baseline), and the
-pre-push hook runs `pnpm reviews:check --push` for the pushed range.
+`pnpm reviews:check --all` (it reports the v0.12.0 exception and the pre-cutoff baseline).
 `pnpm reviews:export --change <name>` copies the local `.dsh` PASS records of a change reviewed
 before the portable write existed.
+
+The checked-in `.githooks/pre-push` hook runs `pnpm reviews:check --push` and refuses a push whose
+archived changes lack an approval; install it once per clone with `pnpm hooks:install` (it sets
+`core.hooksPath .githooks`, a local git config action). The hook fails closed when it cannot
+determine the pushed range or find `pnpm`, naming `pnpm reviews:check --all` as the manual fallback.
+Both CI workflows run `pnpm reviews:check --all` on `windows-latest` with full git history and tags,
+so a `--no-verify` push is still caught before merge. See
+[review-approval.md](review-approval.md) for the rule, the evidence, and the known limits.
 
 ## Change DSH support
 
