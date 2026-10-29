@@ -96,6 +96,29 @@ was written (2026-10-29). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-29-adopt-agent-best-practices`              | 20/21          |
 | `2026-10-29-fix-delegation-review-build-inputs`      | 11/11          |
 
+## Review approval: the v0.12.0 exception and the pre-cutoff baseline
+
+The repository opts in to the archive approval gate with `openspec/review-approval.json`
+(`archiveGate: true`, `taskRule: task-review`, cutoff `v0.12.0`). `pnpm reviews:check --all` reports
+two accepted, non-enforced categories and enforces everything else:
+
+- **The v0.12.0 exception**: the three changes archived at the `v0.12.0` tag carry no per-task
+  portable records and are not backfilled: `add-goal-block-review` (17 checked tasks),
+  `adopt-agent-best-practices` (20), and `fix-delegation-review-build-inputs` (11) — 48 checked tasks
+  in total. Their evidence is a post-hoc integration review `PASS` for each change (verdict `PASS`,
+  target `codex-subagent`) in the `review-v0-12-0` git worktree's
+  `.dsh/delegation/integration-review/<change>/integration.json`, after the fixes on branch
+  `review-v0-12-0` (`6b4e4f9 fix: address v0.12.0 integration review findings`). The worktree
+  evidence is not copied into this repository.
+- **The pre-cutoff historical baseline**: every archive whose first archive commit is an ancestor of
+  the `v0.12.0` tag is reported with its checked-task count and no retroactive records, and is not
+  enforced. `add-hindsight-memory` (25 checked tasks) is the most recent of these; the `--all` output
+  lists the whole baseline.
+
+A change archived after the cutoff, or a later modification of any archive, is checked under the
+normal rule and fails without a portable task-review `PASS` for every checked task. The rule, the
+portable record, and the audit commands are in [review-approval.md](review-approval.md).
+
 ## Open owner follow-ups
 
 The archived parent change (`2026-10-26-add-portable-dsh-setup`) tasks record 32/35. Open owner

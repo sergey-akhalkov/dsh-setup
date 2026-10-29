@@ -168,6 +168,13 @@ export interface FakeAgent {
   steer: ReturnType<typeof vi.fn>
 }
 
+/** One `tools/pre-execute` decision, for the archive gate tests. */
+export interface PreExecuteResult {
+  kind: string
+  reason?: string
+  nextCalled: boolean
+}
+
 export function createAgent(id = 'agent-1', origin?: 'subagent'): FakeAgent {
   return {
     id,
@@ -348,6 +355,39 @@ export class Harness {
 
   async turnStopping(turn = 1, agent: FakeAgent = this.agent): Promise<void> {
     await this.fire('agent/turn-stopping', [{ agent, turn, signal: new AbortController().signal }])
+  }
+
+  /** Fire `tools/pre-execute` and report the decision plus whether next() ran. */
+  async preExecute(
+    name: string,
+    args: unknown,
+    agent: FakeAgent = this.agent,
+  ): Promise<PreExecuteResult> {
+    const handlers = this.events.get('tools/pre-execute') ?? []
+    const next = vi.fn(async () => ({ kind: 'allow' as const }))
+    let decision: unknown = { kind: 'allow' }
+    for (const handler of handlers) {
+      decision = await handler(
+        {
+          agent,
+          arguments: args,
+          callId: 'call-1',
+          name,
+          rootCallId: 'root-1',
+          signal: new AbortController().signal,
+          token: Symbol('token'),
+        },
+        next,
+      )
+    }
+    const record = typeof decision === 'object' && decision !== null ? decision : {}
+    return {
+      kind: String((record as { kind?: unknown }).kind ?? 'allow'),
+      ...(typeof (record as { reason?: unknown }).reason === 'string'
+        ? { reason: (record as { reason: string }).reason }
+        : {}),
+      nextCalled: next.mock.calls.length > 0,
+    }
   }
 
   async toolResult(isError: boolean, agent: FakeAgent = this.agent): Promise<void> {

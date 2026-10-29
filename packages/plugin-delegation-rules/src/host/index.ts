@@ -14,8 +14,41 @@ import type {
   SubagentResult,
   SubagentRuntime,
 } from '@deepseek-ai/dsh-subagent'
-import type { JsonSchemaNode, ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type {
+  JsonSchemaNode,
+  PreToolDecision,
+  ToolDefinition,
+  ToolExecution,
+} from '@deepseek-ai/dsh-tools'
 import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
+import {
+  APPROVAL_MARKER_FILE,
+  type ApprovalCoverage,
+  type ApprovalRecordState,
+  approvalSummaryLine,
+  CHANGE_PATTERN,
+  computeApprovalCoverage,
+  DIGEST_PATTERN,
+  formatApprovalGapLines,
+  isReviewFinding,
+  type NumberedTask,
+  normalizeCheckboxes,
+  normalizeTaskText,
+  type PortableTaskReviewRecord,
+  parsePortableTaskReviewRecord,
+  parseReviewApprovalMarker,
+  parseTasksText,
+  portableTaskRecordDisplayPath,
+  portableTaskRecordPath,
+  REVIEWS_DIRECTORY,
+  type ReviewApprovalMarker,
+  type ReviewFinding,
+  recognizeArchiveCommands,
+  type ShellToken,
+  shellSegments,
+  TASK_ID_PATTERN,
+  unparseableCheckedLines,
+} from '../shared/approval.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -44,7 +77,7 @@ const PROVIDER_NAME = 'dsh-setup-delegation-rules'
  */
 const BUNDLED_SKILL_RANK = 600
 
-const assetsDirectory = fileURLToPath(new URL('../assets/delegation-rules', import.meta.url))
+const assetsDirectory = fileURLToPath(new URL('../../assets/delegation-rules', import.meta.url))
 
 /**
  * Catalog text; a test keeps it identical to the asset frontmatter. Kept short
@@ -79,8 +112,6 @@ const GATE_SOURCE_KIND = 'delegation-rules'
 
 const DELEGATION_DIR = '.dsh/delegation'
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const CHANGE_PATTERN = /^[a-z0-9][a-z0-9-]*$/
-const TASK_ID_PATTERN = /^[0-9a-f]{16}$/
 
 const DEFAULT_TIMEOUTS: TimeoutConfig = { review: 600_000, answer: 300_000, patch: 1_800_000 }
 const DEFAULT_FAILURE_STREAK = 3
@@ -555,13 +586,7 @@ interface GitServices {
   runGit: GitRunner
 }
 
-interface TaskInfo {
-  id: string
-  at: number
-  number: string
-  text: string
-  checked: boolean
-}
+type TaskInfo = NumberedTask
 
 interface ChangeInfo {
   name: string
@@ -650,12 +675,7 @@ interface PendingReviewView {
   record: string
 }
 
-interface Finding {
-  severity: 'P0' | 'P1'
-  title: string
-  evidence: string
-  fix: string
-}
+type Finding = ReviewFinding
 
 interface ProgressNote {
   taskId: string
@@ -694,14 +714,6 @@ type RecordState =
   | { kind: 'malformed'; error: string }
   | { kind: 'record'; record: ReviewRecord }
 
-function normalizeTaskText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
-}
-
-function taskIdOf(text: string): string {
-  return createHash('sha256').update(normalizeTaskText(text)).digest('hex').slice(0, 16)
-}
-
 function hashParts(parts: Array<string | Buffer>): string {
   const hash = createHash('sha256')
   for (const part of parts) {
@@ -711,24 +723,8 @@ function hashParts(parts: Array<string | Buffer>): string {
   return hash.digest('hex')
 }
 
-function parseTasksText(markdown: string): TaskInfo[] {
-  const tasks: TaskInfo[] = []
-  const pattern = /^\s*-\s*\[([ xX])\]\s+(\d+(?:\.\d+)*)\s+(.+?)\s*$/gm
-  for (const match of markdown.matchAll(pattern)) {
-    const [, mark = ' ', number = '', body = ''] = match
-    const text = normalizeTaskText(body)
-    tasks.push({ id: taskIdOf(text), at: match.index ?? 0, number, text, checked: mark !== ' ' })
-  }
-  return tasks
-}
-
 async function readTasks(changeDir: string): Promise<TaskInfo[]> {
   return parseTasksText(await readFile(join(changeDir, 'tasks.md'), 'utf8'))
-}
-
-/** Checkbox state only: a task tick alone never changes this normalized text. */
-function normalizeCheckboxes(markdown: string): string {
-  return markdown.replace(/^(\s*-\s*)\[[xX]\]/gm, '$1[ ]')
 }
 
 async function statSafe(path: string): Promise<'file' | 'directory' | undefined> {
@@ -864,8 +860,11 @@ async function specDigest(changeDir: string, signal?: AbortSignal): Promise<stri
     for (const entry of entries) {
       if (signal?.aborted === true) fail('spec digest was cancelled')
       const path = join(directory, entry.name)
-      if (entry.isDirectory()) await walk(path)
-      else if (entry.isFile()) files.push(path)
+      if (entry.isDirectory()) {
+        // The portable approval directory is not a change artifact.
+        if (relative(changeDir, path).split(sep).join('/') === REVIEWS_DIRECTORY) continue
+        await walk(path)
+      } else if (entry.isFile()) files.push(path)
     }
   }
   try {
@@ -1229,97 +1228,6 @@ function evidenceTarget(
   const rel = relative(activeDir, absolute)
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return undefined
   return target
-}
-
-interface ShellToken {
-  readonly value: string
-  readonly quoted: boolean
-}
-
-interface ShellSegment {
-  readonly tokens: readonly ShellToken[]
-}
-
-/** Quote-aware tokenizer: quoted text stays one argument and never becomes an operator. */
-function shellSegments(command: string): ShellSegment[] {
-  const segments: ShellSegment[] = []
-  let tokens: ShellToken[] = []
-  let value = ''
-  let quoted = false
-  let quote: '"' | "'" | null = null
-  const pushToken = (): void => {
-    if (value !== '' || quoted) {
-      tokens.push({ value, quoted })
-      value = ''
-      quoted = false
-    }
-  }
-  const pushSegment = (): void => {
-    pushToken()
-    if (tokens.length > 0) segments.push({ tokens })
-    tokens = []
-  }
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index] as string
-    if (quote !== null) {
-      if (char === quote) {
-        quote = null
-        quoted = true
-        continue
-      }
-      value += char
-      quoted = true
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      quoted = true
-      continue
-    }
-    if (char === '#') {
-      const newline = command.indexOf('\n', index)
-      if (newline < 0) {
-        index = command.length
-        break
-      }
-      index = newline
-      pushSegment()
-      continue
-    }
-    if (char === '\n' || char === '\r') {
-      pushSegment()
-      if (char === '\r' && command[index + 1] === '\n') index += 1
-      continue
-    }
-    if (/\s/u.test(char)) {
-      pushToken()
-      continue
-    }
-    if (char === ';') {
-      pushSegment()
-      continue
-    }
-    if (char === '|') {
-      if (command[index + 1] === '|') index += 1
-      pushSegment()
-      continue
-    }
-    if (char === '&' && command[index + 1] === '&') {
-      index += 1
-      pushSegment()
-      continue
-    }
-    if (char === '>') {
-      pushToken()
-      const operator = command[index + 1] === '>' ? '>>' : '>'
-      tokens.push({ value: operator, quoted: false })
-      if (operator === '>>') index += 1
-      continue
-    }
-    value += char
-  }
-  pushSegment()
-  return segments
 }
 
 const CONTROL_COMMANDS = new Set([
@@ -1701,7 +1609,7 @@ interface InputSignature {
   entries: Map<string, string>
 }
 
-const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml'])
+const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml', REVIEWS_DIRECTORY])
 
 /** Stat signature (size + nanosecond mtime/ctime) for one reviewed path. */
 async function inputStat(path: string): Promise<string> {
@@ -1730,7 +1638,9 @@ async function inputSignature(
       )
     }
     for (const entry of dirents) {
-      if (excludes.has(entry.name)) continue
+      // Exclusions are change-root entries: a nested `reviews/` or
+      // `.openspec.yaml` is a normal artifact and stays reviewed.
+      if (prefix === '' && excludes.has(entry.name)) continue
       const name = prefix === '' ? entry.name : `${prefix}/${entry.name}`
       const absolute = join(directory, entry.name)
       if (entry.isDirectory()) {
@@ -1865,19 +1775,6 @@ function resolveTaskArgument(change: ChangeInfo, tasks: TaskInfo[], wanted: stri
   return match
 }
 
-function isFinding(value: unknown): value is Finding {
-  if (!isRecord(value)) return false
-  return (
-    (value.severity === 'P0' || value.severity === 'P1') &&
-    typeof value.title === 'string' &&
-    value.title !== '' &&
-    typeof value.evidence === 'string' &&
-    value.evidence !== '' &&
-    typeof value.fix === 'string' &&
-    value.fix !== ''
-  )
-}
-
 function parseRecord(value: unknown): ReviewRecord | undefined {
   if (!isRecord(value)) return undefined
   if (
@@ -1886,10 +1783,10 @@ function parseRecord(value: unknown): ReviewRecord | undefined {
     typeof value.phase !== 'string' ||
     (value.scope !== 'whole' && value.scope !== 'task') ||
     typeof value.digest !== 'string' ||
-    !/^[0-9a-f]{64}$/.test(value.digest) ||
+    !DIGEST_PATTERN.test(value.digest) ||
     (value.verdict !== 'PASS' && value.verdict !== 'FINDINGS' && value.verdict !== 'ERROR') ||
     !Array.isArray(value.findings) ||
-    !value.findings.every(isFinding) ||
+    !value.findings.every(isReviewFinding) ||
     !isRecord(value.target) ||
     typeof value.target.provider !== 'string' ||
     typeof value.time !== 'string'
@@ -1991,6 +1888,105 @@ async function inspectNote(
   } catch {
     return { kind: 'malformed' }
   }
+}
+
+/** The task-review rule whose portable PASS is the approval. */
+async function approvalRuleId(
+  config: EngineConfig,
+  openspecRoot: string,
+): Promise<{ id: string } | { error: string }> {
+  const path = join(openspecRoot, APPROVAL_MARKER_FILE)
+  let raw: string | undefined
+  try {
+    raw = await readFile(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` }
+    }
+  }
+  let marker: ReviewApprovalMarker | undefined
+  if (raw !== undefined) {
+    try {
+      const parsed = parseReviewApprovalMarker(JSON.parse(raw))
+      if (parsed.marker === undefined) {
+        return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` }
+      }
+      marker = parsed.marker
+    } catch (error) {
+      return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` }
+    }
+  }
+  if (marker !== undefined) {
+    const rule = config.rules.find((entry) => entry.id === marker?.taskRule)
+    if (rule === undefined) {
+      return { error: `marker taskRule "${marker.taskRule}" is not a configured rule` }
+    }
+    if (rule.contract !== 'review' || rule.scope !== 'task') {
+      return { error: `marker taskRule "${rule.id}" is not a task-scoped review rule` }
+    }
+    if (rule.gate !== 'strict') {
+      return { error: `marker taskRule "${rule.id}" is not a strict rule` }
+    }
+    return { id: rule.id }
+  }
+  const taskRules = config.rules.filter(
+    (rule) =>
+      rule.when === 'spec-task-ready' && rule.contract === 'review' && rule.scope === 'task',
+  )
+  const strict = taskRules.find((rule) => rule.gate === 'strict')
+  if (strict !== undefined) return { id: strict.id }
+  const fallback = taskRules[0]
+  return fallback === undefined
+    ? { error: 'no task-scoped review rule is configured' }
+    : { id: fallback.id }
+}
+
+async function inspectPortableRecord(
+  changeDir: string,
+  taskId: string,
+): Promise<ApprovalRecordState> {
+  let raw: string
+  try {
+    raw = await readFile(portableTaskRecordPath(changeDir, taskId), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    return { kind: 'malformed', error: errorMessage(error) }
+  }
+  try {
+    const parsed = parsePortableTaskReviewRecord(JSON.parse(raw))
+    return parsed.record === undefined
+      ? { kind: 'malformed', error: parsed.error ?? 'record shape is invalid' }
+      : { kind: 'record', record: parsed.record }
+  } catch (error) {
+    return { kind: 'malformed', error: errorMessage(error) }
+  }
+}
+
+/** PASS-only coverage over every checked task, independent of session attribution. */
+async function changeApproval(
+  config: EngineConfig,
+  change: ChangeInfo,
+  openspecRoot: string,
+  tasks: TaskInfo[],
+): Promise<{ coverage: ApprovalCoverage } | { error: string }> {
+  const rule = await approvalRuleId(config, openspecRoot)
+  if ('error' in rule) return rule
+  let markdown: string
+  try {
+    markdown = await readFile(join(change.dir, 'tasks.md'), 'utf8')
+  } catch (error) {
+    return { error: `change "${change.name}" has no readable tasks.md: ${errorMessage(error)}` }
+  }
+  const coverage = await computeApprovalCoverage({
+    change: change.name,
+    rule: rule.id,
+    tasks,
+    unparseable: unparseableCheckedLines(markdown),
+    recordPath: (taskId) =>
+      portableTaskRecordDisplayPath(`openspec/changes/${change.name}`, taskId),
+    inspect: (taskId) => inspectPortableRecord(change.dir, taskId),
+  })
+  return { coverage }
 }
 
 interface ParsedVerdict {
@@ -2875,6 +2871,30 @@ class DelegationEngine {
         time: this.now(),
         ...(fields.error === undefined ? {} : { error: fields.error }),
       }
+      if (record.scope === 'task' && record.verdict === 'PASS' && record.taskId !== undefined) {
+        // The portable approval is committed with the change; write it before
+        // the local PASS so a failed write can never publish an approval.
+        const path = portableTaskRecordPath(run.context.change.dir, record.taskId)
+        const portable: PortableTaskReviewRecord = {
+          rule: record.rule,
+          change: record.change,
+          scope: 'task',
+          taskId: record.taskId,
+          digest: record.digest,
+          ...(record.worktreeDigest === undefined ? {} : { worktreeDigest: record.worktreeDigest }),
+          verdict: 'PASS',
+          findings: [],
+          target: record.target,
+          time: record.time,
+        }
+        try {
+          await writeJsonAtomic(path, portable)
+        } catch (error) {
+          fail(
+            `could not write the portable approval record at ${relativePath(run.context.cwd, path)}: ${errorMessage(error)}; no PASS record was published`,
+          )
+        }
+      }
       await writeJsonAtomic(run.recordPath, record)
       return record
     } finally {
@@ -3050,6 +3070,15 @@ class DelegationEngine {
       if (recordSatisfies(state, change.name, 'task', undefined, taskId)) return true
     }
     return false
+  }
+
+  /** PASS-only approval over every checked task, independent of session attribution. */
+  private async changeApproval(
+    change: ChangeInfo,
+    openspecRoot: string,
+    tasks: TaskInfo[],
+  ): Promise<{ coverage: ApprovalCoverage } | { error: string }> {
+    return changeApproval(this.config, change, openspecRoot, tasks)
   }
 
   private async runPatch(
@@ -3298,6 +3327,16 @@ class DelegationEngine {
           lines.push(
             `  ${rule.id}: ${reviewed.size}/${checked.length} checked task(s) with a PASS/ERROR record`,
           )
+        }
+        const approval = await this.changeApproval(change, openspecRoot, tasks)
+        if ('error' in approval) {
+          lines.push(
+            `  task approval: unavailable (${sanitizeText(approval.error, MAX_ERROR_CHARS)})`,
+          )
+        } else {
+          const coverage = approval.coverage
+          lines.push(`  task approval: ${approvalSummaryLine(coverage)}`)
+          for (const gap of formatApprovalGapLines(coverage)) lines.push(`  ${gap}`)
         }
         const note = await inspectNote(cwd, change.name)
         if (note.kind === 'note') {
@@ -3566,6 +3605,50 @@ async function evaluateGate(
         }
       }
 
+      // The completing session must obtain an approval for every checked task,
+      // not only the tasks its own tick attributed.
+      if (
+        entry.completed &&
+        taskRules.length > 0 &&
+        tasks.length > 0 &&
+        tasks.every((task) => task.checked)
+      ) {
+        const approval = await changeApproval(deps.config, change, openspecRoot, tasks)
+        if ('error' in approval) {
+          pushStrict(
+            (strictTaskRule ?? softTaskRule)?.id ?? 'task-review',
+            `completion of change "${change.name}" requires a portable task-review PASS for every checked task, but the approval could not be evaluated: ${approval.error}`,
+            `repair openspec/changes/${change.name} (or ${APPROVAL_MARKER_FILE}) and run the task reviews`,
+          )
+        } else {
+          for (const line of approval.coverage.unparseable) {
+            pushStrict(
+              approval.coverage.rule,
+              `completion of change "${change.name}" cannot be approved: checked line ${line.line} "${line.text}" is not a numbered task`,
+              `fix the checked line in openspec/changes/${change.name}/tasks.md`,
+            )
+          }
+          for (const task of approval.coverage.tasks) {
+            if (task.state === 'pass') continue
+            const ruleId = approval.coverage.rule
+            const pending = pendingFor(ruleId, change.name, task.id)
+            const detail =
+              pending !== undefined
+                ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
+                : (task.detail ?? 'it has no portable PASS record')
+            const text = `rule "${ruleId}": the task list of change "${change.name}" is fully checked, so completion requires a portable task-review PASS for checked task "${task.number} ${task.text}"; ${detail}.`
+            const call =
+              pending === undefined
+                ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
+                : `delegation_status (run ${pending.id})`
+            if (strictTaskRule !== undefined) pushStrict(ruleId, text, call)
+            else if (softTaskRule !== undefined) {
+              pushSoft(`completion:${change.name}:${task.id}`, ruleId, text, call)
+            }
+          }
+        }
+      }
+
       const workRules = deps.config.rules.filter(
         (rule) => rule.when === 'implementation-work' && rule.contract === 'note',
       )
@@ -3675,6 +3758,120 @@ async function evaluateGate(
   agent.steer(gateMessage(lines.join('\n')))
 }
 
+interface ShellInvocation {
+  command: string
+  cwd?: string
+}
+
+/** The shell command a tool execution runs, if it is one the guard understands. */
+function archiveShellInvocation(exec: ToolExecution): ShellInvocation | undefined {
+  const args = isRecord(exec.arguments) ? exec.arguments : {}
+  if (exec.name === 'terminal_send') {
+    return typeof args.text === 'string' ? { command: args.text } : undefined
+  }
+  if (exec.name !== 'pwsh' && exec.name !== 'bash') return undefined
+  if (typeof args.command !== 'string') return undefined
+  return typeof args.workdir === 'string'
+    ? { command: args.command, cwd: args.workdir }
+    : { command: args.command }
+}
+
+function archiveDenial(reason: string): PreToolDecision {
+  return { kind: 'deny', reason }
+}
+
+/**
+ * The opt-in archive gate: refuses the documented archive forms before they
+ * run when a checked task lacks a portable task-review PASS. It applies to
+ * subagents too; only the turn-stopping gate skips them.
+ */
+async function archiveGateDecision(
+  deps: GateDeps,
+  exec: ToolExecution,
+): Promise<PreToolDecision | undefined> {
+  if (exec.agent === undefined) return undefined
+  const invocation = archiveShellInvocation(exec)
+  if (invocation === undefined) return undefined
+  const sessionCwd = deps.services.workingDirectory.get(exec.agent.session)
+  const executionCwd =
+    invocation.cwd === undefined ? sessionCwd : resolve(sessionCwd, invocation.cwd)
+  const intents = recognizeArchiveCommands(invocation.command, executionCwd)
+  if (intents.length === 0) return undefined
+  const openspecRoot = findOpenSpecRootSync(executionCwd)
+  if (openspecRoot === undefined) return undefined
+  const markerPath = join(openspecRoot, APPROVAL_MARKER_FILE)
+  let raw: string
+  try {
+    raw = await readFile(markerPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    return archiveDenial(
+      `archive refused: the approval marker at ${relativePath(sessionCwd, markerPath)} is unreadable (${errorMessage(error)}); nothing was archived.`,
+    )
+  }
+  let marker: ReviewApprovalMarker
+  try {
+    const parsed = parseReviewApprovalMarker(JSON.parse(raw))
+    if (parsed.marker === undefined) {
+      return archiveDenial(
+        `archive refused: ${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}; nothing was archived.`,
+      )
+    }
+    marker = parsed.marker
+  } catch (error) {
+    return archiveDenial(
+      `archive refused: ${APPROVAL_MARKER_FILE} is not valid JSON (${errorMessage(error)}); nothing was archived.`,
+    )
+  }
+  if (!marker.archiveGate) return undefined
+  const rule = deps.config.rules.find((entry) => entry.id === marker.taskRule)
+  if (rule === undefined) {
+    return archiveDenial(
+      `archive refused: marker taskRule "${marker.taskRule}" is not a configured rule; add it or fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`,
+    )
+  }
+  if (rule.contract !== 'review' || rule.scope !== 'task') {
+    return archiveDenial(
+      `archive refused: marker taskRule "${rule.id}" is not a task-scoped review rule; fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`,
+    )
+  }
+  if (rule.gate !== 'strict') {
+    return archiveDenial(
+      `archive refused: marker taskRule "${rule.id}" is not a strict rule; fix ${APPROVAL_MARKER_FILE}. Nothing was archived.`,
+    )
+  }
+  const gaps: string[] = []
+  for (const intent of intents) {
+    const change = await readChange(openspecRoot, intent.change)
+    if (change === undefined) continue
+    let tasks: TaskInfo[]
+    try {
+      tasks = await readTasks(change.dir)
+    } catch (error) {
+      return archiveDenial(
+        `archive refused: change "${change.name}" has no readable tasks.md (${errorMessage(error)}); nothing was archived.`,
+      )
+    }
+    const approval = await changeApproval(deps.config, change, openspecRoot, tasks)
+    if ('error' in approval) {
+      return archiveDenial(
+        `archive refused: change "${change.name}": ${approval.error}; nothing was archived.`,
+      )
+    }
+    if (approval.coverage.archiveReady) continue
+    gaps.push(
+      `archive refused: change "${change.name}" is not approval-complete (${approvalSummaryLine(approval.coverage)}).`,
+      ...formatApprovalGapLines(approval.coverage).map((line) => `  ${line}`),
+    )
+  }
+  if (gaps.length === 0) return undefined
+  gaps.push(
+    'Nothing was archived: the change remains active. Fix the lines above, run the exact delegate calls, then archive again.',
+    'Full audit: pnpm reviews:check --all',
+  )
+  return archiveDenial(gaps.join('\n'))
+}
+
 interface GateWiring {
   ctx: Context
   deps: GateDeps
@@ -3728,6 +3925,20 @@ function attachGate({ ctx, deps }: GateWiring): void {
         // The gate never throws into the turn.
       }
     }
+  })
+
+  // Archive guard: deny the documented archive forms before any effect. It
+  // applies to subagents too, unlike the turn-stopping gate.
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    try {
+      const decision = await archiveGateDecision(deps, exec)
+      if (decision !== undefined) return decision
+    } catch (error) {
+      return archiveDenial(
+        `archive refused: the delegation-rules archive gate could not evaluate this command (${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}); nothing was archived.`,
+      )
+    }
+    return await next()
   })
 }
 

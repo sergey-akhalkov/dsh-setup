@@ -3,9 +3,9 @@
   "compilerOptions": {
     "composite": true,
     "declaration": true,
-    "rootDir": "src/host",
+    "rootDir": "src",
     "outDir": "lib",
     "types": ["node"]
   },
-  "include": ["src/host/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }

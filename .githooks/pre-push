@@ -1,0 +1,9 @@
+#!/bin/sh
+# Validate the archived changes' portable task-review approvals before a push.
+# The audit fails closed: an unknown commit range or unreadable evidence refuses
+# the push and points at `pnpm reviews:check --all`.
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pre-push: pnpm was not found; run 'pnpm reviews:check --all' manually (fails closed)." >&2
+  exit 1
+fi
+exec pnpm reviews:check --push

@@ -609,15 +609,16 @@ describe('session-scoped triggers', () => {
     const dir = await writeChange(root, 'change-a', [
       { number: '1.1', text: 'First task' },
       { number: '1.2', text: 'Second task' },
+      { number: '1.3', text: 'Open task' },
     ])
     const harness = harnessFor(root, taskOnly())
     const a = first()
     const b = second()
     await harness.preStep(1, a)
     await harness.preStep(1, b)
-    const before = '# Tasks\n\n- [ ] 1.1 First task\n- [ ] 1.2 Second task\n'
-    const afterA = '# Tasks\n\n- [x] 1.1 First task\n- [ ] 1.2 Second task\n'
-    const afterB = '# Tasks\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n'
+    const before = '# Tasks\n\n- [ ] 1.1 First task\n- [ ] 1.2 Second task\n- [ ] 1.3 Open task\n'
+    const afterA = '# Tasks\n\n- [x] 1.1 First task\n- [ ] 1.2 Second task\n- [ ] 1.3 Open task\n'
+    const afterB = '# Tasks\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n- [ ] 1.3 Open task\n'
     await harness.writeResult(join(dir, 'tasks.md'), before, afterA, a, 'edit')
     await writeFile(join(dir, 'tasks.md'), afterA)
     await harness.writeResult(join(dir, 'tasks.md'), afterA, afterB, b, 'edit')
@@ -836,15 +837,16 @@ describe('session-scoped triggers', () => {
     const dir = await writeChange(root, 'change-a', [
       { number: '1.1', text: 'First task' },
       { number: '1.2', text: 'Second task' },
+      { number: '1.3', text: 'Open task' },
     ])
     const harness = harnessFor(root, taskOnly())
     const a = first()
     const b = second()
     await harness.preStep(1, a)
     await harness.preStep(1, b)
-    const before = '# Tasks\n\n- [ ] 1.1 First task\n- [ ] 1.2 Second task\n'
-    const afterB = '# Tasks\n\n- [x] 1.1 First task\n- [ ] 1.2 Second task\n'
-    const afterA = '# Tasks\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n'
+    const before = '# Tasks\n\n- [ ] 1.1 First task\n- [ ] 1.2 Second task\n- [ ] 1.3 Open task\n'
+    const afterB = '# Tasks\n\n- [x] 1.1 First task\n- [ ] 1.2 Second task\n- [ ] 1.3 Open task\n'
+    const afterA = '# Tasks\n\n- [x] 1.1 First task\n- [x] 1.2 Second task\n- [ ] 1.3 Open task\n'
     await harness.writeResult(join(dir, 'tasks.md'), before, afterB, b, 'edit')
     await writeFile(join(dir, 'tasks.md'), afterB)
     await harness.writeResult(join(dir, 'tasks.md'), afterB, afterA, a, 'edit')

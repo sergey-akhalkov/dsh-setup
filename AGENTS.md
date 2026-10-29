@@ -90,6 +90,15 @@ immediately run its task-scoped review before the next task; stop mid-task with 
 instead of ticking. The gate refuses a code-changing turn without that; see
 [docs/delegation-rules.md](docs/delegation-rules.md).
 
+A checked task is approved only by a committed `openspec/changes/<change>/reviews/<taskId>.json`
+task-review PASS. When `openspec/review-approval.json` sets `archiveGate: true`, the engine refuses
+`openspec archive` and `mv`/`Move-Item`/`git mv` into `changes/archive/` until every checked task has
+one; run `pnpm reviews:check --change <name>` before archiving and `pnpm reviews:check --all` before
+release. Install the pre-push hook once per clone with `pnpm hooks:install` (it runs
+`pnpm reviews:check --push`); both CI workflows run `--all` with full history. See
+[docs/delegation-rules.md](docs/delegation-rules.md#portable-task-approvals) and
+[docs/contributing.md](docs/contributing.md#review-approval-and-the-archive-gate).
+
 Change history, archived task counts, and open owner follow-ups:
 [docs/openspec-status.md](docs/openspec-status.md).
 

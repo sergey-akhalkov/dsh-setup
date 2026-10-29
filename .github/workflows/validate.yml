@@ -38,6 +38,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 11.28.5: pnpm 11.9.0 can leave an install process alive after printing
       # "Done in ..." (pnpm#13617), which hung the installer exercise on CI.
@@ -88,6 +90,11 @@ jobs:
 
       - name: Validate repository manifests and scans
         run: pnpm validate:repo
+
+      # Reports the v0.12.0 exception and the pre-cutoff baseline; fails only
+      # for a post-cutoff archive without approved checked tasks.
+      - name: Audit archived review approvals
+        run: pnpm reviews:check --all
 
       - name: Validate the composed profile with the published DSH CLI
         run: pnpm validate:composition

@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "add-review-approval-gate",
+  "scope": "task",
+  "taskId": "03baed9612e48d71",
+  "digest": "642881c68dfcfd7410f48da1037fdb04ff3ef4b1fbeb4c57f0472d1fca83e728",
+  "worktreeDigest": "1bd02ca3d1299f6960398397e9f8f5a26569586627e77d5c232cf90b73213ab7",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent"
+  },
+  "time": "2026-10-29T12:57:50.416Z"
+}
