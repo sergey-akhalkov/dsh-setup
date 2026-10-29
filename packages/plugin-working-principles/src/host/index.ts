@@ -85,13 +85,11 @@ function skillAdapterNote(): string {
   ].join('\n')
 }
 
-function alwaysOnFooter(): string {
+export function alwaysOnFooter(): string {
   return [
     '',
     '',
-    '---',
-    '',
-    'Always-on note: this working contract ships with @dsh-setup/plugin-working-principles and applies by default in this deployment. Say "stop working principles" or "normal mode" to suspend it for the rest of the session. Turn the section off permanently with `alwaysOn: false` on the row. It does not restate the installed lazy-dev ruleset, which remains in force.',
+    'Always-on: this contract ships in @dsh-setup/plugin-working-principles. Say "stop working principles" or "normal mode" to suspend it; set `alwaysOn: false` on the row to disable it.',
   ].join('\n')
 }
 

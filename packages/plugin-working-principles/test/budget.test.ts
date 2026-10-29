@@ -2,43 +2,45 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { alwaysOnFooter } from '../lib/index.js'
 
 /**
  * The always-on contract is paid on every model step of every session, so its
  * size is a hard budget rather than a preference. A token is estimated as one
- * quarter of the UTF-8 byte count, the same metric the documentation uses.
+ * quarter of the UTF-8 byte count, the same metric the documentation uses. The
+ * registered section includes the footer, so both are measured.
  */
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const contractPath = join(packageDir, 'assets', 'working-principles', 'contract.md')
-const bytes = Buffer.byteLength(readFileSync(contractPath, 'utf8'), 'utf8')
-const estimatedTokens = bytes / 4
+const contract = readFileSync(contractPath, 'utf8')
+const sectionBytes = Buffer.byteLength(`${contract}${alwaysOnFooter()}`, 'utf8')
+const contractBytes = Buffer.byteLength(contract, 'utf8')
+const estimatedTokens = sectionBytes / 4
 
 const BUDGET_TOKENS = 1500
 const MINIMUM_BYTES = 3200
-const MAXIMUM_BYTES = 5980
+const MAXIMUM_BYTES = 5850
 
 describe('always-on contract budget', () => {
   it('stays inside the documented per-step budget', () => {
     expect(
       estimatedTokens,
-      `assets/working-principles/contract.md is ${bytes} bytes (~${Math.round(estimatedTokens)} estimated tokens), over the ${BUDGET_TOKENS}-token budget`,
+      `the registered working-principles section is ${sectionBytes} bytes (~${Math.round(estimatedTokens)} estimated tokens), over the ${BUDGET_TOKENS}-token budget`,
     ).toBeLessThanOrEqual(BUDGET_TOKENS)
   })
 
-  it('stays within the reviewed size range', () => {
-    expect(bytes).toBeGreaterThanOrEqual(MINIMUM_BYTES)
-    expect(bytes).toBeLessThanOrEqual(MAXIMUM_BYTES)
+  it('stays within the reviewed contract size range', () => {
+    expect(contractBytes).toBeGreaterThanOrEqual(MINIMUM_BYTES)
+    expect(contractBytes).toBeLessThanOrEqual(MAXIMUM_BYTES)
   })
 
   it('names no invocation the Harness does not provide', () => {
-    const text = readFileSync(contractPath, 'utf8')
-    expect(text).not.toMatch(/`\/[a-z-]+/)
+    expect(contract).not.toMatch(/`\/[a-z-]+/)
   })
 
   it('states the goal-round continuation policy in the existing section', () => {
-    const text = readFileSync(contractPath, 'utf8')
-    const section = text.split('## Recover instead of repeating')[1] ?? ''
+    const section = contract.split('## Recover instead of repeating')[1] ?? ''
     expect(section).toContain('`job_output(wait: true)`')
     expect(section).toContain('three consecutive rounds')
     expect(section).toContain('user-only')
@@ -52,13 +54,12 @@ describe('always-on contract budget', () => {
   })
 
   it('states the user-only blocker, means, and scope rules', () => {
-    const text = readFileSync(contractPath, 'utf8')
-    const scope = text.split('## Scope belongs to the user')[1]?.split('## Delegate')[0] ?? ''
+    const scope = contract.split('## Scope belongs to the user')[1]?.split('## Delegate')[0] ?? ''
     expect(scope).toContain('is a means')
     expect(scope).toContain('test-only activation')
     expect(scope).toContain('production behavior change')
     expect(scope).toContain('scope decision')
-    expect(text).toContain('never converted into a permission request')
-    expect(text).toContain('foreign or stale grant')
+    expect(contract).toContain('never converted into a permission request')
+    expect(contract).toContain('foreign or stale grant')
   })
 })
