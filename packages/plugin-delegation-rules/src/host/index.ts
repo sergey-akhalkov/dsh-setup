@@ -16,6 +16,19 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { JsonSchemaNode, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
+import {
+  CHANGE_PATTERN,
+  DIGEST_PATTERN,
+  isReviewFinding,
+  type NumberedTask,
+  normalizeCheckboxes,
+  normalizeTaskText,
+  parseTasksText,
+  type ReviewFinding,
+  type ShellToken,
+  shellSegments,
+  TASK_ID_PATTERN,
+} from '../shared/approval.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -44,7 +57,7 @@ const PROVIDER_NAME = 'dsh-setup-delegation-rules'
  */
 const BUNDLED_SKILL_RANK = 600
 
-const assetsDirectory = fileURLToPath(new URL('../assets/delegation-rules', import.meta.url))
+const assetsDirectory = fileURLToPath(new URL('../../assets/delegation-rules', import.meta.url))
 
 /**
  * Catalog text; a test keeps it identical to the asset frontmatter. Kept short
@@ -79,8 +92,6 @@ const GATE_SOURCE_KIND = 'delegation-rules'
 
 const DELEGATION_DIR = '.dsh/delegation'
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const CHANGE_PATTERN = /^[a-z0-9][a-z0-9-]*$/
-const TASK_ID_PATTERN = /^[0-9a-f]{16}$/
 
 const DEFAULT_TIMEOUTS: TimeoutConfig = { review: 600_000, answer: 300_000, patch: 1_800_000 }
 const DEFAULT_FAILURE_STREAK = 3
@@ -555,13 +566,7 @@ interface GitServices {
   runGit: GitRunner
 }
 
-interface TaskInfo {
-  id: string
-  at: number
-  number: string
-  text: string
-  checked: boolean
-}
+type TaskInfo = NumberedTask
 
 interface ChangeInfo {
   name: string
@@ -650,12 +655,7 @@ interface PendingReviewView {
   record: string
 }
 
-interface Finding {
-  severity: 'P0' | 'P1'
-  title: string
-  evidence: string
-  fix: string
-}
+type Finding = ReviewFinding
 
 interface ProgressNote {
   taskId: string
@@ -694,14 +694,6 @@ type RecordState =
   | { kind: 'malformed'; error: string }
   | { kind: 'record'; record: ReviewRecord }
 
-function normalizeTaskText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
-}
-
-function taskIdOf(text: string): string {
-  return createHash('sha256').update(normalizeTaskText(text)).digest('hex').slice(0, 16)
-}
-
 function hashParts(parts: Array<string | Buffer>): string {
   const hash = createHash('sha256')
   for (const part of parts) {
@@ -711,24 +703,8 @@ function hashParts(parts: Array<string | Buffer>): string {
   return hash.digest('hex')
 }
 
-function parseTasksText(markdown: string): TaskInfo[] {
-  const tasks: TaskInfo[] = []
-  const pattern = /^\s*-\s*\[([ xX])\]\s+(\d+(?:\.\d+)*)\s+(.+?)\s*$/gm
-  for (const match of markdown.matchAll(pattern)) {
-    const [, mark = ' ', number = '', body = ''] = match
-    const text = normalizeTaskText(body)
-    tasks.push({ id: taskIdOf(text), at: match.index ?? 0, number, text, checked: mark !== ' ' })
-  }
-  return tasks
-}
-
 async function readTasks(changeDir: string): Promise<TaskInfo[]> {
   return parseTasksText(await readFile(join(changeDir, 'tasks.md'), 'utf8'))
-}
-
-/** Checkbox state only: a task tick alone never changes this normalized text. */
-function normalizeCheckboxes(markdown: string): string {
-  return markdown.replace(/^(\s*-\s*)\[[xX]\]/gm, '$1[ ]')
 }
 
 async function statSafe(path: string): Promise<'file' | 'directory' | undefined> {
@@ -1229,97 +1205,6 @@ function evidenceTarget(
   const rel = relative(activeDir, absolute)
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return undefined
   return target
-}
-
-interface ShellToken {
-  readonly value: string
-  readonly quoted: boolean
-}
-
-interface ShellSegment {
-  readonly tokens: readonly ShellToken[]
-}
-
-/** Quote-aware tokenizer: quoted text stays one argument and never becomes an operator. */
-function shellSegments(command: string): ShellSegment[] {
-  const segments: ShellSegment[] = []
-  let tokens: ShellToken[] = []
-  let value = ''
-  let quoted = false
-  let quote: '"' | "'" | null = null
-  const pushToken = (): void => {
-    if (value !== '' || quoted) {
-      tokens.push({ value, quoted })
-      value = ''
-      quoted = false
-    }
-  }
-  const pushSegment = (): void => {
-    pushToken()
-    if (tokens.length > 0) segments.push({ tokens })
-    tokens = []
-  }
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index] as string
-    if (quote !== null) {
-      if (char === quote) {
-        quote = null
-        quoted = true
-        continue
-      }
-      value += char
-      quoted = true
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      quoted = true
-      continue
-    }
-    if (char === '#') {
-      const newline = command.indexOf('\n', index)
-      if (newline < 0) {
-        index = command.length
-        break
-      }
-      index = newline
-      pushSegment()
-      continue
-    }
-    if (char === '\n' || char === '\r') {
-      pushSegment()
-      if (char === '\r' && command[index + 1] === '\n') index += 1
-      continue
-    }
-    if (/\s/u.test(char)) {
-      pushToken()
-      continue
-    }
-    if (char === ';') {
-      pushSegment()
-      continue
-    }
-    if (char === '|') {
-      if (command[index + 1] === '|') index += 1
-      pushSegment()
-      continue
-    }
-    if (char === '&' && command[index + 1] === '&') {
-      index += 1
-      pushSegment()
-      continue
-    }
-    if (char === '>') {
-      pushToken()
-      const operator = command[index + 1] === '>' ? '>>' : '>'
-      tokens.push({ value: operator, quoted: false })
-      if (operator === '>>') index += 1
-      continue
-    }
-    value += char
-  }
-  pushSegment()
-  return segments
 }
 
 const CONTROL_COMMANDS = new Set([
@@ -1865,19 +1750,6 @@ function resolveTaskArgument(change: ChangeInfo, tasks: TaskInfo[], wanted: stri
   return match
 }
 
-function isFinding(value: unknown): value is Finding {
-  if (!isRecord(value)) return false
-  return (
-    (value.severity === 'P0' || value.severity === 'P1') &&
-    typeof value.title === 'string' &&
-    value.title !== '' &&
-    typeof value.evidence === 'string' &&
-    value.evidence !== '' &&
-    typeof value.fix === 'string' &&
-    value.fix !== ''
-  )
-}
-
 function parseRecord(value: unknown): ReviewRecord | undefined {
   if (!isRecord(value)) return undefined
   if (
@@ -1886,10 +1758,10 @@ function parseRecord(value: unknown): ReviewRecord | undefined {
     typeof value.phase !== 'string' ||
     (value.scope !== 'whole' && value.scope !== 'task') ||
     typeof value.digest !== 'string' ||
-    !/^[0-9a-f]{64}$/.test(value.digest) ||
+    !DIGEST_PATTERN.test(value.digest) ||
     (value.verdict !== 'PASS' && value.verdict !== 'FINDINGS' && value.verdict !== 'ERROR') ||
     !Array.isArray(value.findings) ||
-    !value.findings.every(isFinding) ||
+    !value.findings.every(isReviewFinding) ||
     !isRecord(value.target) ||
     typeof value.target.provider !== 'string' ||
     typeof value.time !== 'string'
