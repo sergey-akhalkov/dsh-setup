@@ -8,6 +8,8 @@ export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './
 export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
 export type { ExportErrorCode } from './export-errors.js';
 export { ExportError, messageOf } from './export-errors.js';
+export type { CommitOptions, GitBootstrapOptions, GitBootstrapResult, GitRunOptions, GitRunResult, } from './export-git.js';
+export { bootstrapRepository, commitSnapshot, currentBranch, EXPORT_GIT_IDENTITY, EXPORT_GITIGNORE, gitOutput, hasCommits, } from './export-git.js';
 export type { BankSnapshotInput, LockOptions, SnapshotLock, SnapshotOptions, SnapshotResult, } from './export-snapshot.js';
 export { acquireSnapshotLock, DEFAULT_LOCK_STALE_MS, LOCK_FILE, normalizedContentHash, PENDING_FILE, recoverPendingSnapshot, STAGING_DIR, writeSnapshot, } from './export-snapshot.js';
 export type { ArchiveEntries } from './export-zip.js';

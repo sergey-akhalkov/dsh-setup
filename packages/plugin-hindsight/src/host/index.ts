@@ -47,6 +47,22 @@ export {
 export type { ExportErrorCode } from './export-errors.js'
 export { ExportError, messageOf } from './export-errors.js'
 export type {
+  CommitOptions,
+  GitBootstrapOptions,
+  GitBootstrapResult,
+  GitRunOptions,
+  GitRunResult,
+} from './export-git.js'
+export {
+  bootstrapRepository,
+  commitSnapshot,
+  currentBranch,
+  EXPORT_GIT_IDENTITY,
+  EXPORT_GITIGNORE,
+  gitOutput,
+  hasCommits,
+} from './export-git.js'
+export type {
   BankSnapshotInput,
   LockOptions,
   SnapshotLock,
