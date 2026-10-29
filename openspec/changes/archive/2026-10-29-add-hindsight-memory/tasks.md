@@ -36,7 +36,7 @@
 
 ## 5. Integration verification
 
-- [ ] 5.1 Run `pnpm check`, `pnpm gen:check`, and `pnpm validate:repo` from a clean tree. Verify all pass and `git diff --exit-code` is clean after `pnpm build`.
+- [x] 5.1 Run `pnpm check`, `pnpm gen:check`, and `pnpm validate:repo` from a clean tree. Verify all pass and `git diff --exit-code` is clean after `pnpm build`.
 - [x] 5.2 Run `pnpm validate:composition` against the published DSH CLI and a throwaway profile. Verify the profile install fetches the exact Hindsight package, the `dsh-setup-hindsight` row composes with its config, and no other package is fetched for the wrapper.
 - [x] 5.3 Run `pnpm validate:installer` and `pnpm dogfood`. Verify both pass, the live profile is untouched, and the throwaway composition includes the new row and dependency.
 
@@ -44,8 +44,8 @@
 
 - [x] 6.1 Prepare the release candidate: run `pnpm release:prepare --version 0.11.0`, rebuild, run the full validation (`pnpm build`, `pnpm validate`, `git diff --exit-code`, `pnpm gen:check`), and keep the version bump plus regenerated setup artifacts uncommitted until the live acceptance passes. Verify every package reports `0.11.0`.
 - [ ] 6.2 On the owner machine, against the local `hindsight-embed` daemon provisioned in group 4, install the release candidate into an isolated profile and run the documented live acceptance: first session retains a fact, a fresh session recalls it or reads the matching knowledge page, `hindsight_diagnose`/`hindsight_sync_status` name the loopback endpoint, disabling the row removes the tools and injection, and re-enabling after a full Harness restart restores them. Record the result; a failure blocks the release.
-- [ ] 6.3 Commit the release candidate, push the commit and tag `v0.11.0`, read the release workflow to a green result, and verify the published market index answers direct `200`, lists the setup and plugin at `0.11.0`, and pins the commit. Verify the previous release stays listed.
-- [ ] 6.4 Install the released setup into a throwaway profile once fresh and once over the previous release. Verify the installed setup version, the Hindsight row, and the exact package version in the profile.
+- [x] 6.3 Commit the release candidate, push the commit and tag `v0.11.0`, read the release workflow to a green result, and verify the published market index answers direct `200`, lists the setup and plugin at `0.11.0`, and pins the commit. Verify the previous release stays listed.
+- [x] 6.4 Install the released setup into a throwaway profile once fresh and once over the previous release. Verify the installed setup version, the Hindsight row, and the exact package version in the profile.
 - [ ] 6.5 Install `0.11.0` on the live desktop profile from an external PowerShell window with the app closed, relaunch, and confirm the row and memory work in a new session; verify the profile patch is unchanged and the local Hindsight data survives.
 
 ## Workflow follow-up
