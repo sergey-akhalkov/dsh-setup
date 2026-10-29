@@ -62,13 +62,13 @@ distinguishes vendored upstream content from plugin-owned runtime additions, and
 9/9 portable task approvals. The temporary project-local lane rule in `openspec/config.yaml` was
 removed.
 
-The active `add-lane-boundary-gate` change carries 8 tasks and extends
-`@dsh-setup/plugin-delegation-rules` inside the existing plugin rather than adding a row or a
-plugin: `lane-boundary` becomes the seventh trigger, the shipped `lane-fanout` note rule turns a
-completed `tasks.md` lane into a fan-out decision, the steer prints one ready `subagent` call per
-remaining lane, and the ordinary `task_progress` note is the serial escape. Lane shape comes from
-the level-2 headings the task-lane guidance already requires, and parsing fails open on a plan
-without lanes. The setup composition is unchanged.
+The archived `2026-10-30-add-lane-boundary-gate` change carries 8 tasks and 8/8 portable task
+approvals; it extends `@dsh-setup/plugin-delegation-rules` inside the existing plugin rather than
+adding a row or a plugin: `lane-boundary` becomes the seventh trigger, the shipped `lane-fanout`
+note rule turns a completed `tasks.md` lane into a fan-out decision, the steer prints one ready
+`subagent` call per remaining lane, and the ordinary `task_progress` note is the serial escape.
+Lane shape comes from the level-2 headings the task-lane guidance already requires, and parsing
+fails open on a plan without lanes. The setup composition is unchanged.
 
 The 2026-10-29 changes archived with release v0.13.2 are `add-review-approval-gate`, which added
 portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
@@ -93,7 +93,7 @@ without spec changes.
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
-was written (2026-10-29). Read the entry's `proposal.md` and `design.md` for what it changed, and its
+was written (2026-10-30). Read the entry's `proposal.md` and `design.md` for what it changed, and its
 `tasks.md` for the open boxes.
 
 | Change                                               | Recorded tasks |
@@ -130,6 +130,7 @@ was written (2026-10-29). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-29-adopt-agent-best-practices`              | 20/21          |
 | `2026-10-29-fix-delegation-review-build-inputs`      | 11/11          |
 | `2026-10-29-add-task-lane-guidance`                  | 9/9            |
+| `2026-10-30-add-lane-boundary-gate`                  | 8/8            |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
