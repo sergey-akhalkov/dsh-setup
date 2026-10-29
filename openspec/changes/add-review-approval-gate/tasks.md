@@ -43,7 +43,7 @@
 
 - [x] 7.1 Run the full local gate: `pnpm build`, `pnpm gen`, `pnpm gen:check`, `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer`, and `git diff --exit-code`; verify the built `lib/**` and the vendored setup copy match the sources.
 - [x] 7.2 Review this change's tasks, export their `.dsh` PASS records with `pnpm reviews:export --change add-review-approval-gate`, and run `pnpm reviews:check --change add-review-approval-gate`; verify every checked task has a portable PASS and the status is archive-ready.
-- [ ] 7.3 Verify the push path with the installed hook and a fixture archive: a missing approval blocks the push, a complete archive passes, and the full audit prints the pre-cutoff baseline and the v0.12.0 exception without failing for either.
+- [x] 7.3 Verify the push path with the installed hook and a fixture archive: a missing approval blocks the push, a complete archive passes, and the full audit prints the pre-cutoff baseline and the v0.12.0 exception without failing for either.
 
 ## Workflow follow-up
 
