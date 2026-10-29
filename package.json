@@ -28,6 +28,7 @@
     "validate:repo": "node scripts/validate-repo.ts",
     "validate:composition": "node scripts/validate-composition.ts",
     "validate:installer": "node scripts/validate-installer.ts",
+    "reviews:export": "node scripts/reviews-check.ts --export",
     "validate": "pnpm check && pnpm gen:check && pnpm validate:repo && pnpm validate:composition && pnpm validate:installer",
     "generate:market": "node scripts/generate-market.ts",
     "release:prepare": "node scripts/release-prepare.ts"
