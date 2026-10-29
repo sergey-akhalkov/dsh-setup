@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-ponytail",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "description": "Ponytail lazy-senior-dev skill and default-on ruleset delivered from a pinned upstream prompt (MIT, by Dietrich Gebert)",
   "license": "MIT",
   "icon": "./icon.svg",
