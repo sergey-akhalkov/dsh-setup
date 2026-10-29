@@ -1884,6 +1884,105 @@ async function inspectNote(
   }
 }
 
+/** The task-review rule whose portable PASS is the approval. */
+async function approvalRuleId(
+  config: EngineConfig,
+  openspecRoot: string,
+): Promise<{ id: string } | { error: string }> {
+  const path = join(openspecRoot, APPROVAL_MARKER_FILE)
+  let raw: string | undefined
+  try {
+    raw = await readFile(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` }
+    }
+  }
+  let marker: ReviewApprovalMarker | undefined
+  if (raw !== undefined) {
+    try {
+      const parsed = parseReviewApprovalMarker(JSON.parse(raw))
+      if (parsed.marker === undefined) {
+        return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` }
+      }
+      marker = parsed.marker
+    } catch (error) {
+      return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` }
+    }
+  }
+  if (marker !== undefined) {
+    const rule = config.rules.find((entry) => entry.id === marker?.taskRule)
+    if (rule === undefined) {
+      return { error: `marker taskRule "${marker.taskRule}" is not a configured rule` }
+    }
+    if (rule.contract !== 'review' || rule.scope !== 'task') {
+      return { error: `marker taskRule "${rule.id}" is not a task-scoped review rule` }
+    }
+    if (rule.gate !== 'strict') {
+      return { error: `marker taskRule "${rule.id}" is not a strict rule` }
+    }
+    return { id: rule.id }
+  }
+  const taskRules = config.rules.filter(
+    (rule) =>
+      rule.when === 'spec-task-ready' && rule.contract === 'review' && rule.scope === 'task',
+  )
+  const strict = taskRules.find((rule) => rule.gate === 'strict')
+  if (strict !== undefined) return { id: strict.id }
+  const fallback = taskRules[0]
+  return fallback === undefined
+    ? { error: 'no task-scoped review rule is configured' }
+    : { id: fallback.id }
+}
+
+async function inspectPortableRecord(
+  changeDir: string,
+  taskId: string,
+): Promise<ApprovalRecordState> {
+  let raw: string
+  try {
+    raw = await readFile(portableTaskRecordPath(changeDir, taskId), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    return { kind: 'malformed', error: errorMessage(error) }
+  }
+  try {
+    const parsed = parsePortableTaskReviewRecord(JSON.parse(raw))
+    return parsed.record === undefined
+      ? { kind: 'malformed', error: parsed.error ?? 'record shape is invalid' }
+      : { kind: 'record', record: parsed.record }
+  } catch (error) {
+    return { kind: 'malformed', error: errorMessage(error) }
+  }
+}
+
+/** PASS-only coverage over every checked task, independent of session attribution. */
+async function changeApproval(
+  config: EngineConfig,
+  change: ChangeInfo,
+  openspecRoot: string,
+  tasks: TaskInfo[],
+): Promise<{ coverage: ApprovalCoverage } | { error: string }> {
+  const rule = await approvalRuleId(config, openspecRoot)
+  if ('error' in rule) return rule
+  let markdown: string
+  try {
+    markdown = await readFile(join(change.dir, 'tasks.md'), 'utf8')
+  } catch (error) {
+    return { error: `change "${change.name}" has no readable tasks.md: ${errorMessage(error)}` }
+  }
+  const coverage = await computeApprovalCoverage({
+    change: change.name,
+    rule: rule.id,
+    tasks,
+    unparseable: unparseableCheckedLines(markdown),
+    recordPath: (taskId) =>
+      portableTaskRecordDisplayPath(`openspec/changes/${change.name}`, taskId),
+    inspect: (taskId) => inspectPortableRecord(change.dir, taskId),
+  })
+  return { coverage }
+}
+
 interface ParsedVerdict {
   verdict: 'PASS' | 'FINDINGS'
   findings: Finding[]
@@ -2967,96 +3066,13 @@ class DelegationEngine {
     return false
   }
 
-  /** The strict task-review rule whose portable PASS is the approval. */
-  private async approvalRule(openspecRoot: string): Promise<{ id: string } | { error: string }> {
-    const path = join(openspecRoot, APPROVAL_MARKER_FILE)
-    let raw: string | undefined
-    try {
-      raw = await readFile(path, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` }
-      }
-    }
-    let marker: ReviewApprovalMarker | undefined
-    if (raw !== undefined) {
-      try {
-        const parsed = parseReviewApprovalMarker(JSON.parse(raw))
-        if (parsed.marker === undefined) {
-          return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` }
-        }
-        marker = parsed.marker
-      } catch (error) {
-        return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` }
-      }
-    }
-    if (marker !== undefined) {
-      const rule = this.config.rules.find((entry) => entry.id === marker?.taskRule)
-      if (rule === undefined) {
-        return { error: `marker taskRule "${marker.taskRule}" is not a configured rule` }
-      }
-      if (rule.contract !== 'review' || rule.scope !== 'task') {
-        return { error: `marker taskRule "${rule.id}" is not a task-scoped review rule` }
-      }
-      if (rule.gate !== 'strict') {
-        return { error: `marker taskRule "${rule.id}" is not a strict rule` }
-      }
-      return { id: rule.id }
-    }
-    const taskRules = this.taskReviewRules()
-    const strict = taskRules.find((rule) => rule.gate === 'strict')
-    if (strict !== undefined) return { id: strict.id }
-    const fallback = taskRules[0]
-    return fallback === undefined
-      ? { error: 'no task-scoped review rule is configured' }
-      : { id: fallback.id }
-  }
-
-  private async inspectPortableRecord(
-    changeDir: string,
-    taskId: string,
-  ): Promise<ApprovalRecordState> {
-    let raw: string
-    try {
-      raw = await readFile(portableTaskRecordPath(changeDir, taskId), 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
-      return { kind: 'malformed', error: errorMessage(error) }
-    }
-    try {
-      const parsed = parsePortableTaskReviewRecord(JSON.parse(raw))
-      return parsed.record === undefined
-        ? { kind: 'malformed', error: parsed.error ?? 'record shape is invalid' }
-        : { kind: 'record', record: parsed.record }
-    } catch (error) {
-      return { kind: 'malformed', error: errorMessage(error) }
-    }
-  }
-
   /** PASS-only approval over every checked task, independent of session attribution. */
   private async changeApproval(
     change: ChangeInfo,
     openspecRoot: string,
     tasks: TaskInfo[],
   ): Promise<{ coverage: ApprovalCoverage } | { error: string }> {
-    const rule = await this.approvalRule(openspecRoot)
-    if ('error' in rule) return rule
-    let markdown: string
-    try {
-      markdown = await readFile(join(change.dir, 'tasks.md'), 'utf8')
-    } catch (error) {
-      return { error: `change "${change.name}" has no readable tasks.md: ${errorMessage(error)}` }
-    }
-    const coverage = await computeApprovalCoverage({
-      change: change.name,
-      rule: rule.id,
-      tasks,
-      unparseable: unparseableCheckedLines(markdown),
-      recordPath: (taskId) =>
-        portableTaskRecordDisplayPath(`openspec/changes/${change.name}`, taskId),
-      inspect: (taskId) => this.inspectPortableRecord(change.dir, taskId),
-    })
-    return { coverage }
+    return changeApproval(this.config, change, openspecRoot, tasks)
   }
 
   private async runPatch(
@@ -3580,6 +3596,50 @@ async function evaluateGate(
         if (strictTaskRule !== undefined) pushStrict(ruleId, text, call)
         else if (softTaskRule !== undefined) {
           pushSoft(`task-review:${change.name}:${task.id}`, ruleId, text, call)
+        }
+      }
+
+      // The completing session must obtain an approval for every checked task,
+      // not only the tasks its own tick attributed.
+      if (
+        entry.completed &&
+        taskRules.length > 0 &&
+        tasks.length > 0 &&
+        tasks.every((task) => task.checked)
+      ) {
+        const approval = await changeApproval(deps.config, change, openspecRoot, tasks)
+        if ('error' in approval) {
+          pushStrict(
+            (strictTaskRule ?? softTaskRule)?.id ?? 'task-review',
+            `completion of change "${change.name}" requires a portable task-review PASS for every checked task, but the approval could not be evaluated: ${approval.error}`,
+            `repair openspec/changes/${change.name} (or ${APPROVAL_MARKER_FILE}) and run the task reviews`,
+          )
+        } else {
+          for (const line of approval.coverage.unparseable) {
+            pushStrict(
+              approval.coverage.rule,
+              `completion of change "${change.name}" cannot be approved: checked line ${line.line} "${line.text}" is not a numbered task`,
+              `fix the checked line in openspec/changes/${change.name}/tasks.md`,
+            )
+          }
+          for (const task of approval.coverage.tasks) {
+            if (task.state === 'pass') continue
+            const ruleId = approval.coverage.rule
+            const pending = pendingFor(ruleId, change.name, task.id)
+            const detail =
+              pending !== undefined
+                ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
+                : (task.detail ?? 'it has no portable PASS record')
+            const text = `rule "${ruleId}": the task list of change "${change.name}" is fully checked, so completion requires a portable task-review PASS for checked task "${task.number} ${task.text}"; ${detail}.`
+            const call =
+              pending === undefined
+                ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
+                : `delegation_status (run ${pending.id})`
+            if (strictTaskRule !== undefined) pushStrict(ruleId, text, call)
+            else if (softTaskRule !== undefined) {
+              pushSoft(`completion:${change.name}:${task.id}`, ruleId, text, call)
+            }
+          }
         }
       }
 

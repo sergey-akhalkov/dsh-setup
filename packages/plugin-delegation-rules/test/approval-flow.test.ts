@@ -9,6 +9,7 @@ import {
   makeWorkspace,
   passResponder,
   type RunRecord,
+  steerTexts,
   taskIdFor,
   writeChange,
 } from './helpers.js'
@@ -386,5 +387,110 @@ describe('change-level approval in delegation_status', () => {
     expect(text).toContain(
       'task approval: unavailable (marker taskRule "missing-rule" is not a configured rule)',
     )
+  })
+})
+
+describe('completion steer', () => {
+  async function gateFixture(tasks: Array<{ number: string; text: string; checked: boolean }>) {
+    const workspace = await makeWorkspace()
+    cleanups.push(workspace.cleanup)
+    const dir = await writeChange(workspace.root, 'change-a', tasks)
+    const agents = new FakeSubagents()
+    agents.addProvider('codex-subagent')
+    const harness = new Harness({
+      cwd: workspace.root,
+      config: defaultTestConfig(),
+      agents,
+      git: new FakeGit(),
+    })
+    return { root: workspace.root, dir, harness }
+  }
+
+  async function writeLocalPass(root: string, taskText: string): Promise<void> {
+    const taskId = taskIdFor(taskText)
+    const path = join(
+      root,
+      '.dsh',
+      'delegation',
+      'task-review',
+      'change-a',
+      'tasks',
+      `${taskId}.json`,
+    )
+    await mkdir(join(path, '..'), { recursive: true })
+    await writeFile(
+      path,
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        phase: 'task',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        worktreeDigest: 'b'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        session: 'session-1',
+        runId: 'run-1',
+        time: '2026-10-29T08:55:43.317Z',
+      }),
+      'utf8',
+    )
+  }
+
+  function tasksMarkdown(
+    entries: Array<{ number: string; text: string; checked: boolean }>,
+  ): string {
+    return `# Tasks\n\n${entries
+      .map((entry) => `- [${entry.checked ? 'x' : ' '}] ${entry.number} ${entry.text}`)
+      .join('\n')}\n`
+  }
+
+  it('requires a portable PASS for every checked task when the tick completes the list', async () => {
+    const { dir, harness } = await gateFixture([
+      { number: '1.1', text: 'Foreign task', checked: true },
+      { number: '1.2', text: 'Own task', checked: false },
+    ])
+    const before = tasksMarkdown([
+      { number: '1.1', text: 'Foreign task', checked: true },
+      { number: '1.2', text: 'Own task', checked: false },
+    ])
+    const after = tasksMarkdown([
+      { number: '1.1', text: 'Foreign task', checked: true },
+      { number: '1.2', text: 'Own task', checked: true },
+    ])
+    await harness.preStep(1)
+    await harness.writeResult('openspec/changes/change-a/tasks.md', before, after)
+    await writeFile(join(dir, 'tasks.md'), after, 'utf8')
+    await harness.turnStopping(1)
+    const text = steerTexts(harness.agent).join('\n')
+    expect(text).toContain('the task list of change "change-a" is fully checked')
+    expect(text).toContain('Foreign task')
+    expect(text).toContain('Own task')
+  })
+
+  it('does not require a foreign checked task before the list is complete', async () => {
+    const { root, dir, harness } = await gateFixture([
+      { number: '1.1', text: 'Foreign task', checked: true },
+      { number: '1.2', text: 'Own task', checked: false },
+      { number: '1.3', text: 'Later task', checked: false },
+    ])
+    const before = tasksMarkdown([
+      { number: '1.1', text: 'Foreign task', checked: true },
+      { number: '1.2', text: 'Own task', checked: false },
+      { number: '1.3', text: 'Later task', checked: false },
+    ])
+    const after = tasksMarkdown([
+      { number: '1.1', text: 'Foreign task', checked: true },
+      { number: '1.2', text: 'Own task', checked: true },
+      { number: '1.3', text: 'Later task', checked: false },
+    ])
+    await writeLocalPass(root, 'Own task')
+    await harness.preStep(1)
+    await harness.writeResult('openspec/changes/change-a/tasks.md', before, after)
+    await writeFile(join(dir, 'tasks.md'), after, 'utf8')
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toEqual([])
   })
 })
