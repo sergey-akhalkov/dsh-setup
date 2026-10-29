@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -7,6 +7,7 @@ import {
   FakeSubagents,
   Harness,
   makeWorkspace,
+  passResponder,
   type RunRecord,
   taskIdFor,
   writeChange,
@@ -167,5 +168,87 @@ describe('portable task-review approval', () => {
     const local = await readJson(localPath)
     expect(local.verdict).toBe('ERROR')
     expect(String(local.error)).toMatch(/portable approval record/)
+  })
+})
+
+describe('portable records and the change artifact digest', () => {
+  async function specFixture() {
+    const workspace = await makeWorkspace()
+    cleanups.push(workspace.cleanup)
+    const dir = await writeChange(workspace.root, 'change-a', [
+      { number: '1.1', text: TASK_TEXT, checked: false },
+    ])
+    const agents = new FakeSubagents()
+    agents.addProvider('codex-subagent')
+    const harness = new Harness({
+      cwd: workspace.root,
+      config: defaultTestConfig(),
+      agents,
+      git: new FakeGit(),
+    })
+    const specRecord = join(
+      workspace.root,
+      '.dsh',
+      'delegation',
+      'spec-review',
+      'change-a',
+      'spec.json',
+    )
+    return { dir, agents, harness, specRecord }
+  }
+
+  it('reuses a spec PASS when a later portable record is added', async () => {
+    const { dir, agents, harness } = await specFixture()
+    const first = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.waitForRun(first)
+    expect(agents.startCalls).toBe(1)
+    // Even a malformed file under reviews/ is not a change artifact.
+    await mkdir(join(dir, 'reviews'), { recursive: true })
+    await writeFile(join(dir, 'reviews', 'aaaaaaaaaaaaaaaa.json'), '{not json', 'utf8')
+    const text = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    expect(text).toContain('reused record')
+    expect(agents.startCalls).toBe(1)
+  })
+
+  it('publishes a running whole-spec review when a task approval is written concurrently', async () => {
+    const { dir, agents, harness, specRecord } = await specFixture()
+    agents.respond = async (run: RunRecord) => {
+      await mkdir(join(dir, 'reviews'), { recursive: true })
+      await writeFile(
+        join(dir, 'reviews', 'bbbbbbbbbbbbbbbb.json'),
+        JSON.stringify({
+          rule: 'task-review',
+          change: 'change-a',
+          scope: 'task',
+          taskId: 'b'.repeat(16),
+          digest: 'c'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-10-29T08:55:43.317Z',
+        }),
+        'utf8',
+      )
+      return passResponder(run)
+    }
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.waitForRun(runId)
+    expect((await readJson(specRecord)).verdict).toBe('PASS')
+  })
+
+  it('still reviews a nested specs/reviews artifact during a whole-spec review', async () => {
+    const { dir, agents, harness, specRecord } = await specFixture()
+    const nested = join(dir, 'specs', 'reviews', 'spec.md')
+    await mkdir(join(dir, 'specs', 'reviews'), { recursive: true })
+    await writeFile(nested, '# nested artifact\n', 'utf8')
+    agents.respond = async (run: RunRecord) => {
+      await writeFile(nested, '# changed during review\n', 'utf8')
+      return passResponder(run)
+    }
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.waitForRun(runId)
+    const record = await readJson(specRecord)
+    expect(record.verdict).toBe('ERROR')
+    expect(String(record.error)).toContain('reviewed inputs changed')
   })
 })

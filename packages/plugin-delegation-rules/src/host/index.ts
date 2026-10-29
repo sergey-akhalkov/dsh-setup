@@ -26,6 +26,7 @@ import {
   type PortableTaskReviewRecord,
   parseTasksText,
   portableTaskRecordPath,
+  REVIEWS_DIRECTORY,
   type ReviewFinding,
   type ShellToken,
   shellSegments,
@@ -842,8 +843,11 @@ async function specDigest(changeDir: string, signal?: AbortSignal): Promise<stri
     for (const entry of entries) {
       if (signal?.aborted === true) fail('spec digest was cancelled')
       const path = join(directory, entry.name)
-      if (entry.isDirectory()) await walk(path)
-      else if (entry.isFile()) files.push(path)
+      if (entry.isDirectory()) {
+        // The portable approval directory is not a change artifact.
+        if (relative(changeDir, path).split(sep).join('/') === REVIEWS_DIRECTORY) continue
+        await walk(path)
+      } else if (entry.isFile()) files.push(path)
     }
   }
   try {
@@ -1588,7 +1592,7 @@ interface InputSignature {
   entries: Map<string, string>
 }
 
-const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml'])
+const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml', REVIEWS_DIRECTORY])
 
 /** Stat signature (size + nanosecond mtime/ctime) for one reviewed path. */
 async function inputStat(path: string): Promise<string> {
@@ -1617,7 +1621,9 @@ async function inputSignature(
       )
     }
     for (const entry of dirents) {
-      if (excludes.has(entry.name)) continue
+      // Exclusions are change-root entries: a nested `reviews/` or
+      // `.openspec.yaml` is a normal artifact and stays reviewed.
+      if (prefix === '' && excludes.has(entry.name)) continue
       const name = prefix === '' ? entry.name : `${prefix}/${entry.name}`
       const absolute = join(directory, entry.name)
       if (entry.isDirectory()) {

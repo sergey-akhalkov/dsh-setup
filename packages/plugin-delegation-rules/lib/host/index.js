@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHANGE_PATTERN, DIGEST_PATTERN, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parseTasksText, portableTaskRecordPath, shellSegments, TASK_ID_PATTERN, } from '../shared/approval.js';
+import { CHANGE_PATTERN, DIGEST_PATTERN, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parseTasksText, portableTaskRecordPath, REVIEWS_DIRECTORY, shellSegments, TASK_ID_PATTERN, } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -526,8 +526,12 @@ async function specDigest(changeDir, signal) {
             if (signal?.aborted === true)
                 fail('spec digest was cancelled');
             const path = join(directory, entry.name);
-            if (entry.isDirectory())
+            if (entry.isDirectory()) {
+                // The portable approval directory is not a change artifact.
+                if (relative(changeDir, path).split(sep).join('/') === REVIEWS_DIRECTORY)
+                    continue;
                 await walk(path);
+            }
             else if (entry.isFile())
                 files.push(path);
         }
@@ -1191,7 +1195,7 @@ class DiscardedRun extends DelegationError {
         this.name = 'DiscardedRun';
     }
 }
-const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml']);
+const CHANGE_INPUT_EXCLUDES = new Set(['.openspec.yaml', REVIEWS_DIRECTORY]);
 /** Stat signature (size + nanosecond mtime/ctime) for one reviewed path. */
 async function inputStat(path) {
     try {
@@ -1215,7 +1219,9 @@ async function inputSignature(root, excludes) {
             fail(`could not read reviewed inputs under ${prefix === '' ? '.' : prefix}: ${errorMessage(error)}`);
         }
         for (const entry of dirents) {
-            if (excludes.has(entry.name))
+            // Exclusions are change-root entries: a nested `reviews/` or
+            // `.openspec.yaml` is a normal artifact and stays reviewed.
+            if (prefix === '' && excludes.has(entry.name))
                 continue;
             const name = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
             const absolute = join(directory, entry.name);
