@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   type ApprovalRecordState,
   approvalSummaryLine,
   computeApprovalCoverage,
   formatApprovalGapLines,
+  localTaskRecordPath,
   normalizeCheckboxes,
   type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
   parseReviewApprovalMarker,
   parseTasksText,
+  portableRecordFromLocal,
   recognizeArchiveCommands,
   taskIdOf,
   unparseableCheckedLines,
@@ -313,5 +316,104 @@ describe('archive command recognition', () => {
     for (const command of commands) {
       expect(recognizeArchiveCommands(command, cwd)).toEqual([])
     }
+  })
+})
+
+describe('export validation', () => {
+  const taskText = 'approved task'
+  const taskId = taskIdOf(taskText)
+
+  function localPass(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      rule: 'task-review',
+      change: 'change-a',
+      phase: 'task',
+      scope: 'task',
+      taskId,
+      digest: DIGEST_A,
+      worktreeDigest: DIGEST_B,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      session: 'session-not-committed',
+      runId: 'run-not-committed',
+      time: '2026-10-29T08:55:43.317Z',
+      ...overrides,
+    }
+  }
+
+  function exportOf(value: unknown, overrides: Partial<Record<string, string>> = {}) {
+    return portableRecordFromLocal({
+      value,
+      rule: 'task-review',
+      change: 'change-a',
+      taskId,
+      ...overrides,
+    })
+  }
+
+  it('copies a local PASS as the sanitized record without local fields', () => {
+    const result = exportOf(localPass())
+    expect(result.error).toBeUndefined()
+    expect(result.record).toEqual({
+      rule: 'task-review',
+      change: 'change-a',
+      scope: 'task',
+      taskId,
+      digest: DIGEST_A,
+      worktreeDigest: DIGEST_B,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-10-29T08:55:43.317Z',
+    })
+    expect(JSON.stringify(result.record)).not.toContain('session')
+    expect(JSON.stringify(result.record)).not.toContain('run-not-committed')
+  })
+
+  it('keeps the target selection when the local record carries one', () => {
+    const result = exportOf(
+      localPass({
+        target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+      }),
+    )
+    expect(result.record?.target).toEqual({
+      provider: 'codex-subagent',
+      model: 'gpt-6-astra',
+      reasoningEffort: 'xhigh',
+    })
+  })
+
+  it('refuses an ERROR or FINDINGS local record', () => {
+    expect(exportOf(localPass({ verdict: 'ERROR' })).error).toContain('only PASS is exported')
+    expect(exportOf(localPass({ verdict: 'FINDINGS' })).error).toContain('only PASS is exported')
+  })
+
+  it('refuses a mismatched task id, a foreign change, and a foreign rule', () => {
+    expect(exportOf(localPass({ taskId: taskIdOf('another task') })).error).toContain('task id')
+    expect(exportOf(localPass({ change: 'other-change' })).error).toContain('change "other-change"')
+    expect(exportOf(localPass({ rule: 'spec-review' }), { rule: 'task-review' }).error).toContain(
+      'rule "spec-review"',
+    )
+  })
+
+  it('refuses findings on a PASS and malformed local records', () => {
+    expect(
+      exportOf(localPass({ findings: [{ severity: 'P1', title: 't', evidence: 'e', fix: 'f' }] }))
+        .error,
+    ).toContain('zero findings')
+    expect(exportOf(localPass({ findings: 'none' })).error).toContain('findings')
+    expect(exportOf(localPass({ scope: 'whole' })).error).toContain('task-scoped')
+    expect(exportOf(localPass({ digest: 'short' })).error).toContain('digest')
+    expect(
+      exportOf(localPass({ target: { provider: 'codex', model: '/opt/models/x' } })).error,
+    ).toBeDefined()
+  })
+
+  it('locates the local .dsh record the export reads', () => {
+    const root = resolve('repo-root')
+    expect(localTaskRecordPath(root, 'task-review', 'change-a', taskId)).toBe(
+      join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
+    )
   })
 })

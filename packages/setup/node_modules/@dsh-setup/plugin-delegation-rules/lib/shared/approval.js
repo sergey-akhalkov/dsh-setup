@@ -154,6 +154,10 @@ export function portableTaskRecordPath(changeDir, taskId) {
 export function portableTaskRecordDisplayPath(changeDirectory, taskId) {
     return `${changeDirectory}/${REVIEWS_DIRECTORY}/${taskId}.json`;
 }
+/** Absolute path of one local `.dsh` task-review record the export may copy. */
+export function localTaskRecordPath(workspaceRoot, rule, change, taskId) {
+    return join(workspaceRoot, '.dsh', 'delegation', rule, change, 'tasks', `${taskId}.json`);
+}
 /**
  * PASS-only coverage over every checked task, independent of session
  * attribution. Unchecked tasks are reported; they never block approval.

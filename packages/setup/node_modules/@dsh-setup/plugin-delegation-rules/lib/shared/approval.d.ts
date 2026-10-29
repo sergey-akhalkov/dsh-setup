@@ -74,6 +74,8 @@ export declare function parsePortableTaskReviewRecord(value: unknown): {
 export declare function portableTaskRecordPath(changeDir: string, taskId: string): string;
 /** Repository-relative display path of one portable record, for messages. */
 export declare function portableTaskRecordDisplayPath(changeDirectory: string, taskId: string): string;
+/** Absolute path of one local `.dsh` task-review record the export may copy. */
+export declare function localTaskRecordPath(workspaceRoot: string, rule: string, change: string, taskId: string): string;
 /** What the coverage reader found at one record path. */
 export type ApprovalRecordState = {
     kind: 'missing';

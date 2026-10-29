@@ -220,6 +220,16 @@ export function portableTaskRecordDisplayPath(changeDirectory: string, taskId: s
   return `${changeDirectory}/${REVIEWS_DIRECTORY}/${taskId}.json`
 }
 
+/** Absolute path of one local `.dsh` task-review record the export may copy. */
+export function localTaskRecordPath(
+  workspaceRoot: string,
+  rule: string,
+  change: string,
+  taskId: string,
+): string {
+  return join(workspaceRoot, '.dsh', 'delegation', rule, change, 'tasks', `${taskId}.json`)
+}
+
 /** What the coverage reader found at one record path. */
 export type ApprovalRecordState =
   | { kind: 'missing' }

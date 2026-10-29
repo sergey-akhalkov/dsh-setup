@@ -4,7 +4,7 @@
 
 - [x] 1.1 Add the pure shared approval module (`packages/plugin-delegation-rules/src/shared/approval.ts`) with the numbered-task parser and task-id hash, the portable record shape and validation, the coverage computation, the archive-command recognition, and the marker schema; verify `pnpm exec vitest run packages/plugin-delegation-rules/test/approval.test.ts` covers the parser, task-id and malformed-record edge cases.
 - [x] 1.2 Replace the Host's local task parser, task-id hash, and record helpers with the shared module without changing the existing gate behavior; verify `pnpm exec vitest run packages/plugin-delegation-rules/test` passes.
-- [ ] 1.3 Add the `reviews/export` validation path to the shared module: a local `.dsh` task-review PASS is copied only when its rule, change, task id, and verdict match the change; verify the export tests reject an `ERROR`, a mismatched task id, and a foreign change.
+- [x] 1.3 Add the `reviews/export` validation path to the shared module: a local `.dsh` task-review PASS is copied only when its rule, change, task id, and verdict match the change; verify the export tests reject an `ERROR`, a mismatched task id, and a foreign change.
 
 ## 2. Portable task-review approval
 
