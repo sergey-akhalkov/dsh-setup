@@ -2,9 +2,11 @@
 
 The setup is one DeepSeek Harness bundle plus the shipped bundles it expects. The primary installation
 path is one command: [`install.ps1`](../install.ps1) enables the required bundles through the same
-mechanism as the Plugins page, installs the setup bundle at the latest release, and restarts DeepSeek
-Harness. It never edits your profile's own `cordis.patch.yml`, so machine-local preferences keep
-winning.
+mechanism as the Plugins page, installs the setup bundle at the latest release, provisions the local
+Hindsight runtime when its prerequisites are available, and restarts DeepSeek Harness. It never edits
+your profile's own `cordis.patch.yml`, so machine-local preferences keep winning. A runtime that is
+already configured and healthy is skipped without prompting, so rerunning for plugin updates stays
+non-interactive.
 
 Run the installer from an ordinary PowerShell window, not from a terminal hosted inside DeepSeek
 Harness (an agent turn or the in-app terminal). Installing into the `desktop` profile closes and
@@ -22,6 +24,10 @@ profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead.
 - Network access to GitHub and the plugin registry.
 - A supported DSH version. The current window is recorded in [`dsh.json`](../dsh.json); the installer
   refuses an unsupported version before changing anything.
+- `uv` on `PATH` for the local Hindsight runtime. When it is missing, the installer warns and skips
+  only that phase; the setup does not install system tools.
+- A DeepSeek API key for Hindsight: `DEEPSEEK_API_KEY`, `%USERPROFILE%\.hindsight\deepseek.key`, an
+  existing Hindsight profile, or a secure prompt during the Hindsight phase.
 
 ## One command
 
@@ -32,7 +38,8 @@ irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1
 ```
 
 The command downloads and executes the installer in one pipeline: it prints its plan, closes
-DeepSeek Harness while it writes the profile, and leaves the window open with the run's exit status.
+DeepSeek Harness while it writes the profile, provisions the local Hindsight runtime when possible,
+and leaves the window open with the run's exit status.
 The pipeline needs no execution-policy change, because a downloaded expression is not a script file.
 From `cmd.exe`, wrap it the same way as other installers:
 
@@ -65,11 +72,17 @@ The script:
 6. Verifies the selection, the installed setup version, that the setup bundle is last in
    `dsh.profile.bundles` (so its defaults outrank the shipped layers), and that `cordis.patch.yml`
    is byte-identical to before.
-7. Starts DeepSeek Harness again.
+7. Runs the Hindsight phase after the profile verification: when the runtime is not configured, it
+   asks for the DeepSeek key and the export location, installs or updates the pinned
+   `hindsight-embed`, starts the daemon, registers the logon task, and verifies a retain/recall
+   round-trip. A configured, healthy runtime is skipped with no prompt; a missing `uv` or key warns,
+   skips the phase, and still exits successfully. A failure once the phase starts exits non-zero and
+   states that the profile was installed.
+8. Starts DeepSeek Harness again.
 
 Running the command a second time is safe: it keeps existing selections, installs nothing when the
-resolved version is already current, and fails the verification when the installed version is not the
-resolved one.
+resolved version is already current, fails the verification when the installed version is not the
+resolved one, and skips the Hindsight phase when the runtime is already configured and healthy.
 
 ### Installer options
 
@@ -87,6 +100,16 @@ Options apply to the downloaded-file form; the pipeline form runs with the defau
 | `-NoRestart`            | Leave DeepSeek Harness closed after installing.                                        |
 | `-NoDesktopShortcut`    | Do not create the administrator desktop shortcut.                                      |
 | `-IndexUrl <url>`       | Market index used to pin the release. Default: the published Pages index.              |
+| `-NoHindsight`          | Install or update the profile only; skip the Hindsight phase.                          |
+| `-HindsightOnly`        | Run only the Hindsight phase; no DSH profile is read, written, or restarted.           |
+| `-RepairHindsight`      | Run the Hindsight phase even when the runtime is already configured and healthy.       |
+| `-DeepSeekApiKey <key>` | Hindsight key for scripted runs; prefer `DEEPSEEK_API_KEY` or the key file.            |
+| `-ExportDir <path>`     | Hindsight export directory (a local folder or an existing Git repository).             |
+| `-ExportRemote <url>`   | Private export remote; `-` removes it and keeps the export local.                      |
+| `-ApiPort <port>`       | Local Hindsight API port. Default `8888`.                                              |
+| `-Model <name>`         | DeepSeek model for Hindsight extraction. Default `deepseek-chat`.                      |
+| `-NoLogonTask`          | Do not register the Hindsight logon task.                                              |
+| `-SkipVerify`           | Skip the Hindsight key, push-access, and retain/recall checks.                         |
 
 When the script is inside a full checkout of this repository it installs that checkout's
 `packages/setup`; pass `-SetupVersion` or `-SetupSpec` to install a released bundle instead.
@@ -199,7 +222,8 @@ changing it**:
 2. copies `package.json`, `cordis.patch.yml`, `cordis.yml`, `pnpm-workspace.yaml`, and, when present,
    the lockfile and `.npmrc` into a throwaway Harness home as a profile named `owner-copy` (`desktop`
    is never a dogfood target, so the installer cannot take its stop/restart path);
-3. runs `install.ps1 -Profile owner-copy -NoStopApp -NoRestart` against this checkout's setup bundle;
+3. runs `install.ps1 -Profile owner-copy -NoStopApp -NoRestart -NoHindsight` against this checkout's
+   setup bundle, so dogfood never touches the live Hindsight runtime;
 4. composes the copy with the installed CLI and checks that the installer appended only the setup
    bundle and kept it last, the profile patch copy is byte-identical, the installed setup version
    matches the checkout, the setup rows and defaults compose, and every row the owner patched keeps
@@ -219,7 +243,8 @@ cleanly against the current profile.
 
 Rerun the same one command. It resolves the newest released setup version, installs it over the
 current one, and fails the verification when the installed version is not the resolved one. When the
-resolved version is already current, the run changes nothing and reports that version.
+resolved version is already current, the run changes nothing and reports that version. The Hindsight
+phase is skipped when the runtime is configured and healthy; `-RepairHindsight` forces it.
 
 To pin an exact version or install a checkout, use the downloaded-file form with `-SetupVersion` or
 `-SetupSpec`; older listed versions remain installable if you need to pin back.
@@ -405,29 +430,44 @@ packaged definitions win. See [openspec.md](openspec.md) for the full workflow a
 
 The setup ships `@dsh-setup/plugin-hindsight`, which mounts the official native
 `@vectorize-io/hindsight-coding-agents@0.8.2` DSH entry point and defaults it to a local
-`hindsight-embed` daemon at `http://127.0.0.1:8888`. The setup installer does not install that
-local runtime; a separate one-click script does, per PC.
+`hindsight-embed` daemon at `http://127.0.0.1:8888`. The one-command installer provisions that local
+runtime as a second phase, after the profile is installed and verified. The runtime is machine-level
+and lives under `%USERPROFILE%\.hindsight`; the setup bundle only mounts the row.
 
-Prerequisites: Windows PowerShell 5.1+, `uv` on `PATH`, network access, and a DeepSeek API key.
-With the key in `DEEPSEEK_API_KEY` (or `%USERPROFILE%\.hindsight\deepseek.key`), run:
+Prerequisites: Windows PowerShell 5.1+, `uv` on `PATH`, network access, and a DeepSeek API key. The
+key comes from `-DeepSeekApiKey`, `DEEPSEEK_API_KEY`, `%USERPROFILE%\.hindsight\deepseek.key`, the
+existing Hindsight profile, or a secure prompt. The phase installs or updates the pinned
+`hindsight-embed`, configures the daemon and TLS trust, registers the logon start, writes the
+machine-local coding-agent configuration, and verifies a retain/recall round-trip.
 
-```powershell
-irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hindsight.ps1 | iex
-```
+The phase runs only after the profile phase and its verification, so a plugin update never asks for
+the key or the export location before the plugins are installed. It is skipped, with no prompt and
+no write, when the runtime is already configured and healthy: the default profile and API version
+are current, the pinned tool is installed, a key resolves without prompting, the coding-agent
+configuration and TLS bundle exist, and `/health` reports a healthy connected database. The logon
+task and the export configuration are optional for that decision.
 
-The script installs the pinned `hindsight-embed`, configures the local daemon and TLS trust,
-registers the logon start, and verifies a retain/recall round-trip. It is idempotent; rerunning it
-repairs the runtime without discarding memory data. See [Hindsight](hindsight.md) for the options,
-data locations, opt-out, costs, and the official-installer alternative that must not be combined
-with this row.
+When `uv` or a key source is missing, the installer warns, skips the phase, leaves the plugins
+installed, exits successfully, and prints the next action. A failure once the phase starts (a
+rejected key, an invalid export location, a foreign listener, a failed daemon or retain/recall
+check) exits non-zero and states that the profile was installed; DeepSeek Harness is still
+restarted. The phase is idempotent and never discards memory data.
+
+The Hindsight-only path remains available for repairs and for `restore-hindsight.ps1`:
+`setup-hindsight.ps1` is a thin forwarder to `install.ps1 -HindsightOnly`, and the documented
+Hindsight-only URL still works. Use `-NoHindsight` to skip the phase, `-HindsightOnly` to run only
+it, and `-RepairHindsight` to force it past the readiness check. See [Hindsight](hindsight.md) for
+the options, data locations, opt-out, costs, and the official-installer alternative that must not
+be combined with this row.
 
 ## What is not included
 
 - Credentials and provider keys: authenticate in the app; nothing secret is in the repository.
-- Runtime prerequisites such as `uv` for the Serena lazy server, `@nuphus/nuphus-mcp` for the Nuphus
-  lazy server, or `@fission-ai/openspec` for the OpenSpec skills: install them yourself; the setup
-  does not run system installers. The local Hindsight daemon is provisioned by the separate
-  one-click `setup-hindsight.ps1` script when you opt in; the setup installer does not start it.
+- Runtime prerequisites such as `uv` for the Serena lazy server and the local Hindsight runtime,
+  `@nuphus/nuphus-mcp` for the Nuphus lazy server, or `@fission-ai/openspec` for the OpenSpec
+  skills: install them yourself; the setup does not run system installers. The installer's Hindsight
+  phase starts the local daemon when `uv` and a key are available; a missing prerequisite warns and
+  skips that phase.
 - Your profile's local overrides: these stay in the profile's own patch file.
 - Your own agent skills and instructions: they live in `~/.agents` and are consumed independently.
   The setup does ship packaged third-party content: the Ponytail prompt, whose vendored bytes and

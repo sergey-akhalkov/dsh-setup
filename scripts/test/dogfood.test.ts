@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   checkBundleSelection,
@@ -11,6 +13,7 @@ import {
   readBundles,
   scalarPairs,
 } from '../lib/dogfood.ts'
+import { rootDir } from '../lib/workspace.ts'
 
 const DUMP = `# == @deepseek-ai/dsh-base
 - id: ui-theme
@@ -29,6 +32,16 @@ const DUMP = `# == @deepseek-ai/dsh-base
       - id: deepseek-flash
         name: DeepSeek-V4.1-Flash
 `
+
+describe('dogfood installer arguments', () => {
+  it('passes -NoHindsight to the installer', () => {
+    const source = readFileSync(join(rootDir, 'scripts/dogfood.ts'), 'utf8')
+    const start = source.indexOf('const installerArgs = [')
+    expect(start).toBeGreaterThan(-1)
+    const end = source.indexOf(']', start)
+    expect(source.slice(start, end)).toContain("'-NoHindsight'")
+  })
+})
 
 describe('patchRowIds', () => {
   it('reads only top-level row targets', () => {

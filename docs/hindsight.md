@@ -16,21 +16,36 @@ local `hindsight-embed` daemon. No Hindsight Cloud account or Docker is used.
   setup ships `restore-hindsight.ps1` for the way back; see
   [Durable memory export](#durable-memory-export) and
   [Restore from the export](#restore-from-the-export).
-- The root `setup-hindsight.ps1` script provisions the local daemon on a PC. It is separate from
-  `install.ps1`: the setup installer installs the DSH bundle row, and the one-click script installs
-  the local runtime.
+- The one-command installer provisions the local daemon as a second phase after the profile is
+  installed and verified. The root `setup-hindsight.ps1` is a thin forwarder to
+  `install.ps1 -HindsightOnly` for the Hindsight-only path and `restore-hindsight.ps1`.
 
 ## One-click local setup {#one-click}
+
+The documented one-command installer runs the Hindsight phase after it installs and verifies the
+profile:
+
+```powershell
+irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 | iex
+```
+
+The Hindsight-only entry point still works for repairs and is what `restore-hindsight.ps1` calls;
+`setup-hindsight.ps1` is a thin forwarder to `install.ps1 -HindsightOnly`:
+
+```powershell
+irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hindsight.ps1 | iex
+```
 
 Prerequisites on the PC:
 
 - Windows with PowerShell 5.1 or newer.
 - [`uv`](https://docs.astral.sh/uv/) on `PATH`. If it is missing:
-  `winget install --id astral-sh.uv -e`.
+  `winget install --id astral-sh.uv -e`. The installer warns and skips the Hindsight phase when
+  `uv` is missing; it never installs system tools.
 - Network access to PyPI and `api.deepseek.com`.
 - A DeepSeek API key.
 
-Put the key in one of these places, or let the script prompt for it with a secure prompt:
+Put the key in one of these places, or let the installer prompt for it with a secure prompt:
 
 ```powershell
 $env:DEEPSEEK_API_KEY = '<your key>'
@@ -43,16 +58,11 @@ New-Item -ItemType Directory -Force "$env:USERPROFILE\.hindsight" | Out-Null
 notepad "$env:USERPROFILE\.hindsight\deepseek.key"
 ```
 
-Then run the one-click bootstrap:
+Then run the documented one-command installer, or the Hindsight-only forwarder for a repair. To run
+a checked-out copy locally, execute `.\install.ps1 -HindsightOnly` (or `.\setup-hindsight.ps1`);
+`irm` accepts a URL, not a relative file path.
 
-```powershell
-irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hindsight.ps1 | iex
-```
-
-To run a checked-out copy locally, execute `.\setup-hindsight.ps1` directly; `irm` accepts a URL,
-not a relative file path.
-
-The script:
+The Hindsight phase, after the profile phase:
 
 1. verifies the DeepSeek key against `https://api.deepseek.com/models` and refuses a rejected key
    before changing anything;
@@ -73,6 +83,12 @@ The script:
    `%USERPROFILE%\.hindsight\coding-agent.json` only when it is absent;
 8. verifies a real retain/recall round-trip through the local REST API.
 
+The phase asks for the key and the export location only after the profile is installed and verified.
+It is skipped with no prompt and no write when the runtime is already configured and healthy; a
+missing `uv` or key warns, skips the phase, and leaves the profile installed. A failure once the
+phase starts exits non-zero and names the profile as installed. `install.ps1 -NoHindsight` skips the
+phase, `-HindsightOnly` runs only it, and `-RepairHindsight` forces it.
+
 The default profile carries these settings (the key is the only secret):
 
 | Key                                   | Value                                                 |
@@ -92,14 +108,14 @@ redirects the command. The upstream README's five-minute idle-exit sentence is s
 the daemon default is no idle exit, and the script sets `HINDSIGHT_EMBED_DAEMON_IDLE_TIMEOUT=0`
 explicitly.
 
-The script is idempotent: rerunning it keeps existing data, the profile, and the logon task, and
+The phase is idempotent: a real run keeps existing data, the profile, and the logon task, and
 restarts the daemon only when the profile changed. A downloaded copy can be inspected and run with
 options:
 
 ```powershell
-$installer = Join-Path $env:TEMP 'setup-hindsight.ps1'
-Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hindsight.ps1 -OutFile $installer
-& $installer -DryRun
+$installer = Join-Path $env:TEMP 'install.ps1'
+Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/install.ps1 -OutFile $installer
+& $installer -HindsightOnly -DryRun
 ```
 
 | Option                | Effect                                                                              |
@@ -111,6 +127,10 @@ Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/ma
 | `-ExportRemote <url>` | Private export remote; `-` removes it and keeps exports local.                      |
 | `-SkipVerify`         | Skip the API-key, push-access, and retain/recall verification.                      |
 | `-DeepSeekApiKey <k>` | Scripted key input; prefer the environment or the key file.                         |
+| `-NoHindsight`        | Install the profile only; skip the Hindsight phase.                                 |
+| `-HindsightOnly`      | Run only the Hindsight phase; no DSH profile is read or restarted.                  |
+| `-RepairHindsight`    | Run the phase even when the runtime is already configured and healthy.              |
+| `-SelfTest`           | Run the Hindsight component self-test and exit.                                     |
 
 The key is verified with the DeepSeek API, never printed, not placed in the repository, and written
 only to the ACL-restricted machine-local profile. The daemon receives it as a process environment
@@ -194,8 +214,8 @@ installs its `hindsight-coding-agent` companion skill in the shared skills root.
 The first session in a repository can be slow while the daemon downloads its API/models and
 seeds the repository. Memory calls fail open if the daemon is down: the Harness keeps working and
 the plugin logs the failure; the default-on autostart below tries to bring it back, and
-`& "$env:USERPROFILE\.hindsight\start-hindsight.ps1"` or the one-click script remain the manual
-paths.
+`& "$env:USERPROFILE\.hindsight\start-hindsight.ps1"` or `install.ps1 -HindsightOnly` remain the
+manual paths.
 
 ## Durable memory export
 
@@ -345,7 +365,7 @@ git -C "$env:USERPROFILE\hindsight-export" push origin HEAD
 If that works without a prompt, the exporter will push too. A push that fails for authentication or
 network reasons is retried later; the local commits are kept.
 
-The one-click script performs the same check when it configures a remote: it runs a
+The installer's Hindsight phase performs the same check when it configures a remote: it runs a
 `git push --dry-run` from a throwaway repository and refuses the setup if the remote rejects it. The
 dry run writes nothing to the remote, but it does exercise the credential helper or SSH agent, so a
 credential cached during setup lets the headless exporter push without a prompt. `-SkipVerify`
@@ -407,8 +427,9 @@ merge), `3` imported counts differ from the manifest, `4` daemon down and no `hi
 
 ### When the daemon cannot start
 
-The script checks `/health` first. When the daemon is down it runs the documented
-`setup-hindsight.ps1` only if `hindsight-embed` is already installed (it never installs silently).
+The script checks `/health` first. When the daemon is down it runs the documented Hindsight-only
+entry point (`setup-hindsight.ps1 -SkipVerify`, a forwarder to `install.ps1 -HindsightOnly`) only if
+`hindsight-embed` is already installed (it never installs silently).
 If that fails or the tool is missing, it falls back to the offline importer:
 
 ```powershell
@@ -434,8 +455,8 @@ The Hindsight row defaults to `autostart: true`. When Harness loads the plugin a
 connection is self-hosted at the managed default-profile endpoint `http://127.0.0.1:8888`, the
 wrapper checks `/health`. If the daemon is unhealthy, it spawns the installed
 `hindsight-embed daemon start` detached with the default profile and the machine-local TLS bundle.
-It does not wait, block startup, install the tool, or fail the session. The logon task from
-`setup-hindsight.ps1` is the primary reboot path; autostart is the self-healing fallback when the
+It does not wait, block startup, install the tool, or fail the session. The logon task from the
+Hindsight phase is the primary reboot path; autostart is the self-healing fallback when the
 daemon crashed, was stopped, or missed its start.
 
 Turn it off in the profile patch (a row configuration replaces the whole object, so restate all
@@ -456,7 +477,7 @@ remote `apiUrl`, `serverMode: daemon`, a different loopback port, a disabled Hin
 machine without the `hindsight-embed` tool. A `paths.<prefix>` or `banks.<bankId>` entry with a
 connection or disabled override (including under `harnesses.dsh`) makes the Host-wide connection
 unknowable, so autostart is skipped; use the logon task or a custom row in that case. A custom
-`-ApiPort` from the one-click script also skips plugin autostart; its logon task remains the start
+`-ApiPort` from the Hindsight phase also skips plugin autostart; its logon task remains the start
 path.
 
 The `hindsight_diagnose` tool reports the resolved endpoint, config path, and whether a token is
@@ -523,11 +544,11 @@ directory. Keep the remote private and see [Privacy boundary](#privacy-boundary)
 
 ## Updating
 
-The local runtime is pinned in `setup-hindsight.ps1` by `$ToolVersion = '1.1.0'` and
+The local runtime is pinned in `install.ps1` by `$ToolVersion = '1.1.0'` and
 `$ApiVersion = '1.1.0'`; the profile records `HINDSIGHT_EMBED_API_VERSION` and the database URL.
-To update the runtime, change both constants together, rerun the one-click script, and repeat the
-retain/restart/recall persistence check. Rerunning keeps the pin and does not switch an existing
-database.
+To update the runtime, change both constants together, rerun the one-command installer (or
+`install.ps1 -HindsightOnly`), and repeat the retain/restart/recall persistence check. Rerunning
+keeps the pin and does not switch an existing database.
 
 The exporter writes metadata schema version `1` (`export.json` and `index.json`), and
 `restore-hindsight.ps1` refuses any other version instead of guessing. A future archive layout change
@@ -539,8 +560,8 @@ root and generated setup declarations to match, and rejects ranges, `latest`, mu
 invalid SemVer. To update it, change the exact version in the plugin manifest and root
 `package.json`, run `pnpm install`, `pnpm gen`, and `pnpm build`, then run `pnpm validate` and the
 live retain/recall plus restart acceptance before publishing a new set release and tag. Do not
-hand-edit the generated setup manifest or vendored tree. The documented one-click URL targets
-`main`, so it becomes live only after the release commit is pushed.
+hand-edit the generated setup manifest or vendored tree. The documented installer URL targets
+`main`, so a pinned-runtime change goes live only after the change is pushed.
 
 ## Do not combine wiring routes
 

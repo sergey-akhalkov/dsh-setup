@@ -272,16 +272,17 @@ the target directory and the private remote are machine-local inputs
 (`~/.dsh/hindsight-export.json`). `export.remote` is read only from that file; `export.dir` may also
 come from a machine-local profile patch, and the file's `dir` wins when both are set.
 
-The one-click `setup-hindsight.ps1` asks for the same directory and remote, verifies the DeepSeek key
+The installer's Hindsight phase asks for the same directory and remote, verifies the DeepSeek key
 and push access before changing anything, and writes the ACL-restricted file. Use
 `-ExportDir`/`-ExportRemote` for scripted runs (`-ExportRemote -` keeps the export local); the
-script's `-SelfTest` covers the URL, config-merge, directory, and push fixtures without a daemon or
-a real remote.
+installer's `-SelfTest` covers the URL, config-merge, directory, and push fixtures without a daemon
+or a real remote. The root `setup-hindsight.ps1` is a thin forwarder to
+`install.ps1 -HindsightOnly`; it accepts the same Hindsight options.
 
 Verify without a live daemon or a real private repository:
 
 ```sh
-pwsh -NoProfile -File setup-hindsight.ps1 -SelfTest
+pwsh -NoProfile -File install.ps1 -SelfTest
 pnpm exec vitest run packages/plugin-hindsight/test/export-end-to-end.test.ts
 pnpm exec vitest run packages/plugin-hindsight/test/export-scheduler.test.ts
 pnpm exec vitest run scripts/test/restore-hindsight.test.ts

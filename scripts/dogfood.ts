@@ -320,6 +320,7 @@ function main(): number {
       '-NoStopApp',
       '-NoRestart',
       '-NoDesktopShortcut',
+      '-NoHindsight',
       '-SetupSpec',
       setupDir,
       '-DshCli',

@@ -204,6 +204,30 @@ function main(): number {
   const manifestPath = join(profileDir, 'package.json')
   const patchPath = join(profileDir, 'cordis.patch.yml')
   const failures: string[] = []
+  const basePath = env.PATH ?? env.Path ?? ''
+
+  const cleanup = (dir: string): void => {
+    if (process.env.DSH_KEEP === '1') return
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch (error) {
+      console.warn(
+        `validate-installer: could not remove ${relative(rootDir, dir)}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  const makeUvStub = (): string => {
+    const dir = mkdtempSync(join(tmpRoot, 'installer-stub-uv-'))
+    writeFileSync(join(dir, 'uv.cmd'), '@exit /b 0\r\n')
+    return dir
+  }
+
+  const makeInvalidExport = (): string => {
+    const dir = mkdtempSync(join(tmpRoot, 'installer-export-'))
+    writeFileSync(join(dir, 'keep.txt'), 'keep')
+    return dir
+  }
 
   const step = (name: string, body: () => void): void => {
     const startedAt = Date.now()
@@ -289,10 +313,150 @@ function main(): number {
       for (const fragment of [
         'git+https://github.com/sergey-akhalkov/dsh-setup.git#',
         '&path:/packages/setup',
+        'hindsight:',
         'Dry run: no changes were made',
       ]) {
         if (!result.stdout.includes(fragment)) {
           throw new Error(`the plan lacks "${fragment}"\n${result.stdout.trim()}`)
+        }
+      }
+      const planIndex = result.stdout.indexOf('==> Plan')
+      const hindsightIndex = result.stdout.indexOf('hindsight:')
+      if (planIndex < 0 || hindsightIndex <= planIndex) {
+        throw new Error(
+          `the plan does not report the profile phase before Hindsight\n${result.stdout.trim()}`,
+        )
+      }
+      const disabled = shell(pwsh, [...args, '-NoHindsight'], env, 120_000)
+      if (disabled.status !== 0) throw fail(disabled)
+      if (!disabled.stdout.includes('hindsight: skip (-NoHindsight)')) {
+        throw new Error(`the -NoHindsight plan lacks its skip line\n${disabled.stdout.trim()}`)
+      }
+    })
+
+    // The Hindsight phase is machine-level and CI has no key or daemon, so the
+    // Hindsight-only mode must plan without a DSH profile, a CLI, or a prompt.
+    step('the Hindsight-only mode plans without a profile or CLI', () => {
+      const hindsightHome = mkdtempSync(join(tmpRoot, 'installer-hindsight-'))
+      try {
+        const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? ''
+        const powershell51 = join(
+          windowsRoot,
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe',
+        )
+        const restrictedEnv: NodeJS.ProcessEnv = {
+          ...env,
+          PATH: `${join(windowsRoot, 'System32')};${windowsRoot}`,
+        }
+        const plans = [
+          { runner: pwsh, runEnv: env, label: 'the normal PATH', prefix: [] as string[] },
+          {
+            runner: powershell51,
+            runEnv: restrictedEnv,
+            label: 'a PATH without uv',
+            prefix: ['-ExecutionPolicy', 'Bypass'],
+          },
+        ]
+        for (const plan of plans) {
+          const result = shell(
+            plan.runner,
+            [
+              '-NoProfile',
+              ...plan.prefix,
+              '-File',
+              join(rootDir, 'install.ps1'),
+              '-HindsightOnly',
+              '-DryRun',
+              '-DshHome',
+              hindsightHome,
+            ],
+            plan.runEnv,
+            120_000,
+          )
+          if (result.status !== 0) throw fail(result)
+          for (const fragment of [
+            'Hindsight dry run: no changes will be made',
+            'hindsight:',
+            'http://127.0.0.1:',
+          ]) {
+            if (!result.stdout.includes(fragment)) {
+              throw new Error(
+                `the Hindsight-only plan on ${plan.label} lacks "${fragment}"\n${result.stdout.trim()}`,
+              )
+            }
+          }
+          if (result.stdout.includes('Reading the DeepSeek Harness installation')) {
+            throw new Error(
+              `the Hindsight-only plan on ${plan.label} read a DSH profile\n${result.stdout.trim()}`,
+            )
+          }
+        }
+      } finally {
+        if (process.env.DSH_KEEP !== '1') {
+          try {
+            rmSync(hindsightHome, { recursive: true, force: true })
+          } catch (error) {
+            console.warn(
+              `validate-installer: could not remove ${relative(rootDir, hindsightHome)}: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          }
+        }
+      }
+    })
+
+    // The contradictory switches must fail before the installer reads a profile
+    // or writes the isolated home; a guard removal has to fail this step.
+    step('contradictory Hindsight options are rejected before any change', () => {
+      const conflictHome = mkdtempSync(join(tmpRoot, 'installer-conflict-'))
+      try {
+        for (const [args, message] of [
+          [
+            ['-HindsightOnly', '-NoHindsight'],
+            '-HindsightOnly and -NoHindsight cannot be combined.',
+          ],
+          [
+            ['-NoHindsight', '-RepairHindsight'],
+            '-NoHindsight and -RepairHindsight cannot be combined.',
+          ],
+        ] as const) {
+          const result = shell(
+            pwsh,
+            [
+              '-NoProfile',
+              '-File',
+              join(rootDir, 'install.ps1'),
+              ...args,
+              '-DshHome',
+              conflictHome,
+            ],
+            env,
+            120_000,
+          )
+          const output = `${result.stdout}\n${result.stderr}`
+          if (result.status === 0) {
+            throw new Error(`the installer accepted ${args.join(' ')}\n${output.trim()}`)
+          }
+          if (!output.includes(message)) {
+            throw new Error(
+              `the refusal for ${args.join(' ')} lacks "${message}"\n${output.trim()}`,
+            )
+          }
+        }
+        if (readdirSync(conflictHome).length > 0) {
+          throw new Error('contradictory options changed the isolated Harness home')
+        }
+      } finally {
+        if (process.env.DSH_KEEP !== '1') {
+          try {
+            rmSync(conflictHome, { recursive: true, force: true })
+          } catch (error) {
+            console.warn(
+              `validate-installer: could not remove ${relative(rootDir, conflictHome)}: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          }
         }
       }
     })
@@ -354,6 +518,7 @@ function main(): number {
               '-NoStopApp',
               '-NoRestart',
               '-NoDesktopShortcut',
+              '-NoHindsight',
             ],
             {
               ...env,
@@ -452,6 +617,7 @@ function main(): number {
       '-NoStopApp',
       '-NoRestart',
       '-NoDesktopShortcut',
+      '-NoHindsight',
       '-SetupSpec',
       setupSpec,
     ]
@@ -461,6 +627,15 @@ function main(): number {
     step('run install.ps1', () => {
       first = shell(pwsh, installerArgs, env, 240_000)
       if (first.status !== 0) throw fail(first)
+      const verificationIndex = first.stdout.indexOf('Verifying the installed profile')
+      const phaseIndex = first.stdout.indexOf('==> Hindsight')
+      const summaryIndex = first.stdout.indexOf('Hindsight: skipped (-NoHindsight)')
+      if (verificationIndex < 0 || phaseIndex <= verificationIndex) {
+        throw new Error('the Hindsight phase did not run after the profile verification')
+      }
+      if (summaryIndex <= phaseIndex) {
+        throw new Error('the run summary does not report the skipped Hindsight phase')
+      }
     })
     if (first?.status === null) {
       // A timed-out installer leaves its process tree behind; the command lines
@@ -539,6 +714,256 @@ function main(): number {
         throw new Error('the bundle selection changed on the second run')
       }
       if (hashFile(patchPath) !== patchBefore) throw new Error('cordis.patch.yml changed')
+    })
+
+    // A missing key must skip, not fail, even when the host cannot prompt.
+    step('a non-interactive run without a key skips the Hindsight phase', () => {
+      const noKeyHome = mkdtempSync(join(tmpRoot, 'installer-no-key-'))
+      const hindsightHome = mkdtempSync(join(tmpRoot, 'installer-no-key-hindsight-'))
+      const uvStub = makeUvStub()
+      try {
+        const noKeyEnv: NodeJS.ProcessEnv = {
+          ...env,
+          PATH: `${uvStub};${basePath}`,
+          DSH_SETUP_HINDSIGHT_HOME: hindsightHome,
+        }
+        delete noKeyEnv.DEEPSEEK_API_KEY
+        const result = shell(
+          pwsh,
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-File',
+            join(rootDir, 'install.ps1'),
+            '-HindsightOnly',
+            '-DshHome',
+            noKeyHome,
+          ],
+          noKeyEnv,
+          120_000,
+        )
+        const output = `${result.stdout}\n${result.stderr}`
+        if (result.status !== 0) throw fail(result)
+        if (!output.includes('no DeepSeek key is available')) {
+          throw new Error(`the no-key run does not report the skip\n${output.trim()}`)
+        }
+        if (readdirSync(noKeyHome).length > 0 || readdirSync(hindsightHome).length > 0) {
+          throw new Error('the no-key run changed the isolated or Hindsight home')
+        }
+      } finally {
+        cleanup(noKeyHome)
+        cleanup(hindsightHome)
+        cleanup(uvStub)
+      }
+    })
+
+    // An attempted phase that fails must exit non-zero without touching the runtime.
+    step('a failed Hindsight phase exits non-zero without changing the runtime', () => {
+      const failureHome = mkdtempSync(join(tmpRoot, 'installer-hindsight-fail-'))
+      const hindsightHome = mkdtempSync(join(tmpRoot, 'installer-hindsight-fail-home-'))
+      const uvStub = makeUvStub()
+      const exportDir = makeInvalidExport()
+      try {
+        const failureEnv: NodeJS.ProcessEnv = {
+          ...env,
+          PATH: `${uvStub};${basePath}`,
+          DSH_SETUP_HINDSIGHT_HOME: hindsightHome,
+        }
+        const result = shell(
+          pwsh,
+          [
+            '-NoProfile',
+            '-File',
+            join(rootDir, 'install.ps1'),
+            '-HindsightOnly',
+            '-RepairHindsight',
+            '-SkipVerify',
+            '-DeepSeekApiKey',
+            'deliberately-invalid',
+            '-ExportDir',
+            exportDir,
+            '-DshHome',
+            failureHome,
+          ],
+          failureEnv,
+          120_000,
+        )
+        const output = `${result.stdout}\n${result.stderr}`
+        if (result.status === 0) throw new Error(`the failed phase passed\n${output.trim()}`)
+        for (const fragment of [
+          'The Hindsight phase failed',
+          'not empty and is not a Git repository',
+        ]) {
+          if (!output.includes(fragment)) {
+            throw new Error(`the failed phase lacks "${fragment}"\n${output.trim()}`)
+          }
+        }
+        if (readdirSync(hindsightHome).length > 0) {
+          throw new Error('the failed phase changed the Hindsight home')
+        }
+      } finally {
+        cleanup(failureHome)
+        cleanup(hindsightHome)
+        cleanup(uvStub)
+        cleanup(exportDir)
+      }
+    })
+
+    // The real phase must skip with a warning when uv is unavailable.
+    step('a run without uv skips the Hindsight phase', () => {
+      const noUvHome = mkdtempSync(join(tmpRoot, 'installer-no-uv-'))
+      const hindsightHome = mkdtempSync(join(tmpRoot, 'installer-no-uv-hindsight-'))
+      try {
+        const windowsRoot = process.env.SystemRoot ?? process.env.WINDIR ?? ''
+        const powershell51 = join(
+          windowsRoot,
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe',
+        )
+        const restrictedEnv: NodeJS.ProcessEnv = {
+          ...env,
+          PATH: `${join(windowsRoot, 'System32')};${windowsRoot}`,
+          DSH_SETUP_HINDSIGHT_HOME: hindsightHome,
+        }
+        const result = shell(
+          powershell51,
+          [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            join(rootDir, 'install.ps1'),
+            '-HindsightOnly',
+            '-DshHome',
+            noUvHome,
+          ],
+          restrictedEnv,
+          120_000,
+        )
+        const output = `${result.stdout}\n${result.stderr}`
+        if (result.status !== 0) throw fail(result)
+        if (!output.includes('uv is not installed')) {
+          throw new Error(`the no-uv run does not report the skip\n${output.trim()}`)
+        }
+        if (readdirSync(noUvHome).length > 0 || readdirSync(hindsightHome).length > 0) {
+          throw new Error('the no-uv run changed the isolated or Hindsight home')
+        }
+      } finally {
+        cleanup(noUvHome)
+        cleanup(hindsightHome)
+      }
+    })
+
+    // A rejected key must fail the attempted phase before any runtime change.
+    step('a rejected key fails the phase without changing the runtime', () => {
+      const failureHome = mkdtempSync(join(tmpRoot, 'installer-rejected-key-'))
+      const hindsightHome = mkdtempSync(join(tmpRoot, 'installer-rejected-key-home-'))
+      const uvStub = makeUvStub()
+      try {
+        const failureEnv: NodeJS.ProcessEnv = {
+          ...env,
+          PATH: `${uvStub};${basePath}`,
+          DSH_SETUP_HINDSIGHT_HOME: hindsightHome,
+        }
+        const result = shell(
+          pwsh,
+          [
+            '-NoProfile',
+            '-File',
+            join(rootDir, 'install.ps1'),
+            '-HindsightOnly',
+            '-RepairHindsight',
+            '-DeepSeekApiKey',
+            'deliberately-invalid',
+            '-DshHome',
+            failureHome,
+          ],
+          failureEnv,
+          120_000,
+        )
+        const output = `${result.stdout}\n${result.stderr}`
+        if (result.status === 0) throw new Error(`the rejected key passed\n${output.trim()}`)
+        if (!output.includes('DeepSeek API key was rejected')) {
+          throw new Error(`the rejected key is not reported\n${output.trim()}`)
+        }
+        if (readdirSync(hindsightHome).length > 0) {
+          throw new Error('the rejected key changed the Hindsight home')
+        }
+      } finally {
+        cleanup(failureHome)
+        cleanup(hindsightHome)
+        cleanup(uvStub)
+      }
+    })
+
+    // The default mode must report the installed profile when the phase fails.
+    step('a default-mode Hindsight failure reports the installed profile', () => {
+      const hindsightHome = mkdtempSync(join(tmpRoot, 'installer-hindsight-default-'))
+      const uvStub = makeUvStub()
+      const exportDir = makeInvalidExport()
+      try {
+        const failureEnv: NodeJS.ProcessEnv = {
+          ...env,
+          PATH: `${uvStub};${basePath}`,
+          DSH_SETUP_HINDSIGHT_HOME: hindsightHome,
+        }
+        const args = [
+          '-NoProfile',
+          '-File',
+          join(rootDir, 'install.ps1'),
+          '-Profile',
+          'ci',
+          '-DshHome',
+          home,
+          '-NoStopApp',
+          '-NoRestart',
+          '-NoDesktopShortcut',
+          '-SetupSpec',
+          setupSpec,
+          '-SkipVerify',
+          '-DeepSeekApiKey',
+          'deliberately-invalid',
+          '-ExportDir',
+          exportDir,
+        ]
+        if (cli !== undefined) args.push('-DshCli', cli)
+        const result = shell(pwsh, args, failureEnv, 240_000)
+        const output = `${result.stdout}\n${result.stderr}`
+        if (result.status === 0) throw new Error(`the default failure passed\n${output.trim()}`)
+        for (const fragment of [
+          'The setup profile was installed, but the Hindsight phase failed',
+          'not empty and is not a Git repository',
+        ]) {
+          if (!output.includes(fragment)) {
+            throw new Error(`the default failure lacks "${fragment}"\n${output.trim()}`)
+          }
+        }
+        const manifest = readJson<ProfileManifest>(manifestPath)
+        if (manifest.dependencies?.['@dsh-setup/setup'] === undefined) {
+          throw new Error('the failed run removed the installed setup dependency')
+        }
+      } finally {
+        cleanup(hindsightHome)
+        cleanup(uvStub)
+        cleanup(exportDir)
+      }
+    })
+
+    // The phase failure must leave the app restart in the unchanged finally path;
+    // a desktop-app fixture is unsafe on a machine that runs the app.
+    step('the failed phase keeps the app restart in finally', () => {
+      const text = readFileSync(join(rootDir, 'install.ps1'), 'utf8')
+      const phaseIndex = text.indexOf('$hindsightStatus = Invoke-HindsightPhase')
+      const finallyIndex = text.indexOf('} finally {')
+      const restartIndex = text.indexOf('Start-Process -FilePath $launch')
+      if (phaseIndex < 0 || finallyIndex <= phaseIndex) {
+        throw new Error('the Hindsight phase call is not inside the main try before finally')
+      }
+      if (restartIndex <= finallyIndex) {
+        throw new Error('the app restart is not in the finally block')
+      }
     })
   } catch (error) {
     console.error(`validate-installer: ${error instanceof Error ? error.message : String(error)}`)

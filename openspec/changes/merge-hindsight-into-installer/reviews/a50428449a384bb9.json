@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "merge-hindsight-into-installer",
+  "scope": "task",
+  "taskId": "a50428449a384bb9",
+  "digest": "4b8a4177e876c97bd81df6c9d4cb5e2ac414d9faf99429307776b9f12a89f423",
+  "worktreeDigest": "82883a115d7fba1e44668e898aa4eda28cba4b52d0e9ea219ea5f37785db5584",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent"
+  },
+  "time": "2026-10-29T19:13:06.819Z"
+}
