@@ -57,6 +57,10 @@ rebuild (`git diff --exit-code` after `pnpm build`, plus `pnpm gen:check`).
 | `pnpm dogfood`                                | Runs `install.ps1` against a throwaway copy of the live `desktop` profile and proves the live profile is unchanged (Windows only)     | installer/composition change; before installing live on the owner machine       |
 | `pnpm generate:market`                        | Builds the gitignored `market/` artifact from HEAD (or `--commit`/`--timestamp`); needs a git commit                                  | verifying release output                                                        |
 | `pnpm release:prepare --version X.Y.Z`        | Sets one version in root, every plugin, setup, then runs `pnpm gen`                                                                   | starting a release                                                              |
+| `pnpm reviews:check --change <name>`          | Audits one change's checked tasks against the committed `reviews/` PASS records                                                       | before archiving a change                                                       |
+| `pnpm reviews:check --all`                    | Audits every archived change against the marker cutoff, the v0.12.0 exception, and the pre-cutoff baseline                            | before release; CI                                                              |
+| `pnpm reviews:check --push`                   | Audits the archived changes the push adds (reads the pre-push refs from stdin)                                                        | automatically from the pre-push hook                                            |
+| `pnpm reviews:export --change <name>`         | Copies existing local `.dsh` PASS records into the change as portable approval evidence                                               | once, for a change reviewed before the portable write existed                   |
 
 Useful environment variables: `DSH_CLI` (CLI command to use instead of `pnpm dlx @deepseek-ai/dsh@<runtime>`),
 `DSH_KEEP=1` (keep throwaway Harness homes), `DSH_VERSION` (`validate:installer` DSH version),

@@ -18,7 +18,7 @@
 - [x] 3.1 Compute approval over every checked task, independent of session attribution: PASS-only, `ERROR`/`FINDINGS`/missing/malformed unapproved, an unparseable checked line fails closed, and unchecked tasks are reported only. Verify the tests cover a shell tick, a foreign-session PASS, an `ERROR`, a malformed record, an unparseable line, and an unchecked task.
 - [x] 3.2 Extend `delegation_status` with `PASS x, ERROR y, missing z`, the missing task number/text/id/record path, and `archive-ready`; verify the status test output and the existing status tests.
 - [x] 3.3 Add `scripts/reviews-check.ts` with `--change`, `--all`, `--push`, and `--export`, reading the marker, the v0.12.0 exception, and the pre-cutoff baseline; verify the script tests cover an active change, a post-cutoff archive, a pre-cutoff historical archive, the exception, a malformed record, and a missing approval.
-- [ ] 3.4 Add the `package.json` scripts and the command reference to `docs/contributing.md`; verify `pnpm reviews:check --change add-review-approval-gate` runs and `pnpm lint` passes.
+- [x] 3.4 Add the `package.json` scripts and the command reference to `docs/contributing.md`; verify `pnpm reviews:check --change add-review-approval-gate` runs and `pnpm lint` passes.
 
 ## 4. Completion and archive gate
 
