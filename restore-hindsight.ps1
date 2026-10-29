@@ -368,23 +368,35 @@ function Initialize-Daemon {
   $tool = Get-Command hindsight-embed -ErrorAction SilentlyContinue
   if ($tool -and (Test-Path -LiteralPath $provisioning -PathType Leaf)) {
     Write-Step 'the daemon is not healthy; running the documented provisioning script (no install)'
-    & $provisioning -SkipVerify
-    $deadline = (Get-Date).AddSeconds(180)
-    while ((Get-Date) -lt $deadline) {
-      if (Test-Daemon) { return }
-      Start-Sleep -Seconds 3
+    $provisioned = $false
+    try {
+      & $provisioning -SkipVerify
+      $provisioned = $true
+    } catch {
+      # A failed provision must not abort the restore: the offline import is next.
+      Write-Step "provisioning failed ($($_.Exception.Message)); trying the offline import instead"
+    }
+    if ($provisioned) {
+      $deadline = (Get-Date).AddSeconds(180)
+      while ((Get-Date) -lt $deadline) {
+        if (Test-Daemon) { return }
+        Start-Sleep -Seconds 3
+      }
     }
   }
-  $admin = Get-Command hindsight-admin -ErrorAction SilentlyContinue
-  return $admin
 }
 
 function Invoke-AdminImport([string]$ZipPath, [string]$Target) {
   $admin = Get-Command hindsight-admin -ErrorAction SilentlyContinue
   if (-not $admin) {
+    # The temporary archive is deleted on exit, so keep a durable copy for the
+    # manual command that follows.
+    $kept = Join-Path ([System.IO.Path]::GetTempPath()) ('hindsight-archive-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.zip')
+    Copy-Item -LiteralPath $ZipPath -Destination $kept -Force
     [Console]::Error.WriteLine('restore-hindsight: the local daemon is not healthy and hindsight-admin is not installed.')
-    [Console]::Error.WriteLine('  Install the runtime with setup-hindsight.ps1, or run the archive import offline:')
-    [Console]::Error.WriteLine("  hindsight-admin import-bank --archive `"$ZipPath`" --target-bank `"$Target`"")
+    [Console]::Error.WriteLine("  The rebuilt archive was kept at: $kept")
+    [Console]::Error.WriteLine('  Install the runtime with setup-hindsight.ps1, then import offline:')
+    [Console]::Error.WriteLine("  hindsight-admin import-bank --archive `"$kept`" --target-bank `"$Target`"")
     exit 4
   }
   Write-Step "daemon unavailable; falling back to hindsight-admin import-bank for $Target"

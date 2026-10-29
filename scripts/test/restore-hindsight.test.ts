@@ -1,10 +1,18 @@
-import { spawn, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { rootDir } from '../lib/workspace.ts'
@@ -21,6 +29,18 @@ const hasPwsh =
   spawnSync(PWSH, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], {
     stdio: 'ignore',
   }).status === 0
+
+/** Whether an executable is on PATH, without running it. */
+function onPath(command: string): boolean {
+  const extensions = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : ['']
+  return (process.env.PATH ?? '')
+    .split(delimiter)
+    .some((directory) => extensions.some((ext) => existsSync(join(directory, command + ext))))
+}
+
+/** Running the real runtime would start the owner's daemon; never do that from a test. */
+const hasHindsightEmbed = onPath('hindsight-embed')
+const hasHindsightAdmin = onPath('hindsight-admin')
 
 const tempDirs: string[] = []
 
@@ -166,9 +186,13 @@ interface ScriptResult {
   stderr: string
 }
 
-function runScript(args: string[], env: NodeJS.ProcessEnv = {}): Promise<ScriptResult> {
+function runScriptWith(
+  script: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<ScriptResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(PWSH, ['-NoProfile', '-NonInteractive', '-File', SCRIPT, ...args], {
+    const child = spawn(PWSH, ['-NoProfile', '-NonInteractive', '-File', script, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
     })
@@ -183,6 +207,17 @@ function runScript(args: string[], env: NodeJS.ProcessEnv = {}): Promise<ScriptR
     child.on('error', reject)
     child.on('close', (code) => resolve({ code, stdout, stderr }))
   })
+}
+
+function runScript(args: string[], env: NodeJS.ProcessEnv = {}): Promise<ScriptResult> {
+  return runScriptWith(SCRIPT, args, env)
+}
+
+/** A stand-in `hindsight-admin` that records its arguments and succeeds. */
+function adminStub(windows: boolean, log: string): string {
+  return windows
+    ? `@echo %* >> "${log}"\r\n@exit /b 0\r\n`
+    : `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`
 }
 
 interface RecordedRequest {
@@ -510,4 +545,146 @@ describe.skipIf(!hasPwsh)('restore-hindsight.ps1', () => {
       await api.close()
     }
   })
+
+  it('restores from a bare private remote when the local copy is gone', async () => {
+    const root = tempDir()
+    const bare = join(root, 'remote.git')
+    execFileSync('git', ['init', '--bare', '--initial-branch=main', bare], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const seed = join(root, 'seed')
+    execFileSync('git', ['clone', bare, seed], { stdio: ['ignore', 'pipe', 'pipe'] })
+    writeFixture(seed, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Seed',
+      GIT_AUTHOR_EMAIL: 'seed@localhost',
+      GIT_COMMITTER_NAME: 'Seed',
+      GIT_COMMITTER_EMAIL: 'seed@localhost',
+      GIT_TERMINAL_PROMPT: '0',
+    }
+    execFileSync('git', ['add', '--all'], {
+      cwd: seed,
+      env: gitEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    execFileSync('git', ['commit', '--message', 'export'], {
+      cwd: seed,
+      env: gitEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    execFileSync('git', ['push', 'origin', 'HEAD'], {
+      cwd: seed,
+      env: gitEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    // The local copy is gone; only the private remote remains.
+    rmSync(seed, { recursive: true, force: true })
+
+    const scratch = (): string[] =>
+      readdirSync(tmpdir())
+        .filter((name) => name.startsWith('hindsight-restore-'))
+        .sort()
+    const before = new Set(scratch())
+    const api = await startFakeApi({ banks: [] })
+    try {
+      const result = await runScript(['-Repo', bare, '-ApiUrl', api.url])
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.stdout).toContain("restored bank 'coding-agent::one'")
+      expect(importRequest(api)?.query.get('target_bank_id')).toBe('coding-agent::one')
+      // The temporary clone and archive are cleaned up.
+      expect(scratch().filter((name) => !before.has(name))).toEqual([])
+    } finally {
+      await api.close()
+    }
+  })
+
+  it.skipIf(hasHindsightEmbed)(
+    'falls back to hindsight-admin import-bank when the daemon is down',
+    async () => {
+      const root = tempDir()
+      writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+      const stubDir = tempDir()
+      const log = join(stubDir, 'admin.log')
+      const windows = process.platform === 'win32'
+      const stub = join(stubDir, windows ? 'hindsight-admin.cmd' : 'hindsight-admin')
+      writeFileSync(stub, adminStub(windows, log))
+      const closed = createServer()
+      await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', () => resolve()))
+      const port = (closed.address() as AddressInfo).port
+      await new Promise<void>((resolve) => closed.close(() => resolve()))
+
+      const result = await runScript(['-From', root, '-ApiUrl', `http://127.0.0.1:${port}`], {
+        PATH: `${stubDir}${delimiter}${process.env.PATH ?? ''}`,
+      })
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.stdout).toContain('falling back to hindsight-admin import-bank')
+      const invocation = readFileSync(log, 'utf8')
+      expect(invocation).toContain('import-bank')
+      expect(invocation).toContain('--archive')
+      expect(invocation).toContain('--target-bank')
+      expect(invocation).toContain('coding-agent::one')
+    },
+  )
+
+  it.skipIf(hasHindsightEmbed)(
+    'keeps the offline import working when the provisioning script throws',
+    async () => {
+      const root = tempDir()
+      writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+      const toolDir = tempDir()
+      const windows = process.platform === 'win32'
+      const adminLog = join(toolDir, 'admin.log')
+      const embedName = windows ? 'hindsight-embed.cmd' : 'hindsight-embed'
+      writeFileSync(join(toolDir, embedName), windows ? '@exit /b 0\r\n' : '#!/bin/sh\nexit 0\n')
+      writeFileSync(
+        join(toolDir, windows ? 'hindsight-admin.cmd' : 'hindsight-admin'),
+        adminStub(windows, adminLog),
+      )
+      // A copy of the script beside a provisioning script that always throws.
+      const scripts = tempDir()
+      writeFileSync(join(scripts, 'setup-hindsight.ps1'), "throw 'provisioning exploded'\n")
+      const restored = readFileSync(SCRIPT, 'utf8')
+      writeFileSync(join(scripts, 'restore-hindsight.ps1'), restored)
+
+      const closed = createServer()
+      await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', () => resolve()))
+      const port = (closed.address() as AddressInfo).port
+      await new Promise<void>((resolve) => closed.close(() => resolve()))
+
+      const result = await runScriptWith(
+        join(scripts, 'restore-hindsight.ps1'),
+        ['-From', root, '-ApiUrl', `http://127.0.0.1:${port}`],
+        { PATH: `${toolDir}${delimiter}${process.env.PATH ?? ''}` },
+      )
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.stdout).toContain('provisioning failed (provisioning exploded)')
+      expect(result.stdout).toContain('falling back to hindsight-admin import-bank')
+      expect(readFileSync(adminLog, 'utf8')).toContain('import-bank')
+    },
+  )
+
+  it.skipIf(hasHindsightEmbed || hasHindsightAdmin)(
+    'prints an offline command that still has its archive after exit',
+    async () => {
+      const root = tempDir()
+      writeFixture(root, [{ folder: 'bank-one', bankId: 'coding-agent::one' }])
+      const closed = createServer()
+      await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', () => resolve()))
+      const port = (closed.address() as AddressInfo).port
+      await new Promise<void>((resolve) => closed.close(() => resolve()))
+      const result = await runScript(['-From', root, '-ApiUrl', `http://127.0.0.1:${port}`])
+      expect(result.code).toBe(4)
+      expect(result.stderr).toContain('hindsight-admin is not installed')
+      const kept = /--archive "([^"]+\.zip)"/u.exec(result.stderr)?.[1]
+      expect(kept).toBeDefined()
+      const archive = kept ?? ''
+      try {
+        expect(existsSync(archive), 'the printed archive must survive the exit').toBe(true)
+        expect(readFileSync(archive).subarray(0, 2).toString('latin1')).toBe('PK')
+      } finally {
+        if (archive !== '') rmSync(archive, { force: true })
+      }
+    },
+  )
 })
