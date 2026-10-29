@@ -205,12 +205,17 @@ function Confirm-BankTree([string]$BankId, [string]$Folder) {
   }
   # Every archive entry must be covered by a checksum, not merely the listed ones.
   $declared = @($metadata.checksums.PSObject.Properties | ForEach-Object { [string]$_.Name })
-  $root = (Resolve-Path -LiteralPath $Folder).Path
-  $exportJson = Join-Path $root 'export.json'
+  # Derive entries from the bank folder name, not from resolved path lengths:
+  # Windows short (8.3) and long path forms can disagree inside one tree.
+  $marker = [System.IO.Path]::DirectorySeparatorChar + (Split-Path -Leaf $Folder) + [System.IO.Path]::DirectorySeparatorChar
   $stored = @(
-    Get-ChildItem -LiteralPath $root -Recurse -File |
-      Where-Object { $_.FullName -ne $exportJson } |
-      ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') }
+    Get-ChildItem -LiteralPath $Folder -Recurse -File |
+      Where-Object { $_.Name -ne 'export.json' } |
+      ForEach-Object {
+        $index = $_.FullName.LastIndexOf($marker, [StringComparison]::OrdinalIgnoreCase)
+        if ($index -lt 0) { Stop-WithError 1 "cannot derive the archive-relative path for $($_.FullName)" }
+        $_.FullName.Substring($index + $marker.Length).Replace('\', '/')
+      }
   )
   $undeclared = @($stored | Where-Object { $declared -notcontains $_ })
   if ($undeclared.Count -gt 0) {
@@ -220,18 +225,19 @@ function Confirm-BankTree([string]$BankId, [string]$Folder) {
 }
 
 function New-TransferArchive([string]$Folder, [string]$ZipPath) {
-  # Resolve first: Resolve-Path and Get-ChildItem can disagree on short (8.3)
-  # paths, and a Substring over mismatched roots corrupts entry names.
-  $root = (Resolve-Path -LiteralPath $Folder).Path
-  $exportJson = Join-Path $root 'export.json'
-  $files = @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { $_.FullName -ne $exportJson })
+  # Same short/long path caution as Confirm-BankTree: locate the bank folder by
+  # name and derive each entry below it.
+  $marker = [System.IO.Path]::DirectorySeparatorChar + (Split-Path -Leaf $Folder) + [System.IO.Path]::DirectorySeparatorChar
+  $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -File | Where-Object { $_.Name -ne 'export.json' })
   if ($files.Count -eq 0) { Stop-WithError 1 "no archive entries found in $Folder" }
   # ZipArchiveMode.Create refuses an existing file; the temp path is reused per bank.
   if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
   $zip = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
   try {
     foreach ($file in $files) {
-      $relative = $file.FullName.Substring($root.Length + 1).Replace('\', '/')
+      $index = $file.FullName.LastIndexOf($marker, [StringComparison]::OrdinalIgnoreCase)
+      if ($index -lt 0) { Stop-WithError 1 "cannot derive the archive-relative path for $($file.FullName)" }
+      $relative = $file.FullName.Substring($index + $marker.Length).Replace('\', '/')
       $entry = $zip.CreateEntry($relative, [System.IO.Compression.CompressionLevel]::Optimal)
       $output = $entry.Open()
       try {
