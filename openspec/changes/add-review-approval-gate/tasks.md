@@ -37,7 +37,7 @@
 
 - [x] 6.1 Write `docs/review-approval.md`: the approval rule, the portable record, the audit commands, the marker, the opt-in boundary, the push/CI enforcement, the worktree workflow, and the known limits; verify `pnpm lint` and every documented command against a fixture.
 - [x] 6.2 Record the v0.12.0 exception and the pre-cutoff historical baseline in `docs/openspec-status.md`: the three changes, their checked-task counts (17, 20, 11), the post-hoc integration review PASS in the `review-v0-12-0` worktree, the fixes branch, the older archives reported as baseline, and the cutoff; verify the audit reports both and the document links resolve.
-- [ ] 6.3 Sync the `delegation-rules` and `review-approval` deltas into the main specs with the `openspec-sync-specs` workflow; verify `openspec validate --specs` and `openspec validate --all` pass.
+- [x] 6.3 Sync the `delegation-rules` and `review-approval` deltas into the main specs with the `openspec-sync-specs` workflow; verify `openspec validate --specs` and `openspec validate --all` pass.
 
 ## 7. Integration verification
 
