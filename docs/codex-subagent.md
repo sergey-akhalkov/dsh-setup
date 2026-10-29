@@ -174,6 +174,13 @@ The providers declare `agentOptions` support and accept a target's `model` and
 targets:
   codex:
     provider: codex-subagent
+    model: gpt-6-astra
+    reasoningEffort: xhigh
+  codex-write:
+    provider: codex-subagent-write
+    write: true
+    model: gpt-6-astra
+    reasoningEffort: xhigh
   codex-astra:
     provider: codex-subagent
     model: gpt-6-astra
@@ -186,6 +193,12 @@ targets:
   row default or the user's Codex `config.toml` route.
 - Any other `agentOptions` entry is rejected before a process starts with a
   `subagent-codex:` diagnostic naming the unsupported option.
+
+The setup's delegation rules use these values by default: `codex` and `codex-write` select
+`gpt-6-astra` at `xhigh`, and `codex-astra` is the explicit strong target the manual advisor uses.
+Override the target in the delegation config (not the provider row) to change a rule's model; keep
+`codex-astra` strong if `codex` is made cheaper. The provider row's `model`/`reasoningEffort` remain
+fallbacks for targets that set neither.
 
 Invalid model or effort strings are passed to Codex and surface as a normal
 non-completed run, which the delegation engine records as an ERROR for that
@@ -241,9 +254,11 @@ acceptance. Do not fall back to another Codex version silently.
 
 Every delegation starts one app-server, creates one ephemeral thread, and runs
 one turn on your Codex account: it costs a Codex request and tokens, and reviews
-are slow by nature. Per-task reviews multiply the runs. The rules engine's
-`task_progress` note runs no model and is the cheap way to close a turn while a
-task is still in progress.
+are slow by nature. Per-task reviews multiply the runs. The shipped delegation
+targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays the
+strong-model rate; override `codex`/`codex-write` for routine reviews and keep
+`codex-astra` for the advisor. The rules engine's `task_progress` note runs no
+model and is the cheap way to close a turn while a task is still in progress.
 
 ## License and maintenance
 

@@ -113,6 +113,16 @@ describe('bundled prompts', () => {
     expect(text).toContain('read-only')
   })
 
+  it('shapes an advisor second opinion with a recommendation, counterargument, risks, next action, and confidence', () => {
+    const text = read('advisor.md')
+    expect(text).toContain('Recommendation')
+    expect(text).toContain('strongest counterargument')
+    expect(text).toContain('Risks')
+    expect(text).toContain('Next action')
+    expect(text).toContain('Confidence')
+    expect(text).toContain('read-only')
+  })
+
   it('shapes the isolated fix with root cause, changed files, tests, and limits', () => {
     const text = read('fix.md')
     expect(text).toContain('worktree')
@@ -120,5 +130,31 @@ describe('bundled prompts', () => {
     expect(text).toContain('Changed files')
     expect(text).toContain('Tests')
     expect(text).toContain('Limits')
+  })
+})
+
+describe('advisor policy', () => {
+  it('names the advisor uses, exclusions, context guidance, and ceiling in the delegate description', () => {
+    const description = toolDescriptions.delegate
+    expect(description).toContain('advisor')
+    expect(description).toContain('exact question')
+    expect(description).toContain('constraints')
+    expect(description).toContain('decisive evidence')
+    expect(description).toContain('expensive-to-reverse')
+    expect(description).toContain('security/data-integrity')
+    expect(description).toContain('routine edits')
+    expect(description).toContain('locally verifiable facts')
+    expect(description).toContain('at most three times per session')
+  })
+
+  it('carries the advisor policy and default row in the skill', () => {
+    const text = read('SKILL.md')
+    expect(text).toContain('| `advisor` | `manual` | answer | none |')
+    expect(text).toContain('## When to consult the advisor')
+    expect(text).toContain('expensive to reverse')
+    expect(text).toContain('security or data integrity')
+    expect(text).toContain('routine edits')
+    expect(text).toContain('at most three advisor calls per session')
+    expect(text).toContain('never satisfies a review')
   })
 })

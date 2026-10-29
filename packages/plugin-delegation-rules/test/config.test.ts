@@ -55,17 +55,36 @@ describe('configuration validation', () => {
       'task-progress',
       'blocker',
       'research',
+      'advisor',
       'bug-fix',
       'integration-review',
     ])
     expect([...config.targets.keys()]).toEqual(['codex', 'codex-write', 'codex-astra'])
     expect(config.targets.get('codex-write')?.write).toBe(true)
-    // The default Codex targets keep provider defaults; the example target selects a model/effort.
-    expect(config.targets.get('codex')).toEqual({ provider: 'codex-subagent' })
+    // The shipped targets select the strong model; codex-astra stays the explicit strong advisor target.
+    expect(config.targets.get('codex')).toEqual({
+      provider: 'codex-subagent',
+      model: 'gpt-6-astra',
+      reasoningEffort: 'xhigh',
+    })
+    expect(config.targets.get('codex-write')).toEqual({
+      provider: 'codex-subagent-write',
+      write: true,
+      model: 'gpt-6-astra',
+      reasoningEffort: 'xhigh',
+    })
     expect(config.targets.get('codex-astra')).toEqual({
       provider: 'codex-subagent',
       model: 'gpt-6-astra',
       reasoningEffort: 'xhigh',
+    })
+    const advisor = config.rules.find((rule) => rule.id === 'advisor')
+    expect(advisor).toMatchObject({
+      when: 'manual',
+      to: 'codex-astra',
+      contract: 'answer',
+      gate: 'none',
+      instruction: 'bundled:advisor',
     })
     expect(config.failureStreak).toBe(3)
     const integration = config.rules.find((rule) => rule.id === 'integration-review')

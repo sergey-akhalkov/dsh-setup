@@ -12,21 +12,26 @@
 # the gate instead of failing profile composition, so a standalone install with
 # another provider still composes. No machine path belongs in this file.
 #
-# `codex-astra` is the per-target model/effort example: point a rule at it (or
-# copy the two option lines onto `codex`) to select a specific Codex model and
-# reasoning effort. The model id is the one verified live against the bundled
-# Codex; the delta spec's `astra` is illustrative, and the engine passes any
-# string through. The default `codex`/`codex-write` targets keep the provider
-# defaults, so an unavailable model slug cannot break the default rules.
+# The shipped `codex` and `codex-write` targets select the documented strong
+# Codex model and `xhigh` reasoning effort. `codex-astra` keeps the same values
+# as the explicit strong target used by the advisor, so overriding `codex` does
+# not weaken the advisor. The model id is the one verified live against the
+# bundled Codex; a profile can override any target (a patch replaces the whole
+# config). An unavailable model fails the run with the target/model next
+# action; it does not change the default rules.
 rows:
   - id: dsh-setup-delegation-rules
     config:
       targets:
         codex:
           provider: codex-subagent
+          model: gpt-6-astra
+          reasoningEffort: xhigh
         codex-write:
           provider: codex-subagent-write
           write: true
+          model: gpt-6-astra
+          reasoningEffort: xhigh
         codex-astra:
           provider: codex-subagent
           model: gpt-6-astra
@@ -63,6 +68,12 @@ rows:
           contract: answer
           gate: none
           instruction: "bundled:research"
+        - id: advisor
+          when: manual
+          to: codex-astra
+          contract: answer
+          gate: none
+          instruction: "bundled:advisor"
         - id: bug-fix
           when: manual
           to: codex-write

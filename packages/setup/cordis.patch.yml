@@ -16,9 +16,13 @@
         targets:
           codex:
             provider: codex-subagent
+            model: gpt-6-astra
+            reasoningEffort: xhigh
           codex-write:
             provider: codex-subagent-write
             write: true
+            model: gpt-6-astra
+            reasoningEffort: xhigh
           codex-astra:
             provider: codex-subagent
             model: gpt-6-astra
@@ -55,6 +59,12 @@
             contract: answer
             gate: none
             instruction: bundled:research
+          - id: advisor
+            when: manual
+            to: codex-astra
+            contract: answer
+            gate: none
+            instruction: bundled:advisor
           - id: bug-fix
             when: manual
             to: codex-write

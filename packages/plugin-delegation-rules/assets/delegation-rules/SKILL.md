@@ -18,8 +18,9 @@ enforcement points; this skill is the authoring and workflow guide.
 
 - `delegate(rule, change?, task?, context?, objective?)` runs one configured rule. The `rule`
   enum is generated from the config, so an unknown rule is rejected with the allowed ids. Write
-  the smallest useful `context` (failing output, files, constraints); `objective` is required for
-  the patch contract.
+  the smallest useful `context` (failing output, files, constraints); for `advisor`, pass the
+  exact question, constraints, and decisive evidence. `objective` is required for the patch
+  contract.
 - `task_progress(task, status, reason)` records an explicit `in-progress`/`blocked` note for an
   unchecked task. It runs no model, costs nothing, and is the only non-tick way to close a
   code-changing turn.
@@ -77,9 +78,10 @@ scope; `implementation-work` requires `note`.
   reused only while the digest is unchanged; an `ERROR` is retried. Any session may run a review:
   the call attributes the change to that session, the record names the reviewing session, and
   records stay workspace-global.
-- **answer** — read-only prompt for a blocker or research question; returns the answer with
-  evidence and, for research, sources. Writes no gate record. A failed answer is reported and
-  marks a consultation attempt so a soft failure-streak rule does not loop.
+- **answer** — read-only prompt for a blocker, research, or advisor question; returns the answer
+  with evidence and, for research, sources, and, for an advisor, a recommendation, the strongest
+  counterargument, risks, a next action, and confidence. Writes no gate record. A failed answer is
+  reported and marks a consultation attempt so a soft failure-streak rule does not loop.
 - **patch** — runs a write-capable target in an isolated git worktree under
   `.dsh/delegation/worktrees/`, returns the changed files, diff, and the target's test report,
   and never applies the diff to the session worktree. The target must be declared
@@ -133,12 +135,14 @@ assign write-capable work, not a new trigger.
 | `task-progress` | `implementation-work` | note | strict |
 | `blocker` | `failure-streak` | answer | soft |
 | `research` | `manual` | answer | none |
+| `advisor` | `manual` | answer | none |
 | `bug-fix` | `manual` | patch | none |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft |
 
-The shipped defaults target the installed-Codex provider. They are data: override `targets` and
-`rules` in the profile's `cordis.patch.yml` (a patch replaces the whole config object). A
-non-Codex target looks like this:
+The shipped defaults target the installed-Codex provider and select `gpt-6-astra` at `xhigh` for
+`codex` and `codex-write`; `codex-astra` is the explicit strong target the advisor uses. They are
+data: override `targets` and `rules` in the profile's `cordis.patch.yml` (a patch replaces the
+whole config object). A non-Codex target looks like this:
 
 ```yaml
 targets:
@@ -159,6 +163,15 @@ rules:
 `provider` is the registered subagent provider; `model`, `reasoningEffort`, and `agentOptions`
 are passed only when the provider declares `agentOptions` support, otherwise the target is
 rejected with the capability error.
+
+## When to consult the advisor
+
+`advisor` is a manual, read-only second opinion, not a gate. Use it only when the decision is
+expensive to reverse, security or data integrity is at stake, the design spans modules, or two
+attempts have failed and the next step is unclear. Do not use it for routine edits, syntax,
+lookups, or facts you can verify locally. One well-framed question per call, with constraints and
+decisive evidence; at most three advisor calls per session. An advisor answer writes no record and
+never satisfies a review.
 
 ## Authoring rules
 
@@ -183,12 +196,15 @@ remain. No in-session phrase bypasses an active gate.
 
 Reviews and answers consume the target's tokens and subscription; the progress note does not.
 Per-task reviews multiply runs, so keep tasks small and sized for one review; set the optional
-integration review to `soft` or `none` if it adds noise. The engine never starts a target from
-the turn-stopping listener, uses fixed-argument git calls with no shell, and treats target output
-as untrusted data: only the declared fenced verdict is parsed and nothing is executed. Records
-and notes are redacted of machine paths and obvious credentials. Session involvement files are
-local scratch under `.dsh/` and are never committed. Records are a process-integrity check, not
-anti-forgery: a model with full filesystem access could write a record-shaped file.
+integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
+targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays for the strong model;
+override those targets for cheaper routine reviews and leave `advisor` on `codex-astra`. The
+engine never starts a target from the turn-stopping listener, uses fixed-argument git calls with
+no shell, and treats target output as untrusted data: only the declared fenced verdict is parsed
+and nothing is executed. Records and notes are redacted of machine paths and obvious credentials.
+Session involvement files are local scratch under `.dsh/` and are never committed. Records are a
+process-integrity check, not anti-forgery: a model with full filesystem access could write a
+record-shaped file.
 
 ## Troubleshooting
 

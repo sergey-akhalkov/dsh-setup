@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "add-codex-advisor-rule",
+  "scope": "task",
+  "taskId": "55ca39fc862f599f",
+  "digest": "09c9678cc7f85b58ad515adf2bc3273e4dd1c3fe2b49c39919f0ad0d0540a2d0",
+  "worktreeDigest": "3f33124c9412d3d57156d6bacf8cdb28a5ac33e64a61ccf91ae84ff154773d04",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent"
+  },
+  "time": "2026-10-29T14:55:47.123Z"
+}

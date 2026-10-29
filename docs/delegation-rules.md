@@ -175,9 +175,10 @@ reviewed-input change during the run (a git-visible worktree file, a tracked fil
 or an included change artifact, including edit-read-restore) discards the verdict and reports a
 retry instead of publishing a `PASS`.
 
-**`answer`** is the read-only blocker/research contract. It returns the answer with evidence and,
-for research, sources and dates. It writes no gate record; a failed answer is reported and
-counts as a consultation attempt so a soft `failure-streak` rule does not loop.
+**`answer`** is the read-only blocker/research/advisor contract. It returns the answer with evidence
+and, for research, sources and dates, and, for an advisor, a recommendation, the strongest
+counterargument, risks, a next action, and confidence. It writes no gate record; a failed answer is
+reported and counts as a consultation attempt so a soft `failure-streak` rule does not loop.
 
 **`patch`** runs a write-capable target in an isolated git worktree under
 `.dsh/delegation/worktrees/` and returns the changed files, diff, and the target's test report.
@@ -278,6 +279,27 @@ provider-supported `agentOptions`:
 targets:
   codex:
     provider: codex-subagent
+    model: gpt-6-astra
+    reasoningEffort: xhigh
+  codex-write:
+    provider: codex-subagent-write
+    write: true
+    model: gpt-6-astra
+    reasoningEffort: xhigh
+  codex-astra:
+    provider: codex-subagent
+    model: gpt-6-astra
+    reasoningEffort: xhigh
+```
+
+The shipped `codex` and `codex-write` targets select `gpt-6-astra` at `xhigh`. `codex-astra` keeps
+the same values as the explicit strong target the advisor uses, so a profile can make
+`codex`/`codex-write` cheaper without weakening the advisor:
+
+```yaml
+targets:
+  codex:
+    provider: codex-subagent
   codex-write:
     provider: codex-subagent-write
     write: true
@@ -287,9 +309,7 @@ targets:
     reasoningEffort: xhigh
 ```
 
-`codex-astra` is the shipped per-target example: it selects a specific Codex model and reasoning
-effort while the default `codex`/`codex-write` targets keep the provider defaults. Point a rule at
-it, or copy the two option lines onto an existing target:
+Point a rule at `codex-astra` only when it must stay strong under such an override:
 
 ```yaml
 rules:
@@ -335,11 +355,10 @@ rules:
     instruction: "bundled:research"
 ```
 
-The shipped defaults target the installed-Codex provider because that is the owner's strongest
-current target. They are data; one target can select `astra`/`xhigh` and another a different
-model/effort, and the same rule contract and gate apply. The engine has no Codex dependency, so a
-standalone install composes with any provider and reports Codex-targeted rules as unavailable until
-a target is configured.
+The shipped defaults target the installed-Codex provider with `gpt-6-astra` at `xhigh`. They are
+data; one target can select a different model/effort and the same rule contract and gate apply. The
+engine has no Codex dependency, so a standalone install composes with any provider and reports
+Codex-targeted rules as unavailable until a target is configured.
 
 ## Default rules
 
@@ -352,8 +371,15 @@ The shipped defaults live in this package's composition fragment:
 | `task-progress`      | `implementation-work`     | note                               | strict |
 | `blocker`            | `failure-streak`          | answer                             | soft   |
 | `research`           | `manual`                  | answer                             | none   |
+| `advisor`            | `manual`                  | answer                             | none   |
 | `bug-fix`            | `manual`                  | patch                              | none   |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
+
+`advisor` is a manual, read-only second opinion. Use it only when the decision is expensive to
+reverse, security or data integrity is at stake, the design spans modules, or two attempts have
+failed and the next step is unclear. Do not use it for routine edits, syntax, lookups, or facts you
+can verify locally. One well-framed question per call, with constraints and decisive evidence; at
+most three advisor calls per session. It writes no gate record and never satisfies a review.
 
 Override `targets`/`rules` in the profile's `cordis.patch.yml`; a patch replaces the whole config
 object, so restate every target and rule the session needs. Do not edit the fragment for
@@ -477,26 +503,30 @@ describes how to assign write-capable work.
 
 ```text
 delegate(rule: "research", objective: "Which helper owns file locking?", context: "failing test in packages/fs")
+delegate(rule: "advisor", context: "Question: keep the approval gate in this plugin? Constraints: standalone install, DSH 0.2.1-rc.3. Evidence: packages/plugin-delegation-rules/src/shared/approval.ts")
 delegate(rule: "blocker", context: "three failed attempts: <commands and output>; current plan: <plan>")
 delegate(rule: "bug-fix", objective: "fix the stale-cache crash", context: "repro: <command>")
 ```
 
-`research` answers with evidence and sources; `blocker` recommends a next action with evidence;
-`bug-fix` returns an isolated worktree, diff, and test report for manual review. A failing target
-is reported; for the soft `failure-streak` rule it marks the consultation attempt and does not
-repeat.
+`research` answers with evidence and sources; `advisor` gives a bounded recommendation, the strongest
+counterargument, risks, a next action, and confidence; `blocker` recommends a next action with
+evidence; `bug-fix` returns an isolated worktree, diff, and test report for manual review. A failing
+target is reported; for the soft `failure-streak` rule it marks the consultation attempt and does
+not repeat.
 
 ## Model-facing cost and security
 
 The plugin adds no always-on prompt text. Its model-facing policy is the three tool descriptions
 plus the skill catalog line, and the full workflow is loaded only when the skill is invoked.
 
-- Measured: three tool descriptions plus the skill catalog description are 2298 UTF-8 bytes
-  (~575 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 12033 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
+  (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
+- Measured: the skill body is 13160 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
-  integration review to `soft` or `none` if it adds noise.
+  integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
+  targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays for the strong model;
+  override those targets for cheaper routine reviews and leave `advisor` on `codex-astra`.
 - The engine validates rule ids, change names, task ids, and record paths before effects; git is
   invoked with fixed arguments; target output is untrusted data, parsed for the declared contract
   and never executed. Patch results stay isolated until a human or agent reviews and applies
