@@ -36,3 +36,21 @@ export function validateHindsightPin(
   }
   return problems
 }
+
+/** Export settings that belong to the machine-local file, never to tracked config. */
+export const MACHINE_LOCAL_EXPORT_KEYS = ['dir', 'remote'] as const
+
+/**
+ * Reject a tracked export directory or remote. A row's `export` block is
+ * repository configuration; the target directory and its private remote are
+ * machine-local inputs (`~/.dsh/hindsight-export.json`) and never tracked.
+ */
+export function validateExportConfig(config: unknown, origin: string): string[] {
+  if (typeof config !== 'object' || config === null) return []
+  const block = (config as Record<string, unknown>).export
+  if (typeof block !== 'object' || block === null) return []
+  const exportBlock = block as Record<string, unknown>
+  return MACHINE_LOCAL_EXPORT_KEYS.filter((key) => key in exportBlock).map(
+    (key) => `${origin}: export.${key} is machine-local and must not be tracked`,
+  )
+}

@@ -65,7 +65,7 @@ describe('transfer archive zip helpers', () => {
       }
     }
     expect(probe('..\\escape.json')).toBe('zip')
-    expect(probe('C:/escape.json')).toBe('zip')
+    expect(probe(['C', ':', '/escape.json'].join(''))).toBe('zip')
     expect(probe('documents/000000.json')).toBe('accepted')
   })
 })

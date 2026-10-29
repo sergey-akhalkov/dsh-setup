@@ -19,7 +19,7 @@
 
 - [x] 4.1 Implement repository bootstrap (`git init` or `git clone`), the fixed commit identity, and commit-only-on-change; verify tests use a temporary repository and a bare remote and cover the first export, no-op cycles, and a clone when the directory is missing.
 - [x] 4.2 Implement automatic push without force, headless credentials (`GIT_TERMINAL_PROMPT=0`), and retry after an authentication or network failure; verify tests prove the local commit survives a failed push, no prompt is attempted, and a later cycle pushes.
-- [ ] 4.3 Verify repository validation rejects a tracked export remote, credential, or machine path, and that the machine-local file is the only source for `dir` and `remote`.
+- [x] 4.3 Verify repository validation rejects a tracked export remote, credential, or machine path, and that the machine-local file is the only source for `dir` and `remote`.
 
 ## 5. Scheduler integration
 

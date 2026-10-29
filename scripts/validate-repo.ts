@@ -6,6 +6,7 @@ import { parseDefaults, validateDefaultsTargets, validateSetupManifest } from '.
 import {
   HINDSIGHT_PACKAGE,
   HINDSIGHT_PLUGIN_PACKAGE,
+  validateExportConfig,
   validateHindsightPin,
 } from './lib/hindsight.ts'
 import { validatePackageManifest } from './lib/manifest.ts'
@@ -143,6 +144,12 @@ function checkComposition(problems: string[]): void {
       for (const row of fragment.rows) {
         if (rowIds.has(row.id)) problems.push(`duplicate row id "${row.id}"`)
         rowIds.add(row.id)
+        for (const problem of validateExportConfig(
+          row.config,
+          `${pkg.relativeDir}/cordis.fragment.yml`,
+        )) {
+          problems.push(problem)
+        }
       }
     } catch (error) {
       problems.push(`${pkg.relativeDir}: ${error instanceof Error ? error.message : String(error)}`)
@@ -154,6 +161,11 @@ function checkComposition(problems: string[]): void {
     const defaults = parseDefaults(readFileSync(defaultsPath, 'utf8'))
     for (const problem of validateDefaultsTargets(defaults, rowIds)) {
       problems.push(`defaults.yml: ${problem}`)
+    }
+    for (const entry of defaults) {
+      for (const problem of validateExportConfig(entry.config, 'packages/setup/defaults.yml')) {
+        problems.push(problem)
+      }
     }
   } catch (error) {
     problems.push(`defaults.yml: ${error instanceof Error ? error.message : String(error)}`)
