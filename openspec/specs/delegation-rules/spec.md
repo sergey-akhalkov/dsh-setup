@@ -12,7 +12,7 @@ The bundle SHALL register a rules engine whose rules are data: each rule names a
 #### Scenario: Default rules
 
 - **WHEN** the plugin is active with the shipped default rules
-- **THEN** the spec-review, task-review, task-progress, blocker, research, bug-fix, and optional integration-review rules are available to the delegate/task_progress tools
+- **THEN** the spec-review, task-review, task-progress, blocker, research, advisor, bug-fix, and optional integration-review rules are available to the delegate/task_progress tools
 
 #### Scenario: Custom rule
 
@@ -209,7 +209,7 @@ The gate SHALL refuse a code-changing turn close unless every checked task the c
 
 ### Requirement: Answer contract
 
-The answer contract SHALL run the target in read-only mode, return a bounded answer with evidence and, for research, sources and dates, and write no gate record. A successful answer MUST be usable by the agent while a failed answer MUST be reported without trapping the turn.
+The answer contract SHALL run the target in read-only mode, return a bounded answer with evidence and, for research, sources and dates, and, for an advisor rule, a recommendation, the strongest counterargument, risks, a next action, and confidence, and write no gate record. A successful answer MUST be usable by the agent while a failed answer MUST be reported without trapping the turn.
 
 #### Scenario: Research
 
@@ -220,6 +220,11 @@ The answer contract SHALL run the target in read-only mode, return a bounded ans
 
 - **WHEN** a blocker rule runs
 - **THEN** the answer names a recommendation, evidence, and the next action
+
+#### Scenario: Advisor
+
+- **WHEN** an advisor rule runs
+- **THEN** the answer names a recommendation, the strongest counterargument, risks, a next action, and confidence, and does not authorize a gate
 
 #### Scenario: Failed answer
 
@@ -296,12 +301,17 @@ For every gated rule, the engine SHALL refuse a turn close unless a matching `PA
 
 ### Requirement: Delegate tool and status
 
-The bundle SHALL register a `delegate` tool whose rule parameter is generated from the configured rules and whose description names the manual tasks, a `task_progress` tool for unchecked-task notes, and a `delegation_status` tool that reports registered providers/capabilities, configured targets/rules, active/stale notes, each active change's involvement by the current session, and missing-target diagnostics. The tools MUST validate their rule/target/note inputs before starting a run or writing a note. A review delegate MAY run in any session and records the reviewing session. `delegation_status` MUST report an active change whose `tasks.md` is missing or unreadable as an unreadable per-change state, keep showing that change's involvement and record state, and MUST NOT throw or run a review.
+The bundle SHALL register a `delegate` tool whose rule parameter is generated from the configured rules and whose description names the manual tasks, including the advisor policy and its soft three-call ceiling, a `task_progress` tool for unchecked-task notes, and a `delegation_status` tool that reports registered providers/capabilities, configured targets/rules, active/stale notes, each active change's involvement by the current session, and missing-target diagnostics. The tools MUST validate their rule/target/note inputs before starting a run or writing a note. A review delegate MAY run in any session and records the reviewing session. `delegation_status` MUST report an active change whose `tasks.md` is missing or unreadable as an unreadable per-change state, keep showing that change's involvement and record state, and MUST NOT throw or run a review.
 
 #### Scenario: Manual delegation
 
 - **WHEN** the agent calls delegate for a configured manual rule
 - **THEN** the engine validates the input and runs that rule's target/instruction
+
+#### Scenario: Advisor policy
+
+- **WHEN** the delegate tool description is read
+- **THEN** it names the advisor as a manual strong-target second opinion for expensive-to-reverse, cross-module, security/data-integrity, or repeated-failure decisions, excludes routine edits, syntax, lookups, and locally verifiable facts, and states the soft three-call ceiling
 
 #### Scenario: Progress tool
 
@@ -335,7 +345,7 @@ The bundle SHALL register a `delegate` tool whose rule parameter is generated fr
 
 ### Requirement: Model-agnostic defaults and documentation
 
-The shipped default rules SHALL be model-agnostic data; the setup MAY default their targets to the Codex provider, but the bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, task progress, blocker, research, bug fix, and an optional integration review. The acceptance MUST exercise at least one non-Codex target.
+The shipped default rules SHALL be model-agnostic data; the setup MAY default their targets to the Codex provider, but the bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, task progress, blocker, research, advisor, bug fix, and an optional integration review. The acceptance MUST exercise at least one non-Codex target.
 
 #### Scenario: Default setup
 
@@ -355,7 +365,7 @@ The shipped default rules SHALL be model-agnostic data; the setup MAY default th
 #### Scenario: Documentation
 
 - **WHEN** a user reads the plugin documentation
-- **THEN** it shows the trigger/contract/gate model, a Codex target, a non-Codex target, and the config/code boundary
+- **THEN** it shows the trigger/contract/gate model, a Codex target, a non-Codex target, the advisor rule, the shipped strong Codex target defaults, and the config/code boundary
 
 ### Requirement: Model-facing cost
 
@@ -880,3 +890,51 @@ An `ERROR` review record MAY let a turn close but MUST NOT approve a task for ar
 
 - **WHEN** the status or audit runs
 - **THEN** it reports the PASS, ERROR, and missing counts separately and names the missing tasks
+
+### Requirement: Advisor consultation
+
+The default rule set SHALL include a manual `advisor` answer rule. It MUST start only from an explicit `delegate` call, run read-only, and write no gate record, steer, wake, or inject a chat message. The tool description and skill SHALL state when it is appropriate, exclude routine work, and set a soft three-call ceiling.
+
+#### Scenario: Manual only
+
+- **WHEN** a turn is about to close and no advisor delegate call was made
+- **THEN** the advisor starts no target and does not steer the turn
+
+#### Scenario: Bounded advice
+
+- **WHEN** the agent calls delegate for the advisor rule with a question and context
+- **THEN** the target returns a recommendation, the strongest counterargument, risks, a next action, and confidence, and writes no gate record
+
+#### Scenario: No authority
+
+- **WHEN** an advisor answer exists
+- **THEN** it does not satisfy a strict review, authorize a block or completion, steer, or wake the session
+
+#### Scenario: Routine work excluded
+
+- **WHEN** the delegate tool description and skill are read
+- **THEN** they name the allowed decision classes, exclude routine edits, syntax, lookups, and locally verifiable facts, and state the three-call soft ceiling
+
+### Requirement: Shipped strong Codex targets
+
+The shipped setup defaults SHALL select the documented strong Codex model and `xhigh` reasoning effort for both `codex` and `codex-write`. The `advisor` rule MUST target the explicit `codex-astra` target so a profile can override `codex` without weakening the advisor. A profile MAY override any target; an unavailable model MUST fail the run with the target/model next action and MUST NOT satisfy a gate.
+
+#### Scenario: Strong read and write defaults
+
+- **WHEN** the setup is installed with the shipped defaults
+- **THEN** `codex` and `codex-write` select the documented strong model and `xhigh` effort
+
+#### Scenario: Advisor target isolation
+
+- **WHEN** a profile overrides `codex` or `codex-write`
+- **THEN** the advisor still runs on `codex-astra` with the strong model
+
+#### Scenario: Unavailable model
+
+- **WHEN** the configured model is unavailable to the account
+- **THEN** the run reports the target/model error with its next action, publishes no PASS, and does not satisfy a gate; composition still succeeds
+
+#### Scenario: Documented values
+
+- **WHEN** a user reads the target documentation
+- **THEN** it names the shipped model and effort and shows how to override either target

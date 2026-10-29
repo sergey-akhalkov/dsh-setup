@@ -55,6 +55,16 @@ verification), `add-loop-guard`, `fix-delegation-session-scope`, `fix-delegation
 `publish-first-market-index`. Cite `openspec/specs/` for accepted requirements and an archived
 change's delta specs for its history.
 
+The 2026-10-29 changes archived with release v0.13.0 are `add-review-approval-gate`, which added
+portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
+(`review-approval` spec and `delegation-rules` amendments; 24/24 portable PASS records),
+`add-hindsight-export`, which added the default-on durable export to a private Git repository and the
+manual restore path (`hindsight-memory` amendments; 18/18 records), and `add-codex-advisor-rule`,
+which added the manual advisor rule and the shipped strong Codex targets (`delegation-rules`
+amendments; 6/6 records). The Hindsight change's owner acceptance used a throwaway Hindsight home and
+a dedicated pg0 database, and the live configuration exported and pushed three banks; the installed
+desktop profile remains at 0.12.0 until the owner installs 0.13.0.
+
 Before archiving, the parent delta restated `Dependency-contained plugins` and `No secrets or machine
 data` as MODIFIED with the current main-spec text (the later amendments), so the archive applied
 without spec changes.
@@ -93,6 +103,9 @@ was written (2026-10-29). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-28-ship-serena-disabled`                    | 5/5            |
 | `2026-10-29-add-goal-block-review`                   | 17/18          |
 | `2026-10-29-add-hindsight-memory`                    | 25/28          |
+| `2026-10-29-add-codex-advisor-rule`                  | 6/6            |
+| `2026-10-29-add-hindsight-export`                    | 18/18          |
+| `2026-10-29-add-review-approval-gate`                | 24/24          |
 | `2026-10-29-adopt-agent-best-practices`              | 20/21          |
 | `2026-10-29-fix-delegation-review-build-inputs`      | 11/11          |
 
@@ -116,8 +129,9 @@ two accepted, non-enforced categories and enforces everything else:
   lists the whole baseline.
 
 A change archived after the cutoff, or a later modification of any archive, is checked under the
-normal rule and fails without a portable task-review `PASS` for every checked task. The rule, the
-portable record, and the audit commands are in [review-approval.md](review-approval.md).
+normal rule and fails without a portable task-review `PASS` for every checked task. The three
+2026-10-29 archives are post-cutoff and carry 24/24, 18/18, and 6/6 portable PASS records. The rule,
+the portable record, and the audit commands are in [review-approval.md](review-approval.md).
 
 ## Open owner follow-ups
 
@@ -168,3 +182,19 @@ The archived `2026-10-29-fix-delegation-review-build-inputs` tasks record 11/11;
 step is the live re-acceptance on the affected Rust repository. After a release and install, run two
 task-review delegations while `cargo check` runs and confirm two `PASS` results with the second reused
 from its record.
+
+The archived `2026-10-29-add-review-approval-gate` tasks record 24/24; the full audit, the portable
+records, the hook installer, and the CI steps are committed. After installing 0.13.0 externally, run
+the live archive-gate acceptance in a throwaway workspace (deny without a portable PASS, allow with
+one, and confirm the pre-push/CI refusal), then archive the next change through the live guard.
+
+The archived `2026-10-29-add-hindsight-export` tasks record 18/18. The first real export and push are
+recorded at export-repository commit `8178372` (three banks); the owner acceptance used a throwaway
+Hindsight home and a dedicated pg0 database and passed. After installing 0.13.0, confirm the automatic
+exporter runs in a real session and pushes the project bank; the machine-local export configuration
+and the private remote are already validated.
+
+The archived `2026-10-29-add-codex-advisor-rule` tasks record 6/6. After installing 0.13.0, smoke-test
+one `delegate(rule: "advisor", ...)` call and confirm the account can use the shipped `codex` /
+`codex-write` defaults (`gpt-6-astra`, `xhigh`); override those targets in the profile if the model is
+unavailable, leaving `codex-astra` for the advisor.

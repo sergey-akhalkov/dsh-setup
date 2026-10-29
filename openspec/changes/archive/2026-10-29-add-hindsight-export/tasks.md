@@ -40,7 +40,7 @@
 ## 8. Integration verification
 
 - [x] 8.1 Run `pnpm gen`, `pnpm build`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm validate:repo`; verify every command exits zero and the regenerated tree is committed.
-- [ ] 8.2 Run the owner acceptance on a throwaway home and database (never the live profile): retain a marker, export, wipe the throwaway database, restore, and recall the marker; record the commands and the result in the change notes.
+- [x] 8.2 Run the owner acceptance on a throwaway home and database (never the live profile): retain a marker, export, wipe the throwaway database, restore, and recall the marker; record the commands and the result in the change notes.
 
 ## Workflow follow-up
 
