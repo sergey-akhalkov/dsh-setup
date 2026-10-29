@@ -22,8 +22,8 @@ description, and `lib/**` is generated; the build and validation tail is serial.
 ## 4. Build and validate (serial tail)
 
 - [x] 4.1 Run `pnpm build` and commit the regenerated `lib/**`; verify a second `pnpm build` leaves `git diff --exit-code` clean.
-- [ ] 4.2 Run `pnpm gen` and commit the regenerated `packages/setup/**` vendor copy; verify `pnpm gen:check` passes.
-- [ ] 4.3 Run `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, and `openspec validate "add-interface-design-skill" --strict`; verify every command exits green.
+- [x] 4.2 Run `pnpm gen` and commit the regenerated `packages/setup/**` vendor copy; verify `pnpm gen:check` passes.
+- [x] 4.3 Run `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, and `openspec validate "add-interface-design-skill" --strict`; verify every command exits green.
 
 ## 5. Verify the behavior in a session
 
