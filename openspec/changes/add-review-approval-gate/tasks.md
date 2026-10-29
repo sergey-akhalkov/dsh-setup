@@ -11,7 +11,7 @@
 - [x] 2.1 On a task-review PASS, write the sanitized `openspec/changes/<change>/reviews/<taskId>.json` record atomically in addition to the local `.dsh` record; a failed portable write publishes no PASS. Verify the new tests cover PASS, ERROR/FINDINGS, a failed write, the absent session/run/machine fields, and the local record still existing.
 - [x] 2.2 Exclude the `reviews/` directory from the change artifact digest and the reviewed change-artifact inputs; verify a portable record added after a spec review does not stale that review and a concurrent task approval does not discard a running whole-spec review.
 - [x] 2.3 Add `pnpm reviews:export --change <name>` for the bootstrap of existing `.dsh` PASS records; verify it writes the portable records for this change, refuses an `ERROR`, and refuses a task-id mismatch.
-- [ ] 2.4 Document the portable record path, shape, digest exclusion, and local/portable relationship in `docs/delegation-rules.md`; verify `pnpm lint` and the documented command against a fixture.
+- [x] 2.4 Document the portable record path, shape, digest exclusion, and local/portable relationship in `docs/delegation-rules.md`; verify `pnpm lint` and the documented command against a fixture.
 
 ## 3. Change-level coverage, status, and audit
 

@@ -146,6 +146,9 @@ record under `.dsh/delegation/<rule>/<change>/`:
 - whole scope: `<phase>.json`;
 - task scope: `tasks/<taskId>.json`, with the task id derived from the normalized task text.
 
+A task-scope `PASS` additionally writes the committed [portable approval](#portable-task-approvals)
+inside the change.
+
 A `PASS` requires zero P0/P1 findings. `FINDINGS` and `ERROR` records are reported but do not
 satisfy a strict gate. A matching `PASS` is reused without another run; a `FINDINGS` record is
 reused only while the digest is unchanged; an `ERROR` is retried on the next run. Stale records
@@ -182,6 +185,51 @@ It never applies the diff to the session worktree, and a patch run is never a re
 The owner or agent reviews and merges manually.
 
 **`note`** is written by `task_progress` and explained below.
+
+### Portable task approvals
+
+A task-scope `PASS` also writes a committed approval record inside the change:
+
+```text
+openspec/changes/<change>/reviews/<taskId>.json
+```
+
+```json
+{
+  "rule": "task-review",
+  "change": "add-goal-block-review",
+  "scope": "task",
+  "taskId": "3ce0a99c131a4a42",
+  "digest": "<task review digest>",
+  "worktreeDigest": "<worktree digest at review time>",
+  "verdict": "PASS",
+  "findings": [],
+  "target": { "provider": "codex-subagent" },
+  "time": "2026-10-29T08:55:43.317Z"
+}
+```
+
+The record carries only those sanitized fields: no session id, run id, machine path, or error
+text. It is written atomically **before** the local `.dsh` record is published, so a failed write
+reports the failure and publishes no `PASS` (the local record becomes `ERROR`). The local record
+stays the turn-gate and status source; the portable record is the approval that travels with the
+change into `archive/` and that a fresh clone can audit without the local `.dsh` state.
+
+`reviews/` is reserved. It is excluded from the change artifact digest and from a review's reviewed
+change-artifact inputs, alongside `.openspec.yaml`: writing an approval can never stale the
+whole-spec review it was produced under, and a malformed file under `reviews/` is ignored by the
+digest rather than treated as an artifact.
+
+For a change whose task reviews ran before the portable write existed, copy the existing local
+`PASS` records once:
+
+```sh
+pnpm reviews:export --change <name>
+```
+
+The export copies only a local task-scope `PASS` whose rule, change, and task id match the checked
+task; it refuses `ERROR`/`FINDINGS`, a foreign change, and a task-id mismatch, and it cannot invent
+an approval.
 
 ### Targets
 
@@ -350,7 +398,8 @@ describes how to assign write-capable work.
 
 ## Digests and records
 
-- The whole-spec digest hashes every file in the change directory except `.openspec.yaml`, with
+- The whole-spec digest hashes every file in the change directory except `.openspec.yaml` and the
+  root `reviews/` approval directory, with
   `tasks.md` checkbox state normalized so ticking tasks does not invalidate a spec review. It is
   computed independently of task parsing, so a partial change whose `tasks.md` is missing still has
   an artifact digest and a write that makes it readable is detectable. A per-change artifact error
@@ -364,15 +413,18 @@ describes how to assign write-capable work.
   signed by size plus nanosecond mtime/ctime; a git-listed path that cannot be stat'ed is recorded
   as changed instead of failing the run. Build output and other scratch trees MUST therefore be
   gitignored: an unignored `target/` or `dist/` folder lets a concurrent build invalidate a review.
-  A task-scope review tracks the union of that set and the reviewed change's artifacts because its
-  digest includes both; a whole-spec review tracks exactly the change artifacts. Do not edit a
+  A task-scope review tracks the union of that set and the reviewed change's artifacts (excluding the
+  root `reviews/` directory) because its digest includes both; a whole-spec review tracks exactly
+  the change artifacts. Do not edit a
   change artifact while one of its reviews is pending — the edit invalidates the pending verdict
   by design.
 - A whole-scope record is valid only while its digest matches; a task-scope record is keyed by
   the stable task id and remains historical.
 - Records contain the rule, change, scope, phase, task id when task-scoped, digest, verdict,
   findings, target identity, time, and the reviewing session. Findings are sanitized of machine
-  paths and obvious credentials; records are parsed as data, never executed.
+  paths and obvious credentials; records are parsed as data, never executed. The committed
+  `reviews/<taskId>.json` copy of a task `PASS` is the sanitized subset described under
+  [Portable task approvals](#portable-task-approvals).
 - Session involvement lives in `.dsh/delegation/sessions/<sha256(session).slice(0,16)>.json` and
   is written atomically. It is the inverse of the old owner map: a session reads and writes only
   its own file, so concurrent sessions never contend. A missing or malformed file reads as empty;
