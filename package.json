@@ -30,6 +30,7 @@
     "validate:installer": "node scripts/validate-installer.ts",
     "reviews:check": "node scripts/reviews-check.ts",
     "reviews:export": "node scripts/reviews-check.ts --export",
+    "hooks:install": "node scripts/install-hooks.ts",
     "validate": "pnpm check && pnpm gen:check && pnpm validate:repo && pnpm validate:composition && pnpm validate:installer",
     "generate:market": "node scripts/generate-market.ts",
     "release:prepare": "node scripts/release-prepare.ts"
