@@ -8,7 +8,7 @@
 ## 2. Archive round trip
 
 - [x] 2.1 Add the pure-JavaScript ZIP dependency to the plugin (no install-time scripts) and implement unpack/repack helpers; verify a fixture archive round-trips with byte-identical entries and the failure path returns a typed error.
-- [ ] 2.2 Implement reversible bank-id sanitization, the per-bank metadata (`export.json`), the repository index, and SHA-256 checksums; verify tests cover collisions, Windows-invalid characters, and metadata recovery of the original bank id.
+- [x] 2.2 Implement reversible bank-id sanitization, the per-bank metadata (`export.json`), the repository index, and SHA-256 checksums; verify tests cover collisions, Windows-invalid characters, and metadata recovery of the original bank id.
 
 ## 3. Hindsight export client
 

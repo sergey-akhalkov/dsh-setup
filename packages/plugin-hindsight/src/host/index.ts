@@ -6,6 +6,29 @@ import type { Context } from '@deepseek-ai/cordis'
 import { apply as applyHindsight } from '@vectorize-io/hindsight-coding-agents/dsh'
 import type { ExportConfig } from './export-config.js'
 
+export type {
+  ArchiveCounts,
+  ArchiveScopeOptions,
+  BankExportMetadata,
+  RepositoryIndex,
+  RepositoryIndexEntry,
+} from './export-archive.js'
+export {
+  applyArchiveScope,
+  BANK_METADATA_FILE,
+  BANKS_DIR,
+  bankFolderName,
+  buildBankFiles,
+  buildRepositoryIndex,
+  INDEX_FILE,
+  METADATA_SCHEMA_VERSION,
+  parseBankMetadata,
+  parseRepositoryIndex,
+  sanitizeBankId,
+  sha256Hex,
+  TRANSFER_SCHEMA_VERSION,
+  unsanitizeBankId,
+} from './export-archive.js'
 export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './export-config.js'
 export {
   DEFAULT_EXPORT_CONFIG,
