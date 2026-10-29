@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHANGE_PATTERN, DIGEST_PATTERN, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parseTasksText, portableTaskRecordPath, REVIEWS_DIRECTORY, shellSegments, TASK_ID_PATTERN, } from '../shared/approval.js';
+import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, isReviewFinding, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -2303,6 +2303,95 @@ class DelegationEngine {
         }
         return false;
     }
+    /** The strict task-review rule whose portable PASS is the approval. */
+    async approvalRule(openspecRoot) {
+        const path = join(openspecRoot, APPROVAL_MARKER_FILE);
+        let raw;
+        try {
+            raw = await readFile(path, 'utf8');
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT') {
+                return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` };
+            }
+        }
+        let marker;
+        if (raw !== undefined) {
+            try {
+                const parsed = parseReviewApprovalMarker(JSON.parse(raw));
+                if (parsed.marker === undefined) {
+                    return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` };
+                }
+                marker = parsed.marker;
+            }
+            catch (error) {
+                return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` };
+            }
+        }
+        if (marker !== undefined) {
+            const rule = this.config.rules.find((entry) => entry.id === marker?.taskRule);
+            if (rule === undefined) {
+                return { error: `marker taskRule "${marker.taskRule}" is not a configured rule` };
+            }
+            if (rule.contract !== 'review' || rule.scope !== 'task') {
+                return { error: `marker taskRule "${rule.id}" is not a task-scoped review rule` };
+            }
+            if (rule.gate !== 'strict') {
+                return { error: `marker taskRule "${rule.id}" is not a strict rule` };
+            }
+            return { id: rule.id };
+        }
+        const taskRules = this.taskReviewRules();
+        const strict = taskRules.find((rule) => rule.gate === 'strict');
+        if (strict !== undefined)
+            return { id: strict.id };
+        const fallback = taskRules[0];
+        return fallback === undefined
+            ? { error: 'no task-scoped review rule is configured' }
+            : { id: fallback.id };
+    }
+    async inspectPortableRecord(changeDir, taskId) {
+        let raw;
+        try {
+            raw = await readFile(portableTaskRecordPath(changeDir, taskId), 'utf8');
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                return { kind: 'missing' };
+            return { kind: 'malformed', error: errorMessage(error) };
+        }
+        try {
+            const parsed = parsePortableTaskReviewRecord(JSON.parse(raw));
+            return parsed.record === undefined
+                ? { kind: 'malformed', error: parsed.error ?? 'record shape is invalid' }
+                : { kind: 'record', record: parsed.record };
+        }
+        catch (error) {
+            return { kind: 'malformed', error: errorMessage(error) };
+        }
+    }
+    /** PASS-only approval over every checked task, independent of session attribution. */
+    async changeApproval(change, openspecRoot, tasks) {
+        const rule = await this.approvalRule(openspecRoot);
+        if ('error' in rule)
+            return rule;
+        let markdown;
+        try {
+            markdown = await readFile(join(change.dir, 'tasks.md'), 'utf8');
+        }
+        catch (error) {
+            return { error: `change "${change.name}" has no readable tasks.md: ${errorMessage(error)}` };
+        }
+        const coverage = await computeApprovalCoverage({
+            change: change.name,
+            rule: rule.id,
+            tasks,
+            unparseable: unparseableCheckedLines(markdown),
+            recordPath: (taskId) => portableTaskRecordDisplayPath(`openspec/changes/${change.name}`, taskId),
+            inspect: (taskId) => this.inspectPortableRecord(change.dir, taskId),
+        });
+        return { coverage };
+    }
     async runPatch(rule, args, agent, cwd, signal) {
         const target = this.target(rule);
         if (target.write !== true) {
@@ -2522,6 +2611,17 @@ class DelegationEngine {
                         }
                     }
                     lines.push(`  ${rule.id}: ${reviewed.size}/${checked.length} checked task(s) with a PASS/ERROR record`);
+                }
+                const approval = await this.changeApproval(change, openspecRoot, tasks);
+                if ('error' in approval) {
+                    lines.push(`  task approval: unavailable (${sanitizeText(approval.error, MAX_ERROR_CHARS)})`);
+                }
+                else {
+                    const coverage = approval.coverage;
+                    lines.push(`  task approval: ${approvalSummaryLine(coverage)}`);
+                    for (const line of coverage.unparseable) {
+                        lines.push(`  approval problem: checked line ${line.line} "${line.text}" is not a numbered task`);
+                    }
                 }
                 const note = await inspectNote(cwd, change.name);
                 if (note.kind === 'note') {

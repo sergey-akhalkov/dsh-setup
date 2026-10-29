@@ -252,3 +252,132 @@ describe('portable records and the change artifact digest', () => {
     expect(String(record.error)).toContain('reviewed inputs changed')
   })
 })
+
+describe('change-level approval in delegation_status', () => {
+  const TASKS = [
+    { number: '1.1', text: 'First task', checked: true },
+    { number: '1.2', text: 'Second task', checked: true },
+    { number: '1.3', text: 'Third task', checked: true },
+    { number: '1.4', text: 'Open task', checked: false },
+  ]
+
+  async function statusFixture() {
+    const workspace = await makeWorkspace()
+    cleanups.push(workspace.cleanup)
+    const dir = await writeChange(workspace.root, 'change-a', TASKS)
+    const agents = new FakeSubagents()
+    agents.addProvider('codex-subagent')
+    const harness = new Harness({
+      cwd: workspace.root,
+      config: defaultTestConfig(),
+      agents,
+      git: new FakeGit(),
+    })
+    return { root: workspace.root, dir, agents, harness }
+  }
+
+  async function writePortable(
+    dir: string,
+    taskText: string,
+    overrides: Record<string, unknown> = {},
+  ): Promise<string> {
+    const taskId = taskIdFor(taskText)
+    await mkdir(join(dir, 'reviews'), { recursive: true })
+    await writeFile(
+      join(dir, 'reviews', `${taskId}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        scope: 'task',
+        taskId,
+        digest: 'a'.repeat(64),
+        worktreeDigest: 'b'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-10-29T08:55:43.317Z',
+        ...overrides,
+      }),
+      'utf8',
+    )
+    return taskId
+  }
+
+  it('counts PASS only, reports ERROR and missing, and ignores unchecked tasks', async () => {
+    const { dir, harness } = await statusFixture()
+    await writePortable(dir, 'First task')
+    await writePortable(dir, 'Second task', { verdict: 'ERROR' })
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain('tasks: 3/4 checked')
+    expect(text).toContain(
+      'task approval: task-review PASS 1/3, ERROR 1, missing 1; archive-ready: no',
+    )
+    expect(text).not.toContain('Open task')
+  })
+
+  it('names a malformed portable record as an error', async () => {
+    const { dir, harness } = await statusFixture()
+    await writePortable(dir, 'First task')
+    await writePortable(dir, 'Second task')
+    const taskId = taskIdFor('Second task')
+    await writeFile(join(dir, 'reviews', `${taskId}.json`), '{not json', 'utf8')
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain(
+      'task approval: task-review PASS 1/3, ERROR 1, missing 1; archive-ready: no',
+    )
+  })
+
+  it('accepts a portable PASS from a different session with no local state', async () => {
+    const { dir, harness } = await statusFixture()
+    for (const task of TASKS.filter((entry) => entry.checked)) {
+      await writePortable(dir, task.text)
+    }
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain('this session: not involved')
+    expect(text).toContain(
+      'task approval: task-review PASS 3/3, ERROR 0, missing 0; archive-ready: yes',
+    )
+  })
+
+  it('counts a FINDINGS record as unapproved', async () => {
+    const { dir, harness } = await statusFixture()
+    await writePortable(dir, 'First task')
+    await writePortable(dir, 'Second task', {
+      verdict: 'FINDINGS',
+      findings: [{ severity: 'P1', title: 't', evidence: 'e', fix: 'f' }],
+    })
+    await writePortable(dir, 'Third task')
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain(
+      'task approval: task-review PASS 2/3, ERROR 1, missing 0; archive-ready: no',
+    )
+  })
+
+  it('fails closed on a checked line that is not a numbered task', async () => {
+    const { dir, harness } = await statusFixture()
+    await writeFile(
+      join(dir, 'tasks.md'),
+      '# Tasks\n\n- [x] 1.1 First task\n- [x] stray line\n',
+      'utf8',
+    )
+    await writePortable(dir, 'First task')
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain('archive-ready: no')
+    expect(text).toContain(
+      'approval problem: checked line 4 "- [x] stray line" is not a numbered task',
+    )
+  })
+
+  it('reports an invalid marker rule instead of inventing an approval rule', async () => {
+    const { root, harness } = await statusFixture()
+    await writeFile(
+      join(root, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'missing-rule' }),
+      'utf8',
+    )
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain(
+      'task approval: unavailable (marker taskRule "missing-rule" is not a configured rule)',
+    )
+  })
+})

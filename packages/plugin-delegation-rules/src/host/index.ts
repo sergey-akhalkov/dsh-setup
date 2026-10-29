@@ -17,20 +17,30 @@ import type {
 import type { JsonSchemaNode, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import {
+  APPROVAL_MARKER_FILE,
+  type ApprovalCoverage,
+  type ApprovalRecordState,
+  approvalSummaryLine,
   CHANGE_PATTERN,
+  computeApprovalCoverage,
   DIGEST_PATTERN,
   isReviewFinding,
   type NumberedTask,
   normalizeCheckboxes,
   normalizeTaskText,
   type PortableTaskReviewRecord,
+  parsePortableTaskReviewRecord,
+  parseReviewApprovalMarker,
   parseTasksText,
+  portableTaskRecordDisplayPath,
   portableTaskRecordPath,
   REVIEWS_DIRECTORY,
+  type ReviewApprovalMarker,
   type ReviewFinding,
   type ShellToken,
   shellSegments,
   TASK_ID_PATTERN,
+  unparseableCheckedLines,
 } from '../shared/approval.js'
 
 /**
@@ -2956,6 +2966,98 @@ class DelegationEngine {
     return false
   }
 
+  /** The strict task-review rule whose portable PASS is the approval. */
+  private async approvalRule(openspecRoot: string): Promise<{ id: string } | { error: string }> {
+    const path = join(openspecRoot, APPROVAL_MARKER_FILE)
+    let raw: string | undefined
+    try {
+      raw = await readFile(path, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` }
+      }
+    }
+    let marker: ReviewApprovalMarker | undefined
+    if (raw !== undefined) {
+      try {
+        const parsed = parseReviewApprovalMarker(JSON.parse(raw))
+        if (parsed.marker === undefined) {
+          return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` }
+        }
+        marker = parsed.marker
+      } catch (error) {
+        return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` }
+      }
+    }
+    if (marker !== undefined) {
+      const rule = this.config.rules.find((entry) => entry.id === marker?.taskRule)
+      if (rule === undefined) {
+        return { error: `marker taskRule "${marker.taskRule}" is not a configured rule` }
+      }
+      if (rule.contract !== 'review' || rule.scope !== 'task') {
+        return { error: `marker taskRule "${rule.id}" is not a task-scoped review rule` }
+      }
+      if (rule.gate !== 'strict') {
+        return { error: `marker taskRule "${rule.id}" is not a strict rule` }
+      }
+      return { id: rule.id }
+    }
+    const taskRules = this.taskReviewRules()
+    const strict = taskRules.find((rule) => rule.gate === 'strict')
+    if (strict !== undefined) return { id: strict.id }
+    const fallback = taskRules[0]
+    return fallback === undefined
+      ? { error: 'no task-scoped review rule is configured' }
+      : { id: fallback.id }
+  }
+
+  private async inspectPortableRecord(
+    changeDir: string,
+    taskId: string,
+  ): Promise<ApprovalRecordState> {
+    let raw: string
+    try {
+      raw = await readFile(portableTaskRecordPath(changeDir, taskId), 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+      return { kind: 'malformed', error: errorMessage(error) }
+    }
+    try {
+      const parsed = parsePortableTaskReviewRecord(JSON.parse(raw))
+      return parsed.record === undefined
+        ? { kind: 'malformed', error: parsed.error ?? 'record shape is invalid' }
+        : { kind: 'record', record: parsed.record }
+    } catch (error) {
+      return { kind: 'malformed', error: errorMessage(error) }
+    }
+  }
+
+  /** PASS-only approval over every checked task, independent of session attribution. */
+  private async changeApproval(
+    change: ChangeInfo,
+    openspecRoot: string,
+    tasks: TaskInfo[],
+  ): Promise<{ coverage: ApprovalCoverage } | { error: string }> {
+    const rule = await this.approvalRule(openspecRoot)
+    if ('error' in rule) return rule
+    let markdown: string
+    try {
+      markdown = await readFile(join(change.dir, 'tasks.md'), 'utf8')
+    } catch (error) {
+      return { error: `change "${change.name}" has no readable tasks.md: ${errorMessage(error)}` }
+    }
+    const coverage = await computeApprovalCoverage({
+      change: change.name,
+      rule: rule.id,
+      tasks,
+      unparseable: unparseableCheckedLines(markdown),
+      recordPath: (taskId) =>
+        portableTaskRecordDisplayPath(`openspec/changes/${change.name}`, taskId),
+      inspect: (taskId) => this.inspectPortableRecord(change.dir, taskId),
+    })
+    return { coverage }
+  }
+
   private async runPatch(
     rule: RuleConfig,
     args: DelegateArguments,
@@ -3202,6 +3304,20 @@ class DelegationEngine {
           lines.push(
             `  ${rule.id}: ${reviewed.size}/${checked.length} checked task(s) with a PASS/ERROR record`,
           )
+        }
+        const approval = await this.changeApproval(change, openspecRoot, tasks)
+        if ('error' in approval) {
+          lines.push(
+            `  task approval: unavailable (${sanitizeText(approval.error, MAX_ERROR_CHARS)})`,
+          )
+        } else {
+          const coverage = approval.coverage
+          lines.push(`  task approval: ${approvalSummaryLine(coverage)}`)
+          for (const line of coverage.unparseable) {
+            lines.push(
+              `  approval problem: checked line ${line.line} "${line.text}" is not a numbered task`,
+            )
+          }
         }
         const note = await inspectNote(cwd, change.name)
         if (note.kind === 'note') {
