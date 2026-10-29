@@ -216,8 +216,8 @@ The target directory and the remote are machine-local and never live in this rep
 
 `dir` and `remote` are the machine-specific keys; the export switches below may also be set there
 and win over the row. A tracked fragment or setup default that carries `export.dir` or
-`export.remote` is rejected by `pnpm validate:repo`, so the file (or a machine-local profile patch)
-is the only place they can come from.
+`export.remote` is rejected by `pnpm validate:repo`. `remote` is read only from this file; `dir` may
+also come from a machine-local profile patch, and this file's `dir` wins when both are set.
 
 The layout is one folder per bank plus an index:
 
