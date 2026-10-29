@@ -15,10 +15,6 @@ context: |
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
 
-rules:
-  tasks:
-    - "Cut execution lanes before writing tasks. A lane is a top-level group whose tasks own disjoint paths and do not consume another group's output except the serial integration tail. State each lane's owned paths in its heading, or state in one line why the change is a single lane (shared hot file, generated output, or a serial gate)."
-
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.
 # This is separate from artifact rules above.
@@ -32,9 +28,6 @@ rules:
 #         - Summarize the archive outcome before finishing
 
 operations:
-  apply:
-    guidance:
-      - "Before the first task, read the change's lanes. When two or more lanes are independent, run them as parallel writers in separate git worktrees with their task ids and owned paths, merge each after its task reviews, then run the serial lane. Keep generated files and the full repository gate in the serial lane."
   archive:
     guidance:
       - "Run `pnpm reviews:check --change <name>` before archiving: every checked task needs a committed `reviews/<taskId>.json` task-review PASS."

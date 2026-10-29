@@ -13,7 +13,8 @@ import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill'
  * The OpenSpec CLI is a machine prerequisite, not a bundle dependency: this
  * module never spawns it, downloads it, or adds it to PATH. The adapter note
  * carried by every loaded skill states the prerequisite and the project-local
- * root/cleanup rules at the point of use.
+ * root/cleanup rules at the point of use; the task-lifecycle skills also carry
+ * the plugin-owned task-lane guidance.
  */
 
 /** Cordis plugin name, equal to the package name. */
@@ -39,7 +40,15 @@ const OPENSPEC_PACKAGE = '@fission-ai/openspec'
 
 const packageDirectory = fileURLToPath(new URL('..', import.meta.url))
 const assetsDirectory = join(packageDirectory, 'assets', 'openspec')
+const guidanceFile = join(packageDirectory, 'assets', 'guidance', 'task-lanes.md')
 const lockFile = join(packageDirectory, 'openspec.lock.json')
+
+/** Skills whose loaded body carries the plugin-owned task-lane guidance. */
+const GUIDANCE_SKILLS: ReadonlySet<string> = new Set([
+  'openspec-apply-change',
+  'openspec-propose',
+  'openspec-update-change',
+])
 
 /** One skill entry the lock records. */
 interface LockSkill {
@@ -93,6 +102,22 @@ function readLock(): OpenSpecLock {
   return { version, skills }
 }
 
+/** Read the plugin-owned guidance appended to the task-lifecycle skill bodies. */
+function readGuidance(): string {
+  const text = readFileSync(guidanceFile, 'utf8')
+  if (text.trim() === '') throw new Error(`${name}: guidance asset ${guidanceFile} is empty`)
+  return text
+}
+
+/** Refuse a lock that no longer contains every skill the guidance targets. */
+export function assertGuidanceTargets(skills: ReadonlyArray<{ name: string }>): void {
+  for (const skillName of GUIDANCE_SKILLS) {
+    if (!skills.some((skill) => skill.name === skillName)) {
+      throw new Error(`${name}: task-lane guidance targets missing skill "${skillName}"`)
+    }
+  }
+}
+
 /** Resolve one recorded skill path, refusing anything outside the vendored assets directory. */
 function skillFile(record: LockSkill): string {
   const file = resolve(packageDirectory, record.path)
@@ -124,7 +149,7 @@ function adapterNote(version: string): string {
 }
 
 /** Build the provider that lists the pinned candidates and reads their bodies on demand. */
-function createSkillProvider(lock: OpenSpecLock): SkillProvider {
+function createSkillProvider(lock: OpenSpecLock, guidance: string): SkillProvider {
   const invocation = { modelInvocable: true, userInvocable: true }
   const candidates = new Map<string, SkillCandidate>()
   for (const record of lock.skills) {
@@ -155,7 +180,9 @@ function createSkillProvider(lock: OpenSpecLock): SkillProvider {
         provider: PROVIDER_NAME,
         source: 'bundled',
         resourceBase: resourceBase(file),
-        content: `${stripFrontmatter(raw)}${adapterNote(lock.version)}`,
+        content: `${stripFrontmatter(raw)}${
+          GUIDANCE_SKILLS.has(candidate.name) ? `\n\n${guidance}` : ''
+        }${adapterNote(lock.version)}`,
       }
     },
   }
@@ -164,5 +191,7 @@ function createSkillProvider(lock: OpenSpecLock): SkillProvider {
 /** Register the pinned skill set from the committed lock. */
 export function apply(ctx: Context): void {
   const lock = readLock()
-  ctx.skills.registerProvider(() => createSkillProvider(lock))
+  assertGuidanceTargets(lock.skills)
+  const guidance = readGuidance()
+  ctx.skills.registerProvider(() => createSkillProvider(lock, guidance))
 }

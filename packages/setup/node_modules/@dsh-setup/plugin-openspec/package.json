@@ -26,6 +26,7 @@
     "cordis.patch.yml",
     "cordis.fragment.yml",
     "assets/openspec/LICENSE",
+    "assets/guidance/task-lanes.md",
     "assets/openspec/openspec-apply-change/SKILL.md",
     "assets/openspec/openspec-archive-change/SKILL.md",
     "assets/openspec/openspec-explore/SKILL.md",

@@ -9,6 +9,14 @@ const lock = JSON.parse(readFileSync(join(packageDir, 'openspec.lock.json'), 'ut
   skills: Array<{ name: string; description: string; path: string }>
 }
 
+const guidancePath = join(packageDir, 'assets', 'guidance', 'task-lanes.md')
+const guidance = readFileSync(guidancePath, 'utf8')
+const guidanceSkills = new Set([
+  'openspec-apply-change',
+  'openspec-propose',
+  'openspec-update-change',
+])
+
 interface SkillCandidateShape {
   name: string
   description: string
@@ -42,6 +50,7 @@ interface PluginModule {
   name: string
   inject: string[]
   apply: (ctx: FakeContext) => void
+  assertGuidanceTargets: (skills: ReadonlyArray<{ name: string }>) => void
 }
 
 async function loadPlugin(): Promise<PluginModule> {
@@ -125,6 +134,37 @@ describe('openspec plugin', () => {
       )
       expect(definition?.content).toContain('--tools none')
       expect(definition?.content).toContain('.dsh/skills/openspec-')
+      const content = definition?.content ?? ''
+      if (guidanceSkills.has(candidate.name)) {
+        expect(content).toContain('## Task lanes (dsh-setup guidance)')
+        expect(content).toContain(guidance.trim())
+        expect(content.indexOf('## Task lanes (dsh-setup guidance)')).toBeLessThan(
+          content.indexOf('DeepSeek Harness adapter:'),
+        )
+      } else {
+        expect(content).not.toContain('## Task lanes (dsh-setup guidance)')
+      }
+      expect(content.trimEnd().endsWith('does not install runtime prerequisites.')).toBe(true)
+    }
+  })
+
+  it('ships the task-lane guidance outside the pinned asset directory', () => {
+    const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+      files: string[]
+    }
+    expect(manifest.files).toContain('assets/guidance/task-lanes.md')
+    expect(guidancePath.replaceAll('\\', '/')).not.toContain('/assets/openspec/')
+    expect(Buffer.byteLength(guidance, 'utf8')).toBeLessThan(4096)
+    expect(guidance).not.toContain('\r')
+  })
+
+  it('refuses a lock missing a task-lane guidance target', async () => {
+    const plugin = await loadPlugin()
+    const realSkills = lock.skills.map((skill) => ({ name: skill.name }))
+    expect(() => plugin.assertGuidanceTargets(realSkills)).not.toThrow()
+    for (const skillName of guidanceSkills) {
+      const missing = realSkills.filter((skill) => skill.name !== skillName)
+      expect(() => plugin.assertGuidanceTargets(missing)).toThrow(skillName)
     }
   })
 

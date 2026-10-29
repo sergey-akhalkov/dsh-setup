@@ -21,6 +21,12 @@ copying files into a project:
 - `openspec-sync-specs` — merge a proposal's spec updates into the main specs.
 - `openspec-archive-change` — archive a finished change proposal.
 
+The propose, update-change, and apply-change bodies also append a short plugin-owned "Task lanes"
+addendum before the adapter note. It defines an execution lane as a top-level task group with
+disjoint owned paths, asks for a lane cut or a one-line single-lane reason, and keeps shared files,
+generated output, and the full repository gate in a serial tail. The explore, sync-specs, and
+archive-change skills do not carry it, and no project `openspec/config.yaml` rule is needed.
+
 The full skill bodies load only when the model or a user invokes one; the catalog carries the
 descriptions. The plugin writes no files, adds no always-on prompt section, and has no configuration.
 A project or user skill with the same name wins over the packaged one, which is why stale local copies
@@ -86,6 +92,10 @@ and `openspec.lock.json`, which records the upstream repository, version, tag, c
 integrity, generator command and profile, every skill's description, size, and SHA-256, and the
 license hash. An offline test verifies those bytes.
 
+The task-lane addendum (`packages/plugin-openspec/assets/guidance/task-lanes.md`) lives outside
+`assets/openspec`, so `pnpm openspec:update` regenerates only the pinned set and leaves the addendum
+in place. The upstream files and the lock remain the only pinned content.
+
 Refreshing is a repository release step, not a runtime fetch:
 
 ```sh
@@ -96,7 +106,8 @@ pnpm test
 ```
 
 Review the generated asset and lock diff, then follow [docs/releasing.md](releasing.md). The running
-plugin never replaces or extends its vendored content.
+plugin never replaces or extends its vendored upstream content; the task-lane addendum is plugin-owned
+and sits outside the pinned set.
 
 ## Remove the plugin
 
