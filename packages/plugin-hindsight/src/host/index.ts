@@ -29,6 +29,12 @@ export {
   TRANSFER_SCHEMA_VERSION,
   unsanitizeBankId,
 } from './export-archive.js'
+export type {
+  BankTransferResult,
+  OperationMetadata,
+  TransferClientOptions,
+} from './export-client.js'
+export { TransferClient } from './export-client.js'
 export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './export-config.js'
 export {
   DEFAULT_EXPORT_CONFIG,
