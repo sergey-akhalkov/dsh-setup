@@ -15,6 +15,10 @@ export {
   readMachineExportConfig,
   resolveExportConfig,
 } from './export-config.js'
+export type { ExportErrorCode } from './export-errors.js'
+export { ExportError, messageOf } from './export-errors.js'
+export type { ArchiveEntries } from './export-zip.js'
+export { packArchive, unpackArchive } from './export-zip.js'
 
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,

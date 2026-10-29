@@ -32,7 +32,8 @@
     "dsh": ">=0.2.1-rc.3 <0.3.0"
   },
   "dependencies": {
-    "@vectorize-io/hindsight-coding-agents": "0.8.2"
+    "@vectorize-io/hindsight-coding-agents": "0.8.2",
+    "fflate": "0.8.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5"

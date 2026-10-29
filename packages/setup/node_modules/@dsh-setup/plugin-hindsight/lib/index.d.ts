@@ -2,6 +2,10 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { ExportConfig } from './export-config.js';
 export type { ExportConfig, MachineExportConfig, ResolvedExportConfig } from './export-config.js';
 export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
+export type { ExportErrorCode } from './export-errors.js';
+export { ExportError, messageOf } from './export-errors.js';
+export type { ArchiveEntries } from './export-zip.js';
+export { packArchive, unpackArchive } from './export-zip.js';
 /**
  * Hindsight memory plugin: delegates the whole memory lifecycle (seeding,
  * recall, injection, retention, native tools, companion skill) to the official
