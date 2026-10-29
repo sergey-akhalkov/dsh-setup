@@ -255,7 +255,8 @@ export function checkSetupRows(setupRows: readonly string[], installedDump: stri
 /**
  * Check the installer's selection change: the setup bundle is appended once as
  * the last entry, every bundle the profile selected before is still selected in
- * the same relative order, and every installer-owned bundle is selected.
+ * the same relative order (except the setup bundle, which the installer owns and
+ * moves last), and every installer-owned bundle is selected.
  */
 export function checkBundleSelection(
   before: readonly string[],
@@ -266,6 +267,9 @@ export function checkBundleSelection(
 
   let cursor = 0
   for (const name of before) {
+    // The installer owns the setup bundle's position and moves it last; every
+    // other owner bundle must keep its relative order.
+    if (name === SETUP_BUNDLE) continue
     const index = after.indexOf(name, cursor)
     if (index === -1) {
       problems.push(`bundle "${name}" was removed or reordered`)

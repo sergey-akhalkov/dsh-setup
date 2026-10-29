@@ -284,6 +284,20 @@ describe('checkBundleSelection', () => {
     expect(checkBundleSelection(before, after, installBundles)).toEqual([])
   })
 
+  it('accepts moving an existing setup bundle last without reordering the owner bundles', () => {
+    const owner = [
+      '@deepseek-ai/dsh-base',
+      '@dsh-setup/setup',
+      '@deepseek-ai/dsh-experimental-inspector-profile',
+    ]
+    const selected = [
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-experimental-inspector-profile',
+      '@dsh-setup/setup',
+    ]
+    expect(checkBundleSelection(owner, selected, [])).toEqual([])
+  })
+
   it('reports removed or reordered bundles', () => {
     expect(
       checkBundleSelection(before, ['@deepseek-ai/dsh-web-app', '@dsh-setup/setup'], []),
