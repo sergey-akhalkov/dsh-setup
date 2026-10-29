@@ -52,6 +52,11 @@ export declare function commitSnapshot(dir: string, options: CommitOptions): Pro
 export declare function currentBranch(dir: string): Promise<string>;
 /** Whether the repository already has a commit to push. */
 export declare function hasCommits(dir: string): Promise<boolean>;
+/**
+ * Whether the branch has local commits the remote-tracking ref does not, i.e.
+ * whether a push would do anything. A never-pushed repository counts as ahead.
+ */
+export declare function hasUnpushedCommits(dir: string): Promise<boolean>;
 export interface PushOptions {
     timeoutMs?: number;
     env?: NodeJS.ProcessEnv;

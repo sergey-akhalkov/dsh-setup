@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,15 +18,49 @@ const originalMode = process.env.HINDSIGHT_SERVER_MODE
 const originalUrl = process.env.HINDSIGHT_API_URL
 const originalDisabled = process.env.HINDSIGHT_DISABLED
 const originalConfig = process.env.HINDSIGHT_CONFIG
+const originalExportConfig = process.env.HINDSIGHT_EXPORT_CONFIG
 
-function fakeContext(): never {
-  return { on: () => undefined, inject: () => undefined } as never
+const exportConfigPath = join(
+  mkdtempSync(join(tmpdir(), 'hindsight-export-host-')),
+  'hindsight-export.json',
+)
+
+interface FakeContext {
+  listeners: Map<string, Array<(payload: { status: string }) => void>>
+  disposers: Array<() => void>
+  on(name: string, listener: (payload: { status: string }) => void): void
+  inject(): void
+  effect(execute: () => (() => void) | void): void
+}
+
+function fakeContext(): FakeContext {
+  const ctx: FakeContext = {
+    listeners: new Map(),
+    disposers: [],
+    on(name, listener) {
+      const list = ctx.listeners.get(name) ?? []
+      list.push(listener)
+      ctx.listeners.set(name, list)
+    },
+    inject: () => undefined,
+    effect(execute) {
+      const disposer = execute()
+      if (typeof disposer === 'function') ctx.disposers.push(disposer)
+    },
+  }
+  return ctx
+}
+
+function dispatchIdle(ctx: FakeContext): void {
+  for (const listener of ctx.listeners.get('agent/status') ?? []) listener({ status: 'idle' })
 }
 
 beforeEach(() => {
   delete process.env.HINDSIGHT_SERVER_MODE
   delete process.env.HINDSIGHT_API_URL
   delete process.env.HINDSIGHT_DISABLED
+  process.env.HINDSIGHT_EXPORT_CONFIG = exportConfigPath
+  writeFileSync(exportConfigPath, JSON.stringify({ enabled: false }))
   vi.clearAllMocks()
 })
 
@@ -49,7 +84,7 @@ describe('plugin-hindsight', () => {
   })
 
   it('applies the row defaults only when the environment is unset', () => {
-    apply(fakeContext(), {
+    apply(fakeContext() as never, {
       serverMode: 'self-hosted',
       apiUrl: 'http://127.0.0.1:8888',
       autostart: false,
@@ -59,7 +94,7 @@ describe('plugin-hindsight', () => {
 
     process.env.HINDSIGHT_SERVER_MODE = 'cloud'
     process.env.HINDSIGHT_API_URL = 'https://example.invalid'
-    apply(fakeContext(), {
+    apply(fakeContext() as never, {
       serverMode: 'self-hosted',
       apiUrl: 'http://127.0.0.1:8888',
       autostart: false,
@@ -143,7 +178,7 @@ describe('plugin-hindsight', () => {
     process.env.HINDSIGHT_CONFIG = join(tmpdir(), 'hindsight-missing-config-test.json')
     const fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
-    apply(fakeContext(), {
+    apply(fakeContext() as never, {
       serverMode: 'self-hosted',
       apiUrl: 'http://127.0.0.1:8888',
       autostart: true,
@@ -152,5 +187,26 @@ describe('plugin-hindsight', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://127.0.0.1:8888/health')
     expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it('registers no export trigger when the effective configuration disables it', () => {
+    // The machine-local file in beforeEach says enabled:false and outranks the row.
+    const ctx = fakeContext()
+    apply(ctx as never, { autostart: false, export: { enabled: true, intervalMinutes: 1 } })
+    expect(ctx.listeners.has('agent/status')).toBe(false)
+  })
+
+  it('registers the interval timer and idle trigger only when export is enabled', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hindsight-export-apply-'))
+    writeFileSync(exportConfigPath, JSON.stringify({ enabled: true, dir }))
+    // A closed port keeps the fire-and-forget idle cycle from touching memory.
+    process.env.HINDSIGHT_API_URL = 'http://127.0.0.1:1'
+    const ctx = fakeContext()
+    apply(ctx as never, { autostart: false })
+    expect(ctx.listeners.get('agent/status')?.length).toBeGreaterThan(0)
+    expect(ctx.disposers.length).toBeGreaterThan(0)
+    expect(() => dispatchIdle(ctx)).not.toThrow()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    for (const dispose of ctx.disposers) dispose()
   })
 })

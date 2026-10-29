@@ -243,6 +243,25 @@ export async function hasCommits(dir: string): Promise<boolean> {
   return result.code === 0
 }
 
+/**
+ * Whether the branch has local commits the remote-tracking ref does not, i.e.
+ * whether a push would do anything. A never-pushed repository counts as ahead.
+ */
+export async function hasUnpushedCommits(dir: string): Promise<boolean> {
+  if (!(await hasCommits(dir))) return false
+  const branch = await currentBranch(dir)
+  const tracking = await runGit(['rev-parse', '--verify', `origin/${branch}`], {
+    cwd: dir,
+    allowFailure: true,
+  })
+  if (tracking.code !== 0) return true
+  const ahead = await runGit(['rev-list', '--count', `origin/${branch}..HEAD`], {
+    cwd: dir,
+    allowFailure: true,
+  })
+  return ahead.code === 0 && Number(ahead.stdout) > 0
+}
+
 export interface PushOptions {
   timeoutMs?: number
   env?: NodeJS.ProcessEnv

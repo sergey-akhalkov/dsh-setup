@@ -39,7 +39,8 @@
     "@deepseek-ai/cordis": "~4.0.5"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5"
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.3"
   },
   "dsh": {
     "bundle": {

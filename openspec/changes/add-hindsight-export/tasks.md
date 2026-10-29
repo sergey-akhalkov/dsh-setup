@@ -23,7 +23,7 @@
 
 ## 5. Scheduler integration
 
-- [ ] 5.1 Wire the interval, idle-session, and dispose triggers into `apply()` with fail-open behavior and no model-facing surface; verify plugin tests cover disabled export, a healthy cycle, a daemon-down cycle, and dispose without blocking.
+- [x] 5.1 Wire the interval, idle-session, and dispose triggers into `apply()` with fail-open behavior and no model-facing surface; verify plugin tests cover disabled export, a healthy cycle, a daemon-down cycle, and dispose without blocking.
 - [ ] 5.2 Run the fake-server end-to-end test: export a bank, change its content, export again, assert one commit and one push; verify the disabled flag produces no Git or HTTP calls.
 
 ## 6. Restore script

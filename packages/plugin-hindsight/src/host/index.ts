@@ -2,9 +2,13 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { setInterval } from 'node:timers'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-agent'
 import { apply as applyHindsight } from '@vectorize-io/hindsight-coding-agents/dsh'
 import type { ExportConfig } from './export-config.js'
+import { resolveExportConfig } from './export-config.js'
+import { createExportScheduler } from './export-scheduler.js'
 
 export type {
   ArchiveCounts,
@@ -44,6 +48,8 @@ export {
   readMachineExportConfig,
   resolveExportConfig,
 } from './export-config.js'
+export type { ExportCycleOptions, ExportCycleResult } from './export-cycle.js'
+export { runExportCycle } from './export-cycle.js'
 export type { ExportErrorCode } from './export-errors.js'
 export { ExportError, messageOf } from './export-errors.js'
 export type {
@@ -63,8 +69,11 @@ export {
   EXPORT_GITIGNORE,
   gitOutput,
   hasCommits,
+  hasUnpushedCommits,
   pushSnapshot,
 } from './export-git.js'
+export type { ExportScheduler, SchedulerOptions } from './export-scheduler.js'
+export { createExportScheduler } from './export-scheduler.js'
 export type {
   BankSnapshotInput,
   LockOptions,
@@ -256,11 +265,35 @@ async function startLocalDaemon(config: HindsightConfig): Promise<void> {
 /**
  * Apply the row's connection defaults as environment fallbacks, then start the
  * official plugin. The upstream config file wins over these values, and an
- * explicit environment variable is never overwritten.
+ * explicit environment variable is never overwritten. The export scheduler is
+ * a timer plus two lifecycle hooks: no tool, command, or prompt surface.
  */
 export function apply(ctx: Context, config: HindsightConfig = {}): void {
   if (config.serverMode) process.env.HINDSIGHT_SERVER_MODE ??= config.serverMode
   if (config.apiUrl) process.env.HINDSIGHT_API_URL ??= config.apiUrl
   void startLocalDaemon(config)
   applyHindsight(ctx)
+
+  const exportConfig = resolveExportConfig(config.export)
+  if (!exportConfig.enabled) return
+  const scheduler = createExportScheduler({
+    config: exportConfig,
+    apiUrl: resolvedApiUrl(config, readMachineConfig()) || 'http://127.0.0.1:8888',
+    log: (line) => console.error(line),
+  })
+  ctx.effect(() => {
+    const timer = setInterval(
+      () => void scheduler.run('interval'),
+      exportConfig.intervalMinutes * 60_000,
+    )
+    timer.unref()
+    // An idle session is the safe moment to catch up: no turn is waiting.
+    ctx.on('agent/status', (payload) => {
+      if (payload.status === 'idle') void scheduler.run('idle')
+    })
+    return () => {
+      clearInterval(timer)
+      void scheduler.dispose()
+    }
+  })
 }
