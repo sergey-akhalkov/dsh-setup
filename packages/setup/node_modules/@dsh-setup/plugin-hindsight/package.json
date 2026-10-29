@@ -23,6 +23,8 @@
     "locale/*.json",
     "lib/index.js",
     "lib/index.d.ts",
+    "lib/*.js",
+    "lib/*.d.ts",
     "cordis.patch.yml",
     "cordis.fragment.yml"
   ],

@@ -50,3 +50,20 @@
           - --enable-web-dashboard=false
           - --enable-gui-log-window=false
         toolCallTimeoutMs: 120000
+# The memory export is on by default and writes every bank into a dedicated
+# private Git repository. A configuration patch replaces the whole object, so
+# the connection keys are restated with it. The directory and remote are
+# machine-local (`~/.dsh/hindsight-export.json`) and never live here.
+- id: dsh-setup-hindsight
+  config:
+    serverMode: self-hosted
+    apiUrl: http://127.0.0.1:8888
+    autostart: true
+    export:
+      enabled: true
+      intervalMinutes: 5
+      autoCommit: true
+      autoPush: true
+      includeHistory: false
+      includeAttachments: false
+      importOnEmpty: false

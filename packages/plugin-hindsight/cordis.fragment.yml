@@ -3,10 +3,20 @@
 # One row mounts this package's Host module, which delegates the memory
 # lifecycle to the official Hindsight DSH plugin. The connection defaults are
 # the owner's local hindsight-embed daemon; a machine-local
-# `~/.hindsight/coding-agent.json` still wins over them.
+# `~/.hindsight/coding-agent.json` still wins over them. The default-on export
+# writes every bank as JSON into a private Git repository; its directory and
+# remote stay in the machine-local `~/.dsh/hindsight-export.json`.
 rows:
   - id: dsh-setup-hindsight
     config:
       serverMode: self-hosted
       apiUrl: http://127.0.0.1:8888
       autostart: true
+      export:
+        enabled: true
+        intervalMinutes: 5
+        autoCommit: true
+        autoPush: true
+        includeHistory: false
+        includeAttachments: false
+        importOnEmpty: false

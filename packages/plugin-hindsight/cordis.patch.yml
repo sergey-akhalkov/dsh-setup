@@ -7,3 +7,11 @@
         serverMode: self-hosted
         apiUrl: http://127.0.0.1:8888
         autostart: true
+        export:
+          enabled: true
+          intervalMinutes: 5
+          autoCommit: true
+          autoPush: true
+          includeHistory: false
+          includeAttachments: false
+          importOnEmpty: false
