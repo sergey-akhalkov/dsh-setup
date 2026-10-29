@@ -49,6 +49,9 @@ Then run the one-click bootstrap:
 irm https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/main/setup-hindsight.ps1 | iex
 ```
 
+To run a checked-out copy locally, execute `.\setup-hindsight.ps1` directly; `irm` accepts a URL,
+not a relative file path.
+
 The script:
 
 1. verifies the DeepSeek key against `https://api.deepseek.com/models` and refuses a rejected key

@@ -245,6 +245,28 @@ function Get-UvCommand {
   return $uv.Source
 }
 
+function Find-EmbedExecutable([string]$ToolRoot, [string]$BinRoot, [string]$UserBin = (Join-Path $env:USERPROFILE '.local\bin')) {
+  $candidates = @((Join-Path $UserBin 'hindsight-embed.exe'))
+  if (-not [string]::IsNullOrWhiteSpace($BinRoot)) {
+    $candidates += (Join-Path $BinRoot 'hindsight-embed.exe')
+    $candidates += (Join-Path $BinRoot 'hindsight-embed')
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ToolRoot)) {
+    $candidates += (Join-Path $ToolRoot 'hindsight-embed\Scripts\hindsight-embed.exe')
+    $candidates += (Join-Path $ToolRoot 'hindsight-embed\bin\hindsight-embed')
+  }
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate) {
+      return $candidate
+    }
+  }
+  $command = Get-Command hindsight-embed -ErrorAction SilentlyContinue
+  if ($null -ne $command) {
+    return $command.Source
+  }
+  return $null
+}
+
 function Get-EmbedCommand([string]$UvPath, [bool]$Install) {
   $list = Invoke-NativeCapture $UvPath @('tool', 'list')
   if ($list.ExitCode -ne 0) {
@@ -261,16 +283,22 @@ function Get-EmbedCommand([string]$UvPath, [bool]$Install) {
       throw "uv tool install hindsight-embed failed: $($installResult.Output)"
     }
   }
-  $candidate = Join-Path $env:USERPROFILE '.local\bin\hindsight-embed.exe'
-  if (Test-Path -LiteralPath $candidate) {
+  $toolRoot = ''
+  $binRoot = ''
+  $toolDir = Invoke-NativeCapture $UvPath @('tool', 'dir')
+  if ($toolDir.ExitCode -eq 0) {
+    $toolRoot = $toolDir.Output.Trim()
+  }
+  $binDir = Invoke-NativeCapture $UvPath @('tool', 'dir', '--bin')
+  if ($binDir.ExitCode -eq 0) {
+    $binRoot = $binDir.Output.Trim()
+  }
+  $candidate = Find-EmbedExecutable $toolRoot $binRoot
+  if ($null -ne $candidate) {
     return $candidate
   }
-  $command = Get-Command hindsight-embed -ErrorAction SilentlyContinue
-  if ($null -ne $command) {
-    return $command.Source
-  }
   if ($Install) {
-    throw 'hindsight-embed was installed but its executable was not found in ~/.local/bin.'
+    throw 'hindsight-embed was installed but its executable was not found (checked the uv tool bin and venv directories, ~/.local/bin, and PATH).'
   }
   return $null
 }
@@ -583,6 +611,17 @@ function Test-ExportRemoteUrl([string]$Remote) {
   return $false
 }
 
+function Resolve-ExportRemoteAnswer([string]$Proposed, [string]$Answer) {
+  if ([string]::IsNullOrWhiteSpace($Answer)) {
+    return $Proposed
+  }
+  $trimmed = $Answer.Trim()
+  if ($trimmed -eq '-') {
+    return ''
+  }
+  return $trimmed
+}
+
 function Resolve-ExportRemote([string]$CurrentRemote, [string]$RepoOrigin) {
   if (-not [string]::IsNullOrWhiteSpace($ExportRemote)) {
     if ($ExportRemote.Trim() -eq '-') {
@@ -595,9 +634,12 @@ function Resolve-ExportRemote([string]$CurrentRemote, [string]$RepoOrigin) {
     return $proposed
   }
   if ([string]::IsNullOrWhiteSpace($proposed)) {
-    return Read-Host 'Private Git remote for the export (leave empty for local-only; no push)'
+    $answer = Read-Host 'Private Git remote for the export (leave empty for local-only; no push)'
   }
-  return Read-Host ("Private Git remote for the export [{0}] (Enter keeps it, '-' removes it)" -f (Hide-RemoteSecret $proposed))
+  else {
+    $answer = Read-Host ("Private Git remote for the export [{0}] (Enter keeps it, '-' removes it)" -f (Hide-RemoteSecret $proposed))
+  }
+  return Resolve-ExportRemoteAnswer $proposed $answer
 }
 
 function Read-ExportConfig([string]$Path) {
@@ -882,6 +924,42 @@ if ($SelfTest) {
     throw 'Remote URL redaction self-test failed.'
   }
   Write-Ok 'Export remote URL self-test passed'
+  $promptCases = @(
+    @{ Proposed = 'https://git.example.invalid/x.git'; Answer = ''; Expected = 'https://git.example.invalid/x.git' },
+    @{ Proposed = 'https://git.example.invalid/x.git'; Answer = '   '; Expected = 'https://git.example.invalid/x.git' },
+    @{ Proposed = 'https://git.example.invalid/x.git'; Answer = '-'; Expected = '' },
+    @{ Proposed = ''; Answer = 'https://git.example.invalid/y.git'; Expected = 'https://git.example.invalid/y.git' },
+    @{ Proposed = ''; Answer = ''; Expected = '' }
+  )
+  foreach ($case in $promptCases) {
+    if ((Resolve-ExportRemoteAnswer $case.Proposed $case.Answer) -ne $case.Expected) {
+      throw "Export remote prompt self-test failed for answer '$($case.Answer)'."
+    }
+  }
+  Write-Ok 'Export remote prompt self-test passed'
+  $toolProbe = Join-Path $env:TEMP ('hindsight-tool-' + [guid]::NewGuid().ToString('N'))
+  $binProbe = Join-Path $env:TEMP ('hindsight-bin-' + [guid]::NewGuid().ToString('N'))
+  $userBinProbe = Join-Path $env:TEMP ('hindsight-userbin-' + [guid]::NewGuid().ToString('N'))
+  try {
+    New-Item -ItemType Directory -Force -Path (Join-Path $toolProbe 'hindsight-embed\Scripts') | Out-Null
+    New-Item -ItemType Directory -Force -Path $binProbe | Out-Null
+    New-Item -ItemType Directory -Force -Path $userBinProbe | Out-Null
+    $toolExe = Join-Path $toolProbe 'hindsight-embed\Scripts\hindsight-embed.exe'
+    New-Item -ItemType File -Force -Path $toolExe | Out-Null
+    if ((Find-EmbedExecutable $toolProbe $binProbe $userBinProbe) -ne $toolExe) {
+      throw 'Hindsight tool discovery self-test did not find the uv venv executable.'
+    }
+    Remove-Item -LiteralPath $toolExe -Force
+    $binExe = Join-Path $binProbe 'hindsight-embed.exe'
+    New-Item -ItemType File -Force -Path $binExe | Out-Null
+    if ((Find-EmbedExecutable $toolProbe $binProbe $userBinProbe) -ne $binExe) {
+      throw 'Hindsight tool discovery self-test did not find the uv bin executable.'
+    }
+  }
+  finally {
+    Remove-Item -Path $toolProbe, $binProbe, $userBinProbe -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Write-Ok 'Hindsight tool discovery self-test passed'
   $configProbe = Join-Path $env:TEMP ('hindsight-export-config-' + [guid]::NewGuid().ToString('N') + '.json')
   try {
     Write-Utf8NoBom $configProbe '{"enabled":false,"remote":"https://git.example.invalid/old.git"}'
