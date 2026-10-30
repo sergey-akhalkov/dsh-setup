@@ -1,0 +1,7 @@
+# Composition fragment for @dsh-setup/plugin-observability.
+#
+# One row mounts this package's Host module and Client view. The shipped signal
+# map (which tools and message kinds belong to which plugin) is owner
+# configuration in packages/setup/defaults.yml, not package code.
+rows:
+  - id: dsh-setup-observability

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Observability",
+    "description": "Shows whether the behaviors a setup relies on actually fired in recent sessions, derived from the session event logs DSH already records"
+  }
+}

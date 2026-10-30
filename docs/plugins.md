@@ -192,6 +192,79 @@ The speed-review loop was added by the `add-goal-round-retro` change; the row
 `dsh-setup-goal-continuity` and the accepted requirements in the `goal-continuity` spec describe its
 behavior.
 
+## Observability view
+
+[`packages/plugin-observability`](../packages/plugin-observability) adds an **Observability** tab
+beside Chat and Trajectory. It answers "did a rule actually fire, and is a plugin still working?"
+from the session event logs DSH already writes; it adds no telemetry pipeline, no second log, and no
+file of its own. The Host reads through `ctx.sessionQuery`, aggregates in memory, and serves
+`GET /plugins/dsh-setup-observability/report?range=<range>&session=<id>` to the Client. A bounded
+in-memory cache keyed by session id plus event count and newest event time makes a repeated request
+cheap; nothing survives a Host restart.
+
+**Ranges and buckets.** `session` is the open session's turns plus one explicit `Outside turn`
+bucket (commands are appended with no turn around them); `day` is 24 local-hour buckets; `week` is 7
+local-day buckets; `month` is 30 local-day buckets. Wider ranges cover every session in the open
+session's workspace whose events fall in the window, subagent children included, and a seed's copied
+prefix is skipped at `inheritedEventCount`, so an event counts once.
+
+**Dashboard, not a log browser.** The view opens on a health verdict and four KPIs (turns, steps, tool
+calls, errors), then one activity chart for the range with the error share in red, plugin health cards
+grouped as Needs attention / Active / Silent (each with a status word, counts, last activity, a
+sparkline, and its tool chips), the tool-call distribution, and a collapsed statement of blind spots.
+A card expands to at most five recent traces — time, row, turn, tool, error flag — and message text
+and tool arguments never appear. Built-in aggregates feed the KPIs, chart, and tools list while
+configured rows become cards, so the same event is never counted twice in the dashboard totals.
+
+**Rows are data.** A configured row has an `id`, a `label`, a `kind`, and a `match`: one predicate or
+an any-of list of predicates over `eventType`, `tool`, `sourceKind` (an injected message's declared
+kind), `abortPrefix` (a hook abort reason's prefix), `command` (a slash command's name), and at most
+one `argument` field/value on a tool call. A `guidance` row has no match; it names a prompt-only
+plugin honestly instead of letting it disappear. Unknown fields are rejected at startup, naming the
+field. The configuration is never executed.
+
+With no configuration the built-in sets still show turns, steps, tool calls, one row per observed
+tool name, one row per observed injected-message source kind, one row per observed abort prefix, and
+errors. The shipped signal map lives in `packages/setup/defaults.yml` and maps each shipped plugin's
+tools, message kinds, aborts, and commands to its own row; its test fails when a tool is renamed or a
+plugin is removed.
+
+**Status words.** `active` means traces in the period, `error` means at least one failed trace,
+`not loaded` means a tool the row names is absent from the live tool registry, and `silent` means
+configured but no traces — labelled explicitly as the absence of traces, not proof of a fault. A
+guidance row has no status: it is always `guidance only` and never enters the other four. Every state
+is written in words as well as colour.
+
+**What it cannot see.** The view names these blind spots rather than implying full coverage: a
+prompt-only plugin's effect on a turn, a plugin that fails while loading (no session event), UI
+rendering effects, and whether the model complied with a prompted rule.
+
+To add a custom signal, override the row in the profile's `cordis.patch.yml`. A configuration patch
+replaces the whole `config` object, so restate every row the profile needs (start from the shipped
+map in `packages/setup/defaults.yml`):
+
+```yaml
+- id: dsh-setup-observability
+  config:
+    rows:
+      - id: my-tool
+        label: My tool
+        kind: signal
+        match:
+          - tool: my_tool
+      - id: my-notes-writes
+        label: My notes writes
+        kind: signal
+        match:
+          - tool: write
+            argument:
+              field: path
+              value: notes.md
+      - id: my-skill
+        label: My plugin
+        kind: guidance
+```
+
 ## Adding a package
 
 1. Copy the closest existing package shape (`packages/plugin-rust` for a Host-only bundle,

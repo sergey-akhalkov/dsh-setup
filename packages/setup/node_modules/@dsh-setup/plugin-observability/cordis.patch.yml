@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-observability.
+- insert:
+    - id: dsh-setup-observability
+      name: "@dsh-setup/plugin-observability"

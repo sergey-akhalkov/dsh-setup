@@ -11,7 +11,6 @@ import {
   patchRowIds,
   RETIRED_ADAPTER_ROWS,
   readBundles,
-  scalarPairs,
 } from '../lib/dogfood.ts'
 import { rootDir } from '../lib/workspace.ts'
 
@@ -192,32 +191,6 @@ describe('patchExplicitDisabled', () => {
   })
 })
 
-describe('scalarPairs', () => {
-  it('flattens nested mappings and skips arrays', () => {
-    expect(
-      scalarPairs({
-        preference: 'dark',
-        count: 2,
-        enabled: true,
-        nothing: null,
-        nested: { model: 'deepseek-flash' },
-        list: ['text', 'image'],
-      }),
-    ).toEqual([
-      'preference: dark',
-      'count: 2',
-      'enabled: true',
-      'nothing: null',
-      'model: deepseek-flash',
-    ])
-  })
-
-  it('ignores non-object config values', () => {
-    expect(scalarPairs('text')).toEqual([])
-    expect(scalarPairs(undefined)).toEqual([])
-  })
-})
-
 describe('checkSetupDefaults', () => {
   const themeDefault = { id: 'ui-theme', config: { preference: 'dark' } }
   const modelDefault = {
@@ -239,8 +212,63 @@ describe('checkSetupDefaults', () => {
   it('reports a default value that did not become effective', () => {
     const installed = DUMP.replace('preference: dark', 'preference: light')
     expect(checkSetupDefaults([themeDefault], [], installed)).toContain(
-      'setup default "ui-theme" lacks effective value "preference: dark"',
+      'setup default "ui-theme" does not match the shipped config',
     )
+  })
+
+  it('compares the composed signal map structurally', () => {
+    const shipped = {
+      id: 'dsh-setup-quoted',
+      config: {
+        rows: [
+          { id: 'delegation-rules', kind: 'signal', match: [{ tool: 'delegate' }] },
+          { id: 'mcp-lazy', kind: 'signal', match: [{ tool: 'mcp_tools' }] },
+        ],
+      },
+    }
+    const dump = [
+      '- id: dsh-setup-quoted',
+      "  name: '@dsh-setup/plugin-observability'",
+      '  config:',
+      '    rows:',
+      '      - id: delegation-rules',
+      '        kind: signal',
+      '        match:',
+      '          - tool: delegate',
+      '      - id: mcp-lazy',
+      '        kind: signal',
+      '        match:',
+      '          - tool: mcp_tools',
+    ].join('\n')
+    expect(checkSetupDefaults([shipped], [], dump)).toEqual([])
+    const renamed = dump.replace('tool: delegate', 'tool: delegate_nonexistent')
+    expect(checkSetupDefaults([shipped], [], renamed)).toEqual([
+      'setup default "dsh-setup-quoted" does not match the shipped config',
+    ])
+    const swapped = dump
+      .replace('tool: delegate', 'tool: TEMP')
+      .replace('tool: mcp_tools', 'tool: delegate')
+      .replace('tool: TEMP', 'tool: mcp_tools')
+    expect(checkSetupDefaults([shipped], [], swapped)).toEqual([
+      'setup default "dsh-setup-quoted" does not match the shipped config',
+    ])
+  })
+
+  it('accepts a composed value YAML had to quote', () => {
+    const quoted = {
+      id: 'dsh-setup-quoted',
+      config: { rows: [{ id: 'loop-guard', match: [{ abortPrefix: 'loop-guard:reset:' }] }] },
+    }
+    const dump = [
+      '- id: dsh-setup-quoted',
+      "  name: '@dsh-setup/plugin-observability'",
+      '  config:',
+      '    rows:',
+      '      - id: loop-guard',
+      '        match:',
+      "          - abortPrefix: 'loop-guard:reset:'",
+    ].join('\n')
+    expect(checkSetupDefaults([quoted], [], dump)).toEqual([])
   })
 
   it('skips rows the owner patch overrides because the owner value wins', () => {

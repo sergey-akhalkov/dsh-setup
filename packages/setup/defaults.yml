@@ -67,3 +67,90 @@
       includeHistory: false
       includeAttachments: false
       importOnEmpty: false
+# Observability signal map: attributes tool calls, injected messages, aborts,
+# and commands to the shipped plugin that produces them. Rows are declarative
+# data, never code. A plugin rename or removal fails the map's test instead of
+# silently blanking a row, and a row id is the plugin's short name
+# (`<id>` in `@dsh-setup/plugin-<id>`). A configuration patch replaces the
+# whole object, so a profile override must restate every row it needs.
+- id: dsh-setup-observability
+  config:
+    rows:
+      - id: delegation-rules
+        label: Delegation rules
+        kind: signal
+        match:
+          - tool: delegate
+          - tool: task_progress
+          - tool: delegation_status
+          - sourceKind: delegation-rules
+      - id: mcp-lazy
+        label: Lazy MCP
+        kind: signal
+        match:
+          - tool: mcp_tools
+          - tool: mcp_call
+      - id: codex-subagent
+        label: Codex subagent
+        kind: signal
+        match:
+          - tool: codex_subagent_status
+      - id: goal-continuity
+        label: Goal continuity
+        kind: signal
+        match:
+          - sourceKind: goal-continuity
+      - id: verification-gate
+        label: Verification gate
+        kind: signal
+        match:
+          - sourceKind: verification-gate
+      - id: loop-guard
+        label: Loop guard
+        kind: signal
+        match:
+          - sourceKind: loop-guard
+          - abortPrefix: "loop-guard:reset:"
+          - abortPrefix: "loop-guard:final:"
+      - id: admin-indicator
+        label: Administrator indicator
+        kind: signal
+        match:
+          - command: admin-shortcut
+          - command: admin-restart
+      - id: ponytail
+        label: Ponytail
+        kind: guidance
+      - id: working-principles
+        label: Working principles
+        kind: guidance
+      - id: rtk
+        label: RTK
+        kind: guidance
+      - id: serena
+        label: Serena
+        kind: guidance
+      - id: nuphus-mcp
+        label: Nuphus MCP
+        kind: guidance
+      - id: openspec
+        label: OpenSpec
+        kind: guidance
+      - id: rust
+        label: Rust
+        kind: guidance
+      - id: answer-page
+        label: Answer page
+        kind: guidance
+      - id: hindsight
+        label: Hindsight memory
+        kind: signal
+        match:
+          - tool: hindsight_search_knowledge_pages
+          - tool: hindsight_list_knowledge_pages
+          - tool: hindsight_read_knowledge_page
+          - tool: hindsight_reflect
+          - tool: hindsight_capture_initiative
+          - tool: hindsight_ingest_document
+          - tool: hindsight_diagnose
+          - tool: hindsight_sync_status

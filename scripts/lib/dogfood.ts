@@ -14,6 +14,8 @@
  * messages unit-testable without a Harness install.
  */
 
+import { parse } from 'yaml'
+
 /** The setup bundle name appended last by the installer. */
 export const SETUP_BUNDLE = '@dsh-setup/setup'
 
@@ -115,6 +117,15 @@ export function dumpEntryBlock(dump: string, id: string): string | undefined {
   return block.join('\n')
 }
 
+/** Parse one composed row block; an unreadable dump is reported as a mismatch. */
+function parseDumpBlock(block: string): unknown {
+  try {
+    return parse(block)
+  } catch {
+    return undefined
+  }
+}
+
 function quoteOrBare(value: string): string {
   return `(?:'${escapeRegExp(value.replaceAll("'", "''"))}'|"${escapeRegExp(value)}"|${escapeRegExp(value)})`
 }
@@ -169,31 +180,6 @@ function withoutRowDisabled(block: string): string {
     .trimEnd()
 }
 
-/**
- * Render scalar leaves of a config object as `key: value` lines.
- *
- * The composed dump prints scalars the same way, so a presence check proves a
- * setup default reached the effective config. Nested mappings are flattened;
- * arrays are skipped because the dump renders them as a different shape.
- */
-export function scalarPairs(config: unknown): string[] {
-  const pairs: string[] = []
-  const visit = (value: unknown): void => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return
-    for (const [key, nested] of Object.entries(value)) {
-      if (typeof nested === 'string' || typeof nested === 'number' || typeof nested === 'boolean') {
-        pairs.push(`${key}: ${String(nested)}`)
-      } else if (nested === null) {
-        pairs.push(`${key}: null`)
-      } else {
-        visit(nested)
-      }
-    }
-  }
-  visit(config)
-  return pairs
-}
-
 /** Read the row-level `disabled` property, ignoring nested configuration values. */
 function rowDisabled(block: string): boolean | undefined {
   const match = /^ {2}disabled:\s*(true|false)\s*$/m.exec(block)
@@ -201,10 +187,34 @@ function rowDisabled(block: string): boolean | undefined {
   return match[1] === 'true'
 }
 
+/** Structural JSON equality; key order is irrelevant. */
+function sameConfig(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((item, index) => sameConfig(item, right[index]))
+  }
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) {
+    return false
+  }
+  const keys = (value: object): string[] =>
+    Object.keys(value).filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+  const leftKeys = keys(left)
+  const rightKeys = keys(right)
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) =>
+      sameConfig((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+    )
+  )
+}
+
 /**
  * Check that setup defaults still take effect where the owner patch does not
- * override the row. An owner patched row replaces the whole setup config, so it
- * is the owner's block, not this check, that proves precedence there.
+ * override the row. The composed config is parsed and compared structurally to
+ * the shipped config, so a changed tool name or a predicate moved to another
+ * row fails. An owner patched row replaces the whole setup config, so it is the
+ * owner's block, not this check, that proves precedence there.
  */
 export function checkSetupDefaults(
   defaults: ReadonlyArray<{
@@ -225,10 +235,14 @@ export function checkSetupDefaults(
       continue
     }
     if (entry.config !== undefined) {
-      for (const pair of scalarPairs(entry.config)) {
-        if (!block.includes(pair)) {
-          problems.push(`setup default "${entry.id}" lacks effective value "${pair}"`)
-        }
+      const parsed: unknown = parseDumpBlock(block)
+      const composed = Array.isArray(parsed) ? parsed[0] : parsed
+      const config =
+        typeof composed === 'object' && composed !== null
+          ? (composed as { config?: unknown }).config
+          : undefined
+      if (!sameConfig(config, entry.config)) {
+        problems.push(`setup default "${entry.id}" does not match the shipped config`)
       }
     }
     if (entry.disabled === true && rowDisabled(block) !== true) {

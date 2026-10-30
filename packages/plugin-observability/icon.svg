@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Observability chart">
+  <path d="M10 10v44h44" fill="none" stroke="#4D6BFE" stroke-width="4" stroke-linecap="round"/>
+  <rect x="18" y="34" width="8" height="20" rx="1.5" fill="#4D6BFE"/>
+  <rect x="30" y="24" width="8" height="30" rx="1.5" fill="#4D6BFE"/>
+  <rect x="42" y="15" width="8" height="39" rx="1.5" fill="#4D6BFE"/>
+</svg>

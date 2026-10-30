@@ -9,6 +9,7 @@
     { "path": "./packages/plugin-loop-guard" },
     { "path": "./packages/plugin-mcp-lazy" },
     { "path": "./packages/plugin-nuphus-mcp" },
+    { "path": "./packages/plugin-observability" },
     { "path": "./packages/plugin-openspec" },
     { "path": "./packages/plugin-ponytail" },
     { "path": "./packages/plugin-rtk" },
