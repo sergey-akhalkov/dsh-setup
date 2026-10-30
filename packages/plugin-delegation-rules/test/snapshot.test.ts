@@ -227,6 +227,35 @@ describe('review snapshot', () => {
     expect(reason).toContain('outside the repository')
   })
 
+  it('reports a snapshot build failure once', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    let reason: string | undefined
+    let calls = 0
+    const failingGit: typeof defaultGit = async (args, cwd, signal, env, stdin) => {
+      if (args[0] === 'write-tree') throw new Error('injected write-tree failure')
+      return defaultGit(args, cwd, signal, env, stdin)
+    }
+    const snapshot = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-e',
+      failingGit,
+      new AbortController().signal,
+      undefined,
+      (value) => {
+        calls += 1
+        reason = value
+      },
+    )
+    expect(snapshot).toBeUndefined()
+    expect(calls).toBe(1)
+    expect(reason).toContain('could not be built')
+  })
+
   it('resolves the repository through a linked checkout path', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), '.dsh/\n')
