@@ -71,6 +71,14 @@ describe('git runner environment and stdin', () => {
     expect(ident).toContain('snapshot@example.test')
   })
 
+  it('rejects when stdin delivery fails even if the child exits zero', async () => {
+    const dir = await repository()
+    const payload = 'x'.repeat(8 * 1024 * 1024)
+    await expect(defaultGit(['version'], dir, undefined, undefined, payload)).rejects.toThrow(
+      /stdin/,
+    )
+  })
+
   it('runs a command that ignores stdin', async () => {
     const dir = await repository()
     const inside = (await defaultGit(['rev-parse', '--is-inside-work-tree'], dir))

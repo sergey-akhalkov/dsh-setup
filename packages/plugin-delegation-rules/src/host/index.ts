@@ -609,6 +609,7 @@ export function defaultGit(
     })
     const chunks: Buffer[] = []
     let stderr = ''
+    let stdinFailure: Error | undefined
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderr.length < 2_000) stderr += chunk.toString('utf8')
@@ -618,7 +619,15 @@ export function defaultGit(
     })
     child.on('close', (code) => {
       if (code === 0) {
-        done(Buffer.concat(chunks))
+        if (stdinFailure === undefined) {
+          done(Buffer.concat(chunks))
+          return
+        }
+        failed(
+          new DelegationError(
+            `git ${args[0] ?? 'command'} could not receive stdin: ${stdinFailure.message}`,
+          ),
+        )
         return
       }
       const detail = stderr.trim().replace(/\s+/g, ' ').slice(0, 300)
@@ -629,14 +638,9 @@ export function defaultGit(
       )
     })
     // Close stdin so a command that reads it (update-index --stdin) gets EOF.
-    // An EPIPE means the child already exited; `close` reports the real failure.
-    child.stdin.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EPIPE') return
-      failed(
-        new DelegationError(
-          `git ${args[0] ?? 'command'} could not receive stdin: ${error.message}`,
-        ),
-      )
+    // Keep any write failure: a zero exit must not hide undelivered input.
+    child.stdin.on('error', (error: Error) => {
+      stdinFailure = error
     })
     child.stdin.end(stdin)
   })

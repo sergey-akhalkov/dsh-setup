@@ -397,6 +397,7 @@ export function defaultGit(args, cwd, signal, env, stdin) {
         });
         const chunks = [];
         let stderr = '';
+        let stdinFailure;
         child.stdout.on('data', (chunk) => chunks.push(chunk));
         child.stderr.on('data', (chunk) => {
             if (stderr.length < 2_000)
@@ -407,18 +408,20 @@ export function defaultGit(args, cwd, signal, env, stdin) {
         });
         child.on('close', (code) => {
             if (code === 0) {
-                done(Buffer.concat(chunks));
+                if (stdinFailure === undefined) {
+                    done(Buffer.concat(chunks));
+                    return;
+                }
+                failed(new DelegationError(`git ${args[0] ?? 'command'} could not receive stdin: ${stdinFailure.message}`));
                 return;
             }
             const detail = stderr.trim().replace(/\s+/g, ' ').slice(0, 300);
             failed(new DelegationError(`git ${args[0] ?? 'command'} failed (exit ${code ?? 'unknown'})${detail ? `: ${detail}` : ''}`));
         });
         // Close stdin so a command that reads it (update-index --stdin) gets EOF.
-        // An EPIPE means the child already exited; `close` reports the real failure.
+        // Keep any write failure: a zero exit must not hide undelivered input.
         child.stdin.on('error', (error) => {
-            if (error.code === 'EPIPE')
-                return;
-            failed(new DelegationError(`git ${args[0] ?? 'command'} could not receive stdin: ${error.message}`));
+            stdinFailure = error;
         });
         child.stdin.end(stdin);
     });
