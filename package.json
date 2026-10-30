@@ -1,6 +1,6 @@
 {
   "name": "dsh-setup",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
   "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
