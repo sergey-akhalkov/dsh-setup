@@ -131,13 +131,23 @@ export declare function createReviewSnapshot(cwd: string, change: ChangeInfo, ru
 /** Test seam: runs after the change directory is frozen, before its digest. */
 afterCopy?: () => Promise<void> | void): Promise<ReviewSnapshot | undefined>;
 /**
+ * Write the initial lease and start renewing it. The initial write is awaited,
+ * so a lease exists before the worktree it protects is created.
+ */
+export declare function startSnapshotLease(cwd: string, runId: string, refreshMs?: number): Promise<void>;
+/** Stop renewal and await any in-flight write, so none lands after cleanup. */
+export declare function stopSnapshotLease(cwd: string, runId: string): Promise<void>;
+/**
  * Remove snapshots no live run owns. Ownership is the lease, never age or the
  * configured review timeout; a lease-less directory is given a grace period.
- * Runs at most once per throttle window per workspace and never throws.
+ * Orphaned leases before creation, scratch indexes, and stale worktree metadata
+ * are also retried here. Runs at most once per throttle window and never throws.
  */
 export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now?: number): Promise<void>;
 /** Remove one snapshot checkout, its lease, and its scratch index; best effort. */
-export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner): Promise<void>;
+export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner, 
+/** Test seam: the filesystem remover, so a failed removal can be injected. */
+remove?: (path: string) => Promise<void>): Promise<void>;
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools

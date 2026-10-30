@@ -1164,9 +1164,10 @@ export async function createReviewSnapshot(
     )
       .toString('utf8')
       .trim()
+    // The lease is written before the checkout exists, so a crash cannot leave
+    // an unowned worktree; the sweep preserves a valid lease without a directory.
+    await startSnapshotLease(cwd, runId)
     await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal)
-    await writeSnapshotLease(cwd, runId)
-    startSnapshotLease(cwd, runId)
     const frozenChange = resolve(worktree, relChange)
     await mkdir(dirname(frozenChange), { recursive: true })
     await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true })
@@ -1180,7 +1181,13 @@ export async function createReviewSnapshot(
 }
 
 /** Live snapshot leases, keyed by workspace snapshot directory and run id. */
-const snapshotLeaseTimers = new Map<string, NodeJS.Timeout>()
+interface SnapshotLease {
+  stopped: boolean
+  /** Pending and future renewal writes, chained so a stop can await them. */
+  writes: Promise<void>
+  timer?: NodeJS.Timeout
+}
+const snapshotLeases = new Map<string, SnapshotLease>()
 /** Last per-workspace sweep time, for the throttle. */
 const snapshotSweeps = new Map<string, number>()
 
@@ -1208,26 +1215,42 @@ async function writeSnapshotLease(cwd: string, runId: string): Promise<void> {
   })
 }
 
-function startSnapshotLease(cwd: string, runId: string): void {
+/**
+ * Write the initial lease and start renewing it. The initial write is awaited,
+ * so a lease exists before the worktree it protects is created.
+ */
+export async function startSnapshotLease(
+  cwd: string,
+  runId: string,
+  refreshMs = SNAPSHOT_REFRESH_MS,
+): Promise<void> {
+  const state: SnapshotLease = { stopped: false, writes: writeSnapshotLease(cwd, runId) }
   const timer = setInterval(() => {
-    void writeSnapshotLease(cwd, runId).catch(() => undefined)
-  }, SNAPSHOT_REFRESH_MS)
+    if (state.stopped) return
+    state.writes = state.writes.then(() => writeSnapshotLease(cwd, runId)).catch(() => undefined)
+  }, refreshMs)
   timer.unref()
-  snapshotLeaseTimers.set(snapshotKey(cwd, runId), timer)
+  state.timer = timer
+  snapshotLeases.set(snapshotKey(cwd, runId), state)
+  await state.writes
 }
 
-function stopSnapshotLease(cwd: string, runId: string): void {
+/** Stop renewal and await any in-flight write, so none lands after cleanup. */
+export async function stopSnapshotLease(cwd: string, runId: string): Promise<void> {
   const key = snapshotKey(cwd, runId)
-  const timer = snapshotLeaseTimers.get(key)
-  if (timer === undefined) return
-  clearInterval(timer)
-  snapshotLeaseTimers.delete(key)
+  const state = snapshotLeases.get(key)
+  if (state === undefined) return
+  state.stopped = true
+  if (state.timer !== undefined) clearInterval(state.timer)
+  snapshotLeases.delete(key)
+  await state.writes.catch(() => undefined)
 }
 
 /**
  * Remove snapshots no live run owns. Ownership is the lease, never age or the
  * configured review timeout; a lease-less directory is given a grace period.
- * Runs at most once per throttle window per workspace and never throws.
+ * Orphaned leases before creation, scratch indexes, and stale worktree metadata
+ * are also retried here. Runs at most once per throttle window and never throws.
  */
 export async function sweepReviewSnapshots(
   cwd: string,
@@ -1237,13 +1260,12 @@ export async function sweepReviewSnapshots(
   const dir = resolve(cwd, SNAPSHOT_DIR)
   if (now - (snapshotSweeps.get(dir) ?? 0) < SNAPSHOT_SWEEP_MS) return
   snapshotSweeps.set(dir, now)
-  let entries: Dirent[]
+  let entries: Dirent[] = []
   try {
     entries = await readdir(dir, { withFileTypes: true })
   } catch {
-    return
+    entries = []
   }
-  let removed = false
   for (const entry of entries) {
     const path = resolve(dir, entry.name)
     if (entry.isDirectory()) {
@@ -1258,26 +1280,69 @@ export async function sweepReviewSnapshots(
         }
       }
       await discardReviewSnapshot(cwd, runId, runGit)
-      removed = true
+      continue
+    }
+    if (entry.name.endsWith('.tmp') && entry.name.includes('.lease.')) {
+      // An abandoned atomic-write temporary of a lease.
+      const runId = entry.name.slice(0, entry.name.indexOf('.lease.'))
+      const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, runId))
+      if (expiresAt !== undefined && expiresAt > now) continue
+      const path = resolve(dir, entry.name)
+      try {
+        if (now - (await stat(path)).mtimeMs <= SNAPSHOT_NO_LEASE_GRACE_MS) continue
+      } catch {
+        continue
+      }
+      try {
+        await unlink(path)
+      } catch {
+        // Missing is fine.
+      }
       continue
     }
     if (entry.name.endsWith('.lease')) {
       const runId = entry.name.slice(0, -'.lease'.length)
-      if (!existsSync(resolve(dir, runId))) {
-        try {
-          await unlink(path)
-        } catch {
-          // Missing is fine.
-        }
+      if (existsSync(resolve(dir, runId))) continue
+      // A valid lease without a directory is a run between lease and creation.
+      const expiresAt = await readSnapshotLease(path)
+      if (expiresAt !== undefined && expiresAt > now) continue
+      try {
+        await unlink(path)
+      } catch {
+        // Missing is fine.
       }
     }
   }
-  if (removed) {
+  // A failed settlement removal can leave only the scratch index behind.
+  let scratchEntries: Dirent[] = []
+  try {
+    scratchEntries = await readdir(resolve(cwd, SCRATCH_DIR), { withFileTypes: true })
+  } catch {
+    scratchEntries = []
+  }
+  for (const entry of scratchEntries) {
+    if (!entry.isFile() || !entry.name.endsWith('.index')) continue
+    const runId = entry.name.slice(0, -'.index'.length)
+    const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, runId))
+    if (expiresAt !== undefined && expiresAt > now) continue
+    const path = resolve(cwd, SCRATCH_DIR, entry.name)
     try {
-      await runGit(['worktree', 'prune'], cwd)
+      if (now - (await stat(path)).mtimeMs <= SNAPSHOT_NO_LEASE_GRACE_MS) continue
     } catch {
-      // Pruning is best effort.
+      continue
     }
+    try {
+      await unlink(path)
+    } catch {
+      // Retried by a later sweep.
+    }
+  }
+  // Prune whenever the throttle allows, even when nothing was removed: a failed
+  // prune must not wait for another directory removal to be retried.
+  try {
+    await runGit(['worktree', 'prune'], cwd)
+  } catch {
+    // Pruning is best effort.
   }
 }
 
@@ -1286,8 +1351,10 @@ export async function discardReviewSnapshot(
   cwd: string,
   runId: string,
   runGit: GitRunner,
+  /** Test seam: the filesystem remover, so a failed removal can be injected. */
+  remove: (path: string) => Promise<void> = (path) => rm(path, { recursive: true, force: true }),
 ): Promise<void> {
-  stopSnapshotLease(cwd, runId)
+  await stopSnapshotLease(cwd, runId)
   const worktree = resolve(cwd, SNAPSHOT_DIR, runId)
   try {
     await runGit(['worktree', 'remove', '--force', worktree], cwd)
@@ -1296,7 +1363,7 @@ export async function discardReviewSnapshot(
   }
   for (const path of [worktree, resolve(cwd, SCRATCH_DIR, `${runId}.index`), `${worktree}.lease`]) {
     try {
-      await rm(path, { recursive: true, force: true })
+      await remove(path)
     } catch {
       // Scratch leftovers are retried by the sweep.
     }
@@ -1851,8 +1918,13 @@ function applyTurnEvidence(
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${randomUUID()}.tmp`
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  await rename(temporary, path)
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+    await rename(temporary, path)
+  } finally {
+    // A failed write or rename must not leave the temporary file behind.
+    await unlink(temporary).catch(() => undefined)
+  }
 }
 
 function runsDirectory(workspaceRoot: string): string {

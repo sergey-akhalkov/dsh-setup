@@ -1,10 +1,18 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { defaultGit } from '../lib/index.js'
+import {
+  createReviewSnapshot,
+  defaultGit,
+  discardReviewSnapshot,
+  specDigest,
+  startSnapshotLease,
+  stopSnapshotLease,
+  sweepReviewSnapshots,
+} from '../lib/index.js'
 import {
   type BundleConfigLike,
   createAgent,
@@ -723,6 +731,8 @@ describe('task-scoped reviews', () => {
     const harness = harnessFor(root, taskConfig, subagents)
     const firstRun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
+    expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
+    expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
     const first = text(
       await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
     )
@@ -734,6 +744,7 @@ describe('task-scoped reviews', () => {
     )
     expect(reused).toContain('reused record')
     expect(subagents.startCalls).toBe(1)
+    expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
 
     harness.git.status = ' M packages/engine.ts\0'
     harness.git.diff = 'diff --git a/packages/engine.ts b/packages/engine.ts'
@@ -1441,6 +1452,18 @@ describe('asynchronous review runs', () => {
     }
   }
 
+  /** A controllable FINDINGS responder: no portable record is written. */
+  function deferredFindings() {
+    const releases: Array<() => void> = []
+    return {
+      responder: async (run: RunRecord) => {
+        await new Promise<void>((resolve) => releases.push(resolve))
+        return findingsResponder('FINDINGS', 'P1')(run)
+      },
+      releases,
+    }
+  }
+
   async function specRecord(root: string): Promise<Record<string, unknown>> {
     return JSON.parse(
       await readFile(
@@ -1920,6 +1943,110 @@ describe('asynchronous review runs', () => {
     expect(await readdir(snapshots)).toEqual([])
   })
 
+  it('removes the snapshot when the target fails', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, () => {
+      throw new Error('target failed')
+    })
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
+    expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
+  })
+
+  it('removes the snapshot when the review times out', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(
+      root,
+      { ...taskReviewConfig(), timeouts: { review: 50 } },
+      subagents,
+    )
+    harness.git.files = ['src/engine.ts']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
+    expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
+  })
+
+  it('removes the snapshot when the target cannot start', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error('cannot start')
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    await expect(
+      harness.startReview({ rule: 'task-review', change: 'change-a' }),
+    ).rejects.toThrow(/could not start/)
+    expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
+    expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
+  })
+
+  it('removes the snapshot when a late completion is discarded', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const firstAgents = new FakeSubagents()
+    const secondAgents = new FakeSubagents()
+    const firstPending = deferredFindings()
+    const secondPending = deferredFindings()
+    firstAgents.addProvider('codex-subagent', {}, firstPending.responder)
+    secondAgents.addProvider('codex-subagent', {}, secondPending.responder)
+    const firstGit = new FakeGit()
+    const secondGit = new FakeGit()
+    firstGit.files = ['src/engine.ts']
+    secondGit.files = ['src/engine.ts']
+    const first = harnessFor(root, taskReviewConfig(), firstAgents, firstGit.run)
+    const second = harnessFor(root, taskReviewConfig(), secondAgents, secondGit.run)
+    const firstRun = await first.startReview({ rule: 'task-review', change: 'change-a' })
+    const secondRun = await second.startReview({ rule: 'task-review', change: 'change-a' })
+    firstPending.releases.shift()?.()
+    expect(await first.waitForRun(firstRun)).toContain('state=completed')
+    secondPending.releases.shift()?.()
+    expect(await second.waitForRun(secondRun)).toContain('state=discarded')
+    expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
+    expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
+  })
+
+  it('writes the lease before the snapshot worktree is created', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    let leaseBeforeAdd = false
+    harness.git.beforeReturn = async (args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const files = await readdir(join(root, '.dsh', 'delegation', 'snapshots'))
+        leaseBeforeAdd = files.some((name) => name.endsWith('.lease'))
+      }
+    }
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    pending.releases.shift()?.()
+    await harness.waitForRun(runId)
+    expect(leaseBeforeAdd).toBe(true)
+  })
+
   it('fails when the selected task changed in the frozen tasks.md', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', [
@@ -2025,5 +2152,264 @@ describe('asynchronous review runs', () => {
     expect(await harness.waitForRun(runId)).toContain('state=completed')
     const record = await taskRecord(root)
     expect(record.verdict).toBe('PASS')
+  })
+})
+
+async function repository(): Promise<string> {
+  const root = await workspace()
+  await defaultGit(['init', '-q'], root)
+  await defaultGit(['config', 'core.autocrlf', 'false'], root)
+  return root
+}
+
+function change(
+  name: string,
+  dir: string,
+): { name: string; dir: string; reviewReady: boolean } {
+  return { name, dir, reviewReady: true }
+}
+
+async function lifecycleFixture(runId: string): Promise<{
+  dir: string
+  snapshot: NonNullable<Awaited<ReturnType<typeof createReviewSnapshot>>>
+}> {
+  const dir = await repository()
+  await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+  const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+  await mkdir(changeDir, { recursive: true })
+  await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+  await writeFile(join(dir, 'a.txt'), 'a\n')
+  const snapshot = await createReviewSnapshot(
+    dir,
+    change('change-a', changeDir),
+    runId,
+    defaultGit,
+    new AbortController().signal,
+  )
+  if (snapshot === undefined) throw new Error('expected a review snapshot')
+  return { dir, snapshot }
+}
+
+describe('snapshot lifecycle', () => {
+  it('freezes the change-artifact digest with the copy', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    await writeFile(join(changeDir, 'proposal.md'), '# proposal\n')
+    let snapshot: Awaited<ReturnType<typeof createReviewSnapshot>>
+    snapshot = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-spec',
+      defaultGit,
+      new AbortController().signal,
+      async () => {
+        // The edit lands after the live directory was copied and before the
+        // digest is computed; the digest must describe the frozen copy.
+        await writeFile(join(changeDir, 'proposal.md'), '# edited between copy and hash\n')
+      },
+    )
+    if (snapshot === undefined) throw new Error('expected a review snapshot')
+    expect(snapshot.specDigest).toBe(await specDigest(snapshot.changeDir))
+    expect(await specDigest(changeDir)).not.toBe(snapshot.specDigest)
+    await discardReviewSnapshot(dir, 'run-spec', defaultGit)
+  })
+
+  it('keeps the digest source stable across snapshot times', async () => {
+    const { dir, snapshot: first } = await lifecycleFixture('run-stable-a')
+    await discardReviewSnapshot(dir, 'run-stable-a', defaultGit)
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    const second = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-stable-b',
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (second === undefined) throw new Error('expected a review snapshot')
+    expect(second.tree).toBe(first.tree)
+    expect(second.specDigest).toBe(first.specDigest)
+    expect(second.commit).not.toBe(first.commit)
+    await discardReviewSnapshot(dir, 'run-stable-b', defaultGit)
+  })
+
+  it('writes a lease and removes it with the checkout', async () => {
+    const { dir, snapshot } = await lifecycleFixture('run-lease')
+    const lease = `${snapshot.worktree}.lease`
+    const scratch = join(dir, '.dsh', 'delegation', 'scratch', 'run-lease.index')
+    const value = JSON.parse(await readFile(lease, 'utf8')) as { expiresAt: number }
+    expect(value.expiresAt).toBeGreaterThan(Date.now())
+    await expect(readFile(scratch)).resolves.toBeDefined()
+    await discardReviewSnapshot(dir, 'run-lease', defaultGit)
+    await expect(readFile(lease)).rejects.toThrow()
+    await expect(readFile(scratch)).rejects.toThrow()
+    await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
+  })
+
+  it('keeps a valid lease past the review timeout and sweeps it once expired', async () => {
+    const { dir, snapshot } = await lifecycleFixture('run-long')
+    const base = Date.now()
+    await writeFile(
+      `${snapshot.worktree}.lease`,
+      JSON.stringify({ runId: 'run-long', expiresAt: base + 2 * 60 * 60_000 }),
+    )
+    await utimes(
+      snapshot.worktree,
+      new Date(base - 2 * 60 * 60_000),
+      new Date(base - 2 * 60 * 60_000),
+    )
+    await sweepReviewSnapshots(dir, defaultGit, base + 60 * 60_000)
+    expect(await readFile(join(snapshot.worktree, 'a.txt'), 'utf8')).toBe('a\n')
+    await sweepReviewSnapshots(dir, defaultGit, base + 3 * 60 * 60_000)
+    await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
+  })
+
+  it('sweeps a lease-less leftover only after the grace period', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const snapshots = join(dir, '.dsh', 'delegation', 'snapshots')
+    await mkdir(join(snapshots, 'run-leftover'), { recursive: true })
+    const now = Date.now()
+    await sweepReviewSnapshots(dir, defaultGit, now + 60_000)
+    expect(await readdir(snapshots)).toContain('run-leftover')
+    await sweepReviewSnapshots(dir, defaultGit, now + 11 * 60_000)
+    expect(await readdir(snapshots)).not.toContain('run-leftover')
+  })
+
+  it('sweeps a leftover whose lease expired after a failed settle removal', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const snapshots = join(dir, '.dsh', 'delegation', 'snapshots')
+    const leftover = join(snapshots, 'run-stale')
+    await mkdir(leftover, { recursive: true })
+    await writeFile(
+      `${leftover}.lease`,
+      JSON.stringify({ runId: 'run-stale', expiresAt: Date.now() - 1_000 }),
+    )
+    await sweepReviewSnapshots(dir, defaultGit, Date.now())
+    expect(await readdir(snapshots)).not.toContain('run-stale')
+  })
+
+  it('renews a lease and stops without recreating it', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const lease = join(dir, '.dsh', 'delegation', 'snapshots', 'run-renew.lease')
+    await startSnapshotLease(dir, 'run-renew', 10)
+    await rm(lease, { force: true })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(JSON.parse(await readFile(lease, 'utf8'))).toMatchObject({ runId: 'run-renew' })
+    await stopSnapshotLease(dir, 'run-renew')
+    await rm(lease, { force: true })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    await expect(readFile(lease)).rejects.toThrow()
+  })
+
+  it('keeps a valid lease whose checkout does not exist yet', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const snapshots = join(dir, '.dsh', 'delegation', 'snapshots')
+    await mkdir(snapshots, { recursive: true })
+    const now = Date.now()
+    await writeFile(
+      join(snapshots, 'run-live.lease'),
+      JSON.stringify({ runId: 'run-live', expiresAt: now + 60_000 }),
+    )
+    await writeFile(
+      join(snapshots, 'run-dead.lease'),
+      JSON.stringify({ runId: 'run-dead', expiresAt: now - 1_000 }),
+    )
+    await sweepReviewSnapshots(dir, defaultGit, now)
+    expect(await readdir(snapshots)).toContain('run-live.lease')
+    expect(await readdir(snapshots)).not.toContain('run-dead.lease')
+  })
+
+  it('sweeps an orphaned scratch index and keeps one whose lease is valid', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const snapshots = join(dir, '.dsh', 'delegation', 'snapshots')
+    const scratch = join(dir, '.dsh', 'delegation', 'scratch')
+    await mkdir(snapshots, { recursive: true })
+    await mkdir(scratch, { recursive: true })
+    const now = Date.now()
+    const orphan = join(scratch, 'run-orphan.index')
+    const live = join(scratch, 'run-live.index')
+    await writeFile(orphan, 'x')
+    await writeFile(live, 'x')
+    const old = new Date(now - 60 * 60_000)
+    await utimes(orphan, old, old)
+    await utimes(live, old, old)
+    await writeFile(
+      join(snapshots, 'run-live.lease'),
+      JSON.stringify({ runId: 'run-live', expiresAt: now + 60_000 }),
+    )
+    await sweepReviewSnapshots(dir, defaultGit, now)
+    expect(await readdir(scratch)).toContain('run-live.index')
+    expect(await readdir(scratch)).not.toContain('run-orphan.index')
+  })
+
+  it('keeps working when the sweep itself fails', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const snapshots = join(dir, '.dsh', 'delegation', 'snapshots')
+    await mkdir(join(snapshots, 'run-broken'), { recursive: true })
+    await writeFile(
+      join(snapshots, 'run-broken.lease'),
+      JSON.stringify({ runId: 'run-broken', expiresAt: Date.now() - 1_000 }),
+    )
+    const failing: GitRunner = async () => {
+      throw new Error('git is unavailable')
+    }
+    await expect(sweepReviewSnapshots(dir, failing, Date.now())).resolves.toBeUndefined()
+    expect(await readdir(snapshots)).not.toContain('run-broken')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    const snapshot = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-after-failure',
+      defaultGit,
+      new AbortController().signal,
+    )
+    expect(snapshot).toBeDefined()
+    await discardReviewSnapshot(dir, 'run-after-failure', defaultGit)
+  })
+
+  it('sweeps an abandoned lease temporary file', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const snapshots = join(dir, '.dsh', 'delegation', 'snapshots')
+    await mkdir(snapshots, { recursive: true })
+    const now = Date.now()
+    const temp = join(snapshots, 'run-temp.lease.abcdef12.tmp')
+    await writeFile(temp, '{}')
+    const old = new Date(now - 60 * 60_000)
+    await utimes(temp, old, old)
+    await sweepReviewSnapshots(dir, defaultGit, now)
+    expect(await readdir(snapshots)).not.toContain('run-temp.lease.abcdef12.tmp')
+  })
+
+  it('retries a failed snapshot removal on a later sweep', async () => {
+    const { dir, snapshot } = await lifecycleFixture('run-locked')
+    const failingGit: GitRunner = async (args, cwd, signal) => {
+      if (args[0] === 'worktree' && args[1] === 'remove') throw new Error('git removal failed')
+      return defaultGit(args, cwd, signal)
+    }
+    let injected = false
+    const failingRemove = async (path: string) => {
+      if (!injected && path === snapshot.worktree) {
+        injected = true
+        throw new Error('locked')
+      }
+      await rm(path, { recursive: true, force: true })
+    }
+    await discardReviewSnapshot(dir, 'run-locked', failingGit, failingRemove)
+    expect(injected).toBe(true)
+    expect(await readdir(join(dir, '.dsh', 'delegation', 'snapshots'))).toContain('run-locked')
+    await sweepReviewSnapshots(dir, defaultGit, Date.now() + 11 * 60_000)
+    await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
   })
 })
