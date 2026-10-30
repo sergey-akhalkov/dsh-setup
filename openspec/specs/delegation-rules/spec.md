@@ -558,8 +558,8 @@ content is later restored; a digest re-check alone is not sufficient.
 A whole-scope code review MUST take its reviewed worktree inputs from git: tracked files plus untracked
 files that are not ignored. Only `.dsh/` and `.tmp/` stay excluded, the same two the worktree digest skips;
 VCS-ignored paths MUST NOT be reviewed inputs, and every Git-visible path the digest covers MUST also be
-guarded. A task-scoped review MUST review exactly that set in its snapshot, so later writes MUST NOT
-invalidate it.
+guarded, except the change's `reviews/` approval directory. A task-scoped review MUST review exactly that
+set in its snapshot, so later writes MUST NOT invalidate it.
 
 #### Scenario: Ignored build output changes during a review
 
@@ -590,6 +590,11 @@ invalidate it.
 
 - **WHEN** a task review starts with a tracked change, a tracked file matching an ignore rule, an untracked non-ignored file, and ignored output in the worktree
 - **THEN** the snapshot contains the tracked change, the tracked-but-ignored file, and the untracked file, not the ignored output, and later writes to any of them do not invalidate the run
+
+#### Scenario: Portable approval record written during a review
+
+- **WHEN** a portable `reviews/<taskId>.json` approval record is written while a live review, including a fallback task review, runs
+- **THEN** the review is not invalidated, because the approval directory is engine output and not a reviewed input
 
 ### Requirement: Reviewed change-artifact inputs
 
@@ -1487,3 +1492,20 @@ The shipped defaults SHALL include two worker targets on the registered in-proce
 
 - **WHEN** the in-process provider is not registered or does not accept agent options
 - **THEN** the worker rule reports the unavailable target and next action, publishes no result, and does not satisfy a gate
+
+### Requirement: Review fallback visibility
+
+When a task-scoped review cannot use its frozen snapshot and falls back to the live worktree, the
+engine SHALL record a bounded reason on the run while it runs and after it settles, alongside any
+verdict or error. When the cause is the missing Git ignore rule for the `.dsh/` scratch directory, the
+reason MUST name that cause and the next action.
+
+#### Scenario: Snapshot skipped because `.dsh` is not ignored
+
+- **WHEN** a task review cannot build its snapshot because `.dsh/` is not Git-ignored
+- **THEN** the run detail says the review is on the live worktree and names the missing `.dsh/` ignore rule and its fix, both while the run is live and after it settles, instead of only `live worktree`
+
+#### Scenario: Snapshot skipped for another reason
+
+- **WHEN** a task review cannot build its snapshot because the repository or change path cannot be resolved, the change lies outside the repository, or the index has unmerged entries
+- **THEN** the run detail names that cause in a bounded form and still reports the live-worktree review, including after settlement

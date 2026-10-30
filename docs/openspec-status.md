@@ -78,6 +78,14 @@ lifecycle removes the checkout on settle and sweeps leftovers, and the live-work
 remains for whole-scope reviews and the fallback. It ships inside
 `@dsh-setup/plugin-delegation-rules` with no composition change.
 
+The archived `2026-10-30-fix-delegation-review-fallback` change carries 5 tasks and 5/5 portable task
+approvals; it keeps the reviewed change's `reviews/` approval directory out of the Git-visible
+reviewed input set, so a portable task `PASS` can no longer discard a concurrent live or fallback
+review with `reviewed inputs changed`. A skipped task snapshot now names its bounded reason in the run
+detail while it runs and after it settles, including the missing `.dsh/` ignore rule and its fix, and
+the default `timeouts.review` rises from 10 to 20 minutes. It ships inside
+`@dsh-setup/plugin-delegation-rules` with no composition change.
+
 The 2026-10-29 changes archived with release v0.13.2 are `add-review-approval-gate`, which added
 portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
 (`review-approval` spec and `delegation-rules` amendments; 24/24 portable PASS records),
@@ -157,6 +165,7 @@ was written (2026-10-30). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-30-add-effort-tiers`                        | 11/11          |
 | `2026-10-30-add-goal-round-retro`                    | 10/10          |
 | `2026-10-30-add-lane-assignment-ledger`              | 8/8            |
+| `2026-10-30-fix-delegation-review-fallback`          | 5/5            |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
