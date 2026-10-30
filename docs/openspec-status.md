@@ -253,14 +253,17 @@ The archived `2026-10-29-add-task-lane-guidance` tasks record 9/9. After install
 `openspec-propose` in a workspace and confirm the task-lane addendum appears before the adapter note;
 this live check remains an owner step.
 
-The four changes archived on 2026-10-30 leave the shipped behavior to a release and install:
-`add-answer-page-skill` task 6.2 (render one page in a live dev profile, no write under the user home
-or the system temporary directory) is the only open task; the `speedReview` defaults and the
-`lane-assignment` default rule reach a machine only after the next release and install, and a profile
-that replaces the whole `rules` config must restate `lane-fanout` to keep it. The published-CLI phase
-of `pnpm validate:composition` and `pnpm validate:installer` could not run on 2026-10-30: `pnpm dlx
-@deepseek-ai/dsh@0.2.1-rc.5` fails to resolve because npm no longer lists the transitive
-`@aws-sdk/token-providers@3.1159.0` version (a registry-side change after the v0.16.2 release CI
-passed). Both validators therefore ran with `DSH_CLI` pointed at the installed DSH 0.2.1-rc.5 CLI and
-passed 15/15 and 19/19 checks; the owner should re-run the published path once the registry resolves
-the dependency again.
+The four changes archived on 2026-10-30 shipped in v0.17.0 (tag on commit `73ae017`) and were
+installed on the desktop profile the same day. The live acceptance passed: the profile lists
+`@dsh-setup/setup` 0.17.0 and keeps its own `cordis.patch.yml` untouched; the `dsh-setup-answer-page`
+row mounts and its `answer-me-with-html` skill appears in the catalog; a real page rendered with the
+installed CLI into `.tmp/answers/` (132 KB, presented as a card, with no write under the home or
+temporary directory); the delegation status lists `worker-fast` / `worker-deep` and a live
+`worker-fast` answer returned; and the installed patch carries `speedReview`, the `goal-reviewer`
+preset row, and `lane-fanout` with `lane-assignment`. That satisfies the intent of
+`add-answer-page-skill` task 6.2; its archived box stays unchecked because editing an archive would
+need its own task-review record. The remaining owner step is the goal-continuity live acceptance: a
+real goal with an expensive round that shows the brief, the worker start and the follow-through gate.
+The v0.17.0 release workflow passed the published-CLI `validate:composition` and `validate:installer`
+steps after one re-run of a flaky `hindsight` export-push test, so the earlier local registry failure
+did not affect the release and needs no follow-up.
