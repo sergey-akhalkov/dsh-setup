@@ -276,3 +276,11 @@ real goal with an expensive round that shows the brief, the worker start and the
 The v0.17.0 release workflow passed the published-CLI `validate:composition` and `validate:installer`
 steps after one re-run of a flaky `hindsight` export-push test, so the earlier local registry failure
 did not affect the release and needs no follow-up.
+
+The `2026-10-30-fix-delegation-review-fallback` change shipped in v0.17.1 (tag on commit `4dd1e0b`)
+after the release workflow passed both supported DSH versions and the publish job. The published index
+at https://sergey-akhalkov.github.io/dsh-setup/index.json returns HTTP 200, lists
+`@dsh-setup/setup` and `@dsh-setup/plugin-delegation-rules` at 0.17.1 with the release commit, and
+retains the earlier versions. The owner install of v0.17.1 remains the step that activates the 20-minute
+review default and the fallback detail; the live fallback text needs a repository that does not
+gitignore `.dsh/`, so it is verified by the shipped tests and awaits the next such repository.
