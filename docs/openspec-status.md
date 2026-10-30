@@ -120,6 +120,14 @@ a follow-through gate, the shared `goal-reviewer` preset, and the `speedReview` 
 ledger, `lane-tag` worker evidence, a per-lane `task_progress` serial escape, and the deprecation of
 `lane-boundary` while the shipped `lane-fanout` rule moves to the new trigger.
 
+The archived `2026-10-31-add-observability` change carries 19 tasks and 19/19 portable task
+approvals; it added the `observability` capability and the `@dsh-setup/plugin-observability` bundle: a
+Conversation dashboard derived on demand from session logs (health verdict, KPI strip, activity/error
+chart, plugin health cards grouped by attention, tool distribution, collapsed blind spots, and at most
+five metadata-only recent traces per row), the shipped per-plugin signal map in the setup owner
+defaults, and the abort-token rule that keeps streamed model text out of row ids and labels. It amends
+`portable-setup` with the signal-map default and adds no telemetry pipeline or second log.
+
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
@@ -166,6 +174,7 @@ was written (2026-10-30). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-30-add-goal-round-retro`                    | 10/10          |
 | `2026-10-30-add-lane-assignment-ledger`              | 8/8            |
 | `2026-10-30-fix-delegation-review-fallback`          | 5/5            |
+| `2026-10-31-add-observability`                       | 19/19          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 

@@ -161,7 +161,7 @@ remain the final authority over every setup override.
 
 ### Requirement: Portable defaults and local precedence
 
-The setup patch SHALL carry owner defaults: default model and reasoning effort, theme, UI preferences, agent preset selection, and the shipped lazy MCP configuration (the `dsh-setup-mcp-lazy` row configured with `nuphus-mcp` and `serena`; no static `@deepseek-ai/dsh-mcp-client` row for either server). It MUST NOT modify the profile's own patch file, and the profile patch MUST continue to take precedence over the setup layer.
+The setup patch SHALL carry owner defaults: default model and reasoning effort, theme, UI preferences, agent preset selection, the observability signal map that attributes the shipped plugins' tools and injected message source kinds to their owning plugin, and the shipped lazy MCP configuration (the `dsh-setup-mcp-lazy` row configured with `nuphus-mcp` and `serena`; no static `@deepseek-ai/dsh-mcp-client` row for either server). It MUST NOT modify the profile's own patch file, and the profile patch MUST continue to take precedence over the setup layer.
 
 #### Scenario: Fresh profile defaults
 
@@ -182,6 +182,11 @@ The setup patch SHALL carry owner defaults: default model and reasoning effort, 
 
 - **WHEN** the profile patch adds a static `@deepseek-ai/dsh-mcp-client` row for `nuphus-mcp` and removes the lazy Nuphus entry
 - **THEN** the static adapter is effective and the lazy row starts no process; the setup does not ship that static row
+
+#### Scenario: Observability attribution default
+
+- **WHEN** the setup is installed with no observability override in the profile patch
+- **THEN** the composed observability row carries the shipped signal map, and the Observability view attributes a mapped tool to its plugin row
 
 ### Requirement: Experimental bundle prerequisites documented
 
