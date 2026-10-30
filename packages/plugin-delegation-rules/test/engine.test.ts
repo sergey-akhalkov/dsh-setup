@@ -1790,6 +1790,28 @@ describe('asynchronous review runs', () => {
     expect(record.error).toContain('reviewed inputs changed during the run')
   })
 
+  it('discards the fallback review when a tracked input is deleted during the run', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    const file = join(root, 'src', 'tracked.ts')
+    await writeFile(file, 'tracked content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/tracked.ts']
+    harness.git.failSnapshot = true
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await rm(file)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = await taskRecord(root)
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('reviewed inputs changed')
+    expect(record.error).toContain('src/tracked.ts')
+  })
+
   it('publishes PASS when a tracked input is deleted during the snapshot review', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
@@ -1896,6 +1918,28 @@ describe('asynchronous review runs', () => {
     pending.releases.shift()?.()
     await harness.waitForRun(runId)
     expect(await readdir(snapshots)).toEqual([])
+  })
+
+  it('fails when the selected task changed in the frozen tasks.md', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', [
+      { number: '1.1', text: 'First task', checked: true },
+    ])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    let edited = false
+    harness.git.beforeReturn = async (args) => {
+      // The edit lands after the live pre-check and before the snapshot copy.
+      if (!edited && args[0] === 'check-ignore') {
+        edited = true
+        await writeFile(join(dir, 'tasks.md'), '# Tasks\n\n- [x] 1.1 Renamed task\n', 'utf8')
+      }
+    }
+    await expect(
+      harness.startReview({ rule: 'task-review', change: 'change-a' }),
+    ).rejects.toThrow(/changed while the review snapshot was prepared/)
+    expect(subagents.startCalls).toBe(0)
   })
 
   it('publishes PASS and reuses the digest when ignored build output changes', async () => {
