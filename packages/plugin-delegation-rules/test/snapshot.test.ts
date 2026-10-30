@@ -8,6 +8,7 @@ import {
   defaultGit,
   discardReviewSnapshot,
   type GitRunner,
+  specDigest,
   sweepReviewSnapshots,
 } from '../src/host/index.js'
 
@@ -296,6 +297,51 @@ async function lifecycleFixture(runId: string): Promise<{
 }
 
 describe('snapshot lifecycle', () => {
+  it('freezes the change-artifact digest with the copy', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    await writeFile(join(changeDir, 'proposal.md'), '# proposal\n')
+    let snapshot: Awaited<ReturnType<typeof createReviewSnapshot>>
+    snapshot = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-spec',
+      defaultGit,
+      new AbortController().signal,
+      async () => {
+        // The edit lands after the live directory was copied and before the
+        // digest is computed; the digest must describe the frozen copy.
+        await writeFile(join(changeDir, 'proposal.md'), '# edited between copy and hash\n')
+      },
+    )
+    if (snapshot === undefined) throw new Error('expected a review snapshot')
+    expect(snapshot.specDigest).toBe(await specDigest(snapshot.changeDir))
+    expect(await specDigest(changeDir)).not.toBe(snapshot.specDigest)
+    await discardReviewSnapshot(dir, 'run-spec', defaultGit)
+  })
+
+  it('keeps the digest source stable across snapshot times', async () => {
+    const { dir, snapshot: first } = await lifecycleFixture('run-stable-a')
+    await discardReviewSnapshot(dir, 'run-stable-a', defaultGit)
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    const second = await createReviewSnapshot(
+      dir,
+      change('change-a', changeDir),
+      'run-stable-b',
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (second === undefined) throw new Error('expected a review snapshot')
+    expect(second.tree).toBe(first.tree)
+    expect(second.specDigest).toBe(first.specDigest)
+    expect(second.commit).not.toBe(first.commit)
+    await discardReviewSnapshot(dir, 'run-stable-b', defaultGit)
+  })
+
   it('writes a lease and removes it with the checkout', async () => {
     const { dir, snapshot } = await lifecycleFixture('run-lease')
     const lease = `${snapshot.worktree}.lease`

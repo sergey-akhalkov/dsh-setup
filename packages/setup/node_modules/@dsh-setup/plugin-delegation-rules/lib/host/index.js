@@ -553,7 +553,7 @@ async function openChange(cwd, requested) {
     return { change: changes[0], openspecRoot };
 }
 /** Hash every change artifact, normalizing `tasks.md` checkbox state. */
-async function specDigest(changeDir, signal) {
+export async function specDigest(changeDir, signal) {
     const files = [];
     async function walk(directory) {
         const entries = await readdir(directory, { withFileTypes: true });
@@ -657,7 +657,9 @@ async function worktreeDigest(cwd, services, signal) {
  * Returns undefined when it cannot be built safely; the caller reviews the live
  * worktree with the mutation guard instead.
  */
-export async function createReviewSnapshot(cwd, change, runId, runGit, signal) {
+export async function createReviewSnapshot(cwd, change, runId, runGit, signal, 
+/** Test seam: runs after the change directory is frozen, before its digest. */
+afterCopy) {
     await sweepReviewSnapshots(cwd, runGit);
     const services = { runGit };
     const root = await repositoryRoot(cwd, services, signal);
@@ -756,7 +758,10 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal) {
         const frozenChange = resolve(worktree, relChange);
         await mkdir(dirname(frozenChange), { recursive: true });
         await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true });
-        return { tree, commit, worktree, changeDir: frozenChange };
+        if (afterCopy !== undefined)
+            await afterCopy();
+        const frozenSpec = await specDigest(frozenChange, signal);
+        return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec };
     }
     catch {
         await discardReviewSnapshot(cwd, runId, runGit);
@@ -2403,7 +2408,7 @@ class DelegationEngine {
                         'task-review-v2',
                         frozen.id,
                         frozen.text,
-                        await specDigest(snapshot.changeDir, signal),
+                        snapshot.specDigest,
                         snapshot.tree,
                     ]),
                     worktreeDigest: hashParts(['task-review-snapshot-v1', snapshot.tree]),
@@ -2412,7 +2417,9 @@ class DelegationEngine {
                     snapshotTree: snapshot.tree,
                 };
             }
-            // Fallback: review the live worktree under the mutation guard.
+            // Fallback: review the live worktree under the mutation guard. Track the
+            // inputs before hashing them, so a change between the two is caught.
+            const signature = await reviewedInputs(cwd, rule, change, this.services, signal);
             const worktree = await worktreeDigest(cwd, this.services.git, signal);
             return {
                 digest: hashParts([
@@ -2424,7 +2431,7 @@ class DelegationEngine {
                 ]),
                 worktreeDigest: worktree,
                 path,
-                signature: await reviewedInputs(cwd, rule, change, this.services, signal),
+                signature,
             };
         }
         // Track the inputs before hashing them: any later mutation, including

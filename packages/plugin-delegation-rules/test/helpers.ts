@@ -42,10 +42,13 @@ export class FakeGit {
   fail = false
   /** Make the snapshot guard fail, so a task review falls back to the live worktree. */
   failSnapshot = false
+  /** Runs before a call returns, so a test can mutate the worktree mid-digest. */
+  beforeReturn?: (args: readonly string[]) => Promise<void> | void
   calls: string[][] = []
 
   run: GitRunner = async (args, cwd, _signal) => {
     this.calls.push([...args])
+    if (this.beforeReturn !== undefined) await this.beforeReturn(args)
     if (this.fail) throw new Error('git is not available in this test workspace')
     const command = args[0] === '-C' ? args[2] : args[0] === '-c' ? 'commit-tree' : args[0]
     if (command === 'rev-parse') {
@@ -236,6 +239,8 @@ export interface HarnessOptions {
   cwdByAgent?: Record<string, string>
   config?: BundleConfig
   git?: FakeGit
+  /** Override the git runner, for example with the real one against a real repository. */
+  runGit?: GitRunner
   agents?: FakeSubagents
   now?: () => Date
   /** Set false to exercise the engine path with no settlement observer. */
@@ -310,7 +315,7 @@ export class Harness {
       },
     }
     apply(ctx as unknown as Context, options.config ?? {}, {
-      runGit: this.git.run,
+      runGit: options.runGit ?? this.git.run,
       now: options.now ?? (() => new Date('2026-10-26T12:00:00.000Z')),
       ...(options.observeSettlements === false
         ? {}

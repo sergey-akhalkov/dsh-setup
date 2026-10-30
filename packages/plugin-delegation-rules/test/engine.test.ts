@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { defaultGit } from '../lib/index.js'
 import {
   type BundleConfigLike,
   createAgent,
@@ -78,8 +79,14 @@ function harnessFor(
   root: string,
   config = defaultTestConfig(),
   subagents = new FakeSubagents(),
+  runGit?: GitRunner,
 ): Harness {
-  return new Harness({ cwd: root, config, agents: subagents })
+  return new Harness({
+    cwd: root,
+    config,
+    agents: subagents,
+    ...(runGit === undefined ? {} : { runGit }),
+  })
 }
 
 function taskReviewConfig(): BundleConfigLike {
@@ -733,6 +740,36 @@ describe('task-scoped reviews', () => {
     const fixedRun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     expect(await harness.waitForRun(fixedRun)).toContain('state=completed')
     expect(subagents.startCalls).toBe(2)
+  })
+
+  it('reuses unchanged FINDINGS across snapshot times in a real repository', async () => {
+    const root = await workspace()
+    await defaultGit(['init', '-q'], root)
+    await writeFile(join(root, '.gitignore'), '.dsh/\n')
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    await defaultGit(['add', '.gitignore', 'src/engine.ts', 'openspec'], root)
+    await defaultGit(
+      ['-c', 'user.name=test', '-c', 'user.email=test@example.test', 'commit', '-qm', 'base'],
+      root,
+    )
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, findingsResponder('FINDINGS', 'P1'))
+    const harness = harnessFor(root, taskReviewConfig(), subagents, defaultGit)
+    const firstRun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(await harness.waitForRun(firstRun)).toContain('state=completed')
+    expect(subagents.startCalls).toBe(1)
+    expect((await taskRecord(root)).verdict).toBe('FINDINGS')
+
+    // A later attempt builds a new snapshot commit with the same content; the
+    // digest must not include the timestamp-dependent commit identity.
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    const reused = text(
+      await harness.callTool('delegate', { rule: 'task-review', change: 'change-a' }),
+    )
+    expect(reused).toContain('reused record')
+    expect(subagents.startCalls).toBe(1)
   })
 })
 
@@ -1722,6 +1759,35 @@ describe('asynchronous review runs', () => {
     expect(record.verdict).toBe('ERROR')
     expect(record.error).toContain('reviewed inputs changed during the run')
     expect(record.error).toContain('finish the writes, then re-run the review')
+  })
+
+  it('captures the live signature before hashing the fallback digests', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    const file = join(root, 'src', 'engine.ts')
+    await writeFile(file, 'original content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    harness.git.failSnapshot = true
+    let edited = false
+    // The edit lands while the fallback digest is computed, after the input
+    // signature; the completion check must catch it.
+    harness.git.beforeReturn = async (args) => {
+      if (!edited && args[0] === 'status') {
+        edited = true
+        await writeFile(file, 'changed during digest\n', 'utf8')
+      }
+    }
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const record = await taskRecord(root)
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('reviewed inputs changed during the run')
   })
 
   it('publishes PASS when a tracked input is deleted during the snapshot review', async () => {

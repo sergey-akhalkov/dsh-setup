@@ -107,6 +107,8 @@ interface ChangeInfo {
     dir: string;
     reviewReady: boolean;
 }
+/** Hash every change artifact, normalizing `tasks.md` checkbox state. */
+export declare function specDigest(changeDir: string, signal?: AbortSignal): Promise<string>;
 /** One immutable review checkout; the digest binds to `tree`. */
 export interface ReviewSnapshot {
     /** Content tree the task digest binds to. */
@@ -117,13 +119,17 @@ export interface ReviewSnapshot {
     worktree: string;
     /** Frozen change directory inside the worktree. */
     changeDir: string;
+    /** Change-artifact digest computed from the frozen copy. */
+    specDigest: string;
 }
 /**
  * Build the disposable task-review snapshot from the exact review input set.
  * Returns undefined when it cannot be built safely; the caller reviews the live
  * worktree with the mutation guard instead.
  */
-export declare function createReviewSnapshot(cwd: string, change: ChangeInfo, runId: string, runGit: GitRunner, signal: AbortSignal): Promise<ReviewSnapshot | undefined>;
+export declare function createReviewSnapshot(cwd: string, change: ChangeInfo, runId: string, runGit: GitRunner, signal: AbortSignal, 
+/** Test seam: runs after the change directory is frozen, before its digest. */
+afterCopy?: () => Promise<void> | void): Promise<ReviewSnapshot | undefined>;
 /**
  * Remove snapshots no live run owns. Ownership is the lease, never age or the
  * configured review timeout; a lease-less directory is given a grace period.
