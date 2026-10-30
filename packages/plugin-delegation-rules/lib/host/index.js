@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { cp, lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
+import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
@@ -669,6 +669,22 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal) {
         isAbsolute(relChange)) {
         return undefined;
     }
+    // A lexical path is not enough: a symlinked or junctioned change directory can
+    // resolve outside the repository, and copying the link would keep the snapshot
+    // pointing at live files.
+    try {
+        const canonicalRel = relative(await realpath(root), await realpath(change.dir));
+        if (canonicalRel === '' ||
+            canonicalRel === '.' ||
+            canonicalRel === '..' ||
+            canonicalRel.startsWith(`..${sep}`) ||
+            isAbsolute(canonicalRel)) {
+            return undefined;
+        }
+    }
+    catch {
+        return undefined;
+    }
     try {
         // A tracked or unignored .dsh would put the checkout inside the reviewed tree.
         // The directory must exist for a directory-only ignore rule to match.
@@ -739,7 +755,7 @@ export async function createReviewSnapshot(cwd, change, runId, runGit, signal) {
         startSnapshotLease(cwd, runId);
         const frozenChange = resolve(worktree, relChange);
         await mkdir(dirname(frozenChange), { recursive: true });
-        await cp(change.dir, frozenChange, { recursive: true, force: true });
+        await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true });
         return { tree, commit, worktree, changeDir: frozenChange };
     }
     catch {

@@ -7,6 +7,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -1068,6 +1069,23 @@ export async function createReviewSnapshot(
   ) {
     return undefined
   }
+  // A lexical path is not enough: a symlinked or junctioned change directory can
+  // resolve outside the repository, and copying the link would keep the snapshot
+  // pointing at live files.
+  try {
+    const canonicalRel = relative(await realpath(root), await realpath(change.dir))
+    if (
+      canonicalRel === '' ||
+      canonicalRel === '.' ||
+      canonicalRel === '..' ||
+      canonicalRel.startsWith(`..${sep}`) ||
+      isAbsolute(canonicalRel)
+    ) {
+      return undefined
+    }
+  } catch {
+    return undefined
+  }
   try {
     // A tracked or unignored .dsh would put the checkout inside the reviewed tree.
     // The directory must exist for a directory-only ignore rule to match.
@@ -1147,7 +1165,7 @@ export async function createReviewSnapshot(
     startSnapshotLease(cwd, runId)
     const frozenChange = resolve(worktree, relChange)
     await mkdir(dirname(frozenChange), { recursive: true })
-    await cp(change.dir, frozenChange, { recursive: true, force: true })
+    await cp(change.dir, frozenChange, { recursive: true, force: true, dereference: true })
     return { tree, commit, worktree, changeDir: frozenChange }
   } catch {
     await discardReviewSnapshot(cwd, runId, runGit)

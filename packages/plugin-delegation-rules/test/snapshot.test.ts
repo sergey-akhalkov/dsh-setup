@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -91,7 +91,10 @@ describe('git runner environment and stdin', () => {
 describe('review snapshot', () => {
   it('captures the exact review input set and the frozen change directory', async () => {
     const dir = await repository()
-    await writeFile(join(dir, '.gitignore'), 'ignored.txt\n.dsh/\n.tmp/\nbuild/\n')
+    await writeFile(
+      join(dir, '.gitignore'),
+      'ignored.txt\ntracked-ignored.txt\nnew-ignored.txt\n.dsh/\n.tmp/\nbuild/\n',
+    )
     await mkdir(join(dir, 'src'))
     await writeFile(join(dir, 'src', 'kept.txt'), 'v1\n')
     await writeFile(join(dir, 'flags.txt'), 'v1\n')
@@ -120,6 +123,12 @@ describe('review snapshot', () => {
 
     // Staged after every commit, so it is in the index and absent from HEAD.
     git(dir, ['add', '-f', 'new-ignored.txt'])
+    // Both fixtures really match an ignore rule, and the working tree is newer
+    // than the index so the assertions prove the snapshot used the worktree.
+    git(dir, ['check-ignore', '-q', '--no-index', 'tracked-ignored.txt'])
+    git(dir, ['check-ignore', '-q', '--no-index', 'new-ignored.txt'])
+    await writeFile(join(dir, 'tracked-ignored.txt'), 'tracked working\n')
+    await writeFile(join(dir, 'new-ignored.txt'), 'staged working\n')
 
     git(dir, ['update-index', '--assume-unchanged', 'flags.txt'])
     await writeFile(join(dir, 'flags.txt'), 'working\n')
@@ -140,8 +149,12 @@ describe('review snapshot', () => {
     expect(await readFile(join(snapshot.worktree, 'src', 'kept.txt'), 'utf8')).toBe('v2\n')
     expect(await readFile(join(snapshot.worktree, 'src', 'new.txt'), 'utf8')).toBe('new\n')
     expect(await readFile(join(snapshot.worktree, 'flags.txt'), 'utf8')).toBe('working\n')
-    expect(await readFile(join(snapshot.worktree, 'tracked-ignored.txt'), 'utf8')).toBe('tracked\n')
-    expect(await readFile(join(snapshot.worktree, 'new-ignored.txt'), 'utf8')).toBe('staged\n')
+    expect(await readFile(join(snapshot.worktree, 'tracked-ignored.txt'), 'utf8')).toBe(
+      'tracked working\n',
+    )
+    expect(await readFile(join(snapshot.worktree, 'new-ignored.txt'), 'utf8')).toBe(
+      'staged working\n',
+    )
     await expect(readFile(join(snapshot.worktree, 'ignored.txt'))).rejects.toThrow()
     await expect(readFile(join(snapshot.worktree, '.dsh', 'tracked.txt'))).rejects.toThrow()
     await expect(readFile(join(snapshot.worktree, '.tmp', 'tracked.txt'))).rejects.toThrow()
@@ -202,6 +215,27 @@ describe('review snapshot', () => {
       dir,
       change('change-a', outside),
       'run-d',
+      defaultGit,
+      new AbortController().signal,
+    )
+    expect(snapshot).toBeUndefined()
+  })
+
+  it('falls back when the change directory links outside the repository', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const outside = await mkdtemp(join(tmpdir(), 'dsh-outside-link-'))
+    cleanups.push(() => rm(outside, { recursive: true, force: true }))
+    const outsideChange = join(outside, 'change-a')
+    await mkdir(outsideChange, { recursive: true })
+    await writeFile(join(outsideChange, 'tasks.md'), '- [x] 1.1 Task\n')
+    await mkdir(join(dir, 'openspec', 'changes'), { recursive: true })
+    const link = join(dir, 'openspec', 'changes', 'change-a')
+    await symlink(outsideChange, link, process.platform === 'win32' ? 'junction' : 'dir')
+    const snapshot = await createReviewSnapshot(
+      dir,
+      change('change-a', link),
+      'run-link',
       defaultGit,
       new AbortController().signal,
     )
