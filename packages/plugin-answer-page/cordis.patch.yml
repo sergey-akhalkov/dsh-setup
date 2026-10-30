@@ -1,0 +1,5 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-answer-page.
+- insert:
+    - id: dsh-setup-answer-page
+      name: "@dsh-setup/plugin-answer-page"

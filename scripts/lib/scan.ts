@@ -38,6 +38,36 @@ const FORBIDDEN_FILENAMES = new Set([
 
 const PRIVATE_KEY_MARKER = /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/
 
+/** Package-relative directory of the vendored answer-page assets. */
+const ANSWER_PAGE_PACKAGE_DIR = 'packages/plugin-answer-page'
+
+/** Directory of the generated setup copy of the answer-page assets. */
+const ANSWER_PAGE_VENDORED_DIR = 'packages/setup/node_modules/@dsh-setup/plugin-answer-page'
+
+const ANSWER_PAGE_LOCK_FILE = join(rootDir, ANSWER_PAGE_PACKAGE_DIR, 'answer-page.lock.json')
+
+/**
+ * Paths whose machine-path text is upstream-owned and pinned by the answer-page
+ * provenance lock (the vendored prompt carries one Windows example path).
+ * Only the exact lock-listed files, in the source package and in the generated
+ * setup copy, are exempt from the machine-path check; secret scanning still
+ * runs on them, and a machine path anywhere else still fails.
+ */
+function answerPageVendoredPaths(): ReadonlySet<string> {
+  const lockStat = statSync(ANSWER_PAGE_LOCK_FILE, { throwIfNoEntry: false })
+  if (lockStat === undefined) return new Set()
+  const lock = JSON.parse(readFileSync(ANSWER_PAGE_LOCK_FILE, 'utf8')) as {
+    files?: Array<{ path?: unknown }>
+  }
+  const paths = new Set<string>()
+  for (const file of lock.files ?? []) {
+    if (typeof file.path !== 'string' || file.path.trim() === '') continue
+    paths.add(`${ANSWER_PAGE_PACKAGE_DIR}/${file.path}`)
+    paths.add(`${ANSWER_PAGE_VENDORED_DIR}/${file.path}`)
+  }
+  return paths
+}
+
 /** Windows drive, UNC, and POSIX home paths that name one machine. */
 const MACHINE_PATH_PATTERNS = [
   { label: 'windows drive path', pattern: /(?:^|[^A-Za-z0-9+.-])[A-Za-z]:\\(?:[^\\\s"'`]*\\)?/ },
@@ -94,8 +124,10 @@ export function readRepositoryFiles(): RepositoryFile[] {
 
 /** Report absolute machine paths embedded in reviewed files. */
 export function scanMachinePaths(files: RepositoryFile[]): ScanProblem[] {
+  const exempt = answerPageVendoredPaths()
   const problems: ScanProblem[] = []
   for (const file of files) {
+    if (exempt.has(file.path)) continue
     for (const { label, pattern } of MACHINE_PATH_PATTERNS) {
       const match = pattern.exec(file.content)
       if (match !== null) {

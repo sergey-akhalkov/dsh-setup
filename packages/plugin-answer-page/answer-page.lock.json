@@ -1,0 +1,43 @@
+{
+  "upstream": {
+    "repository": "https://github.com/QingYunA/answer-me-with-html",
+    "version": "0.5.10",
+    "tag": "v0.5.10",
+    "commit": "f82dd6dce3ca95b0e565f8cffaf5eba23f4c995f"
+  },
+  "skill": {
+    "name": "answer-me-with-html"
+  },
+  "files": [
+    {
+      "path": "assets/answer-me-with-html/LICENSE",
+      "bytes": 1089,
+      "sha256": "752a1a34b40ae8e64e86f546ec699a691aff573179e1f96997e82757b2ee5d3f"
+    },
+    {
+      "path": "assets/answer-me-with-html/licenses/OFL-Bangers.txt",
+      "bytes": 4386,
+      "sha256": "09ef36fcae68a2ba21cc319fd44c09ba40f43163076bcafc14fdfe4cc033e7a2"
+    },
+    {
+      "path": "assets/answer-me-with-html/references/settings.md",
+      "bytes": 3457,
+      "sha256": "772110166c54655ed07e6ddff2d93669d744e9da0d30a784672e7a13524440c3"
+    },
+    {
+      "path": "assets/answer-me-with-html/references/video.md",
+      "bytes": 3615,
+      "sha256": "02cd567f901e4bbd8fb2c1c5970bf1fc6ab4eedeac8e82099ced788d4e8d1a94"
+    },
+    {
+      "path": "assets/answer-me-with-html/scripts/am.mjs",
+      "bytes": 981515,
+      "sha256": "5e08fda8e976927b16596624cf605e5aadd77828ee690a412b5a9a96584d4f2c"
+    },
+    {
+      "path": "assets/answer-me-with-html/SKILL.md",
+      "bytes": 24598,
+      "sha256": "8d40a5a6ebfc6e07270a89c106dd194982c62b164dfa064b70adc6f4cb68c97a"
+    }
+  ]
+}

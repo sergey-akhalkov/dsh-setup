@@ -24,6 +24,7 @@
     "gen:check": "node scripts/generate.ts --check",
     "dogfood": "node scripts/dogfood.ts",
     "ponytail:update": "node scripts/update-ponytail.ts",
+    "answer-page:update": "node scripts/update-answer-page.ts",
     "openspec:update": "node scripts/update-openspec.ts",
     "validate:repo": "node scripts/validate-repo.ts",
     "validate:composition": "node scripts/validate-composition.ts",

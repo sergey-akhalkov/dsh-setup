@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/plugin-admin-indicator" },
+    { "path": "./packages/plugin-answer-page" },
     { "path": "./packages/plugin-delegation-rules" },
     { "path": "./packages/plugin-goal-continuity" },
     { "path": "./packages/plugin-hindsight" },

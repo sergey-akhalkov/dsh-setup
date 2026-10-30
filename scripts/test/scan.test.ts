@@ -50,3 +50,49 @@ describe('scanSecrets', () => {
     expect(scanSecrets([file('README.md', 'No credentials live here.')])).toEqual([])
   })
 })
+
+describe('answer-page machine-path exception', () => {
+  const vendoredSkill = 'packages/plugin-answer-page/assets/answer-me-with-html/SKILL.md'
+  const vendoredSetupSkill =
+    'packages/setup/node_modules/@dsh-setup/plugin-answer-page/assets/answer-me-with-html/SKILL.md'
+  const upstreamExample = [
+    'C',
+    ':',
+    '/',
+    'Users',
+    '/',
+    'Name',
+    '/',
+    'My Pages',
+    '/',
+    'page.html',
+  ].join('')
+
+  it('accepts the upstream Windows example in a lock-listed vendored file', () => {
+    expect(scanMachinePaths([file(vendoredSkill, `link: ${upstreamExample}`)])).toEqual([])
+  })
+
+  it('accepts the same lock-listed file in the generated setup copy', () => {
+    expect(scanMachinePaths([file(vendoredSetupSkill, `link: ${upstreamExample}`)])).toEqual([])
+  })
+
+  it('still reports a machine path in an arbitrary file outside the lock', () => {
+    const problems = scanMachinePaths([
+      file('packages/plugin-answer-page/notes.md', `root: ${WINDOWS_PATH}`),
+    ])
+    expect(problems).toHaveLength(1)
+    expect(problems[0]?.message).toContain('windows drive path')
+  })
+
+  it('still reports machine paths in the package source outside the lock', () => {
+    const content = `const path = "${WINDOWS_PATH}"`
+    expect(
+      scanMachinePaths([file('packages/plugin-answer-page/src/host/index.ts', content)]),
+    ).toHaveLength(1)
+  })
+
+  it('still scans lock-listed vendored files for secrets', () => {
+    const marker = ['-----BEGIN', 'OPENSSH', 'PRIVATE KEY-----'].join(' ')
+    expect(scanSecrets([file(vendoredSkill, marker)])).toHaveLength(1)
+  })
+})
