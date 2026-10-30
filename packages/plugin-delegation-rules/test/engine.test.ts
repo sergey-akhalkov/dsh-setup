@@ -1968,11 +1968,7 @@ describe('asynchronous review runs', () => {
     const subagents = new FakeSubagents()
     const pending = deferred()
     subagents.addProvider('codex-subagent', {}, pending.responder)
-    const harness = harnessFor(
-      root,
-      { ...taskReviewConfig(), timeouts: { review: 50 } },
-      subagents,
-    )
+    const harness = harnessFor(root, { ...taskReviewConfig(), timeouts: { review: 50 } }, subagents)
     harness.git.files = ['src/engine.ts']
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     expect(await harness.waitForRun(runId)).toContain('state=failed')
@@ -1990,9 +1986,9 @@ describe('asynchronous review runs', () => {
     subagents.startError = new Error('cannot start')
     const harness = harnessFor(root, taskReviewConfig(), subagents)
     harness.git.files = ['src/engine.ts']
-    await expect(
-      harness.startReview({ rule: 'task-review', change: 'change-a' }),
-    ).rejects.toThrow(/could not start/)
+    await expect(harness.startReview({ rule: 'task-review', change: 'change-a' })).rejects.toThrow(
+      /could not start/,
+    )
     expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
     expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
   })
@@ -2063,9 +2059,9 @@ describe('asynchronous review runs', () => {
         await writeFile(join(dir, 'tasks.md'), '# Tasks\n\n- [x] 1.1 Renamed task\n', 'utf8')
       }
     }
-    await expect(
-      harness.startReview({ rule: 'task-review', change: 'change-a' }),
-    ).rejects.toThrow(/changed while the review snapshot was prepared/)
+    await expect(harness.startReview({ rule: 'task-review', change: 'change-a' })).rejects.toThrow(
+      /changed while the review snapshot was prepared/,
+    )
     expect(subagents.startCalls).toBe(0)
   })
 
@@ -2162,10 +2158,7 @@ async function repository(): Promise<string> {
   return root
 }
 
-function change(
-  name: string,
-  dir: string,
-): { name: string; dir: string; reviewReady: boolean } {
+function change(name: string, dir: string): { name: string; dir: string; reviewReady: boolean } {
   return { name, dir, reviewReady: true }
 }
 

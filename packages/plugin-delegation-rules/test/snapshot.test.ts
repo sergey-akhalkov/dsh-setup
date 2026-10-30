@@ -267,4 +267,3 @@ describe('review snapshot', () => {
     expect(snapshot).toBeUndefined()
   })
 })
-

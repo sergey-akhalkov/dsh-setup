@@ -178,6 +178,9 @@ export class FakeSubagents {
     this.runs.push(run)
     const responder = this.responders.get(spec.provider) ?? this.respond
     const result = Promise.resolve().then(() => responder(run))
+    // The engine attaches its await after a store; keep an early rejection from
+    // surfacing as an unhandled error while preserving it for the engine.
+    void result.catch(() => undefined)
     for (const waiter of [...this.startWaiters]) {
       if (waiter.count > this.startCalls) continue
       this.startWaiters.splice(this.startWaiters.indexOf(waiter), 1)
