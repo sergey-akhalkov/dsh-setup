@@ -36,6 +36,14 @@ rows:
           provider: codex-subagent
           model: gpt-6-astra
           reasoningEffort: xhigh
+        # In-process worker tiers: effort only, so the model stays the profile's
+        # agent default. The skill's selection policy picks between them.
+        worker-fast:
+          provider: spawn
+          reasoningEffort: high
+        worker-deep:
+          provider: spawn
+          reasoningEffort: max
       rules:
         - id: spec-review
           when: spec-ready
@@ -57,7 +65,7 @@ rows:
           contract: note
           gate: strict
         - id: lane-fanout
-          when: lane-boundary
+          when: lane-assignment
           contract: note
           gate: strict
         - id: blocker
@@ -78,6 +86,18 @@ rows:
           contract: answer
           gate: none
           instruction: "bundled:advisor"
+        - id: worker-fast
+          when: manual
+          to: worker-fast
+          contract: answer
+          gate: none
+          instruction: "bundled:research"
+        - id: worker-deep
+          when: manual
+          to: worker-deep
+          contract: answer
+          gate: none
+          instruction: "bundled:research"
         - id: bug-fix
           when: manual
           to: codex-write

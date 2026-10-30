@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@dsh-setup/plugin-admin-indicator": "0.16.2",
+    "@dsh-setup/plugin-answer-page": "0.16.2",
     "@dsh-setup/plugin-codex-subagent": "0.16.2",
     "@dsh-setup/plugin-delegation-rules": "0.16.2",
     "@dsh-setup/plugin-goal-continuity": "0.16.2",
@@ -39,6 +40,7 @@
   },
   "bundleDependencies": [
     "@dsh-setup/plugin-admin-indicator",
+    "@dsh-setup/plugin-answer-page",
     "@dsh-setup/plugin-codex-subagent",
     "@dsh-setup/plugin-delegation-rules",
     "@dsh-setup/plugin-goal-continuity",

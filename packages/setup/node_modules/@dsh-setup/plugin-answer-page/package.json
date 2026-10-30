@@ -1,0 +1,51 @@
+{
+  "name": "@dsh-setup/plugin-answer-page",
+  "version": "0.16.2",
+  "description": "On-demand answer-page skill from a pinned answer-me-with-html release: writes a compact Markdown draft and renders one self-contained HTML page inside the workspace, offline",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./cordis.fragment.yml": "./cordis.fragment.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "locale/*.json",
+    "lib/index.js",
+    "lib/index.d.ts",
+    "cordis.patch.yml",
+    "cordis.fragment.yml",
+    "assets/answer-me-with-html/LICENSE",
+    "assets/answer-me-with-html/SKILL.md",
+    "assets/answer-me-with-html/licenses/OFL-Bangers.txt",
+    "assets/answer-me-with-html/references/settings.md",
+    "assets/answer-me-with-html/references/video.md",
+    "assets/answer-me-with-html/scripts/am.mjs",
+    "answer-page.lock.json"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.3 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

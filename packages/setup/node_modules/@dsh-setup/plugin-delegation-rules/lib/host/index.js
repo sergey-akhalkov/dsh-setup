@@ -61,8 +61,8 @@ const SNAPSHOT_NO_LEASE_GRACE_MS = 10 * 60_000;
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /**
  * Tool calls that start a parallel worker. The set is deliberately broad: the
- * lane-boundary rule measures that parallel work happened in the turn, not
- * which lane it covered.
+ * deprecated lane-boundary rule measures that parallel work happened in the
+ * turn, while lane-assignment reads the `lane-tag` in the start's arguments.
  */
 const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
 const DEFAULT_TIMEOUTS = { review: 600_000, answer: 300_000, patch: 1_800_000 };
@@ -97,6 +97,7 @@ const TRIGGERS = new Set([
     'spec-ready',
     'spec-task-ready',
     'implementation-work',
+    'lane-assignment',
     'lane-boundary',
     'implementation-complete',
     'failure-streak',
@@ -251,7 +252,7 @@ function validateRule(raw, index, targets) {
     const where = `rule "${id}"`;
     const when = raw.when;
     if (typeof when !== 'string' || !TRIGGERS.has(when)) {
-        fail(`${where}: unknown trigger ${JSON.stringify(when)}; use manual, spec-ready, spec-task-ready, implementation-work, lane-boundary, implementation-complete, or failure-streak`);
+        fail(`${where}: unknown trigger ${JSON.stringify(when)}; use manual, spec-ready, spec-task-ready, implementation-work, lane-assignment, lane-boundary, implementation-complete, or failure-streak`);
     }
     const contract = raw.contract;
     if (typeof contract !== 'string' || !CONTRACTS.has(contract)) {
@@ -280,6 +281,11 @@ function validateRule(raw, index, targets) {
     else if (when === 'implementation-work') {
         if (contract !== 'note') {
             fail(`${where}: implementation-work is satisfied only by a task progress note; set contract: note`);
+        }
+    }
+    else if (when === 'lane-assignment') {
+        if (contract !== 'note') {
+            fail(`${where}: lane-assignment is satisfied only by a lane assignment or a task progress note; set contract: note`);
         }
     }
     else if (when === 'lane-boundary') {
@@ -315,8 +321,10 @@ function validateRule(raw, index, targets) {
             if (raw[forbidden] !== undefined)
                 fail(`${where}: a note rule takes no "${forbidden}"`);
         }
-        if (raw.when !== 'implementation-work' && raw.when !== 'lane-boundary') {
-            fail(`${where}: only the implementation-work and lane-boundary triggers use a note rule`);
+        if (raw.when !== 'implementation-work' &&
+            raw.when !== 'lane-assignment' &&
+            raw.when !== 'lane-boundary') {
+            fail(`${where}: only the implementation-work, lane-assignment, and lane-boundary triggers use a note rule`);
         }
     }
     else {
@@ -1393,6 +1401,65 @@ function recordWriteEvidence(state, agentId, cwd, exec, result) {
     }
 }
 /**
+ * The worker evidence label: `lane-tag: <change>#<n>`, n is the lane's plan
+ * position. The label, the canonical positive integer, and the tag's end are
+ * exact: `xlane-tag`, `#02`, and `#2x` are not the printed tag.
+ */
+const LANE_TAG_PATTERN = /(?<![A-Za-z0-9_-])lane-tag:\s*([a-z0-9][a-z0-9-]*)#([1-9][0-9]*)(?![0-9A-Za-z_])/u;
+/** Collect every string value in a tool-argument tree, decoded (never JSON-escaped). */
+function argumentStrings(value, into) {
+    if (typeof value === 'string') {
+        into.push(value);
+        return;
+    }
+    if (Array.isArray(value)) {
+        for (const item of value)
+            argumentStrings(item, into);
+        return;
+    }
+    if (isRecord(value)) {
+        for (const item of Object.values(value))
+            argumentStrings(item, into);
+    }
+}
+/**
+ * Record the lane a successful worker start covered. The `tools/result`
+ * listener is synchronous, so the plan is read synchronously and the lane title
+ * is stored; a later rename therefore leaves the renamed lane unassigned. The
+ * tag is searched in decoded argument strings, so a tag that starts a new line
+ * still matches.
+ */
+function recordLaneAssignment(state, agentId, cwd, argumentsValue) {
+    const strings = [];
+    argumentStrings(argumentsValue, strings);
+    let match = null;
+    for (const text of strings) {
+        match = LANE_TAG_PATTERN.exec(text);
+        if (match !== null)
+            break;
+    }
+    if (match === null)
+        return;
+    const change = match[1];
+    const number = Number(match[2]);
+    if (!Number.isSafeInteger(number) || number < 1)
+        return;
+    const openspecRoot = findOpenSpecRootSync(cwd);
+    if (openspecRoot === undefined)
+        return;
+    let plan;
+    try {
+        plan = readFileSync(join(openspecRoot, 'changes', change, 'tasks.md'), 'utf8');
+    }
+    catch {
+        return;
+    }
+    const lane = parseTaskLanes(plan)[number - 1];
+    if (lane === undefined || lane.title === '')
+        return;
+    state.assignLane(agentId, change, lane.title);
+}
+/**
  * Attribute this turn's evidence. The snapshot baseline identifies a newly
  * created change and the current list; per-write canonical contents identify
  * checkbox transitions and substantive edits.
@@ -1947,6 +2014,7 @@ class DelegationState {
                 turn: -1,
                 evidence: new Map(),
                 workerStarted: false,
+                lanes: new Map(),
             };
             this.agents.set(agentId, state);
         }
@@ -1996,6 +2064,38 @@ class DelegationState {
     }
     hasWorkerStart(agentId) {
         return this.of(agentId).workerStarted;
+    }
+    lanesFor(agentId, change) {
+        const state = this.of(agentId);
+        let lanes = state.lanes.get(change);
+        if (lanes === undefined) {
+            lanes = new Map();
+            state.lanes.set(change, lanes);
+        }
+        return lanes;
+    }
+    /** A successful tagged worker start assigns one lane for this session. */
+    assignLane(agentId, change, lane) {
+        this.lanesFor(agentId, change).set(lane, 'assigned');
+    }
+    /** A successful progress note decides one lane serial; the decision outlives the digest. */
+    markLaneSerial(agentId, change, lane) {
+        this.lanesFor(agentId, change).set(lane, 'serial');
+    }
+    laneDecision(agentId, change, lane) {
+        return this.of(agentId).lanes.get(change)?.get(lane);
+    }
+    laneDecisions(agentId, change) {
+        return this.of(agentId).lanes.get(change) ?? new Map();
+    }
+    /** Forget one lane's decision when it disappears, completes, or is renamed. */
+    releaseLane(agentId, change, lane) {
+        const lanes = this.of(agentId).lanes.get(change);
+        if (lanes === undefined)
+            return;
+        lanes.delete(lane);
+        if (lanes.size === 0)
+            this.of(agentId).lanes.delete(change);
     }
     markConsulted(agentId) {
         const state = this.of(agentId);
@@ -2891,6 +2991,13 @@ class DelegationEngine {
         };
         const path = notePath(cwd, match.change.name);
         await writeJsonAtomic(path, note);
+        // The note is this session's serial decision for its lane; it stays decided
+        // after later worktree changes, unlike the note's digest.
+        const lanes = await readTaskLanes(match.change.dir);
+        const lane = laneOfTask(lanes, match.task.id);
+        if (lane !== undefined && lane.title !== '') {
+            this.services.state.markLaneSerial(String(agent.id), match.change.name, lane.title);
+        }
         return [
             `progress note written for change "${match.change.name}" (${relativePath(cwd, path)})`,
             `task: ${match.task.number} ${match.task.text}`,
@@ -3080,16 +3187,33 @@ async function readTaskLanes(changeDir) {
         return [];
     }
 }
+/**
+ * Like {@link readTaskLanes}, but distinguishes an unreadable plan (undefined)
+ * from a readable plan with no headings or tasks (an empty lane list).
+ */
+async function readTaskLanesOrUndefined(changeDir) {
+    try {
+        return parseTaskLanes(await readFile(join(changeDir, 'tasks.md'), 'utf8'));
+    }
+    catch {
+        return undefined;
+    }
+}
 /** An argument value safe to print inside a double-quoted suggested call. */
 function quotedArg(text) {
     return text.replace(/"/gu, "'");
 }
-/** One ready-to-paste worker call that takes a remaining lane in its own worktree. */
-function laneWorkerCall(changeName, lane, index) {
-    const worktree = `wt-${changeName}-${index + 1}`;
-    const branch = `lane-${changeName}-${index + 1}`;
+/**
+ * One ready-to-paste worker call that takes a lane in its own worktree. A
+ * tagged call carries `lane-tag: <change>#<n>` in its arguments, where n is the
+ * lane's position in the plan; the engine records that exact tag.
+ */
+function laneWorkerCall(changeName, lane, number, tagged = false) {
+    const worktree = `wt-${changeName}-${number}`;
+    const branch = `lane-${changeName}-${number}`;
     const heading = `the heading '${lane.title}'`;
-    const prompt = `Implement the unchecked tasks under ${heading} in openspec/changes/${changeName}/tasks.md. ` +
+    const tag = tagged ? `lane-tag: ${changeName}#${number}. ` : '';
+    const prompt = `${tag}Implement the unchecked tasks under ${heading} in openspec/changes/${changeName}/tasks.md. ` +
         `Work in your own worktree: resolve the repository root with git rev-parse --show-toplevel, ` +
         `then from that root run git worktree add ../${worktree} -b ${branch} ` +
         '(pick another suffix if that path already exists; the worktree must be a sibling of the ' +
@@ -3098,6 +3222,26 @@ function laneWorkerCall(changeName, lane, index) {
         `Work only inside ${lane.owns.join(', ')}. ` +
         `Do not tick tasks.md; report the branch ${branch}, the files changed, and the commands you ran.`;
     return `subagent(description: "${quotedArg(`Lane: ${lane.title}`.slice(0, 80))}", prompt: "${quotedArg(prompt)}")`;
+}
+/** The lane-assignment steer: a root-anchored checkpoint, then one tagged call per lane. */
+function laneAssignmentCall(changeName, lanes, remaining) {
+    const lines = [
+        'commit the current worktree first, because a new checkout only sees commits;',
+        'the :/ and :(top) pathspecs keep both commands anchored to the repository root:',
+        `  git add -A :/; git add -f ":(top)openspec/changes/${changeName}"; git commit -m "lane checkpoint before fan-out"`,
+        'start one worker per unassigned lane (they run in parallel); each call carries its lane-tag:',
+    ];
+    for (const lane of remaining) {
+        lines.push(`  ${laneWorkerCall(changeName, lane, lanes.indexOf(lane) + 1, true)}`);
+    }
+    lines.push('or record a serial decision for a lane that cannot run in parallel:');
+    for (const lane of remaining) {
+        const next = lane.tasks.find((task) => !task.checked);
+        if (next === undefined)
+            continue;
+        lines.push(`  task_progress(task: "${next.number} ${next.text}", status: "in-progress", reason: "why this lane stays serial")`);
+    }
+    return lines.join('\n');
 }
 /**
  * Evaluate every gated rule and steer the agent once when something is unmet.
@@ -3340,6 +3484,73 @@ async function evaluateGate(deps, agent, turn, signal) {
                         pushSoft(`implementation-work:${change.name}:${current.implementationFingerprint ?? 'none'}`, ruleId, text, call);
                 }
             }
+            // The lane-assignment gate starts fan-out at the first implementation
+            // tick and remembers each lane's tagged worker or serial decision across
+            // turns. A lane ticked in this turn is current and is never reported.
+            const assignmentRules = deps.config.rules.filter((rule) => rule.when === 'lane-assignment' && rule.contract === 'note' && rule.gate !== 'none');
+            if (assignmentRules.length > 0) {
+                // An unreadable plan fails open; a readable plan with no headings or
+                // tasks reports nothing but still releases every assignment.
+                const lanes = await readTaskLanesOrUndefined(change.dir);
+                const readable = lanes ?? [];
+                const titled = readable.filter((lane) => lane.title !== '');
+                // Prune decisions for lanes that disappeared or completed; a renamed
+                // lane is a new title and therefore a new, unassigned lane.
+                if (lanes !== undefined) {
+                    for (const title of [...deps.state.laneDecisions(agentId, change.name).keys()]) {
+                        const lane = titled.find((entry) => entry.title === title);
+                        const complete = lane !== undefined &&
+                            lane.tasks.length > 0 &&
+                            lane.tasks.every((task) => task.checked);
+                        if (lane === undefined || complete) {
+                            deps.state.releaseLane(agentId, change.name, title);
+                        }
+                    }
+                }
+                if (titled.length > 0) {
+                    const parallel = titled.filter((lane) => !/serial/iu.test(lane.title) && lane.tasks.length > 0);
+                    // The lanes this session ticked in the current turn, from its own
+                    // canonical task-write pairs; another session's ticks never count.
+                    const evidence = deps.state.evidenceOf(agentId).get(change.name);
+                    const ticked = new Set();
+                    for (const write of evidence?.taskWrites ?? []) {
+                        const before = new Set(parseTasksText(write.before ?? '')
+                            .filter((task) => task.checked)
+                            .map((task) => task.id));
+                        for (const task of parseTasksText(write.after)) {
+                            if (task.checked && !before.has(task.id))
+                                ticked.add(task.id);
+                        }
+                    }
+                    const currentTitles = new Set(parallel
+                        .filter((lane) => lane.tasks.some((task) => ticked.has(task.id)))
+                        .map((lane) => lane.title));
+                    const unassigned = parallel.filter((lane) => lane.tasks.some((task) => !task.checked) &&
+                        !currentTitles.has(lane.title) &&
+                        deps.state.laneDecision(agentId, change.name, lane.title) === undefined);
+                    const implementationChanged = baseline !== undefined &&
+                        baseline.implementationFingerprint !== undefined &&
+                        current.implementationFingerprint !== undefined &&
+                        baseline.implementationFingerprint !== current.implementationFingerprint;
+                    if (parallel.length >= 2 &&
+                        unassigned.length > 0 &&
+                        unassigned.every((lane) => lane.owns.length > 0) &&
+                        (ticked.size > 0 || implementationChanged)) {
+                        const ruleId = assignmentRules.find((rule) => rule.gate === 'strict')?.id ??
+                            assignmentRules[0]?.id ??
+                            'lane-fanout';
+                        const titles = unassigned.map((lane) => `"${lane.title}"`).join(', ');
+                        const text = `rule "${ruleId}": lane assignment is missing in change "${change.name}": ${unassigned.length} unassigned non-serial lane(s) with unchecked tasks (${titles}); this turn ticked a task or changed implementation files, and no tagged worker start or serial note covers them.`;
+                        const call = laneAssignmentCall(change.name, readable, unassigned);
+                        if (assignmentRules.some((rule) => rule.gate === 'strict')) {
+                            pushStrict(ruleId, text, call);
+                        }
+                        else {
+                            pushSoft(`lane-assignment:${change.name}:${unassigned.map((lane) => lane.title).join('|')}`, ruleId, text, call);
+                        }
+                    }
+                }
+            }
             // A completed lane is a decision point: fan out the lanes that remain, or
             // record the serial decision. Everything here fails open.
             const laneRules = deps.config.rules.filter((rule) => rule.when === 'lane-boundary' && rule.contract === 'note' && rule.gate !== 'none');
@@ -3411,7 +3622,7 @@ async function evaluateGate(deps, agent, turn, signal) {
                                     'the :/ and :(top) pathspecs keep both commands anchored to the repository root:',
                                     `  git add -A :/; git add -f ":(top)openspec/changes/${change.name}"; git commit -m "lane checkpoint before fan-out"`,
                                     'start one worker per lane (they run in parallel):',
-                                    ...remaining.map((lane, index) => `  ${laneWorkerCall(change.name, lane, index)}`),
+                                    ...remaining.map((lane, index) => `  ${laneWorkerCall(change.name, lane, index + 1)}`),
                                     'or record the serial decision:',
                                     next === undefined
                                         ? '  delegation_status'
@@ -3585,6 +3796,7 @@ function attachGate({ ctx, deps }) {
                 recordWriteEvidence(deps.state, agentId, cwd, exec, result);
                 if (!result.isError && WORKER_TOOLS.has(exec.name)) {
                     deps.state.markWorkerStarted(agentId);
+                    recordLaneAssignment(deps.state, agentId, cwd, exec.arguments);
                 }
             }
         }

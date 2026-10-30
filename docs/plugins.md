@@ -149,19 +149,48 @@ observes `llm/stream` and `session/event`, delivers recovery through agent steer
 and carries its documented defaults in the fragment row. Its behavior is documented in
 [loop-guard.md](loop-guard.md).
 
+## Answer pages
+
+[`packages/plugin-answer-page`](../packages/plugin-answer-page) is the skill-only shape: it registers
+one on-demand skill from a pinned upstream release, with its vendored skill directory as the resource
+base so the skill's own `scripts/am.mjs` resolves. It ships no always-on section, no tool, no Client
+half, and no configuration. The upstream renderer, prompt, references, and licenses are vendored
+byte-identically under `assets/answer-me-with-html/` and pinned by `answer-page.lock.json`. Because
+the vendored prompt carries one upstream example Windows path, `scripts/lib/scan.ts` exempts exactly
+the lock-listed files from the machine-path check while secret scanning still runs. Usage, policy, and
+attribution are in [answer-pages.md](answer-pages.md).
+
 ## Goal continuity
 
 [`packages/plugin-goal-continuity`](../packages/plugin-goal-continuity) is the Host-only supervisor
 for an existing root-agent goal. It reconciles an active but disarmed goal after recoverable harness
 stops, prevents the goal driver's pause for a loop-guard reset, extends a reached round cap under a
 bounded budget, and records a visible `continuity-stopped` block on real stops. Notices are
-non-waking (`agent.inject`); the plugin never starts a turn, forks the driver, or calls the model.
+non-waking (`agent.inject`); the supervisor never starts a turn, forks the driver, or calls the
+model.
+
+The same row makes two bounded, read-only review calls with the shared `goal-reviewer` preset:
+
+- a **block review** gates a proposed `blocked` update through a `tools/pre-execute` decision;
+- a **speed review** measures one completed goal round and, when it crosses a cost threshold, starts
+  one background child that returns either `no-action` or one `speedup` action with a `speedup-id`.
+  The action is recorded under `.dsh/goal-continuity/retro/`, announced in the next goal round's
+  brief, and enforced by a follow-through gate that accepts a tagged worker start or a matching
+  `task_progress` decline. The review, its brief, and the gate fail open and never block the goal.
 
 The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: non-goal`,
-`maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, and
-`hardMaxGoalRounds: 5000`. Restart resume is opt-in: set `resumeAfterRestart: true` on the row in the
-profile's `cordis.patch.yml`. Set `enabled: false` or disable the row to restore stock DSH goal
-behavior with no disarm, resume, extension, block, suppression, or notice.
+`maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, `hardMaxGoalRounds: 5000`,
+`blockReview.enabled: true`, and `speedReview.enabled: true`. The speed review defaults to
+`minToolCalls: 12`, `minMinutes: 5`, `slowCallMs: 120000`, `everyRound: false`, `maxPerGoal: 20`,
+`timeoutMs: 120000`, and `brief: true`. Restart resume is opt-in: set `resumeAfterRestart: true` on
+the row in the profile's `cordis.patch.yml`. Set `speedReview.enabled: false` to keep continuity and
+the block review while disabling only the speed loop, or set `enabled: false`/disable the row to
+restore stock DSH goal behavior with no disarm, resume, extension, block, suppression, notice, or
+either review.
+
+The speed-review loop was added by the `add-goal-round-retro` change; the row
+`dsh-setup-goal-continuity` and the accepted requirements in the `goal-continuity` spec describe its
+behavior.
 
 ## Adding a package
 
