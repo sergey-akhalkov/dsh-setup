@@ -139,7 +139,7 @@ force-closes the remaining processes after a short grace, and starts the new ins
 
 ## Bundles the setup enables
 
-These are shipped optional bundles in DSH `0.2.1-rc.3`. The installer selects them; the setup bundle
+These are shipped optional bundles in DSH `0.2.1-rc.3` and `0.2.1-rc.5`. The installer selects them; the setup bundle
 does not duplicate their rows or add them itself.
 
 - **Agent Teams** — `@deepseek-ai/dsh-experimental-agent-team-profile`

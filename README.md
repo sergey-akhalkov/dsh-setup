@@ -1,7 +1,7 @@
 # dsh-setup
 
 [![validate](https://github.com/sergey-akhalkov/dsh-setup/actions/workflows/validate.yml/badge.svg)](https://github.com/sergey-akhalkov/dsh-setup/actions/workflows/validate.yml)
-![DeepSeek Harness 0.2.1-rc.3](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.3-blue)
+![DeepSeek Harness 0.2.1-rc.5](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A portable, installable setup for [DeepSeek Harness](https://www.deepseek.com/en/harness/) (DSH):
@@ -65,17 +65,17 @@ A missing optional runtime does not break startup: the affected adapter logs a f
 skill fails only when called, delegation reports the missing target, and everything else keeps
 working. Install the runtimes for the plugins you want.
 
-| Dependency                          | Needed for                                                              | Install                                                                                                                    |
-| ----------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| DeepSeek Harness Desktop 0.2.1-rc.3 | Running any plugin; the installer refuses an unsupported version        | [Download DeepSeek Harness](https://www.deepseek.com/en/harness/)                                                          |
-| PowerShell 5.1+ (7 recommended)     | The one-command installer                                               | [Install PowerShell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)                       |
-| Git                                 | The installer fetches the setup through a commit-pinned git spec        | [Download Git](https://git-scm.com/downloads)                                                                              |
-| Node.js with npm                    | Installing the two global CLI prerequisites below                       | [Download Node.js](https://nodejs.org/en/download)                                                                         |
-| `uv` (includes `uvx`)               | Serena MCP, every Codex delegation run, and the local Hindsight runtime | [Install uv](https://docs.astral.sh/uv/getting-started/installation/)                                                      |
-| `@nuphus/nuphus-mcp`                | Nuphus MCP desktop and browser automation                               | `npm install -g @nuphus/nuphus-mcp`                                                                                        |
-| `@fission-ai/openspec@1.15.0`       | The six OpenSpec skills                                                 | `npm install -g @fission-ai/openspec@1.15.0`                                                                               |
-| `rtk`                               | The RTK routing rule and skill                                          | [Install RTK](https://github.com/rtk-ai/rtk#installation)                                                                  |
-| Codex CLI (bundled)                 | The Codex subagent and the default delegation target                    | No separate install: the bundle ships `@openai/codex` 0.164.0; log in once with the command `codex_subagent_status` prints |
+| Dependency                                                      | Needed for                                                              | Install                                                                                                                    |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| DeepSeek Harness Desktop 0.2.1-rc.5 (0.2.1-rc.3 also supported) | Running any plugin; the installer refuses an unsupported version        | [Download DeepSeek Harness](https://www.deepseek.com/en/harness/)                                                          |
+| PowerShell 5.1+ (7 recommended)                                 | The one-command installer                                               | [Install PowerShell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)                       |
+| Git                                                             | The installer fetches the setup through a commit-pinned git spec        | [Download Git](https://git-scm.com/downloads)                                                                              |
+| Node.js with npm                                                | Installing the two global CLI prerequisites below                       | [Download Node.js](https://nodejs.org/en/download)                                                                         |
+| `uv` (includes `uvx`)                                           | Serena MCP, every Codex delegation run, and the local Hindsight runtime | [Install uv](https://docs.astral.sh/uv/getting-started/installation/)                                                      |
+| `@nuphus/nuphus-mcp`                                            | Nuphus MCP desktop and browser automation                               | `npm install -g @nuphus/nuphus-mcp`                                                                                        |
+| `@fission-ai/openspec@1.15.0`                                   | The six OpenSpec skills                                                 | `npm install -g @fission-ai/openspec@1.15.0`                                                                               |
+| `rtk`                                                           | The RTK routing rule and skill                                          | [Install RTK](https://github.com/rtk-ai/rtk#installation)                                                                  |
+| Codex CLI (bundled)                                             | The Codex subagent and the default delegation target                    | No separate install: the bundle ships `@openai/codex` 0.164.0; log in once with the command `codex_subagent_status` prints |
 
 ## What the setup installs
 

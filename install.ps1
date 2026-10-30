@@ -144,7 +144,7 @@ $ErrorActionPreference = 'Stop'
 # BEGIN REPOSITORY METADATA
 # Kept in sync with dsh.json by scripts/validate-repo.ts. A standalone copy of
 # this script has no repository to read these from.
-$SupportedDshVersions = @('0.2.1-rc.3')
+$SupportedDshVersions = @('0.2.1-rc.3', '0.2.1-rc.5')
 $ShippedBundles = @(
   '@deepseek-ai/dsh-experimental-agent-team-profile',
   '@deepseek-ai/dsh-experimental-tool-worktree',
