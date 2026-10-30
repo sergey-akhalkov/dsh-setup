@@ -175,6 +175,10 @@ the target to start, and returns a run id, state, and record path while the verd
 the background. Use `delegation_status` (or the record path) for completion; the gate points a
 pending review at its run instead of starting another. Answer and patch stay synchronous.
 
+A target run is bounded by the per-contract timeout: 20 minutes for `review`, 5 minutes for
+`answer`, and 30 minutes for `patch`. A profile overrides them through `timeouts`; a timed-out
+review writes an `ERROR` record and the error names the contract to widen.
+
 Several reviews can run at once. A duplicate request is identified by rule + change + task/phase: a
 second call while that identity is pending returns the existing run handle. Different rules on the
 same change/task queue over one conversation key and each writes its own record. Task-scoped reviews
@@ -186,7 +190,10 @@ nor enters its evidence. A whole-scope run reviews live inputs; any reviewed-inp
 run (a git-visible worktree file, a tracked file that disappears, or an included change artifact,
 including edit-read-restore) discards the verdict and reports a retry instead of publishing a
 `PASS`. A task review whose snapshot cannot be built falls back to the live inputs and the same
-guard.
+guard, and its run detail names the bounded cause (`live worktree: <reason>`); a missing `.dsh/`
+ignore rule is named with the fix. The reviewed change's `reviews/` approval directory is engine
+output and is never a reviewed input, so a portable task approval written by one review does not
+invalidate another.
 
 **`answer`** is the read-only blocker/research/advisor contract. It returns the answer with evidence
 and, for research, sources and dates, and, for an advisor, a recommendation, the strongest
@@ -588,10 +595,12 @@ keep the new behavior.
   fixed argument arrays and no shell; a git failure becomes a visible gate issue, not a silent
   pass.
 - The live inputs a whole-scope review tracks are exactly the git-visible set
-  (`git ls-files --cached --others --exclude-standard`) minus `.dsh/` and `.tmp/`. Each file is
-  signed by size plus nanosecond mtime/ctime; a git-listed path that cannot be stat'ed is recorded
-  as changed instead of failing the run. Build output and other scratch trees MUST therefore be
-  gitignored: an unignored `target/` or `dist/` folder lets a concurrent build invalidate a review.
+  (`git ls-files --cached --others --exclude-standard`) minus `.dsh/`, `.tmp/`, and the reviewed
+  change's `reviews/` approval directory, whose writes are engine output rather than review input.
+  Each file is signed by size plus nanosecond mtime/ctime; a git-listed path that cannot be stat'ed
+  is recorded as changed instead of failing the run. Build output and other scratch trees MUST
+  therefore be gitignored: an unignored `target/` or `dist/` folder lets a concurrent build
+  invalidate a review.
 - A task-scope digest is `task-review-v2` over the task id and text, the frozen change-artifact
   digest, and the snapshot's content tree; the record's worktree digest is derived from that tree.
   The tree is content-addressed, so unchanged content reuses the same digest and an unchanged
@@ -669,8 +678,12 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 - **"reviewed inputs changed during the run"** — a whole-scope review, or a task review that fell
   back to the live worktree, saw a git-visible file or one of the reviewed change's artifacts change
   while it ran; the error names the count and paths. Finish the writes, then re-run the review. A
-  snapshot task review is immune. Gitignore build output so a concurrent build does not count as a
-  reviewed input.
+  snapshot task review is immune, and a portable `reviews/<taskId>.json` approval written by another
+  review is engine output, not a reviewed input. Gitignore build output so a concurrent build does
+  not count as a reviewed input.
+- **The run detail says `live worktree: ...`** — the task review could not build its snapshot and
+  the reason follows. When it names the missing `.dsh/` ignore rule, add `.dsh/` to `.gitignore` or
+  `.git/info/exclude` to restore snapshots; the current review still runs under the live guard.
 - **Snapshot leftovers** — a task review keeps a disposable checkout under
   `.dsh/delegation/snapshots/<runId>` and a `<runId>.lease` beside it; both go away when the run
   settles. After a crashed Host the lease expires and the next snapshot in that workspace sweeps the

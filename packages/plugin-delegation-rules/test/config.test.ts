@@ -35,7 +35,7 @@ describe('configuration validation', () => {
     expect(config.rules).toEqual([])
     expect(config.targets.size).toBe(0)
     expect(config.failureStreak).toBe(3)
-    expect(config.timeouts).toEqual({ review: 600_000, answer: 300_000, patch: 1_800_000 })
+    expect(config.timeouts).toEqual({ review: 1_200_000, answer: 300_000, patch: 1_800_000 })
   })
 
   it('accepts an explicit empty rule list and the no-rules state', () => {

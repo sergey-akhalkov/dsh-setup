@@ -189,14 +189,20 @@ describe('review snapshot', () => {
     const changeDir = join(dir, 'openspec', 'changes', 'change-a')
     await mkdir(changeDir, { recursive: true })
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    let reason: string | undefined
     const snapshot = await createReviewSnapshot(
       dir,
       change('change-a', changeDir),
       'run-c',
       defaultGit,
       new AbortController().signal,
+      undefined,
+      (value) => {
+        reason = value
+      },
     )
     expect(snapshot).toBeUndefined()
+    expect(reason).toContain('not Git-ignored')
   })
 
   it('falls back when the change directory is outside the repository', async () => {
@@ -205,14 +211,20 @@ describe('review snapshot', () => {
     const outside = await mkdtemp(join(tmpdir(), 'dsh-outside-'))
     cleanups.push(() => rm(outside, { recursive: true, force: true }))
     await writeFile(join(outside, 'tasks.md'), '- [x] 1.1 Task\n')
+    let reason: string | undefined
     const snapshot = await createReviewSnapshot(
       dir,
       change('change-a', outside),
       'run-d',
       defaultGit,
       new AbortController().signal,
+      undefined,
+      (value) => {
+        reason = value
+      },
     )
     expect(snapshot).toBeUndefined()
+    expect(reason).toContain('outside the repository')
   })
 
   it('resolves the repository through a linked checkout path', async () => {

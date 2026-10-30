@@ -142,7 +142,7 @@ const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
  */
 const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow'])
 
-const DEFAULT_TIMEOUTS: TimeoutConfig = { review: 600_000, answer: 300_000, patch: 1_800_000 }
+const DEFAULT_TIMEOUTS: TimeoutConfig = { review: 1_200_000, answer: 300_000, patch: 1_800_000 }
 const DEFAULT_FAILURE_STREAK = 3
 const MAX_ANSWER_CHARS = 12_000
 const MAX_FINDING_CHARS = 2_000
@@ -744,6 +744,8 @@ interface ReviewPreparation {
   reviewCwd?: string
   /** Content tree the snapshot digest binds to; absent in live mode. */
   snapshotTree?: string
+  /** Why the live fallback is used; absent for a snapshot review. */
+  fallbackReason?: string
 }
 
 interface PublishFields {
@@ -1063,7 +1065,7 @@ export interface ReviewSnapshot {
 /**
  * Build the disposable task-review snapshot from the exact review input set.
  * Returns undefined when it cannot be built safely; the caller reviews the live
- * worktree with the mutation guard instead.
+ * worktree with the mutation guard instead and gets the cause through `onUnavailable`.
  */
 export async function createReviewSnapshot(
   cwd: string,
@@ -1073,6 +1075,8 @@ export async function createReviewSnapshot(
   signal: AbortSignal,
   /** Test seam: runs after the change directory is frozen, before its digest. */
   afterCopy?: () => Promise<void> | void,
+  /** Called once with a bounded cause when no snapshot is produced. */
+  onUnavailable?: (reason: string) => void,
 ): Promise<ReviewSnapshot | undefined> {
   await sweepReviewSnapshots(cwd, runGit)
   const services: GitServices = { runGit }
@@ -1086,6 +1090,7 @@ export async function createReviewSnapshot(
       .split(sep)
       .join('/')
   } catch {
+    onUnavailable?.('the repository or change directory path could not be resolved')
     return undefined
   }
   if (
@@ -1095,6 +1100,7 @@ export async function createReviewSnapshot(
     relChange.startsWith('../') ||
     isAbsolute(relChange)
   ) {
+    onUnavailable?.('the change directory is outside the repository')
     return undefined
   }
   try {
@@ -1103,13 +1109,18 @@ export async function createReviewSnapshot(
     await mkdir(resolve(cwd, SCRATCH_DIR), { recursive: true })
     await runGit(['check-ignore', '-q', '--no-index', '.dsh'], cwd, signal)
   } catch {
+    onUnavailable?.(
+      'the .dsh scratch directory is not Git-ignored; add .dsh/ to .gitignore or .git/info/exclude',
+    )
     return undefined
   }
   try {
     if ((await runGit(['ls-files', '-u'], root, signal)).toString('utf8').trim() !== '') {
+      onUnavailable?.('the repository index has unmerged entries')
       return undefined
     }
   } catch {
+    onUnavailable?.('the repository index could not be read for unmerged entries')
     return undefined
   }
 
@@ -1183,6 +1194,7 @@ export async function createReviewSnapshot(
     return { tree, commit, worktree, changeDir: frozenChange, specDigest: frozenSpec }
   } catch {
     await discardReviewSnapshot(cwd, runId, runGit)
+    onUnavailable?.('the snapshot worktree could not be built (git error during snapshot creation)')
     return undefined
   }
 }
@@ -2176,6 +2188,23 @@ async function reviewedInputs(
   }
   const root = await repositoryRoot(cwd, services.git, signal)
   const signature = await gitInputSignature(root, services.git, signal)
+  // The portable approval directory is engine output, not reviewed input: a
+  // record another review writes during this run must not discard the verdict.
+  let approvals = resolve(change.dir, REVIEWS_DIRECTORY)
+  try {
+    approvals = resolve(
+      root,
+      relative(await realpath(root), await realpath(change.dir)),
+      REVIEWS_DIRECTORY,
+    )
+  } catch {
+    // Fall back to the session's lexical form when the paths cannot be resolved.
+  }
+  for (const path of [...signature.entries.keys()]) {
+    if (path === approvals || path.startsWith(`${approvals}${sep}`)) {
+      signature.entries.delete(path)
+    }
+  }
   if (rule.scope !== 'task') return signature
   // A task digest also hashes the change artifacts, so they are guarded regardless of git.
   for (const [path, value] of (await inputSignature(change.dir, CHANGE_INPUT_EXCLUDES)).entries) {
@@ -3251,7 +3280,7 @@ class DelegationEngine {
         const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest
         if (reusable && current) {
           await this.discardSnapshot(run)
-          await this.markRun(run, 'completed', 'reused record')
+          await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'))
           this.freeRun(run)
           await this.startNextRun(run.file.key)
           return {
@@ -3278,9 +3307,12 @@ class DelegationEngine {
       await this.markRun(
         run,
         'running',
-        prepared.snapshotTree === undefined
-          ? 'live worktree'
-          : `snapshot ${prepared.snapshotTree.slice(0, 8)}`,
+        this.withFallbackDetail(
+          prepared,
+          prepared.snapshotTree === undefined
+            ? 'live worktree'
+            : `snapshot ${prepared.snapshotTree.slice(0, 8)}`,
+        ),
       )
       void this.completeReviewRun(run, started, prepared)
       return {}
@@ -3296,12 +3328,17 @@ class DelegationEngine {
     if (rule.scope === 'task') {
       const task = run.context.task
       if (task === undefined) fail(`rule "${rule.id}": a task-scoped review needs a task`)
+      let fallbackReason: string | undefined
       const snapshot = await createReviewSnapshot(
         cwd,
         change,
         run.file.id,
         this.services.git.runGit,
         signal,
+        undefined,
+        (reason) => {
+          fallbackReason = reason
+        },
       )
       if (snapshot !== undefined) {
         run.snapshot = snapshot
@@ -3345,6 +3382,7 @@ class DelegationEngine {
         worktreeDigest: worktree,
         path,
         signature,
+        fallbackReason,
       }
     }
     // Track the inputs before hashing them: any later mutation, including
@@ -3403,11 +3441,14 @@ class DelegationEngine {
       await this.markRun(
         run,
         'completed',
-        parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
+        this.withFallbackDetail(
+          prepared,
+          parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
+        ),
       )
     } catch (error) {
       if (error instanceof DiscardedRun) {
-        await this.markRun(run, 'discarded', error.message)
+        await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
       } else {
         try {
           await this.publishRecord(run, {
@@ -3420,15 +3461,26 @@ class DelegationEngine {
             target: targetIdentity(started.provider, started.model, started.reasoningEffort),
             error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
           })
-          await this.markRun(run, 'failed', sanitizeText(errorMessage(error), MAX_ERROR_CHARS))
+          await this.markRun(
+            run,
+            'failed',
+            this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+          )
         } catch (publishError) {
           if (publishError instanceof DiscardedRun) {
-            await this.markRun(run, 'discarded', publishError.message)
+            await this.markRun(
+              run,
+              'discarded',
+              this.withFallbackDetail(prepared, publishError.message),
+            )
           } else {
             await this.markRun(
               run,
               'failed',
-              sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+              this.withFallbackDetail(
+                prepared,
+                sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+              ),
             )
           }
         }
@@ -3506,7 +3558,7 @@ class DelegationEngine {
   ): Promise<void> {
     try {
       if (error instanceof DiscardedRun) {
-        await this.markRun(run, 'discarded', error.message)
+        await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
       } else if (prepared !== undefined) {
         try {
           const target = this.config.targets.get(run.context.rule.to ?? '')
@@ -3527,20 +3579,35 @@ class DelegationEngine {
                   ),
             error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
           })
-          await this.markRun(run, 'failed', sanitizeText(errorMessage(error), MAX_ERROR_CHARS))
+          await this.markRun(
+            run,
+            'failed',
+            this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+          )
         } catch (publishError) {
           if (publishError instanceof DiscardedRun) {
-            await this.markRun(run, 'discarded', publishError.message)
+            await this.markRun(
+              run,
+              'discarded',
+              this.withFallbackDetail(prepared, publishError.message),
+            )
           } else {
             await this.markRun(
               run,
               'failed',
-              sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+              this.withFallbackDetail(
+                prepared,
+                sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+              ),
             )
           }
         }
       } else {
-        await this.markRun(run, 'failed', sanitizeText(errorMessage(error), MAX_ERROR_CHARS))
+        await this.markRun(
+          run,
+          'failed',
+          this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+        )
       }
     } finally {
       await this.discardSnapshot(run)
@@ -3554,6 +3621,21 @@ class DelegationEngine {
     if (run.snapshot === undefined) return
     run.snapshot = undefined
     await discardReviewSnapshot(run.context.cwd, run.file.id, this.services.git.runGit)
+  }
+
+  /**
+   * Keep the live-fallback cause visible after the run settles: the completion
+   * detail replaces the running detail, so append the cause to the verdict/error.
+   */
+  private withFallbackDetail(
+    prepared: ReviewPreparation | undefined,
+    detail: string | undefined,
+  ): string | undefined {
+    const reason = prepared?.fallbackReason
+    if (reason === undefined) return detail
+    const live = `live worktree: ${reason}`
+    if (detail === undefined || detail === 'live worktree') return live
+    return `${detail}; ${live}`
   }
 
   private async markRun(run: ManagedRun, state: RunState, detail?: string): Promise<void> {

@@ -1837,6 +1837,82 @@ describe('asynchronous review runs', () => {
     expect(record.error).toContain('finish the writes, then re-run the review')
   })
 
+  it('does not discard a fallback task review when another task approval is written', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'original content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    harness.git.failSnapshot = true
+    const runId = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-a',
+      task: '1.1 Reviewed task',
+    })
+    // A sibling task review publishes its portable approval while this run is live.
+    const approval = 'openspec/changes/change-a/reviews/aaaaaaaaaaaaaaaa.json'
+    await mkdir(join(root, 'openspec', 'changes', 'change-a', 'reviews'), { recursive: true })
+    await writeFile(join(root, approval), '{}\n', 'utf8')
+    harness.git.files.push(approval)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect((await taskRecord(root)).verdict).toBe('PASS')
+  })
+
+  it('still discards a fallback task review when a change artifact is written', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'original content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    harness.git.failSnapshot = true
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'design.md'),
+      '# design\n',
+      'utf8',
+    )
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    expect((await taskRecord(root)).verdict).toBe('ERROR')
+    expect((await taskRecord(root)).error).toContain('reviewed inputs changed')
+  })
+
+  it('reports why a fallback task review uses the live worktree', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'original content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    harness.git.failSnapshot = true
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    const run = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
+    ) as { state?: string; detail?: string }
+    expect(run.state).toBe('running')
+    expect(run.detail).toContain('live worktree')
+    expect(run.detail).toContain('.dsh')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const settled = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
+    ) as { detail?: string }
+    expect(settled.detail).toContain('live worktree')
+    expect(settled.detail).toContain('.dsh')
+  })
+
   it('captures the live signature before hashing the fallback digests', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])

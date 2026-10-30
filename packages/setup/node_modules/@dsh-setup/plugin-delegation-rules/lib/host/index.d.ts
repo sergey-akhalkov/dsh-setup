@@ -125,11 +125,13 @@ export interface ReviewSnapshot {
 /**
  * Build the disposable task-review snapshot from the exact review input set.
  * Returns undefined when it cannot be built safely; the caller reviews the live
- * worktree with the mutation guard instead.
+ * worktree with the mutation guard instead and gets the cause through `onUnavailable`.
  */
 export declare function createReviewSnapshot(cwd: string, change: ChangeInfo, runId: string, runGit: GitRunner, signal: AbortSignal, 
 /** Test seam: runs after the change directory is frozen, before its digest. */
-afterCopy?: () => Promise<void> | void): Promise<ReviewSnapshot | undefined>;
+afterCopy?: () => Promise<void> | void, 
+/** Called once with a bounded cause when no snapshot is produced. */
+onUnavailable?: (reason: string) => void): Promise<ReviewSnapshot | undefined>;
 /**
  * Write the initial lease and start renewing it. The initial write is awaited,
  * so a lease exists before the worktree it protects is created.
