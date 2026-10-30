@@ -173,10 +173,14 @@ Several reviews can run at once. A duplicate request is identified by rule + cha
 second call while that identity is pending returns the existing run handle. Different rules on the
 same change/task queue over one conversation key and each writes its own record. Task-scoped reviews
 accept an explicit `task` (id or task text), so parallel task reviews for different tasks do not
-collapse onto the engine's next-task choice. A run reviews stable inputs bound to its digest; any
-reviewed-input change during the run (a git-visible worktree file, a tracked file that disappears,
-or an included change artifact, including edit-read-restore) discards the verdict and reports a
-retry instead of publishing a `PASS`.
+collapse onto the engine's next-task choice. A task-scoped run reviews an immutable snapshot of the
+worktree: a detached checkout under `.dsh/delegation/snapshots/<runId>` built from the exact review
+input set and the frozen change directory, so a write after the run starts neither invalidates it
+nor enters its evidence. A whole-scope run reviews live inputs; any reviewed-input change during the
+run (a git-visible worktree file, a tracked file that disappears, or an included change artifact,
+including edit-read-restore) discards the verdict and reports a retry instead of publishing a
+`PASS`. A task review whose snapshot cannot be built falls back to the live inputs and the same
+guard.
 
 **`answer`** is the read-only blocker/research/advisor contract. It returns the answer with evidence
 and, for research, sources and dates, and, for an advisor, a recommendation, the strongest
@@ -404,6 +408,11 @@ A task-scoped `PASS` is a historical snapshot: later tasks do not invalidate it.
 integration review covers the current combined worktree, because a later task can regress an
 earlier one.
 
+The task review takes its snapshot when the call is made: the reviewer reads the task's completion
+state, and a write after that point neither invalidates the run nor enters its evidence. Keep
+implementing while it runs; the turn still cannot close until every checked task this session
+attributed has a record.
+
 The turn-stopping gate refuses a code-changing turn close unless:
 
 - every checked task that this session attributed (the task ids in its involvement file) has a
@@ -524,16 +533,27 @@ boundaries.
   diff against `HEAD`, and untracked file bytes, ignoring `.dsh/` and `.tmp/`. Git runs with
   fixed argument arrays and no shell; a git failure becomes a visible gate issue, not a silent
   pass.
-- The worktree inputs a running review tracks are exactly the git-visible set
+- The live inputs a whole-scope review tracks are exactly the git-visible set
   (`git ls-files --cached --others --exclude-standard`) minus `.dsh/` and `.tmp/`. Each file is
   signed by size plus nanosecond mtime/ctime; a git-listed path that cannot be stat'ed is recorded
   as changed instead of failing the run. Build output and other scratch trees MUST therefore be
   gitignored: an unignored `target/` or `dist/` folder lets a concurrent build invalidate a review.
-  A task-scope review tracks the union of that set and the reviewed change's artifacts (excluding the
-  root `reviews/` directory) because its digest includes both; a whole-spec review tracks exactly
-  the change artifacts. Do not edit a
-  change artifact while one of its reviews is pending — the edit invalidates the pending verdict
-  by design.
+- A task-scope digest is `task-review-v2` over the task id and text, the frozen change-artifact
+  digest, and the snapshot's content tree; the record's worktree digest is derived from that tree.
+  The tree is content-addressed, so unchanged content reuses the same digest and an unchanged
+  `FINDINGS` record is reused without another run.
+- A task-scope review reviews the snapshot's content tree: tracked paths from the real index
+  (including a path staged with `git add -f`), untracked non-ignored files, and a frozen copy of the
+  change directory, with `.dsh/`, `.tmp/`, and the change directory excluded from the tree and a
+  deleted path skipped. A whole-spec review tracks exactly the change artifacts. Do not edit a
+  change artifact while a whole-scope review is pending — the edit invalidates that verdict by
+  design; a task review is immune because it reads the frozen copy.
+- A task review's snapshot worktree, its lease, and its scratch index live under `.dsh/delegation/`
+  (Git-ignored) and are removed when the run settles. A crashed Host leaves an expired lease; the
+  next snapshot in that workspace sweeps the leftover of an expired lease, and of a lease-less
+  directory older than its grace period, then runs `git worktree prune`. The engine never runs a
+  repository-wide `git gc`/`prune`: snapshot objects are content-addressed and collected by the
+  repository's own garbage collection.
 - A whole-scope record is valid only while its digest matches; a task-scope record is keyed by
   the stable task id and remains historical.
 - Records contain the rule, change, scope, phase, task id when task-scoped, digest, verdict,
@@ -570,7 +590,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
   (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 14172 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 14358 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
@@ -590,10 +610,16 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
   `agentOptions` from that target, or use a provider with `agentOptions` capability.
 - **"verdict digest does not match"** — the target answered about a different revision; re-run on
   the current artifacts.
-- **"reviewed inputs changed during the run"** — a git-visible worktree file or the reviewed
-  change's artifacts changed while the review ran; the error names the count and paths. Finish the
-  writes, then re-run the review. Gitignore build output so a concurrent build does not count as a
+- **"reviewed inputs changed during the run"** — a whole-scope review, or a task review that fell
+  back to the live worktree, saw a git-visible file or one of the reviewed change's artifacts change
+  while it ran; the error names the count and paths. Finish the writes, then re-run the review. A
+  snapshot task review is immune. Gitignore build output so a concurrent build does not count as a
   reviewed input.
+- **Snapshot leftovers** — a task review keeps a disposable checkout under
+  `.dsh/delegation/snapshots/<runId>` and a `<runId>.lease` beside it; both go away when the run
+  settles. After a crashed Host the lease expires and the next snapshot in that workspace sweeps the
+  leftover after its throttle window; `git worktree prune` clears stale metadata. The engine never
+  runs a repository-wide `git gc`/`prune`.
 - **"no fenced JSON verdict"** — the target returned prose or an invalid block; an `ERROR` record
   was written, so the gate can close with the failure visible and a later run retries.
 - **The gate keeps steering** — a strict rule has no matching record for the current digest; run

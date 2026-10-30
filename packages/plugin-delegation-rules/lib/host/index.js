@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
@@ -51,6 +51,13 @@ const TOOL_OUTPUT_SCHEMA = {
 /** Media type of a gate steering message; attributed to the gate, not the user. */
 const GATE_SOURCE_KIND = 'delegation-rules';
 const DELEGATION_DIR = '.dsh/delegation';
+/** Disposable task-review checkouts and their scratch indexes. */
+const SNAPSHOT_DIR = `${DELEGATION_DIR}/snapshots`;
+const SCRATCH_DIR = `${DELEGATION_DIR}/scratch`;
+const SNAPSHOT_LEASE_MS = 5 * 60_000;
+const SNAPSHOT_REFRESH_MS = 30_000;
+const SNAPSHOT_SWEEP_MS = 10 * 60_000;
+const SNAPSHOT_NO_LEASE_GRACE_MS = 10 * 60_000;
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /**
  * Tool calls that start a parallel worker. The set is deliberately broad: the
@@ -380,9 +387,14 @@ function validateRule(raw, index, targets) {
     return rule;
 }
 /** Fixed-argument git runner. The shell is never used, so no input is interpolated. */
-function defaultGit(args, cwd, signal) {
+export function defaultGit(args, cwd, signal, env, stdin) {
     return new Promise((done, failed) => {
-        const child = spawn('git', [...args], { cwd, signal, windowsHide: true });
+        const child = spawn('git', [...args], {
+            cwd,
+            signal,
+            windowsHide: true,
+            ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+        });
         const chunks = [];
         let stderr = '';
         child.stdout.on('data', (chunk) => chunks.push(chunk));
@@ -401,6 +413,14 @@ function defaultGit(args, cwd, signal) {
             const detail = stderr.trim().replace(/\s+/g, ' ').slice(0, 300);
             failed(new DelegationError(`git ${args[0] ?? 'command'} failed (exit ${code ?? 'unknown'})${detail ? `: ${detail}` : ''}`));
         });
+        // Close stdin so a command that reads it (update-index --stdin) gets EOF.
+        // An EPIPE means the child already exited; `close` reports the real failure.
+        child.stdin.on('error', (error) => {
+            if (error.code === 'EPIPE')
+                return;
+            failed(new DelegationError(`git ${args[0] ?? 'command'} could not receive stdin: ${error.message}`));
+        });
+        child.stdin.end(stdin);
     });
 }
 function hashParts(parts) {
@@ -628,6 +648,219 @@ async function worktreeDigest(cwd, services, signal) {
     }
     parts.push(await services.runGit(['diff', '--binary', 'HEAD'], cwd, signal));
     return hashParts(parts);
+}
+/**
+ * Build the disposable task-review snapshot from the exact review input set.
+ * Returns undefined when it cannot be built safely; the caller reviews the live
+ * worktree with the mutation guard instead.
+ */
+export async function createReviewSnapshot(cwd, change, runId, runGit, signal) {
+    await sweepReviewSnapshots(cwd, runGit);
+    const services = { runGit };
+    const root = await repositoryRoot(cwd, services, signal);
+    const relChange = relative(root, change.dir).split(sep).join('/');
+    if (relChange === '' ||
+        relChange === '.' ||
+        relChange === '..' ||
+        relChange.startsWith('../') ||
+        isAbsolute(relChange)) {
+        return undefined;
+    }
+    try {
+        // A tracked or unignored .dsh would put the checkout inside the reviewed tree.
+        // The directory must exist for a directory-only ignore rule to match.
+        await mkdir(resolve(cwd, SCRATCH_DIR), { recursive: true });
+        await runGit(['check-ignore', '-q', '--no-index', '.dsh'], cwd, signal);
+    }
+    catch {
+        return undefined;
+    }
+    try {
+        if ((await runGit(['ls-files', '-u'], root, signal)).toString('utf8').trim() !== '') {
+            return undefined;
+        }
+    }
+    catch {
+        return undefined;
+    }
+    const worktree = resolve(cwd, SNAPSHOT_DIR, runId);
+    const scratch = resolve(cwd, SCRATCH_DIR, `${runId}.index`);
+    const env = { GIT_INDEX_FILE: scratch };
+    try {
+        const listed = (await runGit(['ls-files', '-z', '--cached', '--others', '--exclude-standard'], root, signal)).toString('utf8');
+        const paths = [];
+        for (const path of listed.split('\0')) {
+            if (path === '' || ignoredForDigest(path))
+                continue;
+            if (path === relChange || path.startsWith(`${relChange}/`))
+                continue;
+            try {
+                await lstat(resolve(root, path));
+            }
+            catch {
+                // A tracked path deleted from the worktree is what a live review sees.
+                continue;
+            }
+            paths.push(path);
+        }
+        await mkdir(dirname(scratch), { recursive: true });
+        await mkdir(dirname(worktree), { recursive: true });
+        if (paths.length > 0) {
+            await runGit(['update-index', '--add', '-z', '--stdin'], root, signal, env, `${paths.join('\0')}\0`);
+        }
+        const tree = (await runGit(['write-tree'], root, signal, env)).toString('utf8').trim();
+        let parent;
+        try {
+            parent = (await runGit(['rev-parse', '--verify', 'HEAD'], root, signal))
+                .toString('utf8')
+                .trim();
+        }
+        catch {
+            parent = undefined;
+        }
+        const commit = (await runGit([
+            '-c',
+            'user.name=dsh-delegation',
+            '-c',
+            'user.email=delegation@localhost',
+            'commit-tree',
+            tree,
+            ...(parent === undefined ? [] : ['-p', parent]),
+            '-m',
+            'delegation: reviewed snapshot',
+        ], root, signal))
+            .toString('utf8')
+            .trim();
+        await runGit(['worktree', 'add', '--detach', worktree, commit], root, signal);
+        await writeSnapshotLease(cwd, runId);
+        startSnapshotLease(cwd, runId);
+        const frozenChange = resolve(worktree, relChange);
+        await mkdir(dirname(frozenChange), { recursive: true });
+        await cp(change.dir, frozenChange, { recursive: true, force: true });
+        return { tree, commit, worktree, changeDir: frozenChange };
+    }
+    catch {
+        await discardReviewSnapshot(cwd, runId, runGit);
+        return undefined;
+    }
+}
+/** Live snapshot leases, keyed by workspace snapshot directory and run id. */
+const snapshotLeaseTimers = new Map();
+/** Last per-workspace sweep time, for the throttle. */
+const snapshotSweeps = new Map();
+function snapshotKey(cwd, runId) {
+    return `${resolve(cwd, SNAPSHOT_DIR)}\u0000${runId}`;
+}
+function snapshotLeasePath(cwd, runId) {
+    return `${resolve(cwd, SNAPSHOT_DIR, runId)}.lease`;
+}
+async function readSnapshotLease(path) {
+    try {
+        const value = JSON.parse(await readFile(path, 'utf8'));
+        return typeof value.expiresAt === 'number' ? value.expiresAt : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+async function writeSnapshotLease(cwd, runId) {
+    await writeJsonAtomic(snapshotLeasePath(cwd, runId), {
+        runId,
+        expiresAt: Date.now() + SNAPSHOT_LEASE_MS,
+    });
+}
+function startSnapshotLease(cwd, runId) {
+    const timer = setInterval(() => {
+        void writeSnapshotLease(cwd, runId).catch(() => undefined);
+    }, SNAPSHOT_REFRESH_MS);
+    timer.unref();
+    snapshotLeaseTimers.set(snapshotKey(cwd, runId), timer);
+}
+function stopSnapshotLease(cwd, runId) {
+    const key = snapshotKey(cwd, runId);
+    const timer = snapshotLeaseTimers.get(key);
+    if (timer === undefined)
+        return;
+    clearInterval(timer);
+    snapshotLeaseTimers.delete(key);
+}
+/**
+ * Remove snapshots no live run owns. Ownership is the lease, never age or the
+ * configured review timeout; a lease-less directory is given a grace period.
+ * Runs at most once per throttle window per workspace and never throws.
+ */
+export async function sweepReviewSnapshots(cwd, runGit, now = Date.now()) {
+    const dir = resolve(cwd, SNAPSHOT_DIR);
+    if (now - (snapshotSweeps.get(dir) ?? 0) < SNAPSHOT_SWEEP_MS)
+        return;
+    snapshotSweeps.set(dir, now);
+    let entries;
+    try {
+        entries = await readdir(dir, { withFileTypes: true });
+    }
+    catch {
+        return;
+    }
+    let removed = false;
+    for (const entry of entries) {
+        const path = resolve(dir, entry.name);
+        if (entry.isDirectory()) {
+            const runId = entry.name;
+            const expiresAt = await readSnapshotLease(snapshotLeasePath(cwd, runId));
+            if (expiresAt !== undefined && expiresAt > now)
+                continue;
+            if (expiresAt === undefined) {
+                try {
+                    if (now - (await stat(path)).mtimeMs <= SNAPSHOT_NO_LEASE_GRACE_MS)
+                        continue;
+                }
+                catch {
+                    continue;
+                }
+            }
+            await discardReviewSnapshot(cwd, runId, runGit);
+            removed = true;
+            continue;
+        }
+        if (entry.name.endsWith('.lease')) {
+            const runId = entry.name.slice(0, -'.lease'.length);
+            if (!existsSync(resolve(dir, runId))) {
+                try {
+                    await unlink(path);
+                }
+                catch {
+                    // Missing is fine.
+                }
+            }
+        }
+    }
+    if (removed) {
+        try {
+            await runGit(['worktree', 'prune'], cwd);
+        }
+        catch {
+            // Pruning is best effort.
+        }
+    }
+}
+/** Remove one snapshot checkout, its lease, and its scratch index; best effort. */
+export async function discardReviewSnapshot(cwd, runId, runGit) {
+    stopSnapshotLease(cwd, runId);
+    const worktree = resolve(cwd, SNAPSHOT_DIR, runId);
+    try {
+        await runGit(['worktree', 'remove', '--force', worktree], cwd);
+    }
+    catch {
+        // Not a registered worktree, already gone, or not a Git checkout.
+    }
+    for (const path of [worktree, resolve(cwd, SCRATCH_DIR, `${runId}.index`), `${worktree}.lease`]) {
+        try {
+            await rm(path, { recursive: true, force: true });
+        }
+        catch {
+            // Scratch leftovers are retried by the sweep.
+        }
+    }
 }
 async function implementationFingerprint(cwd, services, signal) {
     const root = await repositoryRoot(cwd, services, signal);
@@ -1845,7 +2078,7 @@ async function finishTarget(started) {
 async function runTarget(services, request) {
     return finishTarget(await startTarget(services, request));
 }
-function reviewPrompt(rule, change, digest, task, context, objective) {
+function reviewPrompt(rule, change, digest, task, context, objective, snapshot = false) {
     const lines = [
         instructionText(rule).trimEnd(),
         '',
@@ -1859,6 +2092,9 @@ function reviewPrompt(rule, change, digest, task, context, objective) {
         lines.push(`- Task: ${task.number} ${task.text}`);
     lines.push(`- Review key: ${reviewKeyForPrompt(change.name, task, rule)}`);
     lines.push(`- Digest: ${digest}`);
+    if (snapshot) {
+        lines.push('- Reviewed state: frozen worktree snapshot taken when the review started; later writes are not in it.');
+    }
     if (context !== undefined && context.trim() !== '')
         lines.push('', '## Context', '', context.trim());
     if (objective !== undefined && objective.trim() !== '')
@@ -2098,6 +2334,7 @@ class DelegationEngine {
                     (record.verdict === 'FINDINGS' && record.digest === prepared.digest);
                 const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest;
                 if (reusable && current) {
+                    await this.discardSnapshot(run);
                     await this.markRun(run, 'completed', 'reused record');
                     this.freeRun(run);
                     await this.startNextRun(run.file.key);
@@ -2109,12 +2346,14 @@ class DelegationEngine {
             const started = await startTarget(this.services, {
                 rule: run.context.rule,
                 target: this.target(run.context.rule),
-                prompt: reviewPrompt(run.context.rule, run.context.change, prepared.digest, run.context.task, run.context.args.context, run.context.args.objective),
+                prompt: reviewPrompt(run.context.rule, run.context.change, prepared.digest, run.context.task, run.context.args.context, run.context.args.objective, prepared.snapshotTree !== undefined),
                 agent: run.context.agent,
-                cwd: run.context.cwd,
+                cwd: prepared.reviewCwd ?? run.context.cwd,
                 signal: run.context.signal,
             });
-            await this.markRun(run, 'running');
+            await this.markRun(run, 'running', prepared.snapshotTree === undefined
+                ? 'live worktree'
+                : `snapshot ${prepared.snapshotTree.slice(0, 8)}`);
             void this.completeReviewRun(run, started, prepared);
             return {};
         }
@@ -2125,25 +2364,56 @@ class DelegationEngine {
     }
     async prepareReview(run) {
         const { rule, change, cwd, signal } = run.context;
+        const path = recordPath(cwd, rule, change.name, run.context.task?.id);
+        if (rule.scope === 'task') {
+            const task = run.context.task;
+            if (task === undefined)
+                fail(`rule "${rule.id}": a task-scoped review needs a task`);
+            const snapshot = await createReviewSnapshot(cwd, change, run.file.id, this.services.git.runGit, signal);
+            if (snapshot !== undefined) {
+                run.snapshot = snapshot;
+                const frozen = (await readTasks(snapshot.changeDir)).find((entry) => entry.id === task.id);
+                if (frozen === undefined) {
+                    fail(`task "${task.number} ${task.text}" changed while the review snapshot was prepared in change "${change.name}"; re-run the review`);
+                }
+                if (!frozen.checked) {
+                    fail(`task "${frozen.number} ${frozen.text}" is not checked in the frozen snapshot of change "${change.name}"; re-run the review`);
+                }
+                return {
+                    digest: hashParts([
+                        'task-review-v2',
+                        frozen.id,
+                        frozen.text,
+                        await specDigest(snapshot.changeDir, signal),
+                        snapshot.tree,
+                    ]),
+                    worktreeDigest: hashParts(['task-review-snapshot-v1', snapshot.tree]),
+                    path,
+                    reviewCwd: snapshot.worktree,
+                    snapshotTree: snapshot.tree,
+                };
+            }
+            // Fallback: review the live worktree under the mutation guard.
+            const worktree = await worktreeDigest(cwd, this.services.git, signal);
+            return {
+                digest: hashParts([
+                    'task-review-v1',
+                    task.id,
+                    task.text,
+                    await specDigest(change.dir, signal),
+                    worktree,
+                ]),
+                worktreeDigest: worktree,
+                path,
+                signature: await reviewedInputs(cwd, rule, change, this.services, signal),
+            };
+        }
         // Track the inputs before hashing them: any later mutation, including
         // edit-read-restore, invalidates the verdict via the completion check.
         const signature = await reviewedInputs(cwd, rule, change, this.services, signal);
         let digest;
         let worktree;
-        if (rule.scope === 'task') {
-            const task = run.context.task;
-            if (task === undefined)
-                fail(`rule "${rule.id}": a task-scoped review needs a task`);
-            worktree = await worktreeDigest(cwd, this.services.git, signal);
-            digest = hashParts([
-                'task-review-v1',
-                task.id,
-                task.text,
-                await specDigest(change.dir, signal),
-                worktree,
-            ]);
-        }
-        else if (rule.when === 'implementation-complete') {
+        if (rule.when === 'implementation-complete') {
             worktree = await worktreeDigest(cwd, this.services.git, signal);
             digest = worktree;
         }
@@ -2153,7 +2423,7 @@ class DelegationEngine {
         return {
             digest,
             ...(worktree === undefined ? {} : { worktreeDigest: worktree }),
-            path: recordPath(cwd, rule, change.name, run.context.task?.id),
+            path,
             signature,
         };
     }
@@ -2162,11 +2432,13 @@ class DelegationEngine {
         try {
             const result = await finishTarget(started);
             const parsed = parseVerdict(result.text, prepared.digest);
-            const current = await reviewedInputs(run.context.cwd, run.context.rule, run.context.change, this.services, run.context.signal);
-            const changed = changedInputPaths(prepared.signature, current);
-            if (changed.length > 0) {
-                const sample = changed.slice(0, 5).join(', ');
-                fail(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
+            if (prepared.signature !== undefined) {
+                const current = await reviewedInputs(run.context.cwd, run.context.rule, run.context.change, this.services, run.context.signal);
+                const changed = changedInputPaths(prepared.signature, current);
+                if (changed.length > 0) {
+                    const sample = changed.slice(0, 5).join(', ');
+                    fail(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
+                }
             }
             await this.publishRecord(run, {
                 digest: prepared.digest,
@@ -2208,6 +2480,7 @@ class DelegationEngine {
             }
         }
         finally {
+            await this.discardSnapshot(run);
             this.freeRun(run);
             await this.startNextRun(run.file.key);
         }
@@ -2305,9 +2578,17 @@ class DelegationEngine {
             }
         }
         finally {
+            await this.discardSnapshot(run);
             this.freeRun(run);
             await this.startNextRun(run.file.key).catch(() => undefined);
         }
+    }
+    /** Remove one finished run's disposable checkout; never changes the verdict. */
+    async discardSnapshot(run) {
+        if (run.snapshot === undefined)
+            return;
+        run.snapshot = undefined;
+        await discardReviewSnapshot(run.context.cwd, run.file.id, this.services.git.runGit);
     }
     async markRun(run, state, detail) {
         run.file.state = state;

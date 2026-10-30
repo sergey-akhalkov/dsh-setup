@@ -1675,7 +1675,7 @@ describe('asynchronous review runs', () => {
     expect(taskIds.size).toBe(2)
   })
 
-  it('publishes no PASS when a reviewed file is edited and restored during the run', async () => {
+  it('publishes PASS when a reviewed file is edited and restored during the run', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
     await mkdir(join(root, 'src'), { recursive: true })
@@ -1689,23 +1689,42 @@ describe('asynchronous review runs', () => {
     harness.git.files = ['src/engine.ts']
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     expect(subagents.startCalls).toBe(1)
-    // Edit, read, restore: content ends identical and a digest re-check would pass.
+    // Edit, read, restore: the live worktree changes, the frozen snapshot does not.
     await writeFile(file, 'temporary edit\n', 'utf8')
     expect(await readFile(file, 'utf8')).toBe('temporary edit\n')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await writeFile(file, 'original content\n', 'utf8')
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect((await taskRecord(root)).verdict).toBe('PASS')
+  })
+
+  it('falls back to the live input guard when the snapshot is unavailable', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    const file = join(root, 'src', 'engine.ts')
+    await writeFile(file, 'original content\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    harness.git.failSnapshot = true
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(subagents.startCalls).toBe(1)
+    await writeFile(file, 'temporary edit\n', 'utf8')
     await new Promise((resolve) => setTimeout(resolve, 10))
     await writeFile(file, 'original content\n', 'utf8')
     pending.releases.shift()?.()
     expect(await harness.waitForRun(runId)).toContain('state=failed')
     const record = await taskRecord(root)
     expect(record.verdict).toBe('ERROR')
-    expect(record.error).toContain(
-      'reviewed inputs changed during the run (1 changed: src/engine.ts)',
-    )
-    expect(record.error).toContain('a write inside the reviewed scope happened during the run')
+    expect(record.error).toContain('reviewed inputs changed during the run')
     expect(record.error).toContain('finish the writes, then re-run the review')
   })
 
-  it('reports a tracked input deleted during the run instead of failing the workspace read', async () => {
+  it('publishes PASS when a tracked input is deleted during the snapshot review', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
     await mkdir(join(root, 'src'), { recursive: true })
@@ -1719,15 +1738,11 @@ describe('asynchronous review runs', () => {
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     await rm(file)
     pending.releases.shift()?.()
-    expect(await harness.waitForRun(runId)).toContain('state=failed')
-    const record = await taskRecord(root)
-    // The git list still names the path; it is recorded as [missing] and reported as changed.
-    expect(record.verdict).toBe('ERROR')
-    expect(record.error).toContain('1 changed: src/tracked.ts')
-    expect(record.error).toContain('finish the writes, then re-run the review')
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect((await taskRecord(root)).verdict).toBe('PASS')
   })
 
-  it('reports a new untracked file created during the run as a changed input', async () => {
+  it('publishes PASS when a new untracked file appears during the snapshot review', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
     const subagents = new FakeSubagents()
@@ -1735,18 +1750,15 @@ describe('asynchronous review runs', () => {
     subagents.addProvider('codex-subagent', {}, pending.responder)
     const harness = harnessFor(root, taskReviewConfig(), subagents)
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
-    // The git list grows when a new untracked, non-ignored file appears during the run.
     await mkdir(join(root, 'src'), { recursive: true })
     await writeFile(join(root, 'src', 'added.ts'), 'export const added = true\n', 'utf8')
     harness.git.files.push('src/added.ts')
     pending.releases.shift()?.()
-    expect(await harness.waitForRun(runId)).toContain('state=failed')
-    const record = await taskRecord(root)
-    expect(record.verdict).toBe('ERROR')
-    expect(record.error).toContain('src/added.ts')
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect((await taskRecord(root)).verdict).toBe('PASS')
   })
 
-  it('publishes no PASS when a gitignored change artifact changes during a task review', async () => {
+  it('publishes PASS when a gitignored change artifact changes during a task review', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', [
       { number: '1.1', text: 'Reviewed task', checked: true },
@@ -1762,13 +1774,11 @@ describe('asynchronous review runs', () => {
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     await writeFile(join(dir, 'proposal.md'), '# Proposal\n\nEdited during the run.\n', 'utf8')
     pending.releases.shift()?.()
-    expect(await harness.waitForRun(runId)).toContain('state=failed')
-    const record = await taskRecord(root)
-    expect(record.verdict).toBe('ERROR')
-    expect(record.error).toContain('openspec/changes/change-a/proposal.md')
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect((await taskRecord(root)).verdict).toBe('PASS')
   })
 
-  it('discards the verdict when a git-visible file under a formerly excluded directory changes', async () => {
+  it('publishes PASS when a file under a formerly excluded directory changes during the snapshot review', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
     await mkdir(join(root, 'node_modules', 'vendor'), { recursive: true })
@@ -1782,10 +1792,44 @@ describe('asynchronous review runs', () => {
     const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
     await writeFile(file, 'module.exports = 2\n', 'utf8')
     pending.releases.shift()?.()
-    expect(await harness.waitForRun(runId)).toContain('state=failed')
-    const record = await taskRecord(root)
-    expect(record.verdict).toBe('ERROR')
-    expect(record.error).toContain('node_modules/vendor/tracked.js')
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    expect((await taskRecord(root)).verdict).toBe('PASS')
+  })
+
+  it('runs the reviewer in the snapshot worktree and names the frozen state', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    const run = subagents.runs[0]
+    expect(run?.cwd).toContain(join('.dsh', 'delegation', 'snapshots'))
+    expect(run?.prompt).toContain('frozen worktree snapshot')
+    pending.releases.shift()?.()
+    await harness.waitForRun(runId)
+  })
+
+  it('removes the snapshot and its lease when the review settles', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    harness.git.files = ['src/engine.ts']
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    const snapshots = join(root, '.dsh', 'delegation', 'snapshots')
+    expect((await readdir(snapshots)).length).toBeGreaterThan(0)
+    pending.releases.shift()?.()
+    await harness.waitForRun(runId)
+    expect(await readdir(snapshots)).toEqual([])
   })
 
   it('publishes PASS and reuses the digest when ignored build output changes', async () => {

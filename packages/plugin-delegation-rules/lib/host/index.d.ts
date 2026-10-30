@@ -83,7 +83,11 @@ export interface ApplyOptions {
 /** Terminal review-run states reported to the settlement observer. */
 export type SettledRunState = 'completed' | 'failed' | 'discarded';
 /** One fixed-argument git invocation; output is raw bytes so diffs stay lossless. */
-export type GitRunner = (args: readonly string[], cwd: string, signal?: AbortSignal) => Promise<Buffer>;
+export type GitRunner = (args: readonly string[], cwd: string, signal?: AbortSignal, 
+/** Extra environment, merged over `process.env`; used for `GIT_INDEX_FILE`. */
+env?: Record<string, string>, 
+/** Bytes written to the child's stdin and closed; used for `--stdin` path lists. */
+stdin?: string | Buffer) => Promise<Buffer>;
 interface EngineConfig {
     targets: Map<string, TargetConfig>;
     rules: RuleConfig[];
@@ -96,6 +100,38 @@ interface EngineConfig {
  * validation error, so the profile composes without the target installed.
  */
 export declare function validateConfig(raw: unknown): EngineConfig;
+/** Fixed-argument git runner. The shell is never used, so no input is interpolated. */
+export declare function defaultGit(args: readonly string[], cwd: string, signal?: AbortSignal, env?: Record<string, string>, stdin?: string | Buffer): Promise<Buffer>;
+interface ChangeInfo {
+    name: string;
+    dir: string;
+    reviewReady: boolean;
+}
+/** One immutable review checkout; the digest binds to `tree`. */
+export interface ReviewSnapshot {
+    /** Content tree the task digest binds to. */
+    tree: string;
+    /** Snapshot commit checked out in the disposable worktree. */
+    commit: string;
+    /** Disposable worktree the reviewer runs in. */
+    worktree: string;
+    /** Frozen change directory inside the worktree. */
+    changeDir: string;
+}
+/**
+ * Build the disposable task-review snapshot from the exact review input set.
+ * Returns undefined when it cannot be built safely; the caller reviews the live
+ * worktree with the mutation guard instead.
+ */
+export declare function createReviewSnapshot(cwd: string, change: ChangeInfo, runId: string, runGit: GitRunner, signal: AbortSignal): Promise<ReviewSnapshot | undefined>;
+/**
+ * Remove snapshots no live run owns. Ownership is the lease, never age or the
+ * configured review timeout; a lease-less directory is given a grace period.
+ * Runs at most once per throttle window per workspace and never throws.
+ */
+export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now?: number): Promise<void>;
+/** Remove one snapshot checkout, its lease, and its scratch index; best effort. */
+export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner): Promise<void>;
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools

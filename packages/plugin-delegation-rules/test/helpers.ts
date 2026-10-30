@@ -40,16 +40,42 @@ export class FakeGit {
   /** `git ls-files` answer: the git-visible worktree paths a test declares. */
   files: string[] = []
   fail = false
+  /** Make the snapshot guard fail, so a task review falls back to the live worktree. */
+  failSnapshot = false
   calls: string[][] = []
 
   run: GitRunner = async (args, cwd, _signal) => {
     this.calls.push([...args])
     if (this.fail) throw new Error('git is not available in this test workspace')
-    const command = args[0] === '-C' ? args[2] : args[0]
-    if (command === 'rev-parse') return Buffer.from(cwd)
+    const command = args[0] === '-C' ? args[2] : args[0] === '-c' ? 'commit-tree' : args[0]
+    if (command === 'rev-parse') {
+      return Buffer.from(args.includes('--verify') ? 'b'.repeat(40) : cwd)
+    }
+    if (command === 'check-ignore') {
+      if (this.failSnapshot) throw new Error('git check-ignore failed (test)')
+      return Buffer.alloc(0)
+    }
+    if (command === 'ls-files') {
+      // `-u` asks for unmerged entries; the rest is the review input set.
+      return args.includes('-u') ? Buffer.alloc(0) : Buffer.from(this.files.join('\0'))
+    }
+    if (command === 'write-tree') {
+      // A deterministic tree that follows the fake worktree state, so a change
+      // in status/diff/input set produces a new task digest.
+      return Buffer.from(
+        createHash('sha256')
+          .update(`${this.status}\u0000${this.diff}\u0000${this.files.join('\u0000')}`)
+          .digest('hex'),
+      )
+    }
+    if (command === 'worktree') {
+      const path = args[3] ?? ''
+      if (args[1] === 'add') await mkdir(path, { recursive: true })
+      if (args[1] === 'remove') await rm(path, { recursive: true, force: true })
+      return Buffer.alloc(0)
+    }
     if (command === 'status') return Buffer.from(this.status)
     if (command === 'diff') return Buffer.from(this.diff)
-    if (command === 'ls-files') return Buffer.from(this.files.join('\0'))
     return Buffer.alloc(0)
   }
 }

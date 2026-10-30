@@ -78,7 +78,9 @@ parallel work. The trigger fails open: no headings, a lane without owned paths, 
 - **review** — computes a scope digest, runs the target with the bundled P0/P1 prompt, accepts
   exactly one fenced JSON verdict that echoes the digest, and writes an atomic record under
   `.dsh/delegation/<rule>/<change>/` (`<phase>.json` for whole scope, `tasks/<taskId>.json` for
-  task scope). `PASS` needs zero P0/P1 findings; `FINDINGS` and `ERROR` are reported but do not
+  task scope). A task-scope review reads a frozen worktree snapshot taken when the call is made, so
+  a write after it starts does not invalidate it; a whole-scope review keeps the live-input guard.
+  `PASS` needs zero P0/P1 findings; `FINDINGS` and `ERROR` are reported but do not
   pass a strict gate. A matching `PASS` is reused without another run; a `FINDINGS` record is
   reused only while the digest is unchanged; an `ERROR` is retried. Any session may run a review:
   the call attributes the change to that session, the record names the reviewing session, and
