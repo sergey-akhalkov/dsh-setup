@@ -70,10 +70,13 @@ note rule turns a completed `tasks.md` lane into a fan-out decision, the steer p
 Lane shape comes from the level-2 headings the task-lane guidance already requires, and parsing
 fails open on a plan without lanes. The setup composition is unchanged.
 
-In flight on 2026-10-30 is `add-snapshot-task-review` (9 tasks, not yet archived): a task-scoped
-review reads an immutable detached-worktree snapshot built from the exact review input set, so a
-write during a run no longer discards it, and the snapshot is removed on settle with a lease-backed
-sweep for leftovers. It ships inside `@dsh-setup/plugin-delegation-rules` with no composition change.
+The archived `2026-10-30-add-snapshot-task-review` change carries 9 tasks and 9/9 portable task
+approvals; it moves a task-scoped review onto an immutable detached-worktree snapshot built from the
+exact review input set and a frozen change directory, so a write during a run no longer discards the
+verdict. The digest is the content tree plus the frozen artifact digest, the lease-backed snapshot
+lifecycle removes the checkout on settle and sweeps leftovers, and the live-worktree mutation guard
+remains for whole-scope reviews and the fallback. It ships inside
+`@dsh-setup/plugin-delegation-rules` with no composition change.
 
 The 2026-10-29 changes archived with release v0.13.2 are `add-review-approval-gate`, which added
 portable task approvals, change-level coverage, the archive gate, and the pre-push/CI audit
