@@ -61,17 +61,19 @@ A session with no involvement is not steered for the change. To opt in, edit the
 | `spec-ready` | A change this session created or whose spec artifacts it changed is review-ready and its whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
 | `spec-task-ready` | A task this session checked has no task-review PASS/ERROR record. | `review` scope `task` |
 | `implementation-work` | The turn changed implementation files in a change this session is involved in and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
-| `lane-boundary` | A task this session ticked in this turn completed the last unchecked task of a `tasks.md` lane, another non-`serial` lane with owned paths still has an unchecked task, and the turn started no parallel worker (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`). Satisfied by a worker start or by a matching progress note in a remaining lane. | `note` |
+| `lane-assignment` | This session is involved in a change with at least two non-serial lanes, the turn ticked a task or changed implementation files, and a non-current lane with unchecked tasks has neither a tagged worker start nor a serial note. | `note` |
+| `lane-boundary` (deprecated) | A task this session ticked in this turn completed the last unchecked task of a `tasks.md` lane, another non-`serial` lane with owned paths still has an unchecked task, and the turn started no parallel worker (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`). Satisfied by a worker start or by a matching progress note in a remaining lane. Kept for existing profiles; use `lane-assignment` for new rules. | `note` |
 | `implementation-complete` | This session completed the change's task list and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
 | `failure-streak` | The configured number of consecutive failed tool calls has no intervening success and no consultation attempt for that streak. | `answer` (soft) |
 
 `manual` rules must use `gate: none`. `failure-streak` rules must not be `strict` (an `answer`
 writes no record). `spec-*` and `implementation-complete` require `review` with the matching
-scope; `implementation-work` and `lane-boundary` require `note`. A lane is the numbered tasks under
-the nearest level-2 heading of `tasks.md`, its owned paths are the backticked segments of that
-heading, and a heading containing `serial` is the integration tail and never counts as remaining
-parallel work. The trigger fails open: no headings, a lane without owned paths, an unreadable
-`tasks.md`, and a ticked task that no longer appears in it report nothing.
+scope; `implementation-work`, `lane-assignment`, and `lane-boundary` require `note`. A lane is the
+numbered tasks under the nearest level-2 heading of `tasks.md`, its owned paths are the backticked
+segments of that heading, and a heading containing `serial` is the integration tail and never
+counts as remaining parallel work. The lane triggers fail open: no headings, a lane without owned
+paths, an unreadable `tasks.md`, and a ticked task that no longer appears in it report nothing.
+`lane-boundary` is deprecated and accepted only for existing profiles.
 
 ## Contracts
 
@@ -132,9 +134,31 @@ digest. Before handing work to more than one write-capable agent at once:
   longer.
 
 Triggers, records, and digests are unchanged by this section: it describes how to assign
-write-capable work. The `lane-fanout` rule is what makes the assignment happen at a lane boundary;
-when it steers, start one worker per remaining lane before continuing, or record the serial
-decision with `task_progress`.
+write-capable work. The `lane-fanout` rule makes the assignment happen at the first unassigned
+lane; when it steers, start one tagged worker per reported lane before continuing, or record the
+serial decision with `task_progress`.
+
+## Lane assignment
+
+The shipped `lane-fanout` rule uses the `lane-assignment` trigger. It reports the lanes that still
+need an owner at any implementation turn and stays quiet once each lane is assigned, serial,
+current, or complete.
+
+- **Session ledger** — per session, change, and lane. A successful `subagent`, `subagent_fork`,
+  `spawn_teammate`, or `workflow` start whose arguments contain `lane-tag: <change>#<n>` assigns
+  exactly that lane, `<n>` being the lane's 1-based position in `tasks.md`. A successful
+  `task_progress` note for a task in a lane marks only that lane serial. The lane this session
+  ticked in the turn is current and is never stored.
+- **Tag evidence** — an untagged, failed, or unrelated worker start assigns nothing. Paste the
+  exact call the steer prints; it carries the tag.
+- **Per-lane serial escape** — one `task_progress` note serializes one lane and leaves the others
+  gated. A lane that disappears, completes, or is renamed loses its decision, and a Host restart
+  clears the ledger.
+- **Fail-open** — an unreadable `tasks.md`, a plan without level-2 headings, an unassigned lane
+  without owned paths, and a turn with no tick or implementation change report nothing.
+
+`lane-boundary` is deprecated: it is still accepted for existing profiles with its completion
+boundary behavior, but new rules use `lane-assignment`.
 
 ## Default rules
 
@@ -143,10 +167,12 @@ decision with `task_progress`.
 | `spec-review` | `spec-ready` | review, whole, phase `spec` | strict |
 | `task-review` | `spec-task-ready` | review, task | strict |
 | `task-progress` | `implementation-work` | note | strict |
-| `lane-fanout` | `lane-boundary` | note | strict |
+| `lane-fanout` | `lane-assignment` | note | strict |
 | `blocker` | `failure-streak` | answer | soft |
 | `research` | `manual` | answer | none |
 | `advisor` | `manual` | answer | none |
+| `worker-fast` | `manual` | answer | none |
+| `worker-deep` | `manual` | answer | none |
 | `bug-fix` | `manual` | patch | none |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft |
 
@@ -174,6 +200,23 @@ rules:
 `provider` is the registered subagent provider; `model`, `reasoningEffort`, and `agentOptions`
 are passed only when the provider declares `agentOptions` support, otherwise the target is
 rejected with the capability error.
+
+## Worker effort tiers
+
+The shipped defaults also add two in-process (`spawn`) worker targets, `worker-fast` and
+`worker-deep`, each reachable through the manual `answer` rule of the same name. They set no model,
+so both inherit the profile's model; only the effort differs.
+
+- `worker-fast` at `high` — mechanical inspection, call-site and file sweeps, routine summaries,
+  and any subtask whose answer is a lookup or a checklist.
+- `worker-deep` at `max` — ambiguous analysis, root-cause work, design trade-offs, and anything
+  that gates a decision. Use it when a cheap pass could be plausibly wrong.
+- The main loop keeps its own effort (`max` in the shipped setup). Delegate a bounded subtask
+  whose result can be checked; do not delegate to demote the session itself.
+
+The DeepSeek route exposes three effective levels, not five: `minimal`/`low` map to `low`,
+`medium`/`high`/`xhigh` map to `high`, and `max` is distinct. Pick the tier by the task; do not
+ask for `xhigh` as if it were a separate level.
 
 ## When to consult the advisor
 

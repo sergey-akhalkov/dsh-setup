@@ -12,7 +12,7 @@
   config:
     provider: deepseek-account
     model: deepseek-flash
-    reasoningEffort: high
+    reasoningEffort: max
 - id: ui-theme
   config:
     preference: dark

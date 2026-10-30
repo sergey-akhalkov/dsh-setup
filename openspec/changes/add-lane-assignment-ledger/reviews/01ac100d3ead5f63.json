@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-lane-assignment-ledger",
+  "scope": "task",
+  "taskId": "01ac100d3ead5f63",
+  "digest": "87261fdb36ee79eead44c25c090d8ffe18e057916b479f6c7d992d39ab070912",
+  "worktreeDigest": "74b38a402008999c9296c7df61766f1e093e5d612f0385489d207fb4c5ea3fce",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-10-30T14:08:18.188Z"
+}

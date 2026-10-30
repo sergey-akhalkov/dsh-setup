@@ -70,6 +70,46 @@ describe('model-facing budget', () => {
       expect(text).toContain('reasoningEffort: xhigh')
     }
   })
+
+  it('documents the worker effort tiers and names both worker rules in the skill', () => {
+    const skill = read('SKILL.md')
+    const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
+    const docs = readFileSync(docsPath, 'utf8')
+    for (const text of [skill, docs]) {
+      expect(text).toContain('`worker-fast`')
+      expect(text).toContain('`worker-deep`')
+    }
+    expect(skill).toContain('mechanical inspection')
+    expect(skill).toContain('root-cause')
+    expect(skill).toContain('The main loop keeps its own effort')
+    expect(skill).toContain('`minimal`/`low` map to `low`')
+    expect(skill).toContain('`medium`/`high`/`xhigh` map to `high`')
+    expect(skill).toContain('`max` is distinct')
+    expect(fragment).toContain('worker-fast:')
+    expect(fragment).toContain('worker-deep:')
+    expect(docs).toContain('reasoningEffort: high')
+    expect(docs).toContain('reasoningEffort: max')
+  })
+
+  it('documents the lane assignment trigger, ledger, tag, and deprecated boundary', () => {
+    const skill = read('SKILL.md')
+    const docs = readFileSync(docsPath, 'utf8')
+    const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
+    for (const text of [skill, docs]) {
+      expect(text).toContain('lane-assignment')
+      expect(text).toContain('lane-tag')
+      expect(text).toContain('lane-boundary')
+      expect(text).toContain('lane-fanout')
+    }
+    expect(skill).toContain('| `lane-fanout` | `lane-assignment` | note | strict |')
+    expect(skill).toContain('`lane-boundary` (deprecated)')
+    expect(skill).toContain('Per-lane serial escape')
+    expect(skill).toContain('Host restart')
+    expect(docs).toContain('lane-tag: <change>#<n>')
+    expect(docs).toContain('lane-boundary` is deprecated')
+    expect(fragment).toContain('when: lane-assignment')
+    expect(fragment).not.toContain('when: lane-boundary')
+  })
 })
 
 describe('bundled prompts', () => {

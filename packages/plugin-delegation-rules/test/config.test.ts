@@ -57,10 +57,18 @@ describe('configuration validation', () => {
       'blocker',
       'research',
       'advisor',
+      'worker-fast',
+      'worker-deep',
       'bug-fix',
       'integration-review',
     ])
-    expect([...config.targets.keys()]).toEqual(['codex', 'codex-write', 'codex-astra'])
+    expect([...config.targets.keys()]).toEqual([
+      'codex',
+      'codex-write',
+      'codex-astra',
+      'worker-fast',
+      'worker-deep',
+    ])
     expect(config.targets.get('codex-write')?.write).toBe(true)
     // The shipped targets select the strong model; codex-astra stays the explicit strong advisor target.
     expect(config.targets.get('codex')).toEqual({
@@ -79,6 +87,23 @@ describe('configuration validation', () => {
       model: 'gpt-6-astra',
       reasoningEffort: 'xhigh',
     })
+    // The worker tiers set only effort, so both keep the profile's model.
+    expect(config.targets.get('worker-fast')).toEqual({
+      provider: 'spawn',
+      reasoningEffort: 'high',
+    })
+    expect(config.targets.get('worker-deep')).toEqual({
+      provider: 'spawn',
+      reasoningEffort: 'max',
+    })
+    for (const ruleId of ['worker-fast', 'worker-deep']) {
+      expect(config.rules.find((rule) => rule.id === ruleId)).toMatchObject({
+        when: 'manual',
+        to: ruleId,
+        contract: 'answer',
+        gate: 'none',
+      })
+    }
     const advisor = config.rules.find((rule) => rule.id === 'advisor')
     expect(advisor).toMatchObject({
       when: 'manual',
@@ -87,6 +112,7 @@ describe('configuration validation', () => {
       gate: 'none',
       instruction: 'bundled:advisor',
     })
+    expect(config.rules.find((rule) => rule.id === 'lane-fanout')?.when).toBe('lane-assignment')
     expect(config.failureStreak).toBe(3)
     const integration = config.rules.find((rule) => rule.id === 'integration-review')
     expect(integration).toMatchObject({
@@ -94,6 +120,14 @@ describe('configuration validation', () => {
       gate: 'soft',
       scope: 'whole',
     })
+  })
+
+  it('ships max as the setup owner default reasoning effort', () => {
+    const defaults = parse(
+      readFileSync(join(packageDir, '..', '..', 'packages', 'setup', 'defaults.yml'), 'utf8'),
+    ) as Array<{ id: string; config?: Record<string, unknown> }>
+    const row = defaults.find((entry) => entry.id === 'agent-default-model')
+    expect(row?.config).toMatchObject({ reasoningEffort: 'max' })
   })
 
   it('accepts a valid custom rule on an existing trigger and contract', () => {
@@ -132,6 +166,32 @@ describe('configuration validation', () => {
         }),
       ),
     ).toThrow(/lane-boundary is satisfied only by a task progress note/)
+  })
+
+  it('accepts lane-assignment as a note rule and rejects a target or review contract', () => {
+    const laneRule = {
+      id: 'lane-fanout',
+      when: 'lane-assignment',
+      contract: 'note',
+      gate: 'strict',
+    }
+    expect(validateConfig(configWithRule(laneRule)).rules[0]).toMatchObject(laneRule)
+    expect(() => validateConfig(configWithRule({ ...laneRule, to: 'codex' }))).toThrow(
+      /a note rule takes no "to"/,
+    )
+    expect(() =>
+      validateConfig(
+        configWithRule({
+          id: 'lane-fanout',
+          when: 'lane-assignment',
+          contract: 'review',
+          scope: 'task',
+          to: 'codex',
+          gate: 'strict',
+          instruction: 'bundled:review-task',
+        }),
+      ),
+    ).toThrow(/lane-assignment is satisfied only by a lane assignment or a task progress note/)
   })
 
   const invalid: Array<[string, Record<string, unknown>, RegExp]> = [

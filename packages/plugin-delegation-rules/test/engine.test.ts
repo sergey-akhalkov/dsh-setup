@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import {
   createReviewSnapshot,
   defaultGit,
@@ -447,6 +449,57 @@ describe('target resolution', () => {
       reasoningEffort: 'xhigh',
     })
     expect(record.runId).toBe(runId)
+  })
+
+  it('runs the shipped worker tiers on the in-process provider with their effort', async () => {
+    const root = await workspace()
+    const subagents = new FakeSubagents()
+    subagents.addProvider('spawn', { agentOptions: true }, () => ({
+      output: [{ type: 'text', text: 'Sweep result with evidence.' }],
+      stopReason: 'completed',
+    }))
+    const fragment = parse(readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')) as {
+      rows: Array<{ config: BundleConfigLike }>
+    }
+    const harness = harnessFor(root, fragment.rows[0]?.config, subagents)
+    expect(
+      await harness.toolText('delegate', { rule: 'worker-fast', objective: 'List callers' }),
+    ).toContain('Sweep result')
+    await harness.callTool('delegate', { rule: 'worker-deep', objective: 'Explain the bug' })
+    expect(subagents.runs.map((run) => run.provider)).toEqual(['spawn', 'spawn'])
+    expect(subagents.runs[0]?.agentOptions).toEqual({ reasoningEffort: 'high' })
+    expect(subagents.runs[1]?.agentOptions).toEqual({ reasoningEffort: 'max' })
+  })
+
+  it('reports an unavailable worker provider with the target next action and no record', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', { agentOptions: false })
+    const harness = harnessFor(
+      root,
+      {
+        targets: { 'worker-fast': { provider: 'spawn', reasoningEffort: 'high' } },
+        rules: [
+          {
+            id: 'worker-fast',
+            when: 'manual',
+            to: 'worker-fast',
+            contract: 'answer',
+            gate: 'none',
+            instruction: 'bundled:research',
+          },
+        ],
+      },
+      subagents,
+    )
+    await expect(harness.callTool('delegate', { rule: 'worker-fast' })).rejects.toThrow(
+      /target "worker-fast" names provider "spawn", which is not registered.*install or enable that provider/,
+    )
+    expect(subagents.startCalls).toBe(0)
+    expect(await readdir(join(root, '.dsh', 'delegation')).catch(() => [] as string[])).toEqual([])
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toContain('MISSING provider "spawn"')
   })
 })
 

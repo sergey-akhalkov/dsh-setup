@@ -35,7 +35,7 @@ rules:
 ```
 
 - `id` — unique kebab-case; the record directory and the `delegate` tool's enum value.
-- `when` — one of the six trigger primitives below.
+- `when` — one of the eight trigger primitives below.
 - `to` — a configured target id (absent only for the `note` contract).
 - `instruction` — `bundled:<asset>` for a shipped prompt, or inline text.
 - `contract` — `review`, `answer`, `patch`, or `note`.
@@ -65,16 +65,22 @@ result contract is a code extension.
 - `implementation-work` — this session's turn changed implementation files in an involved change
   and has neither a newly checked-and-reviewed task nor a `task_progress` note matching the
   current worktree digest.
-- `lane-boundary` — a task this session ticked in this turn completed the last unchecked task of a
-  `tasks.md` lane, another non-tail lane still has an unchecked task, and the turn started no
-  parallel worker; satisfied by a worker start or by a progress note in a remaining lane.
+- `lane-assignment` — an involved change has at least two non-serial lanes, the turn ticked a
+  task or changed implementation files, and a lane with unchecked tasks that is not current has
+  neither a tagged worker start nor a serial note; satisfied per lane by a `lane-tag` worker start
+  or a matching `task_progress` note.
+- `lane-boundary` (deprecated) — a task this session ticked in this turn completed the last
+  unchecked task of a `tasks.md` lane, another non-tail lane still has an unchecked task, and the
+  turn started no parallel worker; satisfied by a worker start or by a progress note in a remaining
+  lane. Accepted for existing profiles; new rules use `lane-assignment`.
 - `implementation-complete` — this session completed the change's task list and the optional
   integration review has no matching `PASS`/`ERROR` record for the current worktree digest.
 - `failure-streak` — the configured number of consecutive failed tool calls with no intervening
   success and no consultation attempt for that streak.
 
 The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
-must not be strict (an answer writes no record).
+must not be strict (an answer writes no record). `lane-boundary` is deprecated and kept only for
+existing profiles; the shipped fan-out rule uses `lane-assignment`.
 
 The change-scoped triggers evaluate only for changes attributed to the current session. A session
 is involved in a change when it created or modified it in this workspace; observation, a
@@ -367,6 +373,29 @@ data; one target can select a different model/effort and the same rule contract 
 engine has no Codex dependency, so a standalone install composes with any provider and reports
 Codex-targeted rules as unavailable until a target is configured.
 
+The shipped defaults also add two in-process worker targets on the DSH `spawn` provider. They set
+only `reasoningEffort`, so both inherit the profile's `agent-default-model`; only the effort differs:
+
+```yaml
+targets:
+  worker-fast:
+    provider: spawn
+    reasoningEffort: high
+  worker-deep:
+    provider: spawn
+    reasoningEffort: max
+```
+
+Their manual `answer` rules are also named `worker-fast` and `worker-deep`, so `delegate` offers
+the choice. Pick the tier by the task: `worker-fast` for mechanical inspection, call-site sweeps,
+routine summaries, and bounded lookups; `worker-deep` for ambiguous analysis, root-cause work, and
+anything that gates a decision. The main loop keeps its own effort (`max` in the shipped setup).
+The DeepSeek route has three effective levels — `minimal`/`low` map to `low`,
+`medium`/`high`/`xhigh` map to `high`, and `max` is distinct — so ask for the tier, not a
+five-value effort name. A profile can override either target; the engine reports the target it
+ran, and a missing provider or unsupported option fails the run with the target next action rather
+than satisfying a gate.
+
 ## Default rules
 
 The shipped defaults live in this package's composition fragment:
@@ -376,10 +405,12 @@ The shipped defaults live in this package's composition fragment:
 | `spec-review`        | `spec-ready`              | review, whole, phase `spec`        | strict |
 | `task-review`        | `spec-task-ready`         | review, task                       | strict |
 | `task-progress`      | `implementation-work`     | note                               | strict |
-| `lane-fanout`        | `lane-boundary`           | note                               | strict |
+| `lane-fanout`        | `lane-assignment`         | note                               | strict |
 | `blocker`            | `failure-streak`          | answer                             | soft   |
 | `research`           | `manual`                  | answer                             | none   |
 | `advisor`            | `manual`                  | answer                             | none   |
+| `worker-fast`        | `manual`                  | answer                             | none   |
+| `worker-deep`        | `manual`                  | answer                             | none   |
 | `bug-fix`            | `manual`                  | patch                              | none   |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
 
@@ -422,6 +453,9 @@ The turn-stopping gate refuses a code-changing turn close unless:
   per-task scope is unchanged, so parallel writers do not review each other's work early;
 - the turn has a newly checked-and-reviewed task or a progress note matching the current worktree
   digest;
+- every non-serial lane with unchecked tasks in a plan with at least two non-serial lanes is the
+  lane this turn ticked, carries a tagged worker start, or has a serial note (the `lane-fanout`
+  rule);
 - every strict whole-spec rule applies with a matching record for the current spec digest when
   this session created the change or changed its spec artifacts;
 - the optional integration rule is met when this session's work completed the task list.
@@ -455,7 +489,9 @@ matches the worktree and the task is still unchecked. Any further file change ma
 the next turn must refresh the note or tick the task and run its review. A checked task never
 accepts a note and a note never counts as a task-review `PASS`. A note may be written from any
 session, and it attributes the change to that session; task lookup skips an unrelated change whose
-`tasks.md` is unreadable and validates the selected readable task.
+`tasks.md` is unreadable and validates the selected readable task. A successful note also records a
+serial decision for the task's lane in this session's lane ledger (see
+[the lane assignment gate](#the-lane-assignment-gate)); one note covers one lane.
 
 ## Parallel writers
 
@@ -474,15 +510,15 @@ digest, so decide ownership before the work starts:
   default ceremony.
 
 The review records, digests, triggers, and turn-stopping gate are unchanged by this guidance; it
-describes how to assign write-capable work. The `lane-boundary` rule below is what makes the
-assignment happen at the moment the work is split, rather than at the start of the change.
+describes how to assign write-capable work. The `lane-fanout` rule described below makes the
+assignment happen at the first unassigned lane, rather than only when a lane completes.
 
-### The lane boundary
+### The lane assignment gate
 
 A long goal tends to parallelize once, while the spec is being cut, and then run serially for the
 rest of its life: the loop only ever asks for the next unchecked task, so a lane that becomes free
-never shows up as a decision. The `lane-boundary` trigger turns a completed lane into that decision
-point.
+never shows up as a decision. The `lane-assignment` trigger turns every implementation turn into
+that decision point until each lane has an owner.
 
 A lane is the set of numbered tasks under the nearest preceding level-2 heading of `tasks.md`, and
 its owned paths are the backticked segments of that heading — the shape the task-lane guidance in
@@ -494,32 +530,50 @@ its owned paths are the backticked segments of that heading — the shape the ta
 - [ ] 1.1 Add the parser
 ```
 
-The trigger reports at turn close only when all of these hold:
+The trigger reports when all of these hold:
 
-- a task this session ticked in this turn was the last unchecked task of its lane;
-- at least one other lane still has an unchecked task and is not the serial tail;
-- the turn started no parallel worker — a successful `subagent`, `subagent_fork`,
-  `spawn_teammate`, or `workflow` tool result settles it;
-- no `task_progress` note names a task in a remaining lane and matches the current worktree digest.
+- the change is attributed to this session and has at least two non-serial lanes with tasks;
+- the turn ticked a task or changed implementation files;
+- at least one non-serial lane with unchecked tasks has no assignment and is not the lane this
+  session ticked in this turn (all lanes ticked this turn are current).
 
-The steer names each remaining lane, its owned paths, a ready `subagent` call that takes the lane
-in its own worktree and branch, and the `task_progress` call that records a serial decision. The
-payload also prints a checkpoint commit: a new checkout contains only commits, so the session that
-fans out commits the current plan and worktree first, force-adding the change directory so a change
-that matches a Git ignore rule still reaches the worker. Owned paths come from the change and no
-machine path is printed, because the child inherits the working directory. The serial escape is the
-ordinary progress note: writing it records _why_ the lane stays serial, and the note is what makes
-the decay auditable after the fact.
+A lane is satisfied by a successful tagged worker start or by a serial note; a lane that is complete,
+disappeared, or renamed no longer carries a decision. The state is a session-scoped ledger, so another
+session's worker start or note never settles this one, and a Host restart re-arms the decision for
+lanes that already had a worker.
+
+**The tag is the evidence.** Each worker call the steer prints carries `lane-tag: <change>#<n>`,
+where `<n>` is the lane's 1-based position in `tasks.md`. Only a successful `subagent`,
+`subagent_fork`, `spawn_teammate`, or `workflow` start whose arguments contain that exact tag assigns
+the lane; an untagged, failed, or unrelated start assigns nothing. The tag is a coordination label,
+not a secret or a bypass.
+
+**The serial escape is per lane.** A successful `task_progress` note for a task in a lane marks only
+that lane serial in this session's ledger. It keeps that decision after later worktree changes,
+because it is a plan decision rather than a digest fact; other lanes remain unassigned and still
+report. One note therefore cannot silence the whole change.
+
+The steer names each unassigned lane, its owned paths, a ready `subagent` call with the lane tag that
+takes the lane in its own worktree and branch, and the `task_progress` call that records a serial
+decision for that lane. The payload prints a checkpoint commit before the worker calls: a new
+checkout contains only commits, so the session that fans out commits the current plan and worktree
+first, force-adding the change directory so a change that matches a Git ignore rule still reaches the
+worker. Owned paths come from the change and no machine path is printed, because the child inherits
+the working directory. Workers do not tick `tasks.md`; the session integrates their branches and
+reviews the tasks.
 
 A heading containing `serial` (case-insensitive) is the integration tail and never counts as
-remaining parallel work, because generated output and the full repository gate cannot run
-concurrently. The trigger fails open: an unreadable `tasks.md`, a change without level-2 headings,
-any remaining lane without owned paths, a completion task that no longer appears in `tasks.md`, a
-lane reopened before the turn closes, a renamed lane, and a write that only deletes a lane's last
-unchecked task all report nothing. A completion therefore stands only while the plan still holds
-the lane complete and every task that carried it. Mid-lane turns never report, so a change reaches
-only a handful of
-boundaries.
+parallel work, because generated output and the full repository gate cannot run concurrently. The
+trigger fails open: an unreadable `tasks.md`, a change without level-2 headings, an unassigned lane
+without owned paths, and a turn that neither ticked a task nor changed implementation files report
+nothing. A change with exactly one non-serial lane in the plan reports nothing. The shipped
+`lane-fanout` rule uses this trigger.
+
+`lane-boundary` is deprecated. It remains accepted for existing profiles and keeps its documented
+completion-boundary behavior (a completed lane plus a per-turn worker start or a matching note), but
+no shipped rule uses it and its per-turn boolean forgets a worker started in an earlier turn. A
+profile that replaces the whole `rules` config must restate `lane-fanout` with `lane-assignment` to
+keep the new behavior.
 
 ## Digests and records
 
@@ -572,16 +626,18 @@ boundaries.
 
 ```text
 delegate(rule: "research", objective: "Which helper owns file locking?", context: "failing test in packages/fs")
+delegate(rule: "worker-fast", objective: "List every caller of parseTasksText")
+delegate(rule: "worker-deep", objective: "Why does the lane ledger miss an assignment across turns?", context: "<observed gate steer and relevant files>")
 delegate(rule: "advisor", context: "Question: keep the approval gate in this plugin? Constraints: standalone install, DSH 0.2.1-rc.3. Evidence: packages/plugin-delegation-rules/src/shared/approval.ts")
 delegate(rule: "blocker", context: "three failed attempts: <commands and output>; current plan: <plan>")
 delegate(rule: "bug-fix", objective: "fix the stale-cache crash", context: "repro: <command>")
 ```
 
-`research` answers with evidence and sources; `advisor` gives a bounded recommendation, the strongest
-counterargument, risks, a next action, and confidence; `blocker` recommends a next action with
-evidence; `bug-fix` returns an isolated worktree, diff, and test report for manual review. A failing
-target is reported; for the soft `failure-streak` rule it marks the consultation attempt and does
-not repeat.
+`research` answers with evidence and sources; `worker-fast` and `worker-deep` answer the same way at
+their configured effort; `advisor` gives a bounded recommendation, the strongest counterargument,
+risks, a next action, and confidence; `blocker` recommends a next action with evidence; `bug-fix`
+returns an isolated worktree, diff, and test report for manual review. A failing target is reported;
+for the soft `failure-streak` rule it marks the consultation attempt and does not repeat.
 
 ## Model-facing cost and security
 
@@ -590,7 +646,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
   (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 14389 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 17309 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
