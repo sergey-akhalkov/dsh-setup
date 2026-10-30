@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 /** Cordis plugin name, equal to the package name. */
@@ -23,6 +23,20 @@ export const DEFAULT_BLOCK_REVIEW_CONFIG = Object.freeze({
     onUnavailable: 'allow',
     onExhausted: 'deny',
 });
+/** Documented speed-review defaults; the composition fragment repeats them. */
+export const DEFAULT_SPEED_REVIEW_CONFIG = Object.freeze({
+    enabled: true,
+    provider: 'spawn',
+    model: 'deepseek-flash',
+    reasoningEffort: 'max',
+    minToolCalls: 12,
+    minMinutes: 5,
+    slowCallMs: 120_000,
+    everyRound: false,
+    timeoutMs: 120_000,
+    maxPerGoal: 20,
+    brief: true,
+});
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
 export const DEFAULT_CONFIG = Object.freeze({
     enabled: true,
@@ -33,6 +47,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxRoundExtensions: 2,
     hardMaxGoalRounds: 5000,
     blockReview: DEFAULT_BLOCK_REVIEW_CONFIG,
+    speedReview: DEFAULT_SPEED_REVIEW_CONFIG,
 });
 /** Bound for one notice summary, matching the harness context-summary bound. */
 const CONTEXT_SUMMARY_MAX_CHARS = 120;
@@ -119,6 +134,80 @@ function resolveBlockReview(raw) {
         onExhausted: policy('onExhausted'),
     });
 }
+/** Integer speed-review fields and their accepted inclusive range. */
+const SPEED_REVIEW_INTEGER_RANGES = {
+    minToolCalls: [0, 1000],
+    slowCallMs: [0, 3_600_000],
+    timeoutMs: [50, 3_600_000],
+    maxPerGoal: [0, 100],
+};
+/** Upper bound for the `minMinutes` threshold; fractions are accepted. */
+const MIN_MINUTES_MAX = 1440;
+/** Validate one nested speed-review policy and apply the documented defaults. */
+function resolveSpeedReview(raw) {
+    const input = raw === undefined ? {} : raw;
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+        throw fieldError('speedReview', 'must be an object');
+    }
+    const record = input;
+    for (const key of Object.keys(record)) {
+        if (!Object.hasOwn(DEFAULT_SPEED_REVIEW_CONFIG, key)) {
+            throw new Error(`goal-continuity: unknown config field "speedReview.${key}"`);
+        }
+    }
+    const boolean = (field) => {
+        const value = record[field];
+        if (value === undefined)
+            return DEFAULT_SPEED_REVIEW_CONFIG[field];
+        if (typeof value !== 'boolean')
+            throw fieldError(`speedReview.${field}`, 'must be a boolean');
+        return value;
+    };
+    const text = (field) => {
+        const value = record[field];
+        if (value === undefined)
+            return DEFAULT_SPEED_REVIEW_CONFIG[field];
+        if (typeof value !== 'string' || value.trim() === '') {
+            throw fieldError(`speedReview.${field}`, 'must be a non-empty string');
+        }
+        return value;
+    };
+    const integer = (field) => {
+        const value = record[field];
+        if (value === undefined)
+            return DEFAULT_SPEED_REVIEW_CONFIG[field];
+        const [min, max] = SPEED_REVIEW_INTEGER_RANGES[field];
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) {
+            throw fieldError(`speedReview.${field}`, `must be an integer between ${min} and ${max}`);
+        }
+        return value;
+    };
+    const minutes = () => {
+        const value = record.minMinutes;
+        if (value === undefined)
+            return DEFAULT_SPEED_REVIEW_CONFIG.minMinutes;
+        if (typeof value !== 'number' ||
+            !Number.isFinite(value) ||
+            value < 0 ||
+            value > MIN_MINUTES_MAX) {
+            throw fieldError('speedReview.minMinutes', `must be a number between 0 and ${MIN_MINUTES_MAX}`);
+        }
+        return value;
+    };
+    return Object.freeze({
+        enabled: boolean('enabled'),
+        provider: text('provider'),
+        model: text('model'),
+        reasoningEffort: text('reasoningEffort'),
+        minToolCalls: integer('minToolCalls'),
+        minMinutes: minutes(),
+        slowCallMs: integer('slowCallMs'),
+        everyRound: boolean('everyRound'),
+        timeoutMs: integer('timeoutMs'),
+        maxPerGoal: integer('maxPerGoal'),
+        brief: boolean('brief'),
+    });
+}
 /**
  * Validate the row configuration fail-loud and apply the documented defaults.
  * @param raw - the loader-supplied config object, or undefined when the row has none.
@@ -170,6 +259,7 @@ export function resolveConfig(raw) {
         maxRoundExtensions: integer('maxRoundExtensions'),
         hardMaxGoalRounds: integer('hardMaxGoalRounds'),
         blockReview: resolveBlockReview(record.blockReview),
+        speedReview: resolveSpeedReview(record.speedReview),
     });
 }
 /** Only a root session is supervised; forks and subagents are left untouched. */
@@ -247,11 +337,11 @@ function isStale(error) {
         error.code === 'GOAL_STALE_REVISION');
 }
 /** Build one frozen, bounded, non-waking notice. */
-function createNotice(text, summary) {
+function createNotice(text, summary, max = NOTICE_TEXT_MAX_CHARS) {
     return Object.freeze({
         id: randomUUID(),
         role: 'user',
-        content: Object.freeze([{ type: 'text', text: bound(text, NOTICE_TEXT_MAX_CHARS) }]),
+        content: Object.freeze([{ type: 'text', text: bound(text, max) }]),
         source: Object.freeze({
             kind: 'goal-continuity',
             form: 'notice',
@@ -260,23 +350,24 @@ function createNotice(text, summary) {
     });
 }
 /** Deliver one non-waking notice; a disposed agent fails open. */
-function deliverNotice(agent, text, summary) {
+function deliverNotice(agent, text, summary, max) {
     try {
-        agent.inject(createNotice(text, summary));
+        agent.inject(createNotice(text, summary, max));
     }
     catch {
         // A disposed agent simply receives no notice.
     }
 }
 /**
- * Independent block review: the only model call in this plugin. It reviews one
- * proposed `blocked` update and returns a tool-call decision; it never starts,
- * continues, or cancels a turn and never mutates the goal.
+ * Independent block review: one of two bounded model calls in this plugin. It
+ * reviews one proposed `blocked` update and returns a tool-call decision; it
+ * never starts, continues, or cancels a turn and never mutates the goal.
  */
 /** Read-only tools the reviewer preset mounts and the child-scope allowlist admits. */
 const REVIEWER_TOOLS = Object.freeze(['read', 'grep', 'glob']);
-/** Local workspace state: goal-scoped review records and the machine-local grant ledger. */
+/** Local workspace state: goal-scoped review records, the retro records, and the grant ledger. */
 const BLOCK_REVIEW_DIR = join('.dsh', 'goal-continuity', 'block-review');
+const RETRO_DIR = join('.dsh', 'goal-continuity', 'retro');
 const GRANTS_PATH = join('.dsh', 'goal-continuity', 'grants.json');
 /** Bounds for the evidence bundle and the model-facing strings. */
 const MAX_TOOL_ARGUMENT_CHARS = 400;
@@ -355,6 +446,17 @@ function workspaceFor(ctx, agent) {
     }
     return agent.session.header.cwd ?? process.cwd();
 }
+/** True when a quoted value looks like an absolute machine path. */
+function quotedPathShape(body) {
+    const unescaped = body.replaceAll('\\\\', '\\');
+    const slashUnc = body.startsWith('//') && body.split('/').filter((part) => part !== '').length >= 2;
+    const backslashUnc = /^\\\\[^\\]+\\.+/u.test(body) || /^\\\\[^\\]+\\.+/u.test(unescaped);
+    return (slashUnc ||
+        backslashUnc ||
+        body.startsWith('/') ||
+        /^[A-Za-z]:[\\/]/u.test(body) ||
+        /^[A-Za-z]:[\\/]/u.test(unescaped));
+}
 /** Replace machine paths and obvious credentials before any evidence leaves the workspace. */
 function redact(text, workspace) {
     let output = text;
@@ -362,14 +464,69 @@ function redact(text, workspace) {
         if (candidate !== '')
             output = output.split(candidate).join('[workspace]');
     }
-    return output
-        .replace(/[A-Za-z]:[\\/][^\s"'`<>|]*/gu, '[path]')
-        .replace(/\\\\[^\s"'`<>|]+/gu, '[path]')
-        .replace(/\/(?:home|Users)\/[^\s"'`<>|]*/gu, '[path]')
+    return (output
+        // Credentials first: a path rule consumes the rest of the line and can
+        // remove the closing quote a quoted credential pattern needs. A quoted
+        // JSON key that names a credential is redacted whatever its prefix
+        // (access_token, client_secret, X-Api-Key, ...).
+        .replace(/"([^"\\]*(?:secret|token|key|password|passwd|credential)[^"\\]*)("\s*:\s*)"(?:[^"\\]|\\.)*"/giu, (_match, key, separator) => `"${key}"${separator}"[redacted]"`)
+        // The same rule for a JSON block nested inside a command argument, where
+        // the inner quotes arrive escaped as \" .
+        .replace(/\\"([^"\\]*(?:secret|token|key|password|passwd|credential)[^"\\]*)\\"\s*:\s*\\"(?:[^"\\]|\\.)*?\\"/giu, (_match, key) => `\\"${key}\\" : \\"[redacted]\\"`)
         .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, '[redacted]')
         .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [redacted]')
-        .replace(/\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
-        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu, '[redacted private key]');
+        // Scheme-prefixed authorization values (Basic, Digest, Token, ...).
+        .replace(/\bAuthorization\s*:\s*[A-Za-z]+\s+[^\s,;]+/giu, 'Authorization: [redacted]')
+        // Credentials embedded in a URL's authority (https://user:pass@host).
+        .replace(/(?<=\/\/)[^\s/"@<>]+@/gu, '[redacted]@')
+        // The closing delimiter must match the opening one, so a value may contain
+        // the other quote (for example a double-quoted "don't-SECRET").
+        .replace(/\b((?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|api[_-]?key|token|password|passwd|secret)\\?["']?\s*[:=]\s*)(\\?)"(?:[^"\\]|\\.)*\\?"/giu, '$1[redacted]')
+        .replace(/\b((?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|api[_-]?key|token|password|passwd|secret)\\?["']?\s*[:=]\s*)(\\?)'(?:[^'\\]|\\.)*\\?'/giu, '$1[redacted]')
+        .replace(/\b((?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|api[_-]?key|token|password|passwd|secret))\b\s*[:=]\s*[^\s,;]+/giu, '$1=[redacted]')
+        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu, '[redacted private key]')
+        // Last resort for any quoting depth: a credential-like key followed by
+        // ':' or '=' redacts the rest of its value span, so a nested or escaped
+        // JSON block cannot smuggle a secret past the structured rules.
+        .replace(/\b([A-Za-z0-9_-]*(?:secret|token|password|passwd|credential|key|auth)[A-Za-z0-9_-]*)\b[^\r\n]{0,60}?[:=][^\r\n]*/giu, '$1=[redacted]')
+        // A quoted absolute path (slash UNC, backslash UNC, single-slash POSIX,
+        // or drive) is redacted whole; the body may contain spaces, the other
+        // quote and any Unicode character, so a double-quoted "Team's
+        // PRIVATE_ACCOUNT" path cannot leak its suffix. Both the raw and the
+        // JSON-unescaped backslash forms are recognized. A quoted scheme URL
+        // starts with a letter and is skipped.
+        .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/gu, (quoted) => {
+        const body = quoted.slice(1, -1);
+        return quotedPathShape(body) ? `${quoted[0]}[path]${quoted[0]}` : quoted;
+    })
+        // A quoted value inside a command string is delimited by JSON escapes.
+        .replace(/\\"((?:[^"\\]|\\.)*?)\\"/gu, (match, body) => quotedPathShape(body) ? '\\"[path]\\"' : match)
+        // A single-quoted path inside a JSON-encoded command string.
+        .replace(/'((?:[^'\\]|\\.)*)'/gu, (match, body) => quotedPathShape(body) ? "'[path]'" : match)
+        // An unquoted absolute-path start redacts the rest of the line before a
+        // specific rule can stop halfway and leave a suffix, so a share,
+        // directory, or file name with a space, a quote or Unicode cannot leak.
+        // The lookbehind keeps scheme URLs, relative segments and ratios out.
+        .replace(/(?<![A-Za-z0-9.:\\/])(?:[A-Za-z]:[\\/]|\/\/|\\\\|\/)[^\r\n]{2,}/gu, '[path]')
+        // A POSIX path glued to a status prefix (ENOENT:/data/...) keeps its
+        // colon, while a scheme URL's // right after the colon is skipped.
+        .replace(/(?<=[A-Za-z]):\/(?!\/)[^\r\n]{2,}/gu, ':[path]')
+        // A drive path needs a non-word boundary before the letter, so a URL's
+        // scheme (https://) is not mistaken for one. It runs to the closing quote
+        // or the line end so a directory with a space cannot leak its suffix.
+        .replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n"']*/gu, '[path]')
+        // Slash-form UNC: //server/share/... needs a boundary that a URL's // has
+        // not; it runs to the closing quote or the line end, so Unicode segments
+        // and spaces are covered.
+        .replace(/(?<![A-Za-z0-9.:])\/\/[^\r\n"']+/gu, '[path]')
+        // Backslash UNC up to the closing quote or the line end, so a share with
+        // spaces cannot leak its suffix.
+        .replace(/\\\\[^\r\n"']+/gu, '[path]')
+        .replace(/\/(?:home|Users|tmp|var|etc|opt|srv|mnt|root|private|Volumes)\/[^\s"'`<>|\r\n]*/gu, '[path]')
+        // Bounded general absolute POSIX path; the lookbehind keeps URLs, //UNC,
+        // relative segments, ratios, and drive paths out of it. A negated class
+        // keeps Unicode segments inside the match.
+        .replace(/(?<![A-Za-z0-9.:/])(?:\/[^\s"'`<>|\r\n]{1,120}){2,8}\/?/gu, '[path]'));
 }
 /** Read a bounded text file; a missing file is a named absence, not an error. */
 function readBoundedFile(path, max) {
@@ -624,13 +781,15 @@ async function writeRecord(path, record) {
         const temporary = `${path}.${randomUUID()}.tmp`;
         await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
         await rename(temporary, path);
+        return true;
     }
     catch {
         // Audit state is best-effort: the tool decision is already determined.
+        return false;
     }
 }
-/** Parse exactly one strict verdict; anything else is a review error. */
-function parseVerdict(text, workspace) {
+/** Parse exactly one fenced JSON block; anything else is a review error. */
+function singleFencedJson(text) {
     const blocks = [];
     const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/gu;
     for (const match of text.matchAll(fence))
@@ -640,13 +799,16 @@ function parseVerdict(text, workspace) {
     if (blocks.length > 1) {
         throw new Error(`the reviewer returned ${blocks.length} fenced blocks; exactly one verdict is required`);
     }
-    let value;
     try {
-        value = JSON.parse(blocks[0]);
+        return JSON.parse(blocks[0]);
     }
     catch (error) {
         throw new Error(`the fenced verdict is not valid JSON: ${errorMessage(error)}`);
     }
+}
+/** Parse exactly one strict verdict; anything else is a review error. */
+function parseVerdict(text, workspace) {
+    const value = singleFencedJson(text);
     if (!isRecord(value))
         throw new Error('the fenced verdict must be a JSON object');
     const allowed = new Set(['verdict', 'userAction', 'nextStep', 'evidence', 'confidence']);
@@ -772,13 +934,13 @@ function outputText(output) {
     }
     return blocks.join('\n').trim();
 }
-/** Await one review with a wall-clock bound and caller cancellation. */
-async function awaitReview(activation, timeoutMs, signal) {
+/** Await one promise with a wall-clock bound and caller cancellation. */
+async function awaitBounded(promise, timeoutMs, signal) {
     let timer;
     let abort;
     try {
         return await Promise.race([
-            activation.result.then((value) => ({ kind: 'result', value }), (error) => ({ kind: 'threw', error })),
+            promise.then((value) => ({ kind: 'value', value }), (error) => ({ kind: 'threw', error })),
             new Promise((resolve) => {
                 timer = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
             }),
@@ -798,13 +960,20 @@ async function awaitReview(activation, timeoutMs, signal) {
             signal.removeEventListener('abort', abort);
     }
 }
-/** Start and settle one read-only reviewer child. */
-async function runReview(ctx, agent, workspace, prompt, config, signal) {
+/** Await one review with a wall-clock bound and caller cancellation. */
+async function awaitReview(activation, timeoutMs, signal) {
+    const settled = await awaitBounded(activation.result, timeoutMs, signal);
+    if (settled.kind === 'value')
+        return { kind: 'result', value: settled.value };
+    return settled;
+}
+/** Start and settle one fresh-context read-only reviewer child. */
+async function runReviewChild(ctx, agent, workspace, prompt, policy, signal) {
     const target = {
-        provider: config.provider,
-        model: config.model,
-        reasoningEffort: config.reasoningEffort,
-        preset: config.reviewerPreset,
+        provider: policy.provider,
+        model: policy.model,
+        reasoningEffort: policy.reasoningEffort,
+        preset: policy.reviewerPreset,
     };
     const subagents = optionalService(ctx, 'subagents');
     if (subagents === undefined) {
@@ -812,7 +981,7 @@ async function runReview(ctx, agent, workspace, prompt, config, signal) {
     }
     let provider;
     try {
-        provider = subagents.getProvider(config.provider);
+        provider = subagents.getProvider(policy.provider);
     }
     catch (error) {
         return {
@@ -830,7 +999,7 @@ async function runReview(ctx, agent, workspace, prompt, config, signal) {
         }
         return {
             kind: 'unavailable',
-            detail: `provider "${config.provider}" is not registered (registered: ${registered.join(', ') || 'none'})`,
+            detail: `provider "${policy.provider}" is not registered (registered: ${registered.join(', ') || 'none'})`,
         };
     }
     if (provider.capabilities?.agentPreset !== true) {
@@ -847,47 +1016,79 @@ async function runReview(ctx, agent, workspace, prompt, config, signal) {
     }
     const agentOptions = {};
     if (provider.capabilities.agentOptions === true) {
-        agentOptions.model = config.model;
-        agentOptions.reasoningEffort = config.reasoningEffort;
+        agentOptions.model = policy.model;
+        agentOptions.reasoningEffort = policy.reasoningEffort;
     }
+    // The deadline covers child startup as well as the child's result: a stalled
+    // provider must not hold the review forever.
+    const controller = new AbortController();
+    let callerAborted = false;
+    const onCallerAbort = () => {
+        callerAborted = true;
+        controller.abort();
+    };
+    if (signal.aborted)
+        onCallerAbort();
+    else
+        signal.addEventListener('abort', onCallerAbort, { once: true });
+    const deadline = setTimeout(() => controller.abort(), policy.timeoutMs);
+    const reviewStartedAt = Date.now();
     let activation;
     try {
-        activation = await subagents.startActivation({
+        const starting = subagents.startActivation({
             provider: provider.name,
-            label: REVIEW_LABEL,
+            label: policy.label,
             request: {
                 prompt: [{ type: 'text', text: prompt }],
                 parent: agent,
                 cwd: workspace,
-                agentPreset: config.reviewerPreset,
+                agentPreset: policy.reviewerPreset,
                 ...(Object.keys(agentOptions).length === 0 ? {} : { agentOptions }),
             },
-            signal,
+            signal: controller.signal,
             delivery: 'caller',
         });
-    }
-    catch (error) {
-        const message = errorMessage(error);
-        if (message.startsWith(SCOPE_FAILURE_PREFIX))
-            return { kind: 'unavailable', detail: message };
-        // A missing or disabled preset is a configuration problem; the manager's
-        // mount diagnostic names it, so follow the unavailable policy.
-        if (/agent preset|agentPreset|preset/iu.test(message)) {
-            return { kind: 'unavailable', detail: message };
+        const started = await awaitBounded(starting, policy.timeoutMs, controller.signal);
+        if (started.kind === 'timeout' || started.kind === 'aborted') {
+            // The provider may still return an activation; dispose it when it does.
+            void starting.then((late) => late.dispose()).catch(() => undefined);
+            return callerAborted
+                ? { kind: 'error', detail: 'the review was cancelled', started: false }
+                : {
+                    kind: 'error',
+                    detail: `the review did not finish within ${policy.timeoutMs} ms`,
+                    started: false,
+                };
         }
-        return { kind: 'error', detail: `the reviewer could not start: ${message}`, started: false };
-    }
-    try {
-        const settled = await awaitReview(activation, config.timeoutMs, signal);
+        if (started.kind === 'threw') {
+            const message = errorMessage(started.error);
+            if (message.startsWith(SCOPE_FAILURE_PREFIX))
+                return { kind: 'unavailable', detail: message };
+            // A missing or disabled preset is a configuration problem; the manager's
+            // mount diagnostic names it, so follow the unavailable policy.
+            if (/agent preset|agentPreset|preset/iu.test(message)) {
+                return { kind: 'unavailable', detail: message };
+            }
+            return { kind: 'error', detail: `the reviewer could not start: ${message}`, started: false };
+        }
+        activation = started.value;
+        const remaining = Math.max(0, policy.timeoutMs - (Date.now() - reviewStartedAt));
+        const settled = await awaitReview(activation, remaining, controller.signal);
         if (settled.kind === 'timeout') {
             return {
                 kind: 'error',
-                detail: `the review did not finish within ${config.timeoutMs} ms`,
+                detail: `the review did not finish within ${policy.timeoutMs} ms`,
                 started: true,
             };
         }
         if (settled.kind === 'aborted') {
-            return { kind: 'error', detail: 'the review was cancelled', started: true };
+            return callerAborted
+                ? { kind: 'error', detail: 'the review was cancelled', started: true }
+                : {
+                    kind: 'error',
+                    detail: `the review did not finish within ${policy.timeoutMs} ms`,
+                    started: true,
+                };
         }
         if (settled.kind === 'threw') {
             return {
@@ -904,21 +1105,42 @@ async function runReview(ctx, agent, workspace, prompt, config, signal) {
                 started: true,
             };
         }
-        let verdict;
-        try {
-            verdict = parseVerdict(outputText(settled.value.output), workspace);
-        }
-        catch (error) {
-            return {
-                kind: 'error',
-                detail: `the reviewer verdict is invalid: ${errorMessage(error)}`,
-                started: true,
-            };
-        }
-        return { kind: 'reviewed', verdict, target };
+        return { kind: 'text', text: outputText(settled.value.output), target };
     }
     finally {
-        await activation.dispose().catch(() => undefined);
+        clearTimeout(deadline);
+        signal.removeEventListener('abort', onCallerAbort);
+        // Disposal is cleanup, not part of the bounded review: a stalled dispose
+        // must not keep the timeout outcome from being recorded.
+        if (activation !== undefined)
+            void activation.dispose().catch(() => undefined);
+    }
+}
+/** Start and settle the block reviewer and parse its strict verdict. */
+async function runReview(ctx, agent, workspace, prompt, config, signal) {
+    const outcome = await runReviewChild(ctx, agent, workspace, prompt, {
+        provider: config.provider,
+        model: config.model,
+        reasoningEffort: config.reasoningEffort,
+        reviewerPreset: config.reviewerPreset,
+        timeoutMs: config.timeoutMs,
+        label: REVIEW_LABEL,
+    }, signal);
+    if (outcome.kind !== 'text')
+        return outcome;
+    try {
+        return {
+            kind: 'reviewed',
+            verdict: parseVerdict(outcome.text, workspace),
+            target: outcome.target,
+        };
+    }
+    catch (error) {
+        return {
+            kind: 'error',
+            detail: `the reviewer verdict is invalid: ${errorMessage(error)}`,
+            started: true,
+        };
     }
 }
 /** Deny with the reviewer's next action and a visible code. */
@@ -969,14 +1191,12 @@ async function recordPolicy(agent, workspace, goal, digest, verdict, policy, det
 function notifyUnverified(agent, record, policy, detail) {
     deliverNotice(agent, `Block review allowed this goal block UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The goal will block without a confirmed user-only action.`, `goal-continuity: unverified block allowed (${policy})`);
 }
-/** Install the pre-execute gate and the reviewer child-scope allowlist. */
-function installBlockReview(ctx, config) {
-    if (!config.enabled)
-        return;
+/** Install the shared reviewer child-scope allowlist used by both reviews. */
+function installReviewerScope(ctx, reviewerPreset) {
     ctx.on('agent/created', ({ agent }) => {
         if (agent.session.header.origin !== 'subagent')
             return undefined;
-        if (agent.session.header.agentPreset !== config.reviewerPreset)
+        if (agent.session.header.agentPreset !== reviewerPreset)
             return undefined;
         try {
             const tools = agent.ctx.tools;
@@ -994,6 +1214,11 @@ function installBlockReview(ctx, config) {
         }
         return undefined;
     });
+}
+/** Install the block-review pre-execute gate. */
+function installBlockReview(ctx, config) {
+    if (!config.enabled)
+        return;
     ctx.on('tools/pre-execute', async (exec, next) => {
         try {
             return await decide(exec, next);
@@ -1116,6 +1341,583 @@ function installBlockReview(ctx, config) {
     }
 }
 /**
+ * Goal-round speed review: the second bounded model call in this plugin. It
+ * measures one completed goal round from the session events the supervisor
+ * already observes, starts one fresh-context read-only reviewer child, and
+ * writes one local record. It never starts, continues, or cancels a turn and
+ * never changes the goal.
+ */
+/** Activation label of the round reviewer child. */
+const SPEED_REVIEW_LABEL = 'goal-round-review';
+/** Tool names that count as worker starts in the metrics and the follow-through gate. */
+const WORKER_START_TOOLS = Object.freeze([
+    'subagent',
+    'subagent_fork',
+    'spawn_teammate',
+    'workflow',
+    'delegate',
+]);
+/** Bounds for round metrics, the round-review prompt, and model-facing strings. */
+const MAX_ROUND_ARGUMENT_CHARS = 400;
+const MAX_ROUND_RESULT_CHARS = 300;
+const MAX_ROUND_SLOW_CALLS = 5;
+const MAX_ROUND_SLOW_SUMMARY_CHARS = 160;
+const MAX_ROUND_REVIEW_PROMPT_CHARS = 12_000;
+const MAX_SPEEDUP_FIELD_CHARS = 300;
+const MAX_SPEED_NOTICE_CHARS = 1500;
+/** Whether a registered tool is visible to this agent; an absent registry is absent capability. */
+function toolVisible(ctx, agent, name) {
+    const tools = optionalService(ctx, 'tools');
+    if (tools === undefined)
+        return false;
+    try {
+        return tools.get(name, agent) !== undefined;
+    }
+    catch {
+        return false;
+    }
+}
+/** Start tracking one round at its turn start. */
+function beginRoundState(state, turn, startedAt) {
+    state.round = {
+        turn,
+        startedAt,
+        toolCalls: 0,
+        errors: 0,
+        toolMs: 0,
+        workers: new Map(),
+        pending: new Map(),
+        slowest: [],
+    };
+}
+/** Mark the tracked round as the observed goal round. */
+function markRoundGoal(state, goalId, round) {
+    const current = state.round;
+    if (current === undefined)
+        return;
+    current.goalId = goalId;
+    current.round = round;
+}
+/** Count one tool call in the current goal round. */
+function trackRoundCall(state, event, workspace) {
+    const round = state.round;
+    if (round === undefined || round.goalId === undefined || event.data.turn !== round.turn)
+        return;
+    round.toolCalls += 1;
+    round.pending.set(event.data.callId, {
+        name: bound(event.data.name, 80),
+        startedAt: event.time,
+        // Redact the whole text before truncation, so a cut credential cannot leak.
+        arguments: bound(redact(event.data.arguments, workspace), MAX_ROUND_ARGUMENT_CHARS),
+    });
+}
+/** Count one tool result, close its interval, and keep the slowest calls. */
+function trackRoundResult(state, event, workspace) {
+    const round = state.round;
+    if (round === undefined || round.goalId === undefined || event.data.turn !== round.turn)
+        return;
+    if (event.data.message.isError === true)
+        round.errors += 1;
+    const call = round.pending.get(event.data.message.toolCallId);
+    if (call === undefined)
+        return;
+    round.pending.delete(event.data.message.toolCallId);
+    // A worker counts only when its call succeeded; a cached delegate record
+    // reports a reuse and started no worker.
+    if (WORKER_START_TOOLS.includes(call.name) &&
+        event.data.message.isError !== true &&
+        (call.name !== 'delegate' || delegateStarted(toolResultText(event)))) {
+        round.workers.set(call.name, (round.workers.get(call.name) ?? 0) + 1);
+    }
+    const durationMs = Math.max(0, event.time - call.startedAt);
+    round.toolMs += durationMs;
+    const entry = {
+        name: call.name,
+        durationMs,
+        arguments: call.arguments,
+        // Redact the whole result before truncation, so a cut secret cannot leak.
+        result: bound(redact(toolResultText(event), workspace), MAX_ROUND_RESULT_CHARS),
+    };
+    if (round.slowest.length < MAX_ROUND_SLOW_CALLS)
+        round.slowest.push(entry);
+    else {
+        const last = round.slowest.at(-1);
+        if (last === undefined || durationMs <= last.durationMs)
+            return;
+        round.slowest[round.slowest.length - 1] = entry;
+    }
+    round.slowest.sort((left, right) => right.durationMs - left.durationMs);
+}
+/** Snapshot and clear the current round; an unobserved start or non-goal turn is no snapshot. */
+function snapshotRound(state, endedAt, workspace) {
+    const round = state.round;
+    state.round = undefined;
+    if (round === undefined || round.goalId === undefined || round.round === undefined) {
+        return undefined;
+    }
+    const wallMs = Math.max(0, endedAt - round.startedAt);
+    const slowCalls = round.slowest.map((call) => ({
+        name: call.name,
+        durationMs: call.durationMs,
+        arguments: bound(redact(call.arguments, workspace), MAX_ROUND_SLOW_SUMMARY_CHARS),
+        result: bound(redact(call.result, workspace), MAX_ROUND_SLOW_SUMMARY_CHARS),
+    }));
+    const workers = {};
+    for (const [name, count] of round.workers)
+        workers[name] = count;
+    return {
+        goalId: round.goalId,
+        round: round.round,
+        metrics: {
+            wallMs,
+            toolCalls: round.toolCalls,
+            errors: round.errors,
+            workers,
+            slowCalls,
+            nonToolMs: Math.max(0, wallMs - round.toolMs),
+        },
+    };
+}
+/** Whether the measured round crosses any configured review threshold. */
+function roundQualifies(metrics, config) {
+    return (config.everyRound ||
+        metrics.toolCalls >= config.minToolCalls ||
+        metrics.wallMs >= config.minMinutes * 60_000 ||
+        (metrics.slowCalls[0]?.durationMs ?? 0) >= config.slowCallMs);
+}
+/** Goal-scoped retro directory under the workspace's local state. */
+function retroGoalDirectory(workspace, goalId) {
+    return join(workspace, RETRO_DIR, goalDirectoryName(goalId));
+}
+/** The round-addressed record path for one reviewed round. */
+function retroRecordPath(workspace, goalId, round) {
+    return join(retroGoalDirectory(workspace, goalId), `${round}.json`);
+}
+/** The workspace-relative record path shown in model-facing text (never an absolute path). */
+function displayRetroRecordPath(workspace, goalId, round) {
+    return retroRecordPath(workspace, goalId, round)
+        .slice(workspace.length)
+        .replaceAll('\\', '/')
+        .replace(/^\//u, '');
+}
+/** Read one round record; an absent or malformed file is no record. */
+function readRetroRecord(path) {
+    const value = readRecordFile(path);
+    if (value === undefined ||
+        typeof value.goal !== 'string' ||
+        typeof value.round !== 'number' ||
+        typeof value.status !== 'string' ||
+        typeof value.verdict !== 'string') {
+        return undefined;
+    }
+    return value;
+}
+/** Attempt markers bound the per-goal review count before a record exists. */
+const RETRO_ATTEMPTS_DIR = 'attempts';
+/** Goal-scoped attempts directory; it holds no `.json` records. */
+function retroAttemptsDirectory(workspace, goalId) {
+    return join(retroGoalDirectory(workspace, goalId), RETRO_ATTEMPTS_DIR);
+}
+/** Review attempts this goal already charged, including failed record writes. */
+function retroAttemptCount(workspace, goalId) {
+    try {
+        return readdirSync(retroAttemptsDirectory(workspace, goalId)).length;
+    }
+    catch {
+        return 0;
+    }
+}
+/** Charge one attempt synchronously, before the child starts or any record exists. */
+function chargeRetroAttempt(workspace, goalId) {
+    try {
+        const directory = retroAttemptsDirectory(workspace, goalId);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, `${Date.now()}-${randomUUID()}`), '1', 'utf8');
+    }
+    catch {
+        // The in-memory attempt counter still bounds this process when the disk fails.
+    }
+}
+/** The latest stored record for one goal, optionally below a round. */
+async function latestRetroRecord(workspace, goalId, beforeRound) {
+    const directory = retroGoalDirectory(workspace, goalId);
+    let names;
+    try {
+        names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
+    }
+    catch {
+        return undefined;
+    }
+    let best;
+    for (const name of names) {
+        const path = join(directory, name);
+        const record = readRetroRecord(path);
+        if (record === undefined)
+            continue;
+        if (record.goal !== goalId)
+            continue;
+        if (beforeRound !== undefined && record.round >= beforeRound)
+            continue;
+        if (best === undefined || record.round > best.record.round) {
+            best = { path, display: displayRetroRecordPath(workspace, goalId, record.round), record };
+        }
+    }
+    return best;
+}
+/** Whether a stored record still enforces a speedup action. */
+function isPendingAction(record) {
+    const action = record.action;
+    return (record.status === 'pending' &&
+        record.verdict === 'speedup' &&
+        action !== undefined &&
+        typeof record.speedupId === 'string' &&
+        typeof action.bottleneck === 'string' &&
+        typeof action.action === 'string' &&
+        typeof action.handoff === 'string' &&
+        typeof action.expectedSaving === 'string' &&
+        typeof action.risk === 'string' &&
+        typeof action.speedupId === 'string' &&
+        action.speedupId === record.speedupId);
+}
+/** Every record that still needs follow-through evidence, oldest round first. */
+async function pendingActions(workspace, goalId) {
+    const directory = retroGoalDirectory(workspace, goalId);
+    let names;
+    try {
+        names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
+    }
+    catch {
+        return [];
+    }
+    const pending = [];
+    for (const name of names) {
+        const path = join(directory, name);
+        const record = readRetroRecord(path);
+        if (record === undefined || record.goal !== goalId || !isPendingAction(record))
+            continue;
+        pending.push({
+            path,
+            display: displayRetroRecordPath(workspace, goalId, record.round),
+            record,
+        });
+    }
+    return pending.sort((left, right) => left.record.round - right.record.round);
+}
+/** The newest record that still needs follow-through evidence. */
+async function latestPendingAction(workspace, goalId) {
+    return (await pendingActions(workspace, goalId)).at(-1);
+}
+/** Rewrite one record's status; a missing or changed record is left alone. */
+async function markRetroStatus(path, status) {
+    const record = readRetroRecord(path);
+    if (record === undefined || !isPendingAction(record))
+        return;
+    await writeRecord(path, { ...record, status });
+}
+/** Parse one strict round verdict; anything else is a review error. */
+function parseSpeedVerdict(text, workspace) {
+    const value = singleFencedJson(text);
+    if (!isRecord(value))
+        throw new Error('the fenced verdict must be a JSON object');
+    if (value.verdict === 'no-action') {
+        const allowed = new Set(['verdict']);
+        for (const key of Object.keys(value)) {
+            if (!allowed.has(key))
+                throw new Error(`the verdict has unknown field "${key}"`);
+        }
+        return { verdict: 'no-action' };
+    }
+    if (value.verdict !== 'speedup') {
+        throw new Error('the verdict must be "speedup" or "no-action"');
+    }
+    const allowed = new Set([
+        'verdict',
+        'bottleneck',
+        'action',
+        'handoff',
+        'expectedSaving',
+        'risk',
+        'speedupId',
+    ]);
+    for (const key of Object.keys(value)) {
+        if (!allowed.has(key))
+            throw new Error(`the verdict has unknown field "${key}"`);
+    }
+    const nonEmpty = (field) => {
+        const raw = value[field];
+        if (typeof raw !== 'string' || raw.trim() === '') {
+            throw new Error(`the verdict "${field}" must be a non-empty string`);
+        }
+        return bound(redact(raw.trim(), workspace), MAX_SPEEDUP_FIELD_CHARS);
+    };
+    const speedupId = value.speedupId;
+    if (typeof speedupId !== 'string' ||
+        !/^speedup-[a-z0-9][a-z0-9-]{0,39}$/u.test(speedupId.trim())) {
+        throw new Error('the verdict "speedupId" must look like "speedup-12-a1b2"');
+    }
+    return {
+        verdict: 'speedup',
+        action: {
+            bottleneck: nonEmpty('bottleneck'),
+            action: nonEmpty('action'),
+            handoff: nonEmpty('handoff'),
+            expectedSaving: nonEmpty('expectedSaving'),
+            risk: nonEmpty('risk'),
+            speedupId: speedupId.trim(),
+        },
+    };
+}
+/** The bundled round-review instructions; a missing asset is a review error. */
+let roundReviewerInstructions;
+function loadRoundReviewerInstructions() {
+    if (roundReviewerInstructions === undefined) {
+        roundReviewerInstructions = readFileSync(join(assetsDirectory, 'round-review.md'), 'utf8').trim();
+    }
+    return roundReviewerInstructions;
+}
+/** Render one slow call without letting a long summary dominate the prompt. */
+function renderSlowCall(call) {
+    return [
+        `  - ${call.name} ${call.durationMs} ms`,
+        `    arguments: ${call.arguments}`,
+        ...(call.result === '' ? [] : [`    result: ${call.result}`]),
+    ];
+}
+/** Render the bounded round metrics. */
+function renderRoundMetrics(metrics) {
+    const workers = Object.entries(metrics.workers);
+    return [
+        `- wall time: ${metrics.wallMs} ms`,
+        `- tool calls: ${metrics.toolCalls}`,
+        `- tool errors: ${metrics.errors}`,
+        `- worker starts: ${workers.length === 0 ? 'none' : workers.map(([name, count]) => `${name}=${count}`).join(', ')}`,
+        `- approximate non-tool time: ${metrics.nonToolMs} ms`,
+        '- slowest calls:',
+        ...(metrics.slowCalls.length === 0
+            ? ['  - (no completed tool calls)']
+            : metrics.slowCalls.flatMap(renderSlowCall)),
+    ];
+}
+/** Render the bounded round-review prompt: instructions and metrics first. */
+function composeRoundReviewPrompt(snapshot, objective, goal, previous, workspace) {
+    const header = [
+        loadRoundReviewerInstructions(),
+        '',
+        '## Round evidence',
+        '',
+        `- Objective: ${objective}`,
+        `- Round: ${snapshot.round} (rounds started: ${goal.roundsStarted} of ${goal.maxGoalRounds})`,
+        `- Workspace (read-only): ${bound(workspace, 260)}`,
+        '',
+        '### Round metrics',
+        '',
+        ...renderRoundMetrics(snapshot.metrics),
+    ].join('\n');
+    const tail = [
+        '',
+        '### Previous speedup record',
+        '',
+        previous === undefined
+            ? '(none for this goal)'
+            : previous.record.verdict === 'speedup' && previous.record.action !== undefined
+                ? `Round ${previous.record.round}: ${previous.record.action.speedupId} status ${previous.record.status}; bottleneck: ${previous.record.action.bottleneck}; action: ${previous.record.action.action}; expected saving: ${previous.record.action.expectedSaving}.`
+                : `Round ${previous.record.round}: ${previous.record.verdict} status ${previous.record.status}.`,
+        '',
+        'Return exactly one fenced JSON block in the schema the instructions require.',
+    ].join('\n');
+    return bound(`${header}${tail}`, MAX_ROUND_REVIEW_PROMPT_CHARS);
+}
+/** The policy prose every next-round brief carries. */
+const SPEED_POLICY = 'Speed policy: split independent streams; start workers for streams that can run in parallel; keep integration in the main agent; run known-slow checks in the background; start task reviews as a batch.';
+/** The stable 16-hex id `task_progress` accepts for one unchecked task line. */
+function taskIdOf(text) {
+    return createHash('sha256').update(text.replace(/\s+/gu, ' ').trim()).digest('hex').slice(0, 16);
+}
+/** A paste-ready, valid decline call for one eligible unchecked task. */
+function composeDeclineCall(taskId, speedupId) {
+    return `task_progress(task: "${taskId}", status: "in-progress", reason: "declined ${speedupId}: not applied this round")`;
+}
+/** The exact task_progress call, when the tool and an eligible task exist. */
+async function declineCallFor(ctx, agent, workspace, speedupId) {
+    if (!toolVisible(ctx, agent, 'task_progress'))
+        return undefined;
+    const taskId = await firstUncheckedTaskId(workspace);
+    return taskId === undefined ? undefined : composeDeclineCall(taskId, speedupId);
+}
+/** Active-change directory names the delegation tool considers (it skips others). */
+const ACTIVE_CHANGE_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
+/** Nearest ancestor's `openspec/changes`, matching the delegation tool's discovery. */
+function openSpecChangesFor(directory) {
+    let current = directory;
+    for (;;) {
+        const candidate = join(current, 'openspec', 'changes');
+        try {
+            readdirSync(candidate);
+            return candidate;
+        }
+        catch {
+            // Keep walking up to the filesystem root.
+        }
+        const parent = dirname(current);
+        if (parent === current)
+            return undefined;
+        current = parent;
+    }
+}
+/**
+ * The first numbered unchecked task whose stable id matches exactly one task in
+ * the active changes. `task_progress` rejects any duplicate match, so an id
+ * that appears twice (checked or unchecked, in one change or two) is unusable
+ * and the gate fails open.
+ */
+async function firstUncheckedTaskId(workspace) {
+    const changes = openSpecChangesFor(workspace);
+    if (changes === undefined)
+        return undefined;
+    let names;
+    try {
+        names = (await readdir(changes, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory() && entry.name !== 'archive' && ACTIVE_CHANGE_PATTERN.test(entry.name))
+            .map((entry) => entry.name)
+            .sort();
+    }
+    catch {
+        return undefined;
+    }
+    const matches = new Map();
+    const unchecked = [];
+    for (const name of names) {
+        let text;
+        try {
+            text = await readFile(join(changes, name, 'tasks.md'), 'utf8');
+        }
+        catch {
+            continue;
+        }
+        for (const task of numberedTasksIn(text)) {
+            matches.set(task.id, (matches.get(task.id) ?? 0) + 1);
+            if (!task.checked)
+                unchecked.push(task.id);
+        }
+    }
+    for (const id of unchecked) {
+        if (matches.get(id) === 1)
+            return id;
+    }
+    return undefined;
+}
+/**
+ * Every numbered checkbox task's stable id and state. Only the checkbox line is
+ * read, matching the delegation tool's parser: wrapped continuation lines are
+ * not part of the task text, so quoting and line length cannot break the call.
+ */
+function numberedTasksIn(text) {
+    const tasks = [];
+    for (const line of text.split(/\r?\n/u)) {
+        const match = /^\s*-\s*\[([ xX])\]\s+\d+(?:\.\d+)*\s+(\S.*?)\s*$/u.exec(line);
+        if (match?.[1] === undefined || match[2] === undefined)
+            continue;
+        tasks.push({ id: taskIdOf(match[2]), checked: match[1] !== ' ' });
+    }
+    return tasks;
+}
+/**
+ * One pending action's notice: the mandatory record path and follow-through
+ * choice are reserved first, so long descriptive fields can never truncate them.
+ */
+function composeActionFollowThrough(pending, decline, headline) {
+    if (!isPendingAction(pending.record))
+        return '';
+    const action = pending.record.action;
+    const choice = decline === undefined
+        ? `Start a worker whose arguments contain ${action.speedupId}.`
+        : `Start a worker whose arguments contain ${action.speedupId}, or decline with: ${decline}`;
+    const fixed = `${headline} Record: ${pending.display}. ${choice}`;
+    const descriptive = `bottleneck: ${action.bottleneck}. Action: ${action.action}. Handoff: ${action.handoff}. Expected saving: ${action.expectedSaving}.`;
+    const room = MAX_SPEED_NOTICE_CHARS - fixed.length - 1;
+    if (room <= 0)
+        return bound(fixed, MAX_SPEED_NOTICE_CHARS);
+    return `${bound(descriptive, room)} ${fixed}`;
+}
+/** The next-round brief text: policy plus any pending action and follow-through choice. */
+function composeRoundBrief(pending, decline) {
+    if (pending === undefined || !isPendingAction(pending.record))
+        return SPEED_POLICY;
+    const action = pending.record.action;
+    return composeActionFollowThrough(pending, decline, `${SPEED_POLICY} Pending speedup ${action.speedupId} (round ${pending.record.round}).`);
+}
+/** The late-action notice injected when the review finishes during a goal round. */
+function composeActionNotice(pending, decline) {
+    if (!isPendingAction(pending.record))
+        return '';
+    const action = pending.record.action;
+    return composeActionFollowThrough(pending, decline, `Speed review found a speedup for round ${pending.record.round}: ${action.speedupId}.`);
+}
+/** Scan the current turn's successful calls for the speedup id. */
+function followThroughEvidence(agent, turn, speedupId) {
+    const events = sessionEvents(agent);
+    let start = 0;
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index];
+        if (event?.type === 'turn/start' && event.data.turn === turn) {
+            start = index;
+            break;
+        }
+    }
+    const calls = new Map();
+    const results = new Map();
+    for (let index = start; index < events.length; index += 1) {
+        const event = events[index];
+        if (event?.type === 'tool/call') {
+            calls.set(event.data.callId, { name: event.data.name, arguments: event.data.arguments });
+        }
+        else if (event?.type === 'tool/result' && event.data.message.isError !== true) {
+            results.set(event.data.message.toolCallId, toolResultText(event));
+        }
+    }
+    for (const [callId, call] of calls) {
+        const resultText = results.get(callId);
+        if (resultText === undefined)
+            continue;
+        if (WORKER_START_TOOLS.includes(call.name) && call.arguments.includes(speedupId)) {
+            // A delegate can answer from a cached record without starting a target.
+            // Only the engine's first-line envelope says so; worker answers, which
+            // may contain any words, still count as a started run.
+            if (call.name === 'delegate' && !delegateStarted(resultText))
+                continue;
+            return 'started';
+        }
+        if (call.name !== 'task_progress' || !call.arguments.includes(speedupId))
+            continue;
+        try {
+            const args = JSON.parse(call.arguments);
+            if (isRecord(args) && typeof args.reason === 'string' && args.reason.includes(speedupId)) {
+                return 'declined';
+            }
+        }
+        catch {
+            // A malformed task_progress payload is no evidence.
+        }
+    }
+    return undefined;
+}
+/** Whether a delegate result's first line reports a started run rather than reuse. */
+function delegateStarted(resultText) {
+    // Answer-contract results always ran a target and END with this trailer; a
+    // cached record may quote it inside its evidence, which proves nothing.
+    if (resultText
+        .trimEnd()
+        .endsWith('(no gate record: this answer does not satisfy a strict review rule)')) {
+        return true;
+    }
+    const first = resultText.split(/\r?\n/u)[0] ?? '';
+    if (/^rule "[^"]+" review (?:already pending|queued)$/u.test(first))
+        return false;
+    // Only the engine's own cached-record envelope is a reuse; worker answers may
+    // contain the words "reused record" without being one.
+    return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first);
+}
+/**
  * Keep the reviewer preset out of the human mode roster. The Web client builds
  * its picker from `agentPresets/list`, while the gate starts the reviewer
  * through the registry's `retain`/`resolve` path, so filtering this one Remote
@@ -1143,14 +1945,17 @@ function installReviewerPresetHiding(ctx) {
     });
 }
 /**
- * Install the supervisor and the block-review gate. The configuration is
- * validated at load, so a bad profile fails loudly; supervision itself fails
- * open and the review failures follow their configured policies.
+ * Install the continuity supervisor, the block-review gate, and the round speed
+ * review. The configuration is validated at load, so a bad profile fails
+ * loudly; supervision itself fails open and both reviews fail open.
  */
 export function apply(ctx, config) {
     const resolved = resolveConfig(config);
     if (!resolved.enabled)
         return;
+    if (resolved.blockReview.enabled || resolved.speedReview.enabled) {
+        installReviewerScope(ctx, resolved.blockReview.reviewerPreset);
+    }
     installBlockReview(ctx, resolved.blockReview);
     installReviewerPresetHiding(ctx);
     const mountedAt = Date.now();
@@ -1169,6 +1974,12 @@ export function apply(ctx, config) {
                 pending: false,
                 cause: null,
                 refusal: null,
+                round: undefined,
+                briefedTurn: null,
+                attemptedRounds: new Set(),
+                reviewAttempts: new Map(),
+                announcedActions: new Set(),
+                steered: new Set(),
             };
             states.set(agent, state);
         }
@@ -1181,6 +1992,240 @@ export function apply(ctx, config) {
         }
         catch {
             return undefined;
+        }
+    }
+    /** Start one bounded round review when a qualifying round has no record yet. */
+    function startRoundReview(agent, state, snapshot) {
+        const key = `${snapshot.goalId}:${snapshot.round}`;
+        // Retained after completion: a failed record write must not allow this
+        // round to start a second child.
+        if (state.attemptedRounds.has(key))
+            return;
+        const workspace = workspaceFor(ctx, agent);
+        if (readRetroRecord(retroRecordPath(workspace, snapshot.goalId, snapshot.round)) !== undefined) {
+            return;
+        }
+        const attempted = state.reviewAttempts.get(snapshot.goalId) ?? retroAttemptCount(workspace, snapshot.goalId);
+        if (attempted >= resolved.speedReview.maxPerGoal)
+            return;
+        // Charge the attempt synchronously: a failed record write cannot free a slot.
+        state.reviewAttempts.set(snapshot.goalId, attempted + 1);
+        state.attemptedRounds.add(key);
+        chargeRetroAttempt(workspace, snapshot.goalId);
+        void reviewRound(agent, state, snapshot, workspace).catch(() => undefined);
+    }
+    /** Run one round review in the background and write its local record. */
+    async function reviewRound(agent, state, snapshot, workspace) {
+        const goal = readGoal(agent);
+        if (goal === undefined || goal.id !== snapshot.goalId)
+            return;
+        const target = {
+            provider: resolved.speedReview.provider,
+            model: resolved.speedReview.model,
+            reasoningEffort: resolved.speedReview.reasoningEffort,
+            preset: resolved.blockReview.reviewerPreset,
+        };
+        const startedAt = Date.now();
+        let outcome;
+        try {
+            const previous = await latestRetroRecord(workspace, snapshot.goalId, snapshot.round);
+            const prompt = composeRoundReviewPrompt(snapshot, bound(redact(goal.objective, workspace), 500), goal, previous, workspace);
+            outcome = await runReviewChild(ctx, agent, workspace, prompt, {
+                provider: resolved.speedReview.provider,
+                model: resolved.speedReview.model,
+                reasoningEffort: resolved.speedReview.reasoningEffort,
+                reviewerPreset: resolved.blockReview.reviewerPreset,
+                timeoutMs: resolved.speedReview.timeoutMs,
+                label: SPEED_REVIEW_LABEL,
+            }, new AbortController().signal);
+        }
+        catch (error) {
+            outcome = {
+                kind: 'error',
+                detail: `the round review could not run: ${errorMessage(error)}`,
+                started: false,
+            };
+        }
+        const reviewMs = Math.max(0, Date.now() - startedAt);
+        let verdict = 'error';
+        let action;
+        let status = 'error';
+        let detail;
+        if (outcome.kind === 'text') {
+            try {
+                const parsed = parseSpeedVerdict(outcome.text, workspace);
+                if (parsed.verdict === 'speedup') {
+                    verdict = 'speedup';
+                    action = parsed.action;
+                    status = 'pending';
+                }
+                else {
+                    verdict = 'no-action';
+                    status = 'no-action';
+                }
+            }
+            catch (error) {
+                detail = `the reviewer verdict is invalid: ${errorMessage(error)}`;
+            }
+        }
+        else {
+            detail = outcome.detail;
+        }
+        if (detail !== undefined)
+            detail = bound(redact(detail, workspace), 1000);
+        const record = {
+            version: 1,
+            goal: snapshot.goalId,
+            round: snapshot.round,
+            objective: bound(redact(goal.objective, workspace), 500),
+            metrics: snapshot.metrics,
+            verdict,
+            ...(action === undefined ? {} : { action, speedupId: action.speedupId }),
+            status,
+            target,
+            reviewMs,
+            ...(detail === undefined ? {} : { detail }),
+            time: new Date().toISOString(),
+            session: agent.session.id,
+        };
+        const path = retroRecordPath(workspace, snapshot.goalId, snapshot.round);
+        const written = await writeRecord(path, record);
+        if (!written)
+            return;
+        if (action === undefined || verdict !== 'speedup')
+            return;
+        if (state.announcedActions.has(action.speedupId))
+            return;
+        // Deliver the just-written action while the next goal round is running; a
+        // newer pending record must not re-target this notice.
+        if (!resolved.speedReview.brief || !state.goalRound)
+            return;
+        const destinationTurn = state.turn;
+        const current = readGoal(agent);
+        if (current === undefined || current.id !== snapshot.goalId || current.phase !== 'active') {
+            return;
+        }
+        const decline = await declineCallFor(ctx, agent, workspace, action.speedupId);
+        // The late lookup awaits; deliver only if the same goal round is still open
+        // and a concurrent admission did not already announce this action.
+        if (!state.goalRound || state.turn !== destinationTurn)
+            return;
+        if (state.announcedActions.has(action.speedupId))
+            return;
+        const live = readGoal(agent);
+        if (live === undefined || live.id !== snapshot.goalId || live.phase !== 'active')
+            return;
+        const text = composeActionNotice({
+            path,
+            display: displayRetroRecordPath(workspace, snapshot.goalId, snapshot.round),
+            record,
+        }, decline);
+        if (text === '')
+            return;
+        state.announcedActions.add(action.speedupId);
+        deliverNotice(agent, text, `goal-continuity: speedup action ${action.speedupId}`, MAX_SPEED_NOTICE_CHARS);
+    }
+    /**
+     * The brief message for the first step of a goal round, or no message. The
+     * goal-round message is claimed for this step but logged only after the
+     * pre-step, so the step's own messages are the round signal here.
+     */
+    async function roundBriefMessage(agent, turn, messages) {
+        if (!isRootAgent(agent) || !resolved.speedReview.enabled || !resolved.speedReview.brief) {
+            return undefined;
+        }
+        const state = states.get(agent);
+        if (state === undefined || state.turn !== turn)
+            return undefined;
+        if (state.briefedTurn === turn)
+            return undefined;
+        const goalMessage = messages.find((message) => message.source.kind === 'goal');
+        if (goalMessage === undefined)
+            return undefined;
+        state.briefedTurn = turn;
+        const goal = readGoal(agent);
+        if (goal === undefined || goal.phase !== 'active')
+            return undefined;
+        const workspace = workspaceFor(ctx, agent);
+        const pending = await latestPendingAction(workspace, goal.id);
+        const decline = pending === undefined
+            ? undefined
+            : await declineCallFor(ctx, agent, workspace, pending.record.action.speedupId);
+        if (pending !== undefined)
+            state.announcedActions.add(pending.record.speedupId);
+        return createNotice(composeRoundBrief(pending, decline), 'goal-continuity: speed review brief', MAX_SPEED_NOTICE_CHARS);
+    }
+    /**
+     * Deliver a pending action that completed while the goal step was being
+     * admitted, after the brief for that step had already been composed.
+     */
+    async function announcePendingAction(agent, state) {
+        if (!resolved.speedReview.enabled || !resolved.speedReview.brief)
+            return;
+        if (!isRootAgent(agent) || !state.goalRound)
+            return;
+        const turn = state.turn;
+        const goal = readGoal(agent);
+        if (goal === undefined || goal.phase !== 'active')
+            return;
+        const workspace = workspaceFor(ctx, agent);
+        for (const pending of await pendingActions(workspace, goal.id)) {
+            if (state.announcedActions.has(pending.record.speedupId))
+                continue;
+            if (!state.goalRound || state.turn !== turn)
+                return;
+            const decline = await declineCallFor(ctx, agent, workspace, pending.record.speedupId);
+            if (!state.goalRound || state.turn !== turn)
+                return;
+            if (state.announcedActions.has(pending.record.speedupId))
+                continue;
+            const live = readGoal(agent);
+            if (live === undefined || live.id !== goal.id || live.phase !== 'active')
+                return;
+            const text = composeActionNotice(pending, decline);
+            if (text === '')
+                continue;
+            state.announcedActions.add(pending.record.speedupId);
+            deliverNotice(agent, text, `goal-continuity: speedup action ${pending.record.speedupId}`, MAX_SPEED_NOTICE_CHARS);
+        }
+    }
+    /** Enforce one pending speedup action at the close of a goal round. */
+    async function enforceFollowThrough(agent, turn) {
+        if (!isRootAgent(agent))
+            return;
+        const state = states.get(agent);
+        if (state === undefined || !state.goalRound || state.turn !== turn)
+            return;
+        const goal = readGoal(agent);
+        if (goal === undefined || goal.phase !== 'active')
+            return;
+        const workspace = workspaceFor(ctx, agent);
+        const pending = await latestPendingAction(workspace, goal.id);
+        if (pending === undefined)
+            return;
+        const evidence = followThroughEvidence(agent, turn, pending.record.action.speedupId);
+        if (evidence === 'started') {
+            await markRetroStatus(pending.path, 'started');
+            return;
+        }
+        if (evidence === 'declined') {
+            await markRetroStatus(pending.path, 'declined');
+            return;
+        }
+        if (!WORKER_START_TOOLS.some((name) => toolVisible(ctx, agent, name)))
+            return;
+        const decline = await declineCallFor(ctx, agent, workspace, pending.record.speedupId);
+        if (decline === undefined)
+            return;
+        const key = `${pending.record.speedupId}:${turn}`;
+        if (state.steered.has(key))
+            return;
+        state.steered.add(key);
+        try {
+            agent.steer(createNotice(`Speedup ${pending.record.speedupId} is still pending. Start a worker whose call arguments contain ${pending.record.speedupId}, or decline with: ${decline} Record: ${pending.display}.`, `goal-continuity: speedup ${pending.record.speedupId} needs follow-through`, MAX_SPEED_NOTICE_CHARS));
+        }
+        catch {
+            // A disposed agent cannot be steered; the turn is already over.
         }
     }
     /** Queue one reconciliation after the current dispatch settles. */
@@ -1500,9 +2545,23 @@ export function apply(ctx, config) {
         state.observed = true;
         schedule(agent, state, 'restart');
     }
-    function handleTurnEnd(agent, state, reason) {
+    function handleTurnEnd(agent, state, reason, endedAt) {
         const goalRound = state.goalRound;
         state.goalRound = false;
+        if (state.round?.goalId !== undefined && resolved.speedReview.enabled) {
+            const snapshot = snapshotRound(state, endedAt, workspaceFor(ctx, agent));
+            if (snapshot !== undefined && roundQualifies(snapshot.metrics, resolved.speedReview)) {
+                try {
+                    startRoundReview(agent, state, snapshot);
+                }
+                catch {
+                    // A review start never fails the turn.
+                }
+            }
+        }
+        else {
+            state.round = undefined;
+        }
         const hook = hookCause(reason);
         if (hook !== undefined) {
             const cause = hook === 'reset' ? 'reset' : hook === 'final' ? 'final-hook' : 'unknown-hook';
@@ -1585,21 +2644,67 @@ export function apply(ctx, config) {
             case 'turn/start':
                 state.turn = event.data.turn;
                 state.goalRound = false;
+                state.briefedTurn = null;
+                state.steered.clear();
+                if (resolved.speedReview.enabled)
+                    beginRoundState(state, event.data.turn, event.time);
+                else
+                    state.round = undefined;
                 return;
             case 'user/message':
-                if (event.data.source.kind === 'goal')
+                if (event.data.source.kind === 'goal') {
                     state.goalRound = true;
+                    if (resolved.speedReview.enabled) {
+                        markRoundGoal(state, event.data.source.goalId, event.data.source.round);
+                        // The action may have finished while this step was being admitted,
+                        // after that step's brief was already composed.
+                        void announcePendingAction(agent, state).catch(() => undefined);
+                    }
+                }
                 else if (event.data.source.kind === 'user') {
                     state.suppression = null;
                     state.cause = null;
                 }
                 return;
+            case 'tool/call':
+                if (resolved.speedReview.enabled)
+                    trackRoundCall(state, event, workspaceFor(ctx, agent));
+                return;
+            case 'tool/result':
+                if (resolved.speedReview.enabled)
+                    trackRoundResult(state, event, workspaceFor(ctx, agent));
+                return;
             case 'turn/end':
-                handleTurnEnd(agent, state, event.data.reason);
+                handleTurnEnd(agent, state, event.data.reason, event.time);
                 return;
             default:
                 return;
         }
+    }
+    if (resolved.speedReview.enabled) {
+        // The brief rides the first step's admitted messages: non-waking, and it
+        // cannot miss the request the way a queued inject can.
+        ctx.on('agent/pre-step', async (payload, next) => {
+            let message;
+            try {
+                message = await roundBriefMessage(payload.agent, payload.turn, payload.messages);
+            }
+            catch {
+                message = undefined;
+            }
+            const decision = await next();
+            if (message === undefined || decision.kind !== 'enter')
+                return decision;
+            return { ...decision, messages: [...decision.messages, message] };
+        });
+        ctx.on('agent/turn-stopping', async (payload) => {
+            try {
+                await enforceFollowThrough(payload.agent, payload.turn);
+            }
+            catch {
+                // A gate failure never fails a turn.
+            }
+        });
     }
     for (const agent of ctx.agents.list())
         observeAgent(agent);

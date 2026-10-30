@@ -1,6 +1,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
-import { apply, DEFAULT_BLOCK_REVIEW_CONFIG, DEFAULT_CONFIG, resolveConfig } from '../lib/index.js'
+import {
+  apply,
+  DEFAULT_BLOCK_REVIEW_CONFIG,
+  DEFAULT_CONFIG,
+  DEFAULT_SPEED_REVIEW_CONFIG,
+  resolveConfig,
+} from '../lib/index.js'
 
 /**
  * Configuration is a trust boundary: the row is loaded from a profile patch the
@@ -22,6 +28,20 @@ const BLOCK_REVIEW_DEFAULTS = {
   onExhausted: 'deny',
 }
 
+const SPEED_REVIEW_DEFAULTS = {
+  enabled: true,
+  provider: 'spawn',
+  model: 'deepseek-flash',
+  reasoningEffort: 'max',
+  minToolCalls: 12,
+  minMinutes: 5,
+  slowCallMs: 120000,
+  everyRound: false,
+  timeoutMs: 120000,
+  maxPerGoal: 20,
+  brief: true,
+}
+
 describe('goal continuity configuration', () => {
   it('applies the documented defaults', () => {
     expect(DEFAULT_CONFIG).toEqual({
@@ -33,9 +53,12 @@ describe('goal continuity configuration', () => {
       maxRoundExtensions: 2,
       hardMaxGoalRounds: 5000,
       blockReview: BLOCK_REVIEW_DEFAULTS,
+      speedReview: SPEED_REVIEW_DEFAULTS,
     })
     expect(DEFAULT_BLOCK_REVIEW_CONFIG).toEqual(BLOCK_REVIEW_DEFAULTS)
+    expect(DEFAULT_SPEED_REVIEW_CONFIG).toEqual(SPEED_REVIEW_DEFAULTS)
     expect(Object.isFrozen(DEFAULT_BLOCK_REVIEW_CONFIG)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_SPEED_REVIEW_CONFIG)).toBe(true)
     expect(resolveConfig(undefined)).toEqual(DEFAULT_CONFIG)
     expect(resolveConfig({})).toEqual(DEFAULT_CONFIG)
   })
@@ -63,6 +86,19 @@ describe('goal continuity configuration', () => {
           onUnavailable: 'deny',
           onExhausted: 'allow',
         },
+        speedReview: {
+          enabled: false,
+          provider: 'fork',
+          model: 'other-model',
+          reasoningEffort: 'high',
+          minToolCalls: 0,
+          minMinutes: 0,
+          slowCallMs: 0,
+          everyRound: true,
+          timeoutMs: 50,
+          maxPerGoal: 0,
+          brief: false,
+        },
       }),
     ).toEqual({
       enabled: false,
@@ -85,16 +121,31 @@ describe('goal continuity configuration', () => {
         onUnavailable: 'deny',
         onExhausted: 'allow',
       },
+      speedReview: {
+        enabled: false,
+        provider: 'fork',
+        model: 'other-model',
+        reasoningEffort: 'high',
+        minToolCalls: 0,
+        minMinutes: 0,
+        slowCallMs: 0,
+        everyRound: true,
+        timeoutMs: 50,
+        maxPerGoal: 0,
+        brief: false,
+      },
     })
   })
 
   it('returns a frozen complete value', () => {
-    const resolved = resolveConfig({ maxSessionResumes: 3 })
+    const resolved = resolveConfig({ maxSessionResumes: 3, speedReview: { minToolCalls: 7 } })
     expect(Object.isFrozen(resolved)).toBe(true)
     expect(Object.isFrozen(resolved.blockReview)).toBe(true)
+    expect(Object.isFrozen(resolved.speedReview)).toBe(true)
     expect(resolved.maxSessionResumes).toBe(3)
     expect(resolved.enabled).toBe(true)
     expect(resolved.blockReview.reviewerPreset).toBe('goal-reviewer')
+    expect(resolved.speedReview.minToolCalls).toBe(7)
   })
 
   it('rejects a non-object config', () => {
@@ -188,6 +239,84 @@ describe('goal continuity configuration', () => {
     }
   })
 
+  it('rejects an unknown or malformed speed review section', () => {
+    for (const value of [null, [], 'review', 4]) {
+      expect(() => resolveConfig({ speedReview: value })).toThrow(/speedReview/u)
+    }
+    expect(() => resolveConfig({ speedReview: { unknown: true } })).toThrow(
+      /unknown config field "speedReview.unknown"/u,
+    )
+    expect(() => resolveConfig({ speedReview: { minToolCall: 3 } })).toThrow(
+      /unknown config field/u,
+    )
+  })
+
+  it('rejects every invalid speed review boolean', () => {
+    for (const field of ['enabled', 'everyRound', 'brief']) {
+      for (const value of ['yes', 1, 0, null]) {
+        expect(() => resolveConfig({ speedReview: { [field]: value } })).toThrow(
+          new RegExp(`speedReview\\.${field}`, 'u'),
+        )
+      }
+    }
+  })
+
+  it('rejects every invalid speed review string', () => {
+    for (const field of ['provider', 'model', 'reasoningEffort']) {
+      for (const value of ['', '   ', 5, null, true]) {
+        expect(() => resolveConfig({ speedReview: { [field]: value } })).toThrow(
+          new RegExp(`speedReview\\.${field}`, 'u'),
+        )
+      }
+    }
+  })
+
+  it('accepts the minMinutes boundaries and rejects out-of-range values', () => {
+    expect(resolveConfig({ speedReview: { minMinutes: 0 } }).speedReview.minMinutes).toBe(0)
+    expect(resolveConfig({ speedReview: { minMinutes: 1440 } }).speedReview.minMinutes).toBe(1440)
+    expect(resolveConfig({ speedReview: { minMinutes: 0.5 } }).speedReview.minMinutes).toBe(0.5)
+    for (const value of [-1, 1441, 1.5e9, Number.NaN, Number.POSITIVE_INFINITY, '5', null]) {
+      expect(() => resolveConfig({ speedReview: { minMinutes: value } })).toThrow(
+        /speedReview\.minMinutes/u,
+      )
+    }
+  })
+
+  it('accepts every speed review integer boundary value', () => {
+    expect(resolveConfig({ speedReview: { minToolCalls: 0 } }).speedReview.minToolCalls).toBe(0)
+    expect(resolveConfig({ speedReview: { minToolCalls: 1000 } }).speedReview.minToolCalls).toBe(
+      1000,
+    )
+    expect(resolveConfig({ speedReview: { slowCallMs: 0 } }).speedReview.slowCallMs).toBe(0)
+    expect(resolveConfig({ speedReview: { slowCallMs: 3_600_000 } }).speedReview.slowCallMs).toBe(
+      3_600_000,
+    )
+    expect(resolveConfig({ speedReview: { timeoutMs: 50 } }).speedReview.timeoutMs).toBe(50)
+    expect(resolveConfig({ speedReview: { timeoutMs: 3_600_000 } }).speedReview.timeoutMs).toBe(
+      3_600_000,
+    )
+    expect(resolveConfig({ speedReview: { maxPerGoal: 0 } }).speedReview.maxPerGoal).toBe(0)
+    expect(resolveConfig({ speedReview: { maxPerGoal: 100 } }).speedReview.maxPerGoal).toBe(100)
+  })
+
+  it('rejects every invalid speed review integer', () => {
+    const invalid: Record<string, unknown[]> = {
+      minToolCalls: [-1, 1001, 1.5, '12', Number.NaN],
+      slowCallMs: [-1, 3_600_001, 1.5, '120000', Number.POSITIVE_INFINITY],
+      timeoutMs: [49, 3_600_001, 1.5, '120000', Number.NaN],
+      maxPerGoal: [-1, 101, 1.5, '20'],
+    }
+    for (const [field, values] of Object.entries(invalid)) {
+      for (const value of values) {
+        expect(() => resolveConfig({ speedReview: { [field]: value } })).toThrow(
+          new RegExp(`speedReview\\.${field}`, 'u'),
+        )
+      }
+    }
+    expect(resolveConfig({ speedReview: { minToolCalls: 0 } }).speedReview.minToolCalls).toBe(0)
+    expect(resolveConfig({ speedReview: { maxPerGoal: 0 } }).speedReview.maxPerGoal).toBe(0)
+  })
+
   it('fails the plugin load on an invalid row config', () => {
     const ctx = {} as Context
     expect(() => apply(ctx, { resumeAfterUserStop: 'always' } as never)).toThrow(
@@ -195,6 +324,12 @@ describe('goal continuity configuration', () => {
     )
     expect(() => apply(ctx, { blockReview: { timeoutMs: 0 } } as never)).toThrow(
       /blockReview\.timeoutMs/u,
+    )
+    expect(() => apply(ctx, { speedReview: { minToolCalls: -1 } } as never)).toThrow(
+      /speedReview\.minToolCalls/u,
+    )
+    expect(() => apply(ctx, { speedReview: { brief: 'yes' } } as never)).toThrow(
+      /speedReview\.brief/u,
     )
   })
 })

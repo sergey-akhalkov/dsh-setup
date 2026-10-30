@@ -20,6 +20,7 @@
   },
   "files": [
     "assets/blocker-review.md",
+    "assets/round-review.md",
     "icon.svg",
     "locale/*.json",
     "lib/index.js",

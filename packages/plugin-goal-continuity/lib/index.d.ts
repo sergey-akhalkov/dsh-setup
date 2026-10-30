@@ -36,6 +36,31 @@ export interface BlockReviewConfig {
     /** Policy once `maxReviewsPerGoal` is reached (default `deny`). */
     onExhausted?: 'deny' | 'allow';
 }
+/** Independent goal-round speed-review policy nested under `speedReview`. */
+export interface SpeedReviewConfig {
+    /** Review completed goal rounds for cost (default true); the supervisor keeps running when false. */
+    enabled?: boolean;
+    /** Registered subagent provider that starts the reviewer (default `spawn`). */
+    provider?: string;
+    /** Reviewer model; omitted provider options fall back to the provider defaults. */
+    model?: string;
+    /** Reviewer reasoning effort; same fallback as `model`. */
+    reasoningEffort?: string;
+    /** Review a round with at least this many tool calls (default 12). */
+    minToolCalls?: number;
+    /** Review a round that lasted at least this many minutes (default 5). */
+    minMinutes?: number;
+    /** Review a round with one tool call at least this long in milliseconds (default 120000). */
+    slowCallMs?: number;
+    /** Review every completed goal round regardless of cost (default false). */
+    everyRound?: boolean;
+    /** One review's wall-clock bound in milliseconds (default 120000). */
+    timeoutMs?: number;
+    /** Reviews a single goal may start (default 20); a reused round record is free. */
+    maxPerGoal?: number;
+    /** Inject the next-round speed brief (default true). */
+    brief?: boolean;
+}
 /** Row configuration. Every field is optional; omission selects the documented default. */
 export interface Config {
     /** Supervise goals at all (default true). */
@@ -54,6 +79,8 @@ export interface Config {
     hardMaxGoalRounds?: number;
     /** Independent review of a proposed goal block (enabled by default). */
     blockReview?: BlockReviewConfig;
+    /** Independent cost review of a completed goal round (enabled by default). */
+    speedReview?: SpeedReviewConfig;
 }
 /** Fully resolved block-review policy; the plugin never runs on partial values. */
 export interface ResolvedBlockReviewConfig {
@@ -69,6 +96,20 @@ export interface ResolvedBlockReviewConfig {
     readonly onUnavailable: 'deny' | 'allow';
     readonly onExhausted: 'deny' | 'allow';
 }
+/** Fully resolved goal-round speed-review policy; the plugin never runs on partial values. */
+export interface ResolvedSpeedReviewConfig {
+    readonly enabled: boolean;
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoningEffort: string;
+    readonly minToolCalls: number;
+    readonly minMinutes: number;
+    readonly slowCallMs: number;
+    readonly everyRound: boolean;
+    readonly timeoutMs: number;
+    readonly maxPerGoal: number;
+    readonly brief: boolean;
+}
 /** Fully resolved configuration; the plugin never runs on partial values. */
 export interface ResolvedConfig {
     readonly enabled: boolean;
@@ -79,9 +120,12 @@ export interface ResolvedConfig {
     readonly maxRoundExtensions: number;
     readonly hardMaxGoalRounds: number;
     readonly blockReview: ResolvedBlockReviewConfig;
+    readonly speedReview: ResolvedSpeedReviewConfig;
 }
 /** Documented block-review defaults; the composition fragment repeats them. */
 export declare const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig;
+/** Documented speed-review defaults; the composition fragment repeats them. */
+export declare const DEFAULT_SPEED_REVIEW_CONFIG: ResolvedSpeedReviewConfig;
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
 export declare const DEFAULT_CONFIG: ResolvedConfig;
 /**
@@ -92,8 +136,8 @@ export declare const DEFAULT_CONFIG: ResolvedConfig;
  */
 export declare function resolveConfig(raw: unknown): ResolvedConfig;
 /**
- * Install the supervisor and the block-review gate. The configuration is
- * validated at load, so a bad profile fails loudly; supervision itself fails
- * open and the review failures follow their configured policies.
+ * Install the continuity supervisor, the block-review gate, and the round speed
+ * review. The configuration is validated at load, so a bad profile fails
+ * loudly; supervision itself fails open and both reviews fail open.
  */
 export declare function apply(ctx: Context, config?: Config): void;

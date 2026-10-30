@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-goal-round-retro",
+  "scope": "task",
+  "taskId": "e5b789ac69039214",
+  "digest": "8c70e20324d803325e544b3985f5450df7b85bbd8ac560ab402ec0c7ab8083b8",
+  "worktreeDigest": "8b3b8af92dc7c8fcba6fa2f83befe83a87c382b1ea7d8398cea60904a2858af4",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-10-30T15:02:42.463Z"
+}
