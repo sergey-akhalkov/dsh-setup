@@ -4,13 +4,22 @@
 ![DeepSeek Harness 0.2.1-rc.5](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A portable, installable setup for [DeepSeek Harness](https://www.deepseek.com/en/harness/) (DSH):
-sixteen plugin bundles for agent rules, skills, code navigation, stream recovery, desktop automation,
-and cross-model delegation, aggregated into one setup bundle with owner defaults, plus a static
-plugin-market index and a one-command installer that reproduces the setup on another machine.
+A portable setup for [DeepSeek Harness](https://www.deepseek.com/en/harness/) (DSH). Sixteen plugin
+bundles add rules, skills, MCP access, second-model review, recovery guards, and memory to an agent
+session; `@dsh-setup/setup` mounts all of them with working defaults, and one PowerShell command
+reproduces the setup on another machine.
 
-Every plugin is also installable on its own; use either the full setup or individual plugins for a
-given plugin, never both.
+What changes in a session:
+
+- The smallest complete change, with scope confirmed before it grows.
+- A fix is proven by its original failure instead of asserted.
+- Risky work comes back from a second model as a diff and a test report.
+- A runaway loop or a stranded goal ends with a result or a named blocker.
+- Context goes to the task: MCP tool schemas load on first use, bulky shell output is routed.
+- The repository is remembered between sessions, locally.
+
+Every plugin is also installable on its own; use either the full setup or the individual plugins for
+a given plugin, never both, because both mount the same row.
 
 ## Install or update
 
