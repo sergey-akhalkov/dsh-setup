@@ -663,28 +663,23 @@ afterCopy) {
     await sweepReviewSnapshots(cwd, runGit);
     const services = { runGit };
     const root = await repositoryRoot(cwd, services, signal);
-    const relChange = relative(root, change.dir).split(sep).join('/');
+    // Compare canonical paths: a Windows short (8.3) name or a linked checkout can
+    // make the path Git reports for the root differ from the session's form. The
+    // same check rejects a linked change directory that resolves outside the repo.
+    let relChange;
+    try {
+        relChange = relative(await realpath(root), await realpath(change.dir))
+            .split(sep)
+            .join('/');
+    }
+    catch {
+        return undefined;
+    }
     if (relChange === '' ||
         relChange === '.' ||
         relChange === '..' ||
         relChange.startsWith('../') ||
         isAbsolute(relChange)) {
-        return undefined;
-    }
-    // A lexical path is not enough: a symlinked or junctioned change directory can
-    // resolve outside the repository, and copying the link would keep the snapshot
-    // pointing at live files.
-    try {
-        const canonicalRel = relative(await realpath(root), await realpath(change.dir));
-        if (canonicalRel === '' ||
-            canonicalRel === '.' ||
-            canonicalRel === '..' ||
-            canonicalRel.startsWith(`..${sep}`) ||
-            isAbsolute(canonicalRel)) {
-            return undefined;
-        }
-    }
-    catch {
         return undefined;
     }
     try {

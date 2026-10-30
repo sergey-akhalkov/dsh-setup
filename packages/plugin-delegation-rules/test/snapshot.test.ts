@@ -215,6 +215,31 @@ describe('review snapshot', () => {
     expect(snapshot).toBeUndefined()
   })
 
+  it('resolves the repository through a linked checkout path', async () => {
+    const dir = await repository()
+    await writeFile(join(dir, '.gitignore'), '.dsh/\n')
+    const changeDir = join(dir, 'openspec', 'changes', 'change-a')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n')
+    await writeFile(join(dir, 'a.txt'), 'a\n')
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-linked-'))
+    cleanups.push(() => rm(parent, { recursive: true, force: true }))
+    const linked = join(parent, 'repo')
+    await symlink(dir, linked, process.platform === 'win32' ? 'junction' : 'dir')
+    const snapshot = await createReviewSnapshot(
+      linked,
+      change('change-a', join(linked, 'openspec', 'changes', 'change-a')),
+      'run-linked-path',
+      defaultGit,
+      new AbortController().signal,
+    )
+    if (snapshot === undefined) {
+      throw new Error('expected a review snapshot through a linked path')
+    }
+    expect(await readFile(join(snapshot.worktree, 'a.txt'), 'utf8')).toBe('a\n')
+    await discardReviewSnapshot(linked, 'run-linked-path', defaultGit)
+  })
+
   it('falls back when the change directory links outside the repository', async () => {
     const dir = await repository()
     await writeFile(join(dir, '.gitignore'), '.dsh/\n')
