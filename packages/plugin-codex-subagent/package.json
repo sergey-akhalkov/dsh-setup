@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-codex-subagent",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "MIT-attributed fork of the Codex subagent provider that runs a bundled pinned Codex CLI (codexPath override, then bundled @openai/codex, then PATH), with read-only and workspace-write providers and a codex_subagent_status tool",
   "license": "MIT",
   "icon": "./icon.svg",

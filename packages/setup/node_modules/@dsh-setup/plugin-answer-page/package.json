@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-answer-page",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "On-demand answer-page skill from a pinned answer-me-with-html release: writes a compact Markdown draft and renders one self-contained HTML page inside the workspace, offline",
   "license": "MIT",
   "icon": "./icon.svg",

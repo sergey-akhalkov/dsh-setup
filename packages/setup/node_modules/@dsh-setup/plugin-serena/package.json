@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-serena",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "Serena MCP guidance: an always-on large-file/cross-file refactor trigger and the serena-discipline skill; the setup configures serena through the lazy MCP row (mcp_tools/mcp_call), not a static adapter row",
   "license": "MIT",
   "icon": "./icon.svg",

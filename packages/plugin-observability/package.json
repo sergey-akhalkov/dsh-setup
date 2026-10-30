@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-observability",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "Observability view: derives per-plugin signal counts from the session event logs DeepSeek Harness already records, with no second log",
   "license": "MIT",
   "icon": "./icon.svg",
