@@ -293,3 +293,10 @@ at https://sergey-akhalkov.github.io/dsh-setup/index.json returns HTTP 200, list
 retains the earlier versions. The owner install of v0.17.1 remains the step that activates the 20-minute
 review default and the fallback detail; the live fallback text needs a repository that does not
 gitignore `.dsh/`, so it is verified by the shipped tests and awaits the next such repository.
+
+The `2026-10-31-add-observability` change shipped in v0.18.0 (tag on commit `56c5590`) after the release
+workflow passed DSH 0.2.1-rc.3 and 0.2.1-rc.5 and the publish job. The published index returns HTTP 200,
+lists `@dsh-setup/setup` and the new `@dsh-setup/plugin-observability` at 0.18.0 pinned to that commit,
+and retains every earlier setup version. The owner installed the dashboard during the change and
+accepted it; installing the published 0.18.0 from the market is the step that keeps the desktop profile
+on the tagged build.
