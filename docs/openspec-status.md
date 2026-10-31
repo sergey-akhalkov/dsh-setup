@@ -128,6 +128,26 @@ five metadata-only recent traces per row), the shipped per-plugin signal map in 
 defaults, and the abort-token rule that keeps streamed model text out of row ids and labels. It amends
 `portable-setup` with the signal-map default and adds no telemetry pipeline or second log.
 
+The archived `2026-10-31-add-observability-outcomes` change carries 35 tasks and 35/35 portable task
+approvals (the owner verified the view in the running Desktop app after an external install); it
+extended the `observability` capability from a signal dashboard into an outcome view derived from the
+same session logs: episodes from human messages with the configurable idle gap and joined subagent
+children, window accounting by start versus work by event time with cutoff labels, token and cost
+metrics with coverage, quality/speed/autonomy summaries, scorecards with goals and eligibility matched
+cohorts, baselines (previous equal window or previous completed session), the declarative hypothesis
+catalog with guardrails and per-window evaluation, data-quality coverage, the serial-long-run attention
+finding, and the four sub-views (Overview, Plugins, Tasks, Hypotheses). It also added the shipped row
+goals, eligibility predicates, and two default hypotheses to the setup owner defaults, and bounded the
+view's cost: the hypothesis windows load only for their tab, the session baseline probe stops at the
+first completed candidate, and a short-lived report cache serves a repeated view switch. The delta
+added 16 and modified 7 requirements in `openspec/specs/observability/spec.md`; the owner follow-up is
+the archive index entry below.
+
+The archived `2026-10-31-add-observability-outcomes` change carried the performance follow-ups as
+commits on top of the reviewed tasks (lazy hypothesis windows, the bounded baseline probe, the report
+and client caches, and the Overview's masonry layout), so its review records cover the change text
+while the follow-ups are recorded in the git history (`a7143ad`, `d24ccee`, `16a6dd6`).
+
 The changes archived on 2026-10-31 are `improve-observability-actionability`, which sharpened
 `observability` into an action surface: a failure list with severity (`turn failure`, `turn cut`, `tool
 failure`) and per-turn recovery, session titles, per-tool call outcomes that keep the failing share
@@ -190,6 +210,7 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-30-add-lane-assignment-ledger`                  | 8/8            |
 | `2026-10-30-fix-delegation-review-fallback`              | 5/5            |
 | `2026-10-31-add-observability`                           | 19/19          |
+| `2026-10-31-add-observability-outcomes`                  | 35/35          |
 | `2026-10-31-improve-observability-actionability`         | 15/15          |
 | `2026-10-31-replace-rare-triggers-with-work-checkpoints` | 18/19          |
 
