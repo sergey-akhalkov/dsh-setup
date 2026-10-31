@@ -76,6 +76,8 @@ interface FakeCall {
 class FakeQuery implements SessionQueryService {
   readonly calls: FakeCall[] = []
   readonly listed: string[] = []
+  /** Sessions whose event index was loaded by `listEvents`, in call order. */
+  readonly eventsReads: string[] = []
   maxConcurrentReads = 0
   private concurrentReads = 0
   private readonly sessions: readonly SessionRecord[]
@@ -97,6 +99,7 @@ class FakeQuery implements SessionQueryService {
   }
 
   async listEvents(sessionId: SessionId): Promise<SessionEventRecord[]> {
+    this.eventsReads.push(String(sessionId))
     const snapshot = this.snapshots.get(String(sessionId))
     return (snapshot?.events ?? []).map((value) => ({
       sessionId,
@@ -307,6 +310,47 @@ describe('baseline reader', () => {
     })
     // The previous window has no event and no interval crossing it.
     expect(baseline).toBeUndefined()
+  })
+
+  it('probes baseline candidates newest-first and stops at the first completed one', async () => {
+    const sessions = [
+      record('current', '/workspace'),
+      record('open', '/workspace'),
+      record('done', '/workspace'),
+      record('older', '/workspace'),
+    ]
+    const snapshots = new Map<string, SessionLogSnapshot>([
+      ['current', snapshot('current', [event('step/start', { turn: 1, step: 1 }, NOW - HOUR)])],
+      ['open', snapshot('open', [event('turn/start', { turn: 1 }, NOW - 2 * HOUR)])],
+      [
+        'done',
+        snapshot('done', [
+          event('turn/start', { turn: 1 }, NOW - 4 * HOUR),
+          event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW - 4 * HOUR + 60_000),
+        ]),
+      ],
+      [
+        'older',
+        snapshot('older', [
+          event('turn/start', { turn: 1 }, NOW - 6 * HOUR),
+          event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW - 6 * HOUR + 60_000),
+        ]),
+      ],
+    ])
+    const query = new FakeQuery(sessions, snapshots)
+    const baseline = await readBaseline({
+      query,
+      range: 'session',
+      now: NOW,
+      sessionId: 'current' as unknown as SessionId,
+      windowFrom: 0,
+      windowTo: 1,
+    })
+    expect(baseline?.sessions.map((meta) => meta.id)).toEqual(['done'])
+    // The current session, the unfinished one, and the completed one (probed,
+    // then read for the baseline); `older` is never touched.
+    expect(query.eventsReads).not.toContain('older')
+    expect(query.eventsReads.filter((id) => id !== 'done')).toEqual(['current', 'open'])
   })
 
   it('uses the previous completed session for the session range', async () => {

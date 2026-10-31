@@ -425,10 +425,22 @@ export async function readBaseline(options: BaselineOptions): Promise<BaselineRe
     (earliest, value) => Math.min(earliest, value.time),
     Number.POSITIVE_INFINITY,
   )
-  const candidates = scope.filter(
-    (record) => record.header.id !== sessionId && !lineage.has(record.header.id),
-  )
-  const probed = await mapLimit(candidates, limit, async (record) => {
+  const candidates = scope
+    .filter(
+      (record) =>
+        record.header.id !== sessionId &&
+        !lineage.has(record.header.id) &&
+        // A session created after the current one started cannot have ended first.
+        record.header.createdAt < currentStart,
+    )
+    .sort((left, right) => right.header.createdAt - left.header.createdAt)
+    // shortcut: probe the newest eight candidates. A completed session further
+    // back is not used, keeping a workspace-wide scan off the view's path.
+    .slice(0, 8)
+  // Probe newest first and stop at the first completed session before the
+  // current one: the baseline is found without loading every workspace session.
+  let previous: { record: SessionRecord; last: number } | undefined
+  for (const record of candidates) {
     const events = await query.listEvents(record.header.id)
     const last = events.reduce(
       (latest, value) => Math.max(latest, value.time),
@@ -439,15 +451,11 @@ export async function readBaseline(options: BaselineOptions): Promise<BaselineRe
       .filter((value) => value.type === 'turn/start' || value.type === 'turn/end')
       .sort((left, right) => left.time - right.time || left.seq - right.seq)
     const latestTurn = turnEvents[turnEvents.length - 1]
-    return {
-      record,
-      last,
-      completed: latestTurn?.type === 'turn/end',
+    if (latestTurn?.type === 'turn/end' && last < currentStart) {
+      previous = { record, last }
+      break
     }
-  })
-  const previous = probed
-    .filter((entry) => entry.completed && entry.last < currentStart)
-    .sort((left, right) => right.last - left.last)[0]
+  }
   if (previous === undefined) return undefined
   const ids = new Set<SessionId>([previous.record.header.id])
   addDescendants(records, ids)
