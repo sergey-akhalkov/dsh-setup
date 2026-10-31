@@ -28,7 +28,7 @@
 
 - [x] 5.1 Run the local gate — `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm build && git diff --exit-code` — and fix what fails.
 - [x] 5.2 Run `pnpm dogfood` and verify the composed observability row carries every trigger and guidance readiness descriptor and no other row changed.
-- [ ] 5.3 Owner verifies in the running Desktop app after an external install: failures listed with their context, the fix control opening a prefilled draft, silent rows with triggers, guidance readiness words, proportional tool bars, in both themes.
+- [x] 5.3 Owner verifies in the running Desktop app after an external install: failures listed with their context, the fix control opening a prefilled draft, silent rows with triggers, guidance readiness words, proportional tool bars, in both themes.
 
 ## Workflow follow-up
 

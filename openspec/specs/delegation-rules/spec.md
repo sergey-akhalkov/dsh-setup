@@ -12,7 +12,7 @@ The bundle SHALL register a rules engine whose rules are data: each rule names a
 #### Scenario: Default rules
 
 - **WHEN** the plugin is active with the shipped default rules
-- **THEN** the spec-review, task-review, task-progress, blocker, research, advisor, bug-fix, and optional integration-review rules are available to the delegate/task_progress tools
+- **THEN** the spec-review, task-review, blocker, research, advisor, bug-fix, and optional integration-review rules are available to the delegate and task_progress tools
 
 #### Scenario: Custom rule
 
@@ -374,7 +374,7 @@ The bundle SHALL register a `delegate` tool whose rule parameter is generated fr
 
 ### Requirement: Model-agnostic defaults and documentation
 
-The shipped default rules SHALL be model-agnostic data; the setup MAY default their review, consult, and patch rules to the Codex provider, and SHALL default the worker rules to the registered in-process DSH subagent provider. The bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, task progress, the lane-assignment fan-out gate, blocker, research, advisor, bug fix, the worker effort tiers, and an optional integration review. The deprecated `lane-boundary` trigger MAY remain in a profile but MUST NOT be in the shipped default set. The acceptance MUST exercise at least one non-Codex target.
+The shipped default rules SHALL be model-agnostic data; the setup MAY default their review, consult, and patch rules to the Codex provider, and SHALL default the worker rules to the registered in-process DSH subagent provider. The bundle MUST NOT require Codex, and the documentation MUST show a non-Codex target with another provider/model. The default set SHALL include whole-spec review, task review, blocker, research, advisor, bug fix, the worker effort tiers, and an optional integration review. It MUST NOT include an automatic task-progress or lane-fanout rule; the `implementation-work` and `lane-assignment` triggers remain available for profile rules, and the `work-checkpoints` capability owns the pause-time progress and parallel decision. The deprecated `lane-boundary` trigger MAY remain in a profile but MUST NOT be in the shipped default set. The acceptance MUST exercise at least one non-Codex target.
 
 #### Scenario: Default setup
 
@@ -384,7 +384,7 @@ The shipped default rules SHALL be model-agnostic data; the setup MAY default th
 #### Scenario: Default lane rule
 
 - **WHEN** the setup is installed with the shipped defaults
-- **THEN** the `lane-fanout` rule uses the `lane-assignment` trigger
+- **THEN** no shipped rule uses the `implementation-work` or `lane-assignment` trigger
 
 #### Scenario: Non-Codex target
 
@@ -399,7 +399,7 @@ The shipped default rules SHALL be model-agnostic data; the setup MAY default th
 #### Scenario: Documentation
 
 - **WHEN** a user reads the plugin documentation
-- **THEN** it shows the trigger/contract/gate model, the lane-assignment fan-out gate with its per-lane serial escape, the deprecated lane-boundary trigger, a Codex target, a non-Codex target, the worker effort tiers and their selection policy, the advisor rule, the shipped strong Codex target defaults, and the config/code boundary
+- **THEN** it shows the trigger/contract/gate model, the lane-assignment trigger with its per-lane serial escape as a profile rule, the deprecated lane-boundary trigger, a Codex target, a non-Codex target, the worker effort tiers and their selection policy, the advisor rule, the shipped strong Codex target defaults, and the config/code boundary
 
 ### Requirement: Model-facing cost
 
@@ -1462,7 +1462,7 @@ The engine SHALL keep `lane-boundary` accepted for existing profiles with its do
 #### Scenario: Shipped default uses lane-assignment
 
 - **WHEN** the setup is installed with the shipped defaults
-- **THEN** the `lane-fanout` rule uses the `lane-assignment` trigger
+- **THEN** no shipped rule uses the `lane-boundary` trigger, and the `lane-assignment` trigger remains available to a profile rule
 
 #### Scenario: Documentation marks the deprecation
 
