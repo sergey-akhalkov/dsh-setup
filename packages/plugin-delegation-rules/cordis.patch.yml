@@ -40,14 +40,6 @@
             scope: task
             gate: strict
             instruction: bundled:review-task
-          - id: task-progress
-            when: implementation-work
-            contract: note
-            gate: strict
-          - id: lane-fanout
-            when: lane-assignment
-            contract: note
-            gate: strict
           - id: blocker
             when: failure-streak
             to: codex

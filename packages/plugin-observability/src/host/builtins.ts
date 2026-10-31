@@ -11,26 +11,12 @@ export interface TestableRow {
   readonly group: RowGroup
 }
 
-/** Parse raw tool-call arguments; malformed JSON simply matches nothing. */
-export function readArguments(raw: string | undefined): Record<string, unknown> | undefined {
-  if (raw === undefined) return undefined
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** Whether raw tool-call arguments carry the configured field/value. */
-export function argumentMatches(raw: string | undefined, argument: ArgumentMatch): boolean {
-  const value = readArguments(raw)?.[argument.field]
-  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
-    return false
-  }
-  return String(value) === argument.value
+/** Whether a record's configured argument fields carry the predicate field/value. */
+export function argumentMatches(
+  values: Readonly<Record<string, string>> | undefined,
+  argument: ArgumentMatch,
+): boolean {
+  return values?.[argument.field] === argument.value
 }
 
 /** Whether one record satisfies every field of one predicate. */
@@ -47,7 +33,10 @@ export function matchesPredicate(record: TraceRecord, predicate: Predicate): boo
     }
   }
   if (predicate.command !== undefined && record.command !== predicate.command) return false
-  if (predicate.argument !== undefined && !argumentMatches(record.arguments, predicate.argument)) {
+  if (
+    predicate.argument !== undefined &&
+    !argumentMatches(record.argumentValues, predicate.argument)
+  ) {
     return false
   }
   return true
@@ -59,7 +48,8 @@ export function matchesOwnedTool(record: TraceRecord, match: readonly Predicate[
     (predicate) =>
       predicate.tool !== undefined &&
       predicate.tool === record.tool &&
-      (predicate.argument === undefined || argumentMatches(record.arguments, predicate.argument)),
+      (predicate.argument === undefined ||
+        argumentMatches(record.argumentValues, predicate.argument)),
   )
 }
 

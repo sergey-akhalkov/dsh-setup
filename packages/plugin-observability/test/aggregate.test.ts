@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { aggregate, RANGES, type Range } from '../src/host/aggregate.ts'
 import { builtinRows, testableRow } from '../src/host/builtins.ts'
 import { extractRecords } from '../src/host/records.ts'
-import { parseRows } from '../src/host/rows.ts'
+import { configuredArgumentFields, parseRows } from '../src/host/rows.ts'
 
 let seq = 0
 
@@ -34,7 +34,14 @@ describe('aggregation buckets', () => {
   it('returns zero counts for an empty window in every range', () => {
     for (const range of RANGES satisfies readonly Range[]) {
       const result = aggregate([], builtinRows([]), range, NOW)
-      expect(result.totals).toEqual({ turns: 0, steps: 0, toolCalls: 0, errors: 0, records: 0 })
+      expect(result.totals).toEqual({
+        turns: 0,
+        steps: 0,
+        toolCalls: 0,
+        errors: 0,
+        records: 0,
+        sessions: 0,
+      })
       expect(result.activity.every((count) => count === 0)).toBe(true)
       expect(result.errorSeries.every((count) => count === 0)).toBe(true)
       for (const row of result.rows.values()) {
@@ -214,52 +221,7 @@ describe('aggregation buckets', () => {
   })
 
   it('attributes a failed result only when the argument predicate matches the call', () => {
-    const records = extractRecords('s', [
-      event('turn/start', { turn: 1 }, NOW - 2 * MINUTE),
-      event(
-        'tool/call',
-        { turn: 1, step: 1, callId: 'c1', name: 'write', arguments: '{"path":"notes.md"}' },
-        NOW - MINUTE,
-      ),
-      event(
-        'tool/call',
-        { turn: 1, step: 1, callId: 'c2', name: 'write', arguments: '{"path":"other.md"}' },
-        NOW - MINUTE,
-      ),
-      event(
-        'tool/result',
-        {
-          turn: 1,
-          step: 1,
-          message: {
-            role: 'tool',
-            id: 'm1',
-            content: [],
-            source: { kind: 'tool', callId: 'c1' },
-            toolCallId: 'c1',
-            isError: true,
-          },
-        },
-        NOW - MINUTE,
-      ),
-      event(
-        'tool/result',
-        {
-          turn: 1,
-          step: 1,
-          message: {
-            role: 'tool',
-            id: 'm2',
-            content: [],
-            source: { kind: 'tool', callId: 'c2' },
-            toolCallId: 'c2',
-            isError: true,
-          },
-        },
-        NOW - MINUTE,
-      ),
-    ])
-    const rows = configured({
+    const raw = {
       rows: [
         {
           id: 'notes',
@@ -269,7 +231,58 @@ describe('aggregation buckets', () => {
         },
         { id: 'writes', label: 'Writes', kind: 'signal', match: [{ tool: 'write' }] },
       ],
-    })
+    }
+    const records = extractRecords(
+      's',
+      [
+        event('turn/start', { turn: 1 }, NOW - 2 * MINUTE),
+        event(
+          'tool/call',
+          { turn: 1, step: 1, callId: 'c1', name: 'write', arguments: '{"path":"notes.md"}' },
+          NOW - MINUTE,
+        ),
+        event(
+          'tool/call',
+          { turn: 1, step: 1, callId: 'c2', name: 'write', arguments: '{"path":"other.md"}' },
+          NOW - MINUTE,
+        ),
+        event(
+          'tool/result',
+          {
+            turn: 1,
+            step: 1,
+            message: {
+              role: 'tool',
+              id: 'm1',
+              content: [],
+              source: { kind: 'tool', callId: 'c1' },
+              toolCallId: 'c1',
+              isError: true,
+            },
+          },
+          NOW - MINUTE,
+        ),
+        event(
+          'tool/result',
+          {
+            turn: 1,
+            step: 1,
+            message: {
+              role: 'tool',
+              id: 'm2',
+              content: [],
+              source: { kind: 'tool', callId: 'c2' },
+              toolCallId: 'c2',
+              isError: true,
+            },
+          },
+          NOW - MINUTE,
+        ),
+      ],
+      0,
+      configuredArgumentFields(parseRows(raw)),
+    )
+    const rows = configured(raw)
     const result = aggregate(records, rows, 'session', NOW)
     expect(result.rows.get('notes')?.errors).toBe(1)
     expect(result.rows.get('writes')?.errors).toBe(2)
@@ -304,20 +317,8 @@ describe('aggregation buckets', () => {
     expect(result.rows.get('tools.mystery')?.counts).toEqual([1, 0])
   })
 
-  it('matches an argument predicate against the raw call arguments only', () => {
-    const records = extractRecords('s', [
-      event(
-        'tool/call',
-        { turn: 1, step: 1, callId: 'c1', name: 'write', arguments: '{"path":"notes.md"}' },
-        NOW - MINUTE,
-      ),
-      event(
-        'tool/call',
-        { turn: 1, step: 1, callId: 'c2', name: 'write', arguments: '{"path":"other.md"}' },
-        NOW - MINUTE,
-      ),
-    ])
-    const rows = configured({
+  it('matches an argument predicate against the configured call field only', () => {
+    const raw = {
       rows: [
         {
           id: 'notes',
@@ -326,7 +327,25 @@ describe('aggregation buckets', () => {
           match: [{ tool: 'write', argument: { field: 'path', value: 'notes.md' } }],
         },
       ],
-    })
+    }
+    const records = extractRecords(
+      's',
+      [
+        event(
+          'tool/call',
+          { turn: 1, step: 1, callId: 'c1', name: 'write', arguments: '{"path":"notes.md"}' },
+          NOW - MINUTE,
+        ),
+        event(
+          'tool/call',
+          { turn: 1, step: 1, callId: 'c2', name: 'write', arguments: '{"path":"other.md"}' },
+          NOW - MINUTE,
+        ),
+      ],
+      0,
+      configuredArgumentFields(parseRows(raw)),
+    )
+    const rows = configured(raw)
     expect(aggregate(records, rows, 'session', NOW).rows.get('notes')?.counts).toEqual([1, 0])
   })
 

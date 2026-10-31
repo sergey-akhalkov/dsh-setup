@@ -1,9 +1,35 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import type { Range } from '../host/aggregate.js'
-import type { Report, ReportRow } from '../host/report.js'
+import type {
+  FailureEntry,
+  FailureSeverity,
+  FailureTotals,
+  Report,
+  ReportRow,
+  ToolOutcome,
+} from '../host/report.js'
+import type { Readiness } from '../host/status.js'
 
 type Translate = (key: string) => string
+
+/** The optional Client Workspace navigation the failure actions use. */
+interface WorkspaceFacade {
+  openSession(sessionId: string): void
+  startSession(
+    workspaceId?: string,
+    options?: { prompt?: string; whenDraftExists?: 'replace' | 'append' | 'keep' },
+  ): void
+}
+
+/** What the Conversation shell hands to a View entry. */
+interface ViewProps {
+  readonly sessionId?: string
+  /** Focus the registered tool-call inspector on one recorded call. */
+  readonly inspectCall?: (callId: string) => void
+  /** Select a View and address an opaque focus identity to it. */
+  readonly openView?: (view: string, focus: string) => void
+}
 
 interface ClientContext {
   effect: (callback: () => () => void) => () => void
@@ -16,13 +42,15 @@ interface ClientContext {
         order?: number
         label?: string | (() => string)
       },
-      component: (props: { sessionId?: string }) => ReactNode,
+      component: (props: ViewProps) => ReactNode,
     ) => () => void
   }
   locale: {
     register: (namespace: string, locale: string, dictionary: Record<string, string>) => () => void
     bind: (namespace: string) => Translate
   }
+  /** Optional service access without declaring a load requirement. */
+  reflect?: { get(name: string): unknown }
 }
 
 export const inject = ['slots', 'locale']
@@ -32,7 +60,30 @@ const NS = 'dsh-setup-observability'
 /** Read-only report route served by the Host half. */
 export const REPORT_PATH = '/plugins/dsh-setup-observability/report'
 
+/** Focus target of the revealed failure list. */
+export const FAILURE_SECTION_ID = 'dsh-obs-failures'
+
+/** Characters one fix-session draft may spend on the failure summary. */
+export const MAX_FIX_PROMPT_CHARS = 1200
+
+/** Failures one fix-session draft names before it states the omission. */
+export const MAX_FIX_PROMPT_ENTRIES = 10
+
 const RANGE_OPTIONS: readonly Range[] = ['session', 'day', 'week', 'month']
+
+const SEVERITY_ORDER: readonly FailureSeverity[] = ['turn failure', 'turn cut', 'tool failure']
+
+const SEVERITY_KEYS: Record<FailureSeverity, string> = {
+  'turn failure': 'severity.turnFailure',
+  'turn cut': 'severity.turnCut',
+  'tool failure': 'severity.toolFailure',
+}
+
+const READINESS_KEYS: Record<Readiness, string> = {
+  mounted: 'readiness.mounted',
+  'not mounted': 'readiness.notMounted',
+  'readiness unknown': 'readiness.unknown',
+}
 
 const EN: Record<string, string> = {
   'view.label': 'Observability',
@@ -46,14 +97,20 @@ const EN: Record<string, string> = {
   'health.ok': 'Everything looks healthy',
   'health.attention': 'Something needs attention',
   'health.missing': 'A configured tool is not loaded',
+  'health.notMounted': 'A declared prompt contribution is not mounted',
+  'health.notMountedCount': 'not mounted',
   'health.active': 'active',
   'health.silent': 'silent',
   'health.guidance': 'guidance-only',
-  'health.errors': 'errors',
+  'health.failure': 'failure',
+  'health.failures': 'failures',
   'kpi.turns': 'Turns',
   'kpi.steps': 'Steps',
   'kpi.toolCalls': 'Tool calls',
-  'kpi.errors': 'Errors',
+  'kpi.failures': 'Failures',
+  'kpi.turn': 'turn',
+  'kpi.toolCall': 'tool call',
+  'kpi.session': 'session',
   'chart.title': 'Activity over the range',
   'chart.events': 'events',
   'chart.errors': 'errors',
@@ -64,19 +121,51 @@ const EN: Record<string, string> = {
   'section.active': 'Active',
   'section.silent': 'Silent',
   'section.guidance': 'Guidance only',
+  'section.absence': 'No traces in this period; absence is not evidence of a fault.',
   'card.lastActivity': 'last activity',
   'card.never': 'no traces',
   'card.recent': 'Recent traces',
   'card.tools': 'Tools',
   'card.errors': 'errors',
+  'card.showFailures': 'View failures',
+  'failure.title': 'Failures',
+  'failure.entry': 'entry',
+  'failure.entries': 'entries',
+  'failure.bound': 'Showing the newest',
+  'failure.of': 'of',
+  'failure.copy': 'Copy list',
+  'failure.fix': 'Fix in a new session',
+  'failure.open': 'Open',
+  'failure.none': 'No failures in this range.',
+  'failure.filtered': 'Filtered to',
+  'failure.clear': 'Clear filter',
+  'severity.turnFailure': 'turn failure',
+  'severity.turnCut': 'turn cut',
+  'severity.toolFailure': 'tool failure',
+  'entry.recovered': 'recovered',
+  'readiness.mounted': 'mounted',
+  'readiness.notMounted': 'not mounted',
+  'readiness.unknown': 'readiness unknown',
+  'fix.head': 'Investigate and fix these failures recorded by the Observability view.',
+  'fix.instructions':
+    'Read the events of each session with the session tools, find the root cause of every failure, and fix it. Add a test that would have caught it. Do not simply retry the failed call.',
+  'fix.omitted': 'older failures are omitted from this draft.',
+  'fix.truncated': '[draft truncated to fit the size bound]',
+  'fix.event': 'event',
   'tools.title': 'Tool calls',
   'tools.empty': 'No tool calls in this range.',
+  'tools.share': 'failed',
   'signals.title': 'Injected messages and aborts',
   'status.guidance': 'guidance only',
+  'status.active': 'active',
+  'status.error': 'error',
+  'status.silent': 'silent',
+  'status.not loaded': 'not loaded',
   'state.loading': 'Reading session logs…',
   'state.empty': 'No sessions recorded activity in this range.',
   'state.error': 'The report could not be loaded.',
   'detail.turn': 'turn',
+  'detail.step': 'step',
   'detail.failed': 'error',
   'blind.title': 'What this view cannot see',
   'time.minute': 'm ago',
@@ -104,12 +193,106 @@ function formatAge(time: number, now: number, t: Translate): string {
   return `${String(Math.floor(diff / 86_400_000))}${t('time.day')}`
 }
 
+/** The one pluralization helper the dashboard uses for every count. */
+export function counted(count: number, one: string, many = `${one}s`): string {
+  return `${String(count)} ${count === 1 ? one : many}`
+}
+
+/** A session is named by title when known, otherwise by a short id. */
+function sessionName(failure: FailureEntry): string {
+  return failure.sessionTitle ?? failure.sessionId.slice(0, 8)
+}
+
+/** The metadata one failure entry shows; never message text or a raw reason. */
+export function failureFacts(failure: FailureEntry, t: Translate): string[] {
+  const facts = [formatTime(failure.time), t(SEVERITY_KEYS[failure.severity])]
+  facts.push(sessionName(failure))
+  if (failure.turn !== undefined) facts.push(`${t('detail.turn')} ${String(failure.turn)}`)
+  if (failure.step !== undefined) facts.push(`${t('detail.step')} ${String(failure.step)}`)
+  if (failure.tool !== undefined) facts.push(failure.tool)
+  const identity = [failure.errorName, failure.errorCode]
+    .filter((value): value is string => value !== undefined)
+    .join('/')
+  if (identity !== '') facts.push(identity)
+  if (failure.recovered) facts.push(t('entry.recovered'))
+  return facts
+}
+
+/** Copy output of the failure list: the same metadata, one entry per line. */
+export function failureCopyText(failures: readonly FailureEntry[], t: Translate): string {
+  return failures.map((failure) => failureFacts(failure, t).join(' · ')).join('\n')
+}
+
+/** Characters one prompt entry may spend on its descriptive fields. */
+export const MAX_FIX_ENTRY_CHARS = 300
+
+/**
+ * One prompt entry. The event sequence and session come first, so truncating a
+ * long tool name or error identity never removes the event locator.
+ */
+function fixEntry(failure: FailureEntry, t: Translate): string {
+  const locator = `${t('fix.event')} ${String(failure.seq)} · session ${failure.sessionId}`
+  const text = `- ${locator} · ${failureFacts(failure, t).join(' · ')}`
+  if (text.length <= MAX_FIX_ENTRY_CHARS) return text
+  return `${text.slice(0, MAX_FIX_ENTRY_CHARS - 1)}…`
+}
+
+/**
+ * A self-contained draft for a new session. Bounded in entries and characters;
+ * the omitted tail and the closing instructions always survive, and oversized
+ * fields are cut inside an entry rather than from the end of the draft. It is a
+ * draft: nothing is submitted.
+ */
+export function failureFixPrompt(failures: readonly FailureEntry[], t: Translate): string {
+  const assemble = (shown: readonly FailureEntry[]): string => {
+    const lines = [t('fix.head')]
+    for (const failure of shown) lines.push(fixEntry(failure, t))
+    if (failures.length > shown.length) {
+      lines.push(`- ${String(failures.length - shown.length)} ${t('fix.omitted')}`)
+    }
+    lines.push(t('fix.instructions'))
+    return lines.join('\n')
+  }
+  let shown = failures.slice(0, MAX_FIX_PROMPT_ENTRIES)
+  let text = assemble(shown)
+  while (text.length > MAX_FIX_PROMPT_CHARS && shown.length > 1) {
+    shown = shown.slice(0, -1)
+    text = assemble(shown)
+  }
+  if (text.length <= MAX_FIX_PROMPT_CHARS) return text
+  const boundary = MAX_FIX_PROMPT_CHARS - t('fix.truncated').length - 1
+  return `${text.slice(0, Math.max(0, boundary))}…${t('fix.truncated')}`
+}
+
+/** Clipboard write that does nothing when the browser exposes no clipboard. */
+function copyText(text: string): void {
+  const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+  if (clipboard === undefined) return
+  void clipboard.writeText(text).catch(() => {})
+}
+
+/** Move focus to the revealed failure section, when a document exists. */
+function focusFailures(): void {
+  if (typeof document === 'undefined') return
+  document.getElementById(FAILURE_SECTION_ID)?.focus()
+}
+
+/** Read the optional Workspace service without making it a load requirement. */
+function optionalWorkspace(ctx: ClientContext): WorkspaceFacade | undefined {
+  try {
+    return (ctx.reflect?.get('uiWorkspace') as WorkspaceFacade | undefined) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
 function byAttention(left: ReportRow, right: ReportRow): number {
   const rank = (row: ReportRow): number => {
-    if (row.status === 'error') return 0
+    if (row.status === 'error' && row.unrecoveredErrors > 0) return 0
     if (row.status === 'not loaded') return 1
-    if (row.status === 'active') return 2
-    return 3
+    if (row.readiness === 'not mounted') return 2
+    if (row.status === 'active' || row.status === 'error') return 3
+    return 4
   }
   return (
     rank(left) - rank(right) || right.traces - left.traces || left.label.localeCompare(right.label)
@@ -117,40 +300,78 @@ function byAttention(left: ReportRow, right: ReportRow): number {
 }
 
 /** The four big numbers of the window, computed once by the Host. */
-export function KpiStrip({ report, t }: { report: Report; t: Translate }): ReactNode {
+export function KpiStrip({
+  report,
+  t,
+  failuresOpen,
+  onRevealFailures,
+}: {
+  report: Report
+  t: Translate
+  failuresOpen?: boolean
+  onRevealFailures?: () => void
+}): ReactNode {
   const cards: ReadonlyArray<{ key: string; value: number; tone?: 'error' }> = [
     { key: 'turns', value: report.totals.turns },
     { key: 'steps', value: report.totals.steps },
     { key: 'toolCalls', value: report.totals.toolCalls },
     {
-      key: 'errors',
-      value: report.totals.errors,
-      ...(report.totals.errors > 0 ? { tone: 'error' as const } : {}),
+      key: 'failures',
+      value: report.failureTotals.total,
+      ...(report.failureTotals.total > 0 ? { tone: 'error' as const } : {}),
     },
   ]
   return (
     <section className="dsh-obs-kpis">
-      {cards.map((card) => (
-        <div key={card.key} className="dsh-obs-kpi" data-kpi={card.key} data-tone={card.tone}>
-          <span className="dsh-obs-kpi-label">{t(`kpi.${card.key}`)}</span>
-          <span className="dsh-obs-kpi-value">{card.value}</span>
-        </div>
-      ))}
+      {cards.map((card) => {
+        const content = (
+          <>
+            <span className="dsh-obs-kpi-label">{t(`kpi.${card.key}`)}</span>
+            <span className="dsh-obs-kpi-value">{card.value}</span>
+          </>
+        )
+        return card.key === 'failures' && onRevealFailures !== undefined ? (
+          <button
+            key={card.key}
+            type="button"
+            className="dsh-obs-kpi"
+            data-kpi={card.key}
+            data-tone={card.tone}
+            aria-expanded={failuresOpen === true}
+            aria-controls={FAILURE_SECTION_ID}
+            onClick={onRevealFailures}
+          >
+            {content}
+          </button>
+        ) : (
+          <div key={card.key} className="dsh-obs-kpi" data-kpi={card.key} data-tone={card.tone}>
+            {content}
+          </div>
+        )
+      })}
     </section>
   )
 }
 
-/** One-line verdict: healthy, erroring, or missing a configured tool. */
+/** One-line verdict: a union of explicit conditions, never a count or silence. */
 export function HealthBanner({ report, t }: { report: Report; t: Translate }): ReactNode {
   const plugins = report.rows.filter((row) => row.group === 'plugin')
-  const errors = report.totals.errors
   const notLoaded = plugins.filter((row) => row.status === 'not loaded')
+  const notMounted = plugins.filter((row) => row.readiness === 'not mounted')
   const active = plugins.filter((row) => row.status === 'active' || row.status === 'error').length
   const silent = plugins.filter((row) => row.status === 'silent').length
   const guidance = plugins.filter((row) => row.kind === 'guidance').length
-  const attention = errors > 0 || notLoaded.length > 0
+  const unrecovered = report.failureTotals.toolFailures - report.failureTotals.recovered
+  const failed = report.failureTotals.turnFailures + report.failureTotals.turnCuts + unrecovered
+  const attention = failed > 0 || notLoaded.length > 0 || notMounted.length > 0
   const headline =
-    errors > 0 ? t('health.attention') : notLoaded.length > 0 ? t('health.missing') : t('health.ok')
+    failed > 0
+      ? t('health.attention')
+      : notLoaded.length > 0
+        ? t('health.missing')
+        : notMounted.length > 0
+          ? t('health.notMounted')
+          : t('health.ok')
   const summary = `${String(active)} ${t('health.active')} · ${String(silent)} ${t('health.silent')} · ${String(guidance)} ${t('health.guidance')}`
   return (
     <section className="dsh-obs-health" data-tone={attention ? 'attention' : 'ok'}>
@@ -158,8 +379,15 @@ export function HealthBanner({ report, t }: { report: Report; t: Translate }): R
       <div className="dsh-obs-health-text">
         <strong>{headline}</strong>
         <span>{summary}</span>
-        {errors > 0 ? (
-          <span className="dsh-obs-err">{`${String(errors)} ${t('health.errors')}`}</span>
+        {report.failureTotals.total > 0 ? (
+          <span className="dsh-obs-err">
+            {counted(report.failureTotals.total, t('health.failure'), t('health.failures'))}
+          </span>
+        ) : null}
+        {notMounted.length > 0 ? (
+          <span className="dsh-obs-err">
+            {`${String(notMounted.length)} ${t('health.notMountedCount')}`}
+          </span>
         ) : null}
       </div>
     </section>
@@ -291,11 +519,18 @@ export function ActivityChart({ report, t }: { report: Report; t: Translate }): 
 
 /** One status pill: the word is always visible, colour is secondary. */
 export function StatusPill({ row, t }: { row: ReportRow; t: Translate }): ReactNode {
-  const guidance = row.kind === 'guidance'
-  const status = guidance ? t('status.guidance') : (row.status ?? t('status.guidance'))
+  if (row.kind === 'guidance') {
+    const readiness = row.readiness
+    return (
+      <span className="dsh-obs-pill" data-status="guidance" data-readiness={readiness}>
+        {readiness === undefined ? t('status.guidance') : t(READINESS_KEYS[readiness])}
+      </span>
+    )
+  }
+  const status = row.status ?? 'silent'
   return (
-    <span className="dsh-obs-pill" data-status={guidance ? 'guidance' : (row.status ?? 'silent')}>
-      {status}
+    <span className="dsh-obs-pill" data-status={status}>
+      {t(`status.${status}`)}
     </span>
   )
 }
@@ -361,12 +596,15 @@ export function PluginCard({
   row,
   t,
   now,
+  onShowFailures,
 }: {
   row: ReportRow
   t: Translate
   now: number
+  onShowFailures?: (tool?: string) => void
 }): ReactNode {
   const silent = row.status === 'silent' || row.status === 'not loaded'
+  const lastFailure = row.lastFailure
   return (
     <article className="dsh-obs-card" data-status={row.status}>
       <header className="dsh-obs-card-head">
@@ -394,6 +632,24 @@ export function PluginCard({
           ))}
         </div>
       ) : null}
+      {lastFailure === undefined ? null : (
+        <p className="dsh-obs-card-failure">
+          <span className="dsh-obs-muted">
+            {[lastFailure.tool, lastFailure.errorName, lastFailure.errorCode]
+              .filter((value): value is string => value !== undefined)
+              .join(' · ')}
+          </span>
+          {onShowFailures === undefined ? null : (
+            <button
+              type="button"
+              className="dsh-obs-link"
+              onClick={() => onShowFailures(lastFailure.tool)}
+            >
+              {t('card.showFailures')}
+            </button>
+          )}
+        </p>
+      )}
       {silent ? <p className="dsh-obs-muted">{row.note}</p> : null}
       <RecentTraces row={row} t={t} />
     </article>
@@ -407,12 +663,14 @@ function PluginSection({
   t,
   now,
   tone,
+  onShowFailures,
 }: {
   title: string
   rows: readonly ReportRow[]
   t: Translate
   now: number
   tone?: 'attention'
+  onShowFailures?: (tool?: string) => void
 }): ReactNode {
   if (rows.length === 0) return null
   return (
@@ -420,9 +678,48 @@ function PluginSection({
       <h2>{`${title} (${String(rows.length)})`}</h2>
       <div className="dsh-obs-grid">
         {rows.map((row) => (
-          <PluginCard key={row.id} row={row} t={t} now={now} />
+          <PluginCard
+            key={row.id}
+            row={row}
+            t={t}
+            now={now}
+            {...(onShowFailures === undefined ? {} : { onShowFailures })}
+          />
         ))}
       </div>
+    </section>
+  )
+}
+
+/** Silent rows stay compact and state their trigger and the window denominators. */
+function SilentRows({
+  rows,
+  report,
+  t,
+}: {
+  rows: readonly ReportRow[]
+  report: Report
+  t: Translate
+}): ReactNode {
+  if (rows.length === 0) return null
+  return (
+    <section className="dsh-obs-section">
+      <h2>{`${t('section.silent')} (${String(rows.length)})`}</h2>
+      <p className="dsh-obs-muted">{t('section.absence')}</p>
+      <ul className="dsh-obs-silent">
+        {rows.map((row) => (
+          <li key={row.id} data-status="silent">
+            <span className="dsh-obs-silent-name">{row.label}</span>
+            <span className="dsh-obs-pill" data-status="silent">
+              {t('status.silent')}
+            </span>
+            <span className="dsh-obs-muted">{row.trigger ?? t('card.never')}</span>
+            <span className="dsh-obs-muted">
+              {`0 ${t('failure.of')} ${counted(report.totals.turns, t('kpi.turn'))} · 0 ${t('failure.of')} ${counted(report.totals.toolCalls, t('kpi.toolCall'))} · 0 ${t('failure.of')} ${counted(report.totals.sessions, t('kpi.session'))}`}
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   )
 }
@@ -432,16 +729,23 @@ export function PluginBoard({
   report,
   t,
   now,
+  onShowFailures,
 }: {
   report: Report
   t: Translate
   now: number
+  onShowFailures?: (tool?: string) => void
 }): ReactNode {
   const plugins = report.rows.filter((row) => row.group === 'plugin').sort(byAttention)
-  const attention = plugins.filter((row) => row.status === 'error' || row.status === 'not loaded')
-  const active = plugins.filter((row) => row.status === 'active')
+  const needsAttention = (row: ReportRow): boolean =>
+    row.status === 'not loaded' || (row.status === 'error' && row.unrecoveredErrors > 0)
+  const attention = plugins.filter(needsAttention)
+  const active = plugins.filter(
+    (row) => row.status === 'active' || (row.status === 'error' && !needsAttention(row)),
+  )
   const silent = plugins.filter((row) => row.status === 'silent')
   const guidance = plugins.filter((row) => row.kind === 'guidance')
+  const guidanceNeedsAttention = guidance.some((row) => row.readiness === 'not mounted')
   return (
     <>
       <PluginSection
@@ -450,11 +754,21 @@ export function PluginBoard({
         t={t}
         now={now}
         tone="attention"
+        {...(onShowFailures === undefined ? {} : { onShowFailures })}
       />
-      <PluginSection title={t('section.active')} rows={active} t={t} now={now} />
-      <PluginSection title={t('section.silent')} rows={silent} t={t} now={now} />
+      <PluginSection
+        title={t('section.active')}
+        rows={active}
+        t={t}
+        now={now}
+        {...(onShowFailures === undefined ? {} : { onShowFailures })}
+      />
+      <SilentRows rows={silent} report={report} t={t} />
       {guidance.length > 0 ? (
-        <section className="dsh-obs-section">
+        <section
+          className="dsh-obs-section"
+          {...(guidanceNeedsAttention ? { 'data-tone': 'attention' } : {})}
+        >
           <h2>{`${t('section.guidance')} (${String(guidance.length)})`}</h2>
           <ul className="dsh-obs-guidance">
             {guidance.map((row) => (
@@ -470,41 +784,164 @@ export function PluginBoard({
   )
 }
 
-/** Tool call distribution; one bar per observed tool, errors in red text. */
-export function ToolsPanel({ rows, t }: { rows: readonly ReportRow[]; t: Translate }): ReactNode {
-  const tools = rows
-    .filter((row) => row.group === 'tools')
-    .sort((left, right) => right.traces - left.traces)
-  const max = Math.max(1, ...tools.map((row) => row.traces))
+/** Tool call distribution; the failing share is drawn over the call population. */
+export function ToolsPanel({
+  outcomes,
+  t,
+}: {
+  outcomes: readonly ToolOutcome[]
+  t: Translate
+}): ReactNode {
+  const max = Math.max(1, ...outcomes.map((outcome) => outcome.calls))
   return (
     <section className="dsh-obs-panel">
       <header className="dsh-obs-panel-head">
         <h2>{t('tools.title')}</h2>
       </header>
-      {tools.length === 0 ? (
+      {outcomes.length === 0 ? (
         <p className="dsh-obs-muted">{t('tools.empty')}</p>
       ) : (
         <ul className="dsh-obs-bars">
-          {tools.map((row) => (
-            <li key={row.id}>
-              <span className="dsh-obs-bars-label">{row.label}</span>
-              <span className="dsh-obs-bars-track">
-                <span
-                  className="dsh-obs-bars-fill"
-                  data-tone={row.errors > 0 ? 'errors' : undefined}
-                  style={{ width: `${String((row.traces / max) * 100)}%` }}
-                />
-              </span>
-              <span className="dsh-obs-bars-value">
-                {row.traces}
-                {row.errors > 0 ? (
-                  <em className="dsh-obs-err">{` · ${String(row.errors)} ${t('card.errors')}`}</em>
-                ) : null}
-              </span>
-            </li>
-          ))}
+          {outcomes.map((outcome) => {
+            const percent =
+              outcome.calls === 0 ? 0 : Math.round((outcome.failed / outcome.calls) * 100)
+            return (
+              <li key={outcome.tool}>
+                <span className="dsh-obs-bars-label">{outcome.tool}</span>
+                <span className="dsh-obs-bars-track">
+                  <span
+                    className="dsh-obs-bars-fill"
+                    style={{ width: `${String((outcome.calls / max) * 100)}%` }}
+                  >
+                    {outcome.failed > 0 ? (
+                      <span
+                        className="dsh-obs-bars-fail"
+                        style={{ width: `${String(percent)}%` }}
+                        title={`${String(outcome.failed)} ${t('tools.share')}`}
+                      />
+                    ) : null}
+                  </span>
+                </span>
+                <span className="dsh-obs-bars-value">
+                  {`${String(outcome.failed)} ${t('failure.of')} ${String(outcome.calls)} · ${String(percent)}%`}
+                </span>
+              </li>
+            )
+          })}
         </ul>
       )}
+    </section>
+  )
+}
+
+/** One bounded section listing every failure in the window, grouped by severity. */
+export function FailureList({
+  failures,
+  totals,
+  t,
+  open,
+  onToggle,
+  onOpen,
+  canOpen,
+  onFix,
+  filterTool,
+  onClearFilter,
+}: {
+  failures: readonly FailureEntry[]
+  totals: FailureTotals
+  t: Translate
+  open: boolean
+  /** Report a native summary toggle so the KPI control stays in sync. */
+  onToggle?: (open: boolean) => void
+  onOpen?: (failure: FailureEntry) => void
+  /** Whether one entry has an action in the current client; metadata-only entries have none. */
+  canOpen?: (failure: FailureEntry) => boolean
+  onFix?: () => void
+  filterTool?: string
+  onClearFilter?: () => void
+}): ReactNode {
+  if (totals.total === 0) return null
+  const visible =
+    filterTool === undefined ? failures : failures.filter((failure) => failure.tool === filterTool)
+  return (
+    <section
+      id={FAILURE_SECTION_ID}
+      tabIndex={-1}
+      className="dsh-obs-panel dsh-obs-failures"
+      aria-label={t('failure.title')}
+    >
+      <details
+        open={open}
+        onToggle={
+          onToggle === undefined ? undefined : (event) => onToggle(event.currentTarget.open)
+        }
+      >
+        <summary>
+          {`${t('failure.title')} (${counted(totals.total, t('failure.entry'), t('failure.entries'))})`}
+        </summary>
+        <div className="dsh-obs-failure-bar">
+          {totals.total > failures.length ? (
+            <span className="dsh-obs-muted">
+              {`${t('failure.bound')} ${String(failures.length)} ${t('failure.of')} ${String(totals.total)}`}
+            </span>
+          ) : null}
+          {filterTool === undefined ? null : (
+            <span className="dsh-obs-muted">
+              {`${t('failure.filtered')} ${filterTool}`}
+              {onClearFilter === undefined ? null : (
+                <button type="button" className="dsh-obs-link" onClick={onClearFilter}>
+                  {t('failure.clear')}
+                </button>
+              )}
+            </span>
+          )}
+          <button
+            type="button"
+            className="dsh-obs-link"
+            onClick={() => copyText(failureCopyText(visible, t))}
+          >
+            {t('failure.copy')}
+          </button>
+          {onFix === undefined ? null : (
+            <button type="button" onClick={onFix}>
+              {t('failure.fix')}
+            </button>
+          )}
+        </div>
+        {visible.length === 0 ? (
+          <p className="dsh-obs-muted">{t('failure.none')}</p>
+        ) : (
+          SEVERITY_ORDER.map((severity) => {
+            const entries = visible.filter((failure) => failure.severity === severity)
+            if (entries.length === 0) return null
+            return (
+              <div key={severity} className="dsh-obs-failure-group" data-severity={severity}>
+                <h3>{`${t(SEVERITY_KEYS[severity])} (${String(entries.length)})`}</h3>
+                <ol>
+                  {entries.map((failure) => (
+                    <li
+                      key={`${failure.sessionId}:${String(failure.seq)}`}
+                      {...(failure.recovered ? { 'data-recovered': 'true' } : {})}
+                    >
+                      <span>{failureFacts(failure, t).join(' · ')}</span>
+                      {onOpen === undefined ||
+                      (canOpen !== undefined && !canOpen(failure)) ? null : (
+                        <button
+                          type="button"
+                          className="dsh-obs-link"
+                          onClick={() => onOpen(failure)}
+                        >
+                          {t('failure.open')}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )
+          })
+        )}
+      </details>
     </section>
   )
 }
@@ -581,6 +1018,10 @@ export function ObservabilityPanel({
   t,
   onRange,
   now,
+  sessionId,
+  workspace,
+  inspectCall,
+  openView,
 }: {
   range: Range
   report: Report | null
@@ -588,8 +1029,49 @@ export function ObservabilityPanel({
   t: Translate
   onRange: (range: Range) => void
   now: number
+  sessionId?: string
+  workspace?: WorkspaceFacade
+  inspectCall?: (callId: string) => void
+  openView?: (view: string, focus: string) => void
 }): ReactNode {
+  const [failuresOpen, setFailuresOpen] = useState(false)
+  const [failureFilter, setFailureFilter] = useState<string | undefined>(undefined)
   const plugins = report?.rows.filter((row) => row.group === 'plugin').length ?? 0
+  const revealFailures = (tool?: string): void => {
+    setFailureFilter(tool)
+    setFailuresOpen(true)
+    focusFailures()
+  }
+  const canOpenLocal =
+    sessionId !== undefined && (inspectCall !== undefined || openView !== undefined)
+  const canOpenRemote = workspace !== undefined
+  const openFailure = (failure: FailureEntry): void => {
+    if (failure.sessionId === sessionId) {
+      if (failure.callId === undefined) return
+      if (inspectCall !== undefined) inspectCall(failure.callId)
+      else openView?.('trajectory', failure.callId)
+      return
+    }
+    workspace?.openSession(failure.sessionId)
+  }
+  const canOpenFailure = (failure: FailureEntry): boolean =>
+    failure.sessionId === sessionId
+      ? failure.callId !== undefined && (inspectCall !== undefined || openView !== undefined)
+      : workspace !== undefined
+  const visibleFailures =
+    report === null || failureFilter === undefined
+      ? (report?.failures ?? [])
+      : report.failures.filter((failure) => failure.tool === failureFilter)
+  const fixSession =
+    report === null || workspace === undefined
+      ? undefined
+      : (): void => {
+          workspace.startSession(undefined, {
+            prompt: failureFixPrompt(visibleFailures, t),
+            whenDraftExists: 'append',
+          })
+        }
+  const canOpenAny = canOpenLocal || canOpenRemote
   return (
     <div className="dsh-obs">
       <style>{CSS}</style>
@@ -612,10 +1094,26 @@ export function ObservabilityPanel({
       ) : (
         <>
           <HealthBanner report={report} t={t} />
-          <KpiStrip report={report} t={t} />
+          <KpiStrip
+            report={report}
+            t={t}
+            failuresOpen={failuresOpen}
+            onRevealFailures={report.failureTotals.total === 0 ? undefined : () => revealFailures()}
+          />
           <ActivityChart report={report} t={t} />
-          <PluginBoard report={report} t={t} now={now} />
-          <ToolsPanel rows={report.rows} t={t} />
+          <FailureList
+            failures={report.failures}
+            totals={report.failureTotals}
+            t={t}
+            open={failuresOpen}
+            onToggle={setFailuresOpen}
+            {...(canOpenAny ? { onOpen: openFailure, canOpen: canOpenFailure } : {})}
+            {...(fixSession === undefined ? {} : { onFix: fixSession })}
+            {...(failureFilter === undefined ? {} : { filterTool: failureFilter })}
+            onClearFilter={() => setFailureFilter(undefined)}
+          />
+          <PluginBoard report={report} t={t} now={now} onShowFailures={revealFailures} />
+          <ToolsPanel outcomes={report.toolOutcomes} t={t} />
           <SignalsPanel rows={report.rows} t={t} />
           <BlindSpots report={report} t={t} />
         </>
@@ -628,9 +1126,15 @@ export function ObservabilityPanel({
 export function ObservabilityView({
   t,
   sessionId,
+  workspace,
+  inspectCall,
+  openView,
 }: {
   t: Translate
   sessionId?: string
+  workspace?: WorkspaceFacade
+  inspectCall?: (callId: string) => void
+  openView?: (view: string, focus: string) => void
 }): ReactNode {
   const [range, setRange] = useState<Range>('session')
   const [report, setReport] = useState<Report | null>(null)
@@ -676,6 +1180,10 @@ export function ObservabilityView({
       t={t}
       onRange={setRange}
       now={now}
+      {...(sessionId === undefined ? {} : { sessionId })}
+      {...(workspace === undefined ? {} : { workspace })}
+      {...(inspectCall === undefined ? {} : { inspectCall })}
+      {...(openView === undefined ? {} : { openView })}
     />
   )
 }
@@ -688,7 +1196,18 @@ export function apply(ctx: ClientContext): void {
     ctx.slots.inject('conversation.view', () =>
       ctx.slots.register(
         { name: 'conversation.view', id: 'observability', order: 20, label: () => t('view.label') },
-        (props) => <ObservabilityView t={t} sessionId={props.sessionId} />,
+        (props) => {
+          const workspace = optionalWorkspace(ctx)
+          return (
+            <ObservabilityView
+              t={t}
+              {...(props.sessionId === undefined ? {} : { sessionId: props.sessionId })}
+              {...(props.inspectCall === undefined ? {} : { inspectCall: props.inspectCall })}
+              {...(props.openView === undefined ? {} : { openView: props.openView })}
+              {...(workspace === undefined ? {} : { workspace })}
+            />
+          )
+        },
       ),
     )
   } catch (error) {
@@ -789,6 +1308,20 @@ const CSS = `
   padding: 10px 14px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+button.dsh-obs-kpi {
+  cursor: pointer;
+}
+button.dsh-obs-kpi:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+button.dsh-obs-kpi:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
 }
 .dsh-obs-kpi-label {
   color: var(--dsw-alias-label-secondary);
@@ -890,6 +1423,13 @@ const CSS = `
 .dsh-obs-card[data-status="error"] {
   border-color: var(--dsw-alias-state-error-primary);
 }
+.dsh-obs-card-failure {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  flex-wrap: wrap;
+}
 .dsh-obs-card-head {
   display: flex;
   align-items: center;
@@ -928,10 +1468,12 @@ const CSS = `
 .dsh-obs-pill[data-status="active"]::before {
   background: var(--dsw-alias-state-success-primary);
 }
-.dsh-obs-pill[data-status="error"] {
+.dsh-obs-pill[data-status="error"],
+.dsh-obs-pill[data-readiness="not mounted"] {
   color: var(--dsw-alias-state-error-primary);
 }
-.dsh-obs-pill[data-status="error"]::before {
+.dsh-obs-pill[data-status="error"]::before,
+.dsh-obs-pill[data-readiness="not mounted"]::before {
   background: var(--dsw-alias-state-error-primary);
 }
 .dsh-obs-pill[data-status="not loaded"] {
@@ -1009,6 +1551,83 @@ const CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dsh-obs-silent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dsh-obs-silent li {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+.dsh-obs-silent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh-obs-failures summary {
+  cursor: pointer;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+.dsh-obs-failures summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
+.dsh-obs-failures:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
+.dsh-obs-failure-bar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-obs-failure-group h3 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-obs-failure-group ol {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-obs-failure-group li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+.dsh-obs-failure-group li[data-recovered="true"] {
+  opacity: 0.75;
+}
+.dsh-obs-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-state-business-primary);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.dsh-obs-link:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
 .dsh-obs-bars {
   display: flex;
   flex-direction: column;
@@ -1041,7 +1660,10 @@ const CSS = `
   border-radius: inherit;
   background: var(--dsw-alias-state-business-primary);
 }
-.dsh-obs-bars-fill[data-tone="errors"] {
+.dsh-obs-bars-fail {
+  display: block;
+  height: 100%;
+  min-width: 1px;
   background: var(--dsw-alias-state-error-primary);
 }
 .dsh-obs-bars-value {

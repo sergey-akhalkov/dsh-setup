@@ -62,3 +62,51 @@ export function rowState(
   }
   return { status: 'silent', note: SILENT_NOTE }
 }
+
+/** How a guidance row's declared prompt contribution checked out. */
+export type Readiness = 'mounted' | 'not mounted' | 'readiness unknown'
+
+/**
+ * Live registry observations for readiness. An absent set means that registry
+ * is unavailable, which is unknown rather than absent.
+ */
+export interface ReadinessSources {
+  readonly sections?: ReadonlySet<string>
+  readonly skills?: ReadonlySet<string>
+  /** Whether skill discovery completed; an incomplete catalog cannot prove absence. */
+  readonly skillsComplete: boolean
+}
+
+/**
+ * Check a guidance row's declared prompt section and/or skill against the live
+ * registries. `not mounted` wins over unknown, because a confirmed absence is
+ * the only evidence that needs attention. An undeclared row has no readiness.
+ */
+export function guidanceReadiness(row: Row, sources: ReadinessSources): Readiness | undefined {
+  const mounted = row.mounted
+  if (mounted === undefined) return undefined
+  const checks: Readiness[] = []
+  if (mounted.section !== undefined) {
+    checks.push(
+      sources.sections === undefined
+        ? 'readiness unknown'
+        : sources.sections.has(mounted.section)
+          ? 'mounted'
+          : 'not mounted',
+    )
+  }
+  if (mounted.skill !== undefined) {
+    checks.push(
+      sources.skills === undefined
+        ? 'readiness unknown'
+        : sources.skills.has(mounted.skill)
+          ? 'mounted'
+          : sources.skillsComplete
+            ? 'not mounted'
+            : 'readiness unknown',
+    )
+  }
+  if (checks.includes('not mounted')) return 'not mounted'
+  if (checks.includes('readiness unknown')) return 'readiness unknown'
+  return 'mounted'
+}

@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "improve-observability-actionability",
+  "scope": "task",
+  "taskId": "f17d63e2532ef30e",
+  "digest": "d9438afb43ddab75400307509054f68aaec1cfd6ed70f55957cdcc8093d2e872",
+  "worktreeDigest": "30b56f0656b5ee617b214a39128ee1d807e9469ff92e926c7e6761f6c83406bc",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-10-31T11:44:55.331Z"
+}

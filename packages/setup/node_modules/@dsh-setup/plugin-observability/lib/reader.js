@@ -1,5 +1,27 @@
 import { rangeWindow } from './aggregate.js';
 import { extractRecords } from './records.js';
+/** Resolve titles for the unique failure sessions; every failure mode drops a title only. */
+export async function readSessionTitles(query, sessionIds) {
+    const titles = new Map();
+    const unique = [...new Set(sessionIds.map((id) => String(id)))];
+    if (unique.length === 0 || query.readTitleSnapshots === undefined)
+        return titles;
+    let observations;
+    try {
+        observations = await query.readTitleSnapshots(unique);
+    }
+    catch {
+        return titles;
+    }
+    for (const observation of observations) {
+        if (observation.status !== 'fulfilled')
+            continue;
+        const title = observation.value?.title?.title;
+        if (title !== undefined && title !== '')
+            titles.set(String(observation.sessionId), title);
+    }
+    return titles;
+}
 /** How many sessions the reader opens at once. */
 export const READ_CONCURRENCY = 4;
 async function mapLimit(items, limit, run) {
@@ -32,12 +54,12 @@ function overlaps(events, from, to) {
     return events.some((event) => event.time >= from && event.time < to);
 }
 /** Extract one session's own records, serving an unchanged session from memory. */
-async function readOne(query, id, stamp, cache) {
+async function readOne(query, id, stamp, cache, fields) {
     const cached = cache?.get(String(id), stamp);
     if (cached !== undefined)
         return [...cached];
     const snapshot = await query.readSession(id);
-    const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount));
+    const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount), fields);
     cache?.set(String(id), stamp, records);
     return records;
 }
@@ -90,14 +112,14 @@ function lineageIds(records, byId, start) {
  * prefix is skipped at `inheritedEventCount`, so a parent's events count once.
  */
 export async function readSessions(options) {
-    const { query, range, now, sessionId, cache } = options;
+    const { query, range, now, sessionId, cache, argumentFields } = options;
     const limit = options.concurrency ?? READ_CONCURRENCY;
     const window = rangeWindow(range, now, 0);
     if (range === 'session') {
         if (sessionId === undefined)
             return [];
         const events = await query.listEvents(sessionId);
-        return readOne(query, sessionId, modificationStamp(events), cache);
+        return readOne(query, sessionId, modificationStamp(events), cache, argumentFields);
     }
     const records = await query.listSessions();
     const byId = new Map(records.map((record) => [record.header.id, record]));
@@ -136,6 +158,6 @@ export async function readSessions(options) {
         return { record, events, stamp: modificationStamp(events) };
     });
     const selected = listed.filter((entry) => overlaps(entry.events, window.from, window.to));
-    const read = await mapLimit(selected, limit, async (entry) => readOne(query, entry.record.header.id, entry.stamp, cache));
+    const read = await mapLimit(selected, limit, async (entry) => readOne(query, entry.record.header.id, entry.stamp, cache, argumentFields));
     return read.flat();
 }

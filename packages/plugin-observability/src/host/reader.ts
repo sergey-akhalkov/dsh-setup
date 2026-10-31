@@ -6,13 +6,44 @@ import type {
 } from '@deepseek-ai/dsh-session-query'
 import { type Range, rangeWindow } from './aggregate.js'
 import type { SessionCache } from './cache.js'
-import { extractRecords, type TraceRecord } from './records.js'
+import { type ArgumentFieldMap, extractRecords, type TraceRecord } from './records.js'
 
 /** The narrow part of `ctx.sessionQuery` the reader drives; tests fake it. */
 export interface SessionQueryService {
   listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
   readSession(sessionId: SessionId): Promise<SessionLogSnapshot>
   listEvents(sessionId: SessionId): Promise<SessionEventRecord[]>
+  /** Optional batch title lookup; a fake without it still reports failures. */
+  readTitleSnapshots?(sessionIds: readonly SessionId[]): Promise<readonly TitleObservation[]>
+}
+
+/** The part of one title observation the failure list uses. */
+export interface TitleObservation {
+  readonly sessionId: SessionId
+  readonly status: 'fulfilled' | 'rejected'
+  readonly value?: { readonly title?: { readonly title?: string } }
+}
+
+/** Resolve titles for the unique failure sessions; every failure mode drops a title only. */
+export async function readSessionTitles(
+  query: SessionQueryService,
+  sessionIds: readonly SessionId[],
+): Promise<Map<string, string>> {
+  const titles = new Map<string, string>()
+  const unique = [...new Set(sessionIds.map((id) => String(id)))] as SessionId[]
+  if (unique.length === 0 || query.readTitleSnapshots === undefined) return titles
+  let observations: readonly TitleObservation[]
+  try {
+    observations = await query.readTitleSnapshots(unique)
+  } catch {
+    return titles
+  }
+  for (const observation of observations) {
+    if (observation.status !== 'fulfilled') continue
+    const title = observation.value?.title?.title
+    if (title !== undefined && title !== '') titles.set(String(observation.sessionId), title)
+  }
+  return titles
 }
 
 /** How many sessions the reader opens at once. */
@@ -60,6 +91,8 @@ export interface ReadSessionsOptions {
   readonly sessionId?: SessionId | undefined
   readonly concurrency?: number
   readonly cache?: SessionCache
+  /** Argument fields the configured predicates read; nothing else is kept. */
+  readonly argumentFields?: ArgumentFieldMap
 }
 
 /** Extract one session's own records, serving an unchanged session from memory. */
@@ -68,11 +101,12 @@ async function readOne(
   id: SessionId,
   stamp: string,
   cache: SessionCache | undefined,
+  fields: ArgumentFieldMap | undefined,
 ): Promise<TraceRecord[]> {
   const cached = cache?.get(String(id), stamp)
   if (cached !== undefined) return [...cached]
   const snapshot = await query.readSession(id)
-  const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount))
+  const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount), fields)
   cache?.set(String(id), stamp, records)
   return records
 }
@@ -134,14 +168,14 @@ function lineageIds(
  * prefix is skipped at `inheritedEventCount`, so a parent's events count once.
  */
 export async function readSessions(options: ReadSessionsOptions): Promise<TraceRecord[]> {
-  const { query, range, now, sessionId, cache } = options
+  const { query, range, now, sessionId, cache, argumentFields } = options
   const limit = options.concurrency ?? READ_CONCURRENCY
   const window = rangeWindow(range, now, 0)
 
   if (range === 'session') {
     if (sessionId === undefined) return []
     const events = await query.listEvents(sessionId)
-    return readOne(query, sessionId, modificationStamp(events), cache)
+    return readOne(query, sessionId, modificationStamp(events), cache, argumentFields)
   }
 
   const records = await query.listSessions()
@@ -184,7 +218,7 @@ export async function readSessions(options: ReadSessionsOptions): Promise<TraceR
   const selected = listed.filter((entry) => overlaps(entry.events, window.from, window.to))
 
   const read = await mapLimit(selected, limit, async (entry) =>
-    readOne(query, entry.record.header.id, entry.stamp, cache),
+    readOne(query, entry.record.header.id, entry.stamp, cache, argumentFields),
   )
   return read.flat()
 }

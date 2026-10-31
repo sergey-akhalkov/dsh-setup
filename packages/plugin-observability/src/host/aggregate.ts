@@ -114,6 +114,8 @@ export interface AggregateTotals {
   readonly toolCalls: number
   readonly errors: number
   readonly records: number
+  /** Distinct sessions that contributed an in-window record. */
+  readonly sessions: number
 }
 
 /** The pure aggregate over one window. */
@@ -171,9 +173,11 @@ export function aggregate(
   }
   const activity = new Array<number>(window.buckets.length).fill(0)
   const errorSeries = new Array<number>(window.buckets.length).fill(0)
-  const totals = { turns: 0, steps: 0, toolCalls: 0, errors: 0, records: 0 }
+  const totals = { turns: 0, steps: 0, toolCalls: 0, errors: 0, records: 0, sessions: 0 }
+  const sessions = new Set<string>()
   for (const { record, index } of inWindow) {
     activity[index] = (activity[index] ?? 0) + 1
+    sessions.add(record.sessionId)
     totals.records += 1
     if (record.eventType === 'turn/start') totals.turns += 1
     if (record.eventType === 'step/start') totals.steps += 1
@@ -183,6 +187,7 @@ export function aggregate(
       totals.errors += 1
     }
   }
+  totals.sessions = sessions.size
   const aggregated = new Map<string, RowAggregate>()
   for (const row of rows) {
     const counts = new Array<number>(window.buckets.length).fill(0)

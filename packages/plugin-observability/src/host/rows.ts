@@ -25,12 +25,24 @@ export interface Predicate {
   readonly argument?: ArgumentMatch
 }
 
+/**
+ * Declared prompt contribution of a guidance row: the prompt section name
+ * and/or the skill name the named plugin is expected to register.
+ */
+export interface MountedNames {
+  readonly section?: string
+  readonly skill?: string
+}
+
 /** One configured row. */
 export interface Row {
   readonly id: string
   readonly label: string
   readonly kind: RowKind
   readonly match?: readonly Predicate[]
+  /** What the row waits for, shown while it has no traces. */
+  readonly trigger?: string
+  readonly mounted?: MountedNames
 }
 
 /** A configuration error that names the offending field or row. */
@@ -41,7 +53,8 @@ export class RowConfigError extends Error {
   }
 }
 
-const ROW_FIELDS = new Set(['id', 'label', 'kind', 'match'])
+const ROW_FIELDS = new Set(['id', 'label', 'kind', 'match', 'trigger', 'mounted'])
+const MOUNTED_FIELDS = new Set(['section', 'skill'])
 const PREDICATE_FIELDS = new Set([
   'eventType',
   'tool',
@@ -108,6 +121,19 @@ function readPredicate(value: unknown, at: string): Predicate {
   return predicate
 }
 
+function readMounted(value: unknown, at: string): MountedNames {
+  if (!isRecord(value)) throw new RowConfigError(`${at} must be a mapping`)
+  rejectUnknownFields(value, MOUNTED_FIELDS, at)
+  const mounted: { section?: string; skill?: string } = {}
+  for (const field of ['section', 'skill'] as const) {
+    if (value[field] !== undefined) mounted[field] = readText(value[field], `${at}.${field}`)
+  }
+  if (Object.keys(mounted).length === 0) {
+    throw new RowConfigError(`${at} must name "section" or "skill"`)
+  }
+  return mounted
+}
+
 function readRow(value: unknown, at: string): Row {
   if (!isRecord(value)) throw new RowConfigError(`${at} must be a mapping`)
   rejectUnknownFields(value, ROW_FIELDS, at)
@@ -117,11 +143,20 @@ function readRow(value: unknown, at: string): Row {
   if (kind !== 'signal' && kind !== 'guidance') {
     throw new RowConfigError(`${at}.kind must be "signal" or "guidance"`)
   }
+  const descriptors: { trigger?: string; mounted?: MountedNames } = {
+    ...(value.trigger === undefined ? {} : { trigger: readText(value.trigger, `${at}.trigger`) }),
+  }
+  if (value.mounted !== undefined) {
+    if (kind === 'signal') {
+      throw new RowConfigError(`${at}.mounted is not allowed on a signal row`)
+    }
+    descriptors.mounted = readMounted(value.mounted, `${at}.mounted`)
+  }
   if (kind === 'guidance') {
     if (value.match !== undefined) {
       throw new RowConfigError(`${at}.match is not allowed on a guidance row`)
     }
-    return { id, label, kind }
+    return { id, label, kind, ...descriptors }
   }
   if (value.match === undefined) {
     throw new RowConfigError(`${at}.match is required on a signal row`)
@@ -129,7 +164,7 @@ function readRow(value: unknown, at: string): Row {
   const raw = Array.isArray(value.match) ? value.match : [value.match]
   if (raw.length === 0) throw new RowConfigError(`${at}.match must not be empty`)
   const match = raw.map((predicate, index) => readPredicate(predicate, `${at}.match[${index}]`))
-  return { id, label, kind, match }
+  return { id, label, kind, match, ...descriptors }
 }
 
 /**
@@ -155,4 +190,24 @@ export function parseRows(raw: unknown): Row[] {
     parsed.push(row)
   })
   return parsed
+}
+
+/**
+ * The argument fields configured predicates read, per tool. Extraction keeps
+ * only these values, so raw tool arguments never enter a neutral record.
+ */
+export function configuredArgumentFields(rows: readonly Row[]): Map<string, Set<string>> {
+  const fields = new Map<string, Set<string>>()
+  for (const row of rows) {
+    for (const predicate of row.match ?? []) {
+      if (predicate.tool === undefined || predicate.argument === undefined) continue
+      let names = fields.get(predicate.tool)
+      if (names === undefined) {
+        names = new Set()
+        fields.set(predicate.tool, names)
+      }
+      names.add(predicate.argument.field)
+    }
+  }
+  return fields
 }

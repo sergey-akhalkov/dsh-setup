@@ -22,8 +22,8 @@ enforcement points; this skill is the authoring and workflow guide.
   exact question, constraints, and decisive evidence. `objective` is required for the patch
   contract.
 - `task_progress(task, status, reason)` records an explicit `in-progress`/`blocked` note for an
-  unchecked task. It runs no model, costs nothing, and is the only non-tick way to close a
-  code-changing turn.
+  unchecked task. It runs no model and costs nothing; with a profile `task-progress` rule it is the
+  only non-tick way to close a code-changing turn.
 - `delegation_status` lists providers/capabilities, targets, rules, each active change's
   involvement by this session, records, and active/stale notes, plus missing-target diagnostics.
   It never attributes a change.
@@ -108,15 +108,18 @@ This is the intended loop for an OpenSpec change:
    starting the next task. The gate names the explicit task id it wants; use it.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`. A task-scoped `PASS` is a
    historical snapshot: later tasks do not invalidate it.
-5. If the turn must stop mid-task, call `task_progress` for that task instead of ticking it.
-   The note records the current worktree digest and authorizes the close only while it still
-   matches.
+5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call
+   `task_progress` for that task instead of ticking it. The note records the current worktree
+   digest and authorizes the close only while it still matches.
 
-The gate refuses a code-changing turn unless a task was newly checked and reviewed, or a fresh
-progress note matches the current worktree. Only the checked tasks this session attributed are
-gated; another session's ticks are not imported. A checked task always requires its review
-record; a note never counts as a PASS. Ticking tasks in a batch at the end defeats the per-task
-chunk and is refused by the gate.
+The shipped defaults configure no `implementation-work` rule, so a code-changing turn is not
+refused for an unticked task, and a default session may pause mid-task through the goal-continuity
+`work-checkpoints` capability (one `work_checkpoint` call at the pause). A profile that configures
+an `implementation-work` rule refuses a code-changing turn until a task was newly checked and
+reviewed, or a fresh progress note matches the current worktree. Only the checked tasks this
+session attributed are gated; another session's ticks are not imported. A checked task always
+requires its review record, and a note never counts as a PASS. When that rule is configured,
+ticking tasks in a batch at the end defeats the per-task chunk and is refused by the gate.
 
 ## Parallel writers
 
@@ -134,13 +137,15 @@ digest. Before handing work to more than one write-capable agent at once:
   longer.
 
 Triggers, records, and digests are unchanged by this section: it describes how to assign
-write-capable work. The `lane-fanout` rule makes the assignment happen at the first unassigned
+write-capable work. A profile `lane-fanout` rule makes the assignment happen at the first unassigned
 lane; when it steers, start one tagged worker per reported lane before continuing, or record the
-serial decision with `task_progress`.
+serial decision with `task_progress`. The shipped defaults omit it: the goal-continuity
+`work-checkpoints` capability owns the pause-time parallel decision and requires a `work_checkpoint`
+call before the turn closes.
 
 ## Lane assignment
 
-The shipped `lane-fanout` rule uses the `lane-assignment` trigger. It reports the lanes that still
+A profile `lane-fanout` rule can use the `lane-assignment` trigger. It reports the lanes that still
 need an owner at any implementation turn and stays quiet once each lane is assigned, serial,
 current, or complete.
 
@@ -166,8 +171,6 @@ boundary behavior, but new rules use `lane-assignment`.
 | --- | --- | --- | --- |
 | `spec-review` | `spec-ready` | review, whole, phase `spec` | strict |
 | `task-review` | `spec-task-ready` | review, task | strict |
-| `task-progress` | `implementation-work` | note | strict |
-| `lane-fanout` | `lane-assignment` | note | strict |
 | `blocker` | `failure-streak` | answer | soft |
 | `research` | `manual` | answer | none |
 | `advisor` | `manual` | answer | none |
@@ -175,6 +178,11 @@ boundary behavior, but new rules use `lane-assignment`.
 | `worker-deep` | `manual` | answer | none |
 | `bug-fix` | `manual` | patch | none |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft |
+
+The shipped set intentionally omits the automatic `task-progress` and `lane-fanout` rules. The
+`implementation-work` and `lane-assignment` triggers and the `note` contract remain available to
+profile rules; the goal-continuity `work-checkpoints` capability owns the pause-time progress and
+parallel decision and requires a `work_checkpoint` call at each substantial pause.
 
 The shipped defaults target the installed-Codex provider and select `gpt-6-astra` at `xhigh` for
 `codex` and `codex-write`; `codex-astra` is the explicit strong target the advisor uses. They are

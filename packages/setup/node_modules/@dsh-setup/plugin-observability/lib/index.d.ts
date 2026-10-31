@@ -35,6 +35,9 @@ interface HostContext extends Context {
 export declare function computeReport(ctx: {
     readonly sessionQuery: SessionQueryService;
     readonly tools: ToolRegistry;
+    readonly reflect?: {
+        get(name: string): unknown;
+    };
 }, range: Range, sessionId: SessionId | undefined, now: number, cache: SessionCache, configured: ReturnType<typeof parseRows>): Promise<Report>;
 /** Register the read-only report route. */
 export declare function apply(ctx: HostContext, rawConfig?: Config): void;

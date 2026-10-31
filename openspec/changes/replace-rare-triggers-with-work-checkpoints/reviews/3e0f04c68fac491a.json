@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "replace-rare-triggers-with-work-checkpoints",
+  "scope": "task",
+  "taskId": "3e0f04c68fac491a",
+  "digest": "d28ff9334b8843bb2674d3cefea12e4a542ab77b6497244deaeceee7f3e9b72d",
+  "worktreeDigest": "e0f0b93d5447864b2cf2dd4b3aa28bcffdbd999a0579ff52061ec97c76569629",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-10-31T12:25:43.674Z"
+}

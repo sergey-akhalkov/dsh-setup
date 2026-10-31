@@ -105,9 +105,11 @@ export function aggregate(records, rows, range, now) {
     }
     const activity = new Array(window.buckets.length).fill(0);
     const errorSeries = new Array(window.buckets.length).fill(0);
-    const totals = { turns: 0, steps: 0, toolCalls: 0, errors: 0, records: 0 };
+    const totals = { turns: 0, steps: 0, toolCalls: 0, errors: 0, records: 0, sessions: 0 };
+    const sessions = new Set();
     for (const { record, index } of inWindow) {
         activity[index] = (activity[index] ?? 0) + 1;
+        sessions.add(record.sessionId);
         totals.records += 1;
         if (record.eventType === 'turn/start')
             totals.turns += 1;
@@ -120,6 +122,7 @@ export function aggregate(records, rows, range, now) {
             totals.errors += 1;
         }
     }
+    totals.sessions = sessions.size;
     const aggregated = new Map();
     for (const row of rows) {
         const counts = new Array(window.buckets.length).fill(0);

@@ -1,24 +1,6 @@
-/** Parse raw tool-call arguments; malformed JSON simply matches nothing. */
-export function readArguments(raw) {
-    if (raw === undefined)
-        return undefined;
-    try {
-        const parsed = JSON.parse(raw);
-        return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-            ? parsed
-            : undefined;
-    }
-    catch {
-        return undefined;
-    }
-}
-/** Whether raw tool-call arguments carry the configured field/value. */
-export function argumentMatches(raw, argument) {
-    const value = readArguments(raw)?.[argument.field];
-    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
-        return false;
-    }
-    return String(value) === argument.value;
+/** Whether a record's configured argument fields carry the predicate field/value. */
+export function argumentMatches(values, argument) {
+    return values?.[argument.field] === argument.value;
 }
 /** Whether one record satisfies every field of one predicate. */
 export function matchesPredicate(record, predicate) {
@@ -38,7 +20,8 @@ export function matchesPredicate(record, predicate) {
     }
     if (predicate.command !== undefined && record.command !== predicate.command)
         return false;
-    if (predicate.argument !== undefined && !argumentMatches(record.arguments, predicate.argument)) {
+    if (predicate.argument !== undefined &&
+        !argumentMatches(record.argumentValues, predicate.argument)) {
         return false;
     }
     return true;
@@ -47,7 +30,8 @@ export function matchesPredicate(record, predicate) {
 export function matchesOwnedTool(record, match) {
     return match.some((predicate) => predicate.tool !== undefined &&
         predicate.tool === record.tool &&
-        (predicate.argument === undefined || argumentMatches(record.arguments, predicate.argument)));
+        (predicate.argument === undefined ||
+            argumentMatches(record.argumentValues, predicate.argument)));
 }
 /** Whether one record satisfies any predicate of a row's any-of list. */
 export function matchesRow(record, match) {

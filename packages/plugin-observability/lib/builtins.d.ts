@@ -8,10 +8,8 @@ export interface TestableRow {
     readonly test: (record: TraceRecord) => boolean;
     readonly group: RowGroup;
 }
-/** Parse raw tool-call arguments; malformed JSON simply matches nothing. */
-export declare function readArguments(raw: string | undefined): Record<string, unknown> | undefined;
-/** Whether raw tool-call arguments carry the configured field/value. */
-export declare function argumentMatches(raw: string | undefined, argument: ArgumentMatch): boolean;
+/** Whether a record's configured argument fields carry the predicate field/value. */
+export declare function argumentMatches(values: Readonly<Record<string, string>> | undefined, argument: ArgumentMatch): boolean;
 /** Whether one record satisfies every field of one predicate. */
 export declare function matchesPredicate(record: TraceRecord, predicate: Predicate): boolean;
 /** Whether a failed tool result belongs to a row that names its tool (and argument). */

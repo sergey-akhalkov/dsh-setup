@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { RowAggregate } from '../src/host/aggregate.ts'
 import { parseRows } from '../src/host/rows.ts'
-import { boundTools, rowState, SILENT_NOTE } from '../src/host/status.ts'
+import {
+  boundTools,
+  guidanceReadiness,
+  type ReadinessSources,
+  rowState,
+  SILENT_NOTE,
+} from '../src/host/status.ts'
 
 function row(raw: unknown) {
   const rows = parseRows({ rows: [raw] })
@@ -72,5 +78,71 @@ describe('row status', () => {
       }),
     )
     expect(tools).toEqual(['delegate', 'task_progress'])
+  })
+})
+
+describe('guidance readiness', () => {
+  const live: ReadinessSources = {
+    sections: new Set(['dsh-setup:ponytail']),
+    skills: new Set(['ponytail']),
+    skillsComplete: true,
+  }
+
+  function guidance(raw: unknown) {
+    return row({ id: 'g', label: 'G', kind: 'guidance', ...(raw as object) })
+  }
+
+  it('reports a present section and a present skill as mounted', () => {
+    expect(guidanceReadiness(guidance({ mounted: { section: 'dsh-setup:ponytail' } }), live)).toBe(
+      'mounted',
+    )
+    expect(guidanceReadiness(guidance({ mounted: { skill: 'ponytail' } }), live)).toBe('mounted')
+    expect(
+      guidanceReadiness(
+        guidance({ mounted: { section: 'dsh-setup:ponytail', skill: 'ponytail' } }),
+        live,
+      ),
+    ).toBe('mounted')
+  })
+
+  it('reports an absent section or skill as not mounted', () => {
+    expect(guidanceReadiness(guidance({ mounted: { section: 'dsh-setup:gone' } }), live)).toBe(
+      'not mounted',
+    )
+    expect(guidanceReadiness(guidance({ mounted: { skill: 'gone' } }), live)).toBe('not mounted')
+  })
+
+  it('reports readiness unknown when a registry is unavailable', () => {
+    const noPrompt: ReadinessSources = { skills: live.skills, skillsComplete: true }
+    const noSkills: ReadinessSources = { sections: live.sections, skillsComplete: false }
+    expect(
+      guidanceReadiness(guidance({ mounted: { section: 'dsh-setup:ponytail' } }), noPrompt),
+    ).toBe('readiness unknown')
+    expect(guidanceReadiness(guidance({ mounted: { skill: 'ponytail' } }), noSkills)).toBe(
+      'readiness unknown',
+    )
+  })
+
+  it('never turns an incomplete catalog into absence', () => {
+    const partial: ReadinessSources = {
+      sections: live.sections,
+      skills: new Set(),
+      skillsComplete: false,
+    }
+    expect(guidanceReadiness(guidance({ mounted: { skill: 'ponytail' } }), partial)).toBe(
+      'readiness unknown',
+    )
+    const complete: ReadinessSources = {
+      sections: live.sections,
+      skills: new Set(),
+      skillsComplete: true,
+    }
+    expect(guidanceReadiness(guidance({ mounted: { skill: 'ponytail' } }), complete)).toBe(
+      'not mounted',
+    )
+  })
+
+  it('leaves an undeclared guidance row without a readiness word', () => {
+    expect(guidanceReadiness(guidance({}), live)).toBeUndefined()
   })
 })

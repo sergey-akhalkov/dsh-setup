@@ -44,3 +44,35 @@ export function rowState(row, aggregate, registry) {
     }
     return { status: 'silent', note: SILENT_NOTE };
 }
+/**
+ * Check a guidance row's declared prompt section and/or skill against the live
+ * registries. `not mounted` wins over unknown, because a confirmed absence is
+ * the only evidence that needs attention. An undeclared row has no readiness.
+ */
+export function guidanceReadiness(row, sources) {
+    const mounted = row.mounted;
+    if (mounted === undefined)
+        return undefined;
+    const checks = [];
+    if (mounted.section !== undefined) {
+        checks.push(sources.sections === undefined
+            ? 'readiness unknown'
+            : sources.sections.has(mounted.section)
+                ? 'mounted'
+                : 'not mounted');
+    }
+    if (mounted.skill !== undefined) {
+        checks.push(sources.skills === undefined
+            ? 'readiness unknown'
+            : sources.skills.has(mounted.skill)
+                ? 'mounted'
+                : sources.skillsComplete
+                    ? 'not mounted'
+                    : 'readiness unknown');
+    }
+    if (checks.includes('not mounted'))
+        return 'not mounted';
+    if (checks.includes('readiness unknown'))
+        return 'readiness unknown';
+    return 'mounted';
+}

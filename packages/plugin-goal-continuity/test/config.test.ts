@@ -1,10 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
   DEFAULT_BLOCK_REVIEW_CONFIG,
+  DEFAULT_CHECKPOINT_CONFIG,
   DEFAULT_CONFIG,
-  DEFAULT_SPEED_REVIEW_CONFIG,
   resolveConfig,
 } from '../lib/index.js'
 
@@ -28,21 +28,20 @@ const BLOCK_REVIEW_DEFAULTS = {
   onExhausted: 'deny',
 }
 
-const SPEED_REVIEW_DEFAULTS = {
+const CHECKPOINT_DEFAULTS = {
   enabled: true,
-  provider: 'spawn',
-  model: 'deepseek-flash',
-  reasoningEffort: 'max',
-  minToolCalls: 12,
-  minMinutes: 5,
-  slowCallMs: 120000,
-  everyRound: false,
-  timeoutMs: 120000,
-  maxPerGoal: 20,
-  brief: true,
+  minToolCalls: 4,
+  requireWrite: true,
+  maxBlocks: 3,
+  enforceParallel: true,
+  maxMessageChars: 1200,
 }
 
 describe('goal continuity configuration', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('applies the documented defaults', () => {
     expect(DEFAULT_CONFIG).toEqual({
       enabled: true,
@@ -53,12 +52,12 @@ describe('goal continuity configuration', () => {
       maxRoundExtensions: 2,
       hardMaxGoalRounds: 5000,
       blockReview: BLOCK_REVIEW_DEFAULTS,
-      speedReview: SPEED_REVIEW_DEFAULTS,
+      checkpoint: CHECKPOINT_DEFAULTS,
     })
     expect(DEFAULT_BLOCK_REVIEW_CONFIG).toEqual(BLOCK_REVIEW_DEFAULTS)
-    expect(DEFAULT_SPEED_REVIEW_CONFIG).toEqual(SPEED_REVIEW_DEFAULTS)
+    expect(DEFAULT_CHECKPOINT_CONFIG).toEqual(CHECKPOINT_DEFAULTS)
     expect(Object.isFrozen(DEFAULT_BLOCK_REVIEW_CONFIG)).toBe(true)
-    expect(Object.isFrozen(DEFAULT_SPEED_REVIEW_CONFIG)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_CHECKPOINT_CONFIG)).toBe(true)
     expect(resolveConfig(undefined)).toEqual(DEFAULT_CONFIG)
     expect(resolveConfig({})).toEqual(DEFAULT_CONFIG)
   })
@@ -86,18 +85,13 @@ describe('goal continuity configuration', () => {
           onUnavailable: 'deny',
           onExhausted: 'allow',
         },
-        speedReview: {
+        checkpoint: {
           enabled: false,
-          provider: 'fork',
-          model: 'other-model',
-          reasoningEffort: 'high',
-          minToolCalls: 0,
-          minMinutes: 0,
-          slowCallMs: 0,
-          everyRound: true,
-          timeoutMs: 50,
-          maxPerGoal: 0,
-          brief: false,
+          minToolCalls: 1,
+          requireWrite: false,
+          maxBlocks: 0,
+          enforceParallel: false,
+          maxMessageChars: 200,
         },
       }),
     ).toEqual({
@@ -121,31 +115,27 @@ describe('goal continuity configuration', () => {
         onUnavailable: 'deny',
         onExhausted: 'allow',
       },
-      speedReview: {
+      checkpoint: {
         enabled: false,
-        provider: 'fork',
-        model: 'other-model',
-        reasoningEffort: 'high',
-        minToolCalls: 0,
-        minMinutes: 0,
-        slowCallMs: 0,
-        everyRound: true,
-        timeoutMs: 50,
-        maxPerGoal: 0,
-        brief: false,
+        minToolCalls: 1,
+        requireWrite: false,
+        maxBlocks: 0,
+        enforceParallel: false,
+        maxMessageChars: 200,
       },
     })
   })
 
   it('returns a frozen complete value', () => {
-    const resolved = resolveConfig({ maxSessionResumes: 3, speedReview: { minToolCalls: 7 } })
+    const resolved = resolveConfig({ maxSessionResumes: 3, checkpoint: { minToolCalls: 7 } })
     expect(Object.isFrozen(resolved)).toBe(true)
     expect(Object.isFrozen(resolved.blockReview)).toBe(true)
-    expect(Object.isFrozen(resolved.speedReview)).toBe(true)
+    expect(Object.isFrozen(resolved.checkpoint)).toBe(true)
     expect(resolved.maxSessionResumes).toBe(3)
     expect(resolved.enabled).toBe(true)
     expect(resolved.blockReview.reviewerPreset).toBe('goal-reviewer')
-    expect(resolved.speedReview.minToolCalls).toBe(7)
+    expect(resolved.checkpoint.minToolCalls).toBe(7)
+    expect(resolved.checkpoint.requireWrite).toBe(true)
   })
 
   it('rejects a non-object config', () => {
@@ -163,11 +153,21 @@ describe('goal continuity configuration', () => {
     expect(() => resolveConfig({ blockReview: { reviewerPresett: 'x' } })).toThrow(
       /unknown config field/u,
     )
+    expect(() => resolveConfig({ checkpoint: { unknown: true } })).toThrow(
+      /unknown config field "checkpoint.unknown"/u,
+    )
+    expect(() => resolveConfig({ checkpoint: { minToolCall: 3 } })).toThrow(/unknown config field/u)
   })
 
   it('rejects a malformed block review section', () => {
     for (const value of [null, [], 'review', 4]) {
       expect(() => resolveConfig({ blockReview: value })).toThrow(/blockReview/u)
+    }
+  })
+
+  it('rejects a malformed checkpoint section', () => {
+    for (const value of [null, [], 'checkpoint', 4]) {
+      expect(() => resolveConfig({ checkpoint: value })).toThrow(/checkpoint/u)
     }
   })
 
@@ -181,6 +181,13 @@ describe('goal continuity configuration', () => {
       expect(() => resolveConfig({ blockReview: { enabled: value } })).toThrow(
         /blockReview\.enabled/u,
       )
+    }
+    for (const field of ['enabled', 'requireWrite', 'enforceParallel']) {
+      for (const value of ['yes', 1, 0, null]) {
+        expect(() => resolveConfig({ checkpoint: { [field]: value } })).toThrow(
+          new RegExp(`checkpoint\\.${field}`, 'u'),
+        )
+      }
     }
   })
 
@@ -239,82 +246,55 @@ describe('goal continuity configuration', () => {
     }
   })
 
-  it('rejects an unknown or malformed speed review section', () => {
-    for (const value of [null, [], 'review', 4]) {
-      expect(() => resolveConfig({ speedReview: value })).toThrow(/speedReview/u)
-    }
-    expect(() => resolveConfig({ speedReview: { unknown: true } })).toThrow(
-      /unknown config field "speedReview.unknown"/u,
+  it('accepts the checkpoint integer boundaries and rejects out-of-range values', () => {
+    expect(resolveConfig({ checkpoint: { minToolCalls: 1 } }).checkpoint.minToolCalls).toBe(1)
+    expect(resolveConfig({ checkpoint: { minToolCalls: 1000 } }).checkpoint.minToolCalls).toBe(1000)
+    expect(resolveConfig({ checkpoint: { maxBlocks: 0 } }).checkpoint.maxBlocks).toBe(0)
+    expect(resolveConfig({ checkpoint: { maxBlocks: 100 } }).checkpoint.maxBlocks).toBe(100)
+    expect(resolveConfig({ checkpoint: { maxMessageChars: 200 } }).checkpoint.maxMessageChars).toBe(
+      200,
     )
-    expect(() => resolveConfig({ speedReview: { minToolCall: 3 } })).toThrow(
-      /unknown config field/u,
-    )
-  })
+    expect(
+      resolveConfig({ checkpoint: { maxMessageChars: 20_000 } }).checkpoint.maxMessageChars,
+    ).toBe(20_000)
 
-  it('rejects every invalid speed review boolean', () => {
-    for (const field of ['enabled', 'everyRound', 'brief']) {
-      for (const value of ['yes', 1, 0, null]) {
-        expect(() => resolveConfig({ speedReview: { [field]: value } })).toThrow(
-          new RegExp(`speedReview\\.${field}`, 'u'),
-        )
-      }
-    }
-  })
-
-  it('rejects every invalid speed review string', () => {
-    for (const field of ['provider', 'model', 'reasoningEffort']) {
-      for (const value of ['', '   ', 5, null, true]) {
-        expect(() => resolveConfig({ speedReview: { [field]: value } })).toThrow(
-          new RegExp(`speedReview\\.${field}`, 'u'),
-        )
-      }
-    }
-  })
-
-  it('accepts the minMinutes boundaries and rejects out-of-range values', () => {
-    expect(resolveConfig({ speedReview: { minMinutes: 0 } }).speedReview.minMinutes).toBe(0)
-    expect(resolveConfig({ speedReview: { minMinutes: 1440 } }).speedReview.minMinutes).toBe(1440)
-    expect(resolveConfig({ speedReview: { minMinutes: 0.5 } }).speedReview.minMinutes).toBe(0.5)
-    for (const value of [-1, 1441, 1.5e9, Number.NaN, Number.POSITIVE_INFINITY, '5', null]) {
-      expect(() => resolveConfig({ speedReview: { minMinutes: value } })).toThrow(
-        /speedReview\.minMinutes/u,
-      )
-    }
-  })
-
-  it('accepts every speed review integer boundary value', () => {
-    expect(resolveConfig({ speedReview: { minToolCalls: 0 } }).speedReview.minToolCalls).toBe(0)
-    expect(resolveConfig({ speedReview: { minToolCalls: 1000 } }).speedReview.minToolCalls).toBe(
-      1000,
-    )
-    expect(resolveConfig({ speedReview: { slowCallMs: 0 } }).speedReview.slowCallMs).toBe(0)
-    expect(resolveConfig({ speedReview: { slowCallMs: 3_600_000 } }).speedReview.slowCallMs).toBe(
-      3_600_000,
-    )
-    expect(resolveConfig({ speedReview: { timeoutMs: 50 } }).speedReview.timeoutMs).toBe(50)
-    expect(resolveConfig({ speedReview: { timeoutMs: 3_600_000 } }).speedReview.timeoutMs).toBe(
-      3_600_000,
-    )
-    expect(resolveConfig({ speedReview: { maxPerGoal: 0 } }).speedReview.maxPerGoal).toBe(0)
-    expect(resolveConfig({ speedReview: { maxPerGoal: 100 } }).speedReview.maxPerGoal).toBe(100)
-  })
-
-  it('rejects every invalid speed review integer', () => {
     const invalid: Record<string, unknown[]> = {
-      minToolCalls: [-1, 1001, 1.5, '12', Number.NaN],
-      slowCallMs: [-1, 3_600_001, 1.5, '120000', Number.POSITIVE_INFINITY],
-      timeoutMs: [49, 3_600_001, 1.5, '120000', Number.NaN],
-      maxPerGoal: [-1, 101, 1.5, '20'],
+      minToolCalls: [0, 1001, 1.5, '4', Number.NaN],
+      maxBlocks: [-1, 101, 1.5, '3'],
+      maxMessageChars: [199, 20_001, 1.5, '1200', Number.POSITIVE_INFINITY],
     }
     for (const [field, values] of Object.entries(invalid)) {
       for (const value of values) {
-        expect(() => resolveConfig({ speedReview: { [field]: value } })).toThrow(
-          new RegExp(`speedReview\\.${field}`, 'u'),
+        expect(() => resolveConfig({ checkpoint: { [field]: value } })).toThrow(
+          new RegExp(`checkpoint\\.${field}`, 'u'),
         )
       }
     }
-    expect(resolveConfig({ speedReview: { minToolCalls: 0 } }).speedReview.minToolCalls).toBe(0)
-    expect(resolveConfig({ speedReview: { maxPerGoal: 0 } }).speedReview.maxPerGoal).toBe(0)
+  })
+
+  it('accepts a legacy speedReview object, warns once, and ignores it', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const legacy = {
+      enabled: true,
+      provider: 'spawn',
+      model: 'deepseek-flash',
+      reasoningEffort: 'max',
+      minToolCalls: 12,
+      minMinutes: 5,
+      slowCallMs: 120000,
+      everyRound: false,
+      timeoutMs: 120000,
+      maxPerGoal: 20,
+      brief: true,
+    }
+    expect(resolveConfig({ speedReview: legacy })).toEqual(DEFAULT_CONFIG)
+    expect(resolveConfig({ speedReview: legacy })).toEqual(DEFAULT_CONFIG)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('speedReview')
+    expect(String(warn.mock.calls[0]?.[0])).toContain('deprecated')
+    for (const value of [null, [], 'review', 4]) {
+      expect(() => resolveConfig({ speedReview: value })).toThrow(/speedReview/u)
+    }
   })
 
   it('fails the plugin load on an invalid row config', () => {
@@ -325,11 +305,11 @@ describe('goal continuity configuration', () => {
     expect(() => apply(ctx, { blockReview: { timeoutMs: 0 } } as never)).toThrow(
       /blockReview\.timeoutMs/u,
     )
-    expect(() => apply(ctx, { speedReview: { minToolCalls: -1 } } as never)).toThrow(
-      /speedReview\.minToolCalls/u,
+    expect(() => apply(ctx, { checkpoint: { minToolCalls: 0 } } as never)).toThrow(
+      /checkpoint\.minToolCalls/u,
     )
-    expect(() => apply(ctx, { speedReview: { brief: 'yes' } } as never)).toThrow(
-      /speedReview\.brief/u,
+    expect(() => apply(ctx, { checkpoint: { enforceParallel: 'yes' } } as never)).toThrow(
+      /checkpoint\.enforceParallel/u,
     )
   })
 })

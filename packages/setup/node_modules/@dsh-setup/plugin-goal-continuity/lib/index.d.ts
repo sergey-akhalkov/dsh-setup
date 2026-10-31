@@ -9,7 +9,7 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 /** Cordis plugin name, equal to the package name. */
 export declare const name = "@dsh-setup/plugin-goal-continuity";
-/** Services the supervisor needs. */
+/** Services the supervisor and the checkpoint tool need. */
 export declare const inject: string[];
 /** Independent block-review policy nested under `blockReview`. */
 export interface BlockReviewConfig {
@@ -36,30 +36,20 @@ export interface BlockReviewConfig {
     /** Policy once `maxReviewsPerGoal` is reached (default `deny`). */
     onExhausted?: 'deny' | 'allow';
 }
-/** Independent goal-round speed-review policy nested under `speedReview`. */
-export interface SpeedReviewConfig {
-    /** Review completed goal rounds for cost (default true); the supervisor keeps running when false. */
+/** Work-checkpoint policy nested under `checkpoint`. */
+export interface CheckpointConfig {
+    /** Require a checkpoint at a substantial pause (default true). */
     enabled?: boolean;
-    /** Registered subagent provider that starts the reviewer (default `spawn`). */
-    provider?: string;
-    /** Reviewer model; omitted provider options fall back to the provider defaults. */
-    model?: string;
-    /** Reviewer reasoning effort; same fallback as `model`. */
-    reasoningEffort?: string;
-    /** Review a round with at least this many tool calls (default 12). */
+    /** A turn needs at least this many tool calls before the checkpoint is required (default 4). */
     minToolCalls?: number;
-    /** Review a round that lasted at least this many minutes (default 5). */
-    minMinutes?: number;
-    /** Review a round with one tool call at least this long in milliseconds (default 120000). */
-    slowCallMs?: number;
-    /** Review every completed goal round regardless of cost (default false). */
-    everyRound?: boolean;
-    /** One review's wall-clock bound in milliseconds (default 120000). */
-    timeoutMs?: number;
-    /** Reviews a single goal may start (default 20); a reused round record is free. */
-    maxPerGoal?: number;
-    /** Inject the next-round speed brief (default true). */
-    brief?: boolean;
+    /** Also require a successful write or worker start (default true). */
+    requireWrite?: boolean;
+    /** Refusals allowed per turn before the close is allowed UNCHECKED (default 3). */
+    maxBlocks?: number;
+    /** Require a tagged worker start after a parallel checkpoint (default true). */
+    enforceParallel?: boolean;
+    /** Bound for the injected checkpoint request (default 1200 characters). */
+    maxMessageChars?: number;
 }
 /** Row configuration. Every field is optional; omission selects the documented default. */
 export interface Config {
@@ -79,8 +69,10 @@ export interface Config {
     hardMaxGoalRounds?: number;
     /** Independent review of a proposed goal block (enabled by default). */
     blockReview?: BlockReviewConfig;
-    /** Independent cost review of a completed goal round (enabled by default). */
-    speedReview?: SpeedReviewConfig;
+    /** Structured work checkpoint at a substantial pause (enabled by default). */
+    checkpoint?: CheckpointConfig;
+    /** Deprecated and ignored: accepted so an older profile still loads. */
+    speedReview?: Record<string, unknown>;
 }
 /** Fully resolved block-review policy; the plugin never runs on partial values. */
 export interface ResolvedBlockReviewConfig {
@@ -96,19 +88,14 @@ export interface ResolvedBlockReviewConfig {
     readonly onUnavailable: 'deny' | 'allow';
     readonly onExhausted: 'deny' | 'allow';
 }
-/** Fully resolved goal-round speed-review policy; the plugin never runs on partial values. */
-export interface ResolvedSpeedReviewConfig {
+/** Fully resolved work-checkpoint policy; the plugin never runs on partial values. */
+export interface ResolvedCheckpointConfig {
     readonly enabled: boolean;
-    readonly provider: string;
-    readonly model: string;
-    readonly reasoningEffort: string;
     readonly minToolCalls: number;
-    readonly minMinutes: number;
-    readonly slowCallMs: number;
-    readonly everyRound: boolean;
-    readonly timeoutMs: number;
-    readonly maxPerGoal: number;
-    readonly brief: boolean;
+    readonly requireWrite: boolean;
+    readonly maxBlocks: number;
+    readonly enforceParallel: boolean;
+    readonly maxMessageChars: number;
 }
 /** Fully resolved configuration; the plugin never runs on partial values. */
 export interface ResolvedConfig {
@@ -120,12 +107,12 @@ export interface ResolvedConfig {
     readonly maxRoundExtensions: number;
     readonly hardMaxGoalRounds: number;
     readonly blockReview: ResolvedBlockReviewConfig;
-    readonly speedReview: ResolvedSpeedReviewConfig;
+    readonly checkpoint: ResolvedCheckpointConfig;
 }
 /** Documented block-review defaults; the composition fragment repeats them. */
 export declare const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig;
-/** Documented speed-review defaults; the composition fragment repeats them. */
-export declare const DEFAULT_SPEED_REVIEW_CONFIG: ResolvedSpeedReviewConfig;
+/** Documented work-checkpoint defaults; the composition fragment repeats them. */
+export declare const DEFAULT_CHECKPOINT_CONFIG: ResolvedCheckpointConfig;
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
 export declare const DEFAULT_CONFIG: ResolvedConfig;
 /**
@@ -136,8 +123,8 @@ export declare const DEFAULT_CONFIG: ResolvedConfig;
  */
 export declare function resolveConfig(raw: unknown): ResolvedConfig;
 /**
- * Install the continuity supervisor, the block-review gate, and the round speed
- * review. The configuration is validated at load, so a bad profile fails
- * loudly; supervision itself fails open and both reviews fail open.
+ * Install the continuity supervisor, the block-review gate, and the work
+ * checkpoint. The configuration is validated at load, so a bad profile fails
+ * loudly; supervision itself fails open and both gates fail open.
  */
 export declare function apply(ctx: Context, config?: Config): void;

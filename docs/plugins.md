@@ -169,28 +169,32 @@ bounded budget, and records a visible `continuity-stopped` block on real stops. 
 non-waking (`agent.inject`); the supervisor never starts a turn, forks the driver, or calls the
 model.
 
-The same row makes two bounded, read-only review calls with the shared `goal-reviewer` preset:
+The same row makes one bounded, read-only review call and delivers the work-checkpoint capability:
 
-- a **block review** gates a proposed `blocked` update through a `tools/pre-execute` decision;
-- a **speed review** measures one completed goal round and, when it crosses a cost threshold, starts
-  one background child that returns either `no-action` or one `speedup` action with a `speedup-id`.
-  The action is recorded under `.dsh/goal-continuity/retro/`, announced in the next goal round's
-  brief, and enforced by a follow-through gate that accepts a tagged worker start or a matching
-  `task_progress` decline. The review, its brief, and the gate fail open and never block the goal.
+- a **block review** gates a proposed `blocked` update through a `tools/pre-execute` decision, using
+  the shared `goal-reviewer` preset;
+- a **work checkpoint** requires one structured `work_checkpoint` decision at a substantial root
+  turn close: it steers a bounded request naming the turn's tool calls, written paths, last shell
+  result, failed tool, and worker starts, refuses the close until a successful checkpoint exists for
+  the turn (at most `maxBlocks` refusals, then a visible UNCHECKED notice), and, when the decision
+  declares parallel remaining work, requires a tagged worker start or a serial reason. The request is
+  non-waking, and the record stays local under `.dsh/work-checkpoints/`.
 
 The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: non-goal`,
 `maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, `hardMaxGoalRounds: 5000`,
-`blockReview.enabled: true`, and `speedReview.enabled: true`. The speed review defaults to
-`minToolCalls: 12`, `minMinutes: 5`, `slowCallMs: 120000`, `everyRound: false`, `maxPerGoal: 20`,
-`timeoutMs: 120000`, and `brief: true`. Restart resume is opt-in: set `resumeAfterRestart: true` on
-the row in the profile's `cordis.patch.yml`. Set `speedReview.enabled: false` to keep continuity and
-the block review while disabling only the speed loop, or set `enabled: false`/disable the row to
-restore stock DSH goal behavior with no disarm, resume, extension, block, suppression, notice, or
-either review.
+`blockReview.enabled: true`, and `checkpoint.enabled: true`. The checkpoint defaults to
+`minToolCalls: 4`, `requireWrite: true`, `maxBlocks: 3`, `enforceParallel: true`, and
+`maxMessageChars: 1200`. Restart resume is opt-in: set `resumeAfterRestart: true` on the row in the
+profile's `cordis.patch.yml`. Set `checkpoint.enabled: false` to keep continuity and the block review
+while disabling only the checkpoint, or set `enabled: false`/disable the row to restore stock DSH goal
+behavior with no disarm, resume, extension, block, suppression, notice, block review, or checkpoint.
 
-The speed-review loop was added by the `add-goal-round-retro` change; the row
-`dsh-setup-goal-continuity` and the accepted requirements in the `goal-continuity` spec describe its
-behavior.
+The checkpoint was added by the `replace-rare-triggers-with-work-checkpoints` change, which removed
+the earlier goal-round speed review; a leftover `speedReview` object in a profile is accepted, warns
+once, and runs nothing. The row `dsh-setup-goal-continuity` and the accepted requirements in the
+`goal-continuity` and `work-checkpoints` specs describe the behavior. The shipped observability map
+attributes the checkpoint request through the `goal-continuity` source kind and the tool call through
+a `tool: work_checkpoint` match.
 
 ## Observability view
 
@@ -208,36 +212,73 @@ local-day buckets; `month` is 30 local-day buckets. Wider ranges cover every ses
 session's workspace whose events fall in the window, subagent children included, and a seed's copied
 prefix is skipped at `inheritedEventCount`, so an event counts once.
 
-**Dashboard, not a log browser.** The view opens on a health verdict and four KPIs (turns, steps, tool
-calls, errors), then one activity chart for the range with the error share in red, plugin health cards
-grouped as Needs attention / Active / Silent (each with a status word, counts, last activity, a
-sparkline, and its tool chips), the tool-call distribution, and a collapsed statement of blind spots.
-A card expands to at most five recent traces — time, row, turn, tool, error flag — and message text
-and tool arguments never appear. Built-in aggregates feed the KPIs, chart, and tools list while
-configured rows become cards, so the same event is never counted twice in the dashboard totals.
+**Dashboard, not a log browser.** The view opens on a health verdict and four KPIs (turns, steps,
+tool calls, failures), then one activity chart for the range with the error share in red, the
+collapsed failure list, plugin health cards grouped as Needs attention / Active / Silent, the
+guidance list, the tool-call distribution, and a collapsed statement of blind spots. The failure
+count is a control: it reveals the failure list and moves focus to it. Configured silent rows are
+compact rows carrying their trigger and the window denominators, with the absence note once in the
+section header. An error card names its newest failure's tool and error identity and links to the
+filtered failure list. A card expands to at most five recent traces — time, row, turn, tool, error
+flag — and message text and tool arguments never appear. Built-in aggregates feed the KPIs, chart,
+and tools list while configured rows become cards, so the same event is never counted twice in the
+dashboard totals.
+
+**Failures are a list, not a number.** Every failed or cut record in the window is listed newest
+first, independent of the configured rows and of the per-row trace cap: its time, session (title, or a
+short id when the title is unavailable), turn, step, tool, and the error identity the log records
+(`name`/`code`). Severity comes from the log's own reasons: `turn failure` (`turn/end` with `error`),
+`turn cut` (`max-tokens` or `interrupted`), and `tool failure` (`tool/result` with an error). A tool
+failure is `recovered` when its turn ended `completed`; recovery is resolved by turn over the
+session's full record set, so a closer outside the window still counts. `aborted`, `blocked`, and
+`forked` closers are not failures. The rendered list is bounded to the newest 200 entries while the
+counts cover the whole window, and the list states the bound. Raw failure reasons, message text, and
+tool arguments are never listed: the view shows metadata only, and one click opens the inspector that
+holds the rest. An entry from the open session focuses the Trajectory inspector on the recorded call;
+an entry from another session opens that session (focus is not carried across a session boundary);
+"Fix in a new session" opens a blank with a bounded draft naming the listed failures and instructions
+to read their events and fix the root causes. The draft is never submitted automatically and never
+replaces existing draft text (`whenDraftExists: 'append'`). If the client cannot open a session, the
+control is absent and the list stays copyable.
+
+**Needs attention is earned.** The verdict is the union of a turn failure, a turn cut, a tool
+failure its turn did not recover from, a configured tool that is not loaded, and a declared prompt
+contribution that is not mounted. Silence and recovered failures never raise it, and an unknown
+readiness check never counts as a fault.
 
 **Rows are data.** A configured row has an `id`, a `label`, a `kind`, and a `match`: one predicate or
 an any-of list of predicates over `eventType`, `tool`, `sourceKind` (an injected message's declared
 kind), `abortPrefix` (a hook abort reason's prefix), `command` (a slash command's name), and at most
 one `argument` field/value on a tool call. A `guidance` row has no match; it names a prompt-only
-plugin honestly instead of letting it disappear. Unknown fields are rejected at startup, naming the
+plugin honestly instead of letting it disappear. Two optional descriptors keep the map honest: any
+row may carry a `trigger` sentence, shown while the row is silent, and a `guidance` row may carry
+`mounted` with a `section` and/or `skill` name. Readiness checks the declared names against the live
+registries — the assembled system prompt's section names and a completed skill catalog — and reports
+`mounted`, `not mounted`, or `readiness unknown`. A missing service, a throwing assembly, or partial
+skill discovery reports unknown, never `not mounted`; only a confirmed `not mounted` needs attention.
+Descriptor and predicate fields are validated at startup, and unknown fields are rejected naming the
 field. The configuration is never executed.
 
 With no configuration the built-in sets still show turns, steps, tool calls, one row per observed
 tool name, one row per observed injected-message source kind, one row per observed abort prefix, and
 errors. The shipped signal map lives in `packages/setup/defaults.yml` and maps each shipped plugin's
-tools, message kinds, aborts, and commands to its own row; its test fails when a tool is renamed or a
-plugin is removed.
+tools, message kinds, aborts, and commands to its own row; its test fails when a tool is renamed, a
+plugin is removed, or a declared section or skill is no longer registered.
 
 **Status words.** `active` means traces in the period, `error` means at least one failed trace,
 `not loaded` means a tool the row names is absent from the live tool registry, and `silent` means
 configured but no traces — labelled explicitly as the absence of traces, not proof of a fault. A
-guidance row has no status: it is always `guidance only` and never enters the other four. Every state
-is written in words as well as colour.
+silent row is compact and states what it waits for (its `trigger`, when configured) and the window's
+activity denominators (turns and tool calls) beside its zero; the absence note appears once per
+section. A guidance row has no activity status: it is `guidance only`, or its readiness word when it
+declares a contribution. Every state is written in words as well as colour. The tool distribution
+draws each tool's failing share over the calls made inside the window, joined by call identity, so
+the share never exceeds the call count.
 
-**What it cannot see.** The view names these blind spots rather than implying full coverage: a
-prompt-only plugin's effect on a turn, a plugin that fails while loading (no session event), UI
-rendering effects, and whether the model complied with a prompted rule.
+**What it cannot see.** The view names these blind spots rather than implying full coverage: a plugin
+that fails while loading and leaves no registered tool, prompt section, or skill; UI rendering
+effects; and whether the model complied with a prompted rule. Delivery of a declared contribution is
+checked; compliance with its text is not.
 
 To add a custom signal, override the row in the profile's `cordis.patch.yml`. A configuration patch
 replaces the whole `config` object, so restate every row the profile needs (start from the shipped
@@ -250,11 +291,13 @@ map in `packages/setup/defaults.yml`):
       - id: my-tool
         label: My tool
         kind: signal
+        trigger: a my_tool call runs
         match:
           - tool: my_tool
       - id: my-notes-writes
         label: My notes writes
         kind: signal
+        trigger: a write targets notes.md
         match:
           - tool: write
             argument:
@@ -263,6 +306,9 @@ map in `packages/setup/defaults.yml`):
       - id: my-skill
         label: My plugin
         kind: guidance
+        trigger: the my-plugin skill is loaded
+        mounted:
+          skill: my-plugin
 ```
 
 ## Adding a package

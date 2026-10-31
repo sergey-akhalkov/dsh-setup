@@ -91,7 +91,7 @@ describe('model-facing budget', () => {
     expect(docs).toContain('reasoningEffort: max')
   })
 
-  it('documents the lane assignment trigger, ledger, tag, and deprecated boundary', () => {
+  it('documents the lane triggers as profile rules and names the checkpoint owner', () => {
     const skill = read('SKILL.md')
     const docs = readFileSync(docsPath, 'utf8')
     const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
@@ -100,15 +100,24 @@ describe('model-facing budget', () => {
       expect(text).toContain('lane-tag')
       expect(text).toContain('lane-boundary')
       expect(text).toContain('lane-fanout')
+      expect(text).toContain('work-checkpoints')
+      expect(text).toContain('work_checkpoint')
+      expect(text).toContain('`implementation-work` and `lane-assignment` triggers')
     }
-    expect(skill).toContain('| `lane-fanout` | `lane-assignment` | note | strict |')
     expect(skill).toContain('`lane-boundary` (deprecated)')
     expect(skill).toContain('Per-lane serial escape')
     expect(skill).toContain('Host restart')
     expect(docs).toContain('lane-tag: <change>#<n>')
     expect(docs).toContain('lane-boundary` is deprecated')
-    expect(fragment).toContain('when: lane-assignment')
+    expect(fragment).not.toContain('when: lane-assignment')
+    expect(fragment).not.toContain('when: implementation-work')
     expect(fragment).not.toContain('when: lane-boundary')
+    // The task-completion requirement belongs to a profile that configures the
+    // implementation-work rule, never to the shipped defaults.
+    expect(skill).toContain('The shipped defaults configure no `implementation-work` rule')
+    expect(skill).toContain('may pause mid-task through the goal-continuity')
+    expect(skill).not.toContain('With the shipped defaults the gate refuses')
+    expect(docs).toMatch(/when a profile configures/iu)
   })
 })
 

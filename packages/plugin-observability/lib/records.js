@@ -9,13 +9,37 @@ function text(value) {
 function number(value) {
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
+/** Keep only the configured argument fields, as strings, so no raw arguments survive. */
+function argumentValues(raw, fields) {
+    if (raw === undefined || fields === undefined || fields.size === 0)
+        return undefined;
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch {
+        return undefined;
+    }
+    const source = asRecord(parsed);
+    if (source === undefined)
+        return undefined;
+    const values = {};
+    for (const field of fields) {
+        const value = source[field];
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            values[field] = String(value);
+        }
+    }
+    return Object.keys(values).length === 0 ? undefined : values;
+}
 /**
  * Extract the aggregation records a session owns.
  *
  * `start` is the session's durable inheritance boundary: a fork seed copies a
- * parent prefix and owns only what follows it.
+ * parent prefix and owns only what follows it. `fields` names the argument
+ * fields a configured predicate reads; anything else in the arguments is dropped.
  */
-export function extractRecords(sessionId, events, start = 0) {
+export function extractRecords(sessionId, events, start = 0, fields) {
     const records = [];
     const callById = new Map();
     let currentTurn;
@@ -31,26 +55,34 @@ export function extractRecords(sessionId, events, start = 0) {
         let tool;
         let sourceKind;
         let command;
-        let args;
+        let values;
+        let callId;
+        let errorName;
+        let errorCode;
+        let turnEnd;
         switch (type) {
             case 'tool/call': {
                 tool = text(data.name);
-                args = text(data.arguments);
-                const callId = text(data.callId);
+                callId = text(data.callId);
+                values = argumentValues(text(data.arguments), tool === undefined ? undefined : fields?.get(tool));
                 if (tool !== undefined && callId !== undefined) {
-                    callById.set(callId, args === undefined ? { tool } : { tool, arguments: args });
+                    callById.set(callId, values === undefined ? { tool } : { tool, values });
                 }
                 break;
             }
             case 'tool/result': {
                 const message = asRecord(data.message);
                 const source = asRecord(message?.source);
-                const callId = text(source?.callId);
+                callId = text(source?.callId) ?? text(message?.toolCallId);
                 const call = callId === undefined ? undefined : callById.get(callId);
                 tool = call?.tool;
-                // Keep the originating call's arguments with its result, so an
+                // The result owns the call's configured argument fields, so an
                 // argument-scoped signal can own the failure without message text.
-                args = call?.arguments;
+                values = call?.values;
+                // Only the failure identity is kept; the raw reason is user-facing text.
+                const error = asRecord(data.error);
+                errorName = text(error?.name);
+                errorCode = text(error?.code);
                 if (message?.isError === true || data.error !== undefined)
                     failed = true;
                 break;
@@ -66,8 +98,11 @@ export function extractRecords(sessionId, events, start = 0) {
             }
             case 'turn/end': {
                 const reason = asRecord(data.reason);
-                if (reason?.kind === 'error')
+                turnEnd = text(reason?.kind);
+                if (reason?.kind === 'error') {
                     failed = true;
+                    errorCode = text(asRecord(reason.error)?.code);
+                }
                 if (reason?.kind === 'aborted') {
                     const cause = asRecord(reason.reason);
                     abortPrefix = cause?.kind === 'hook' ? text(cause.reason) : undefined;
@@ -88,8 +123,12 @@ export function extractRecords(sessionId, events, start = 0) {
             ...(sourceKind === undefined ? {} : { sourceKind }),
             ...(abortPrefix === undefined ? {} : { abortPrefix }),
             ...(command === undefined ? {} : { command }),
-            ...(args === undefined ? {} : { arguments: args }),
+            ...(values === undefined ? {} : { argumentValues: values }),
             ...(failed === undefined ? {} : { failed }),
+            ...(callId === undefined ? {} : { callId }),
+            ...(errorName === undefined ? {} : { errorName }),
+            ...(errorCode === undefined ? {} : { errorCode }),
+            ...(turnEnd === undefined ? {} : { turnEnd }),
         });
         if (type === 'turn/end')
             currentTurn = undefined;

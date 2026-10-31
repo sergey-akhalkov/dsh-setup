@@ -21,12 +21,23 @@ export interface Predicate {
     readonly command?: string;
     readonly argument?: ArgumentMatch;
 }
+/**
+ * Declared prompt contribution of a guidance row: the prompt section name
+ * and/or the skill name the named plugin is expected to register.
+ */
+export interface MountedNames {
+    readonly section?: string;
+    readonly skill?: string;
+}
 /** One configured row. */
 export interface Row {
     readonly id: string;
     readonly label: string;
     readonly kind: RowKind;
     readonly match?: readonly Predicate[];
+    /** What the row waits for, shown while it has no traces. */
+    readonly trigger?: string;
+    readonly mounted?: MountedNames;
 }
 /** A configuration error that names the offending field or row. */
 export declare class RowConfigError extends Error {
@@ -37,3 +48,8 @@ export declare class RowConfigError extends Error {
  * signal sets still work on a profile with no configuration.
  */
 export declare function parseRows(raw: unknown): Row[];
+/**
+ * The argument fields configured predicates read, per tool. Extraction keeps
+ * only these values, so raw tool arguments never enter a neutral record.
+ */
+export declare function configuredArgumentFields(rows: readonly Row[]): Map<string, Set<string>>;

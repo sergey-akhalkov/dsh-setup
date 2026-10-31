@@ -62,4 +62,17 @@ describe('always-on contract budget', () => {
     expect(contract).toContain('never converted into a permission request')
     expect(contract).toContain('foreign or stale grant')
   })
+
+  it('makes a multi-step task a goal and exempts single-turn requests', () => {
+    expect(contract).toContain('A multi-step task runs under a goal created before the first step')
+    expect(contract).toContain('single-turn, one-line, or informational request is exempt')
+  })
+
+  it('requires a pause checkpoint with a parallel worker or a serial reason', () => {
+    expect(contract).toContain('`work_checkpoint`')
+    expect(contract).toContain('done, verified, remaining, and parallel lanes')
+    expect(contract).toContain('starts a worker for at least one lane before the turn closes')
+    expect(contract).toContain('in the main agent')
+    expect(contract).toContain('`serialReason`')
+  })
 })

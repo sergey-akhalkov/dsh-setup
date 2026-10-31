@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { mkdir, readdir, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
@@ -13,7 +13,12 @@ import type {
   SubagentProvider,
   SubagentRuntime,
 } from '@deepseek-ai/dsh-subagent'
-import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
+import type {
+  JsonSchemaNode,
+  PreToolDecision,
+  ToolDefinition,
+  ToolExecution,
+} from '@deepseek-ai/dsh-tools'
 import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -27,8 +32,8 @@ declare module '@deepseek-ai/dsh-llm' {
 /** Cordis plugin name, equal to the package name. */
 export const name = '@dsh-setup/plugin-goal-continuity'
 
-/** Services the supervisor needs. */
-export const inject = ['agents', 'goals']
+/** Services the supervisor and the checkpoint tool need. */
+export const inject = ['agents', 'goals', 'tools']
 
 /** Independent block-review policy nested under `blockReview`. */
 export interface BlockReviewConfig {
@@ -56,30 +61,20 @@ export interface BlockReviewConfig {
   onExhausted?: 'deny' | 'allow'
 }
 
-/** Independent goal-round speed-review policy nested under `speedReview`. */
-export interface SpeedReviewConfig {
-  /** Review completed goal rounds for cost (default true); the supervisor keeps running when false. */
+/** Work-checkpoint policy nested under `checkpoint`. */
+export interface CheckpointConfig {
+  /** Require a checkpoint at a substantial pause (default true). */
   enabled?: boolean
-  /** Registered subagent provider that starts the reviewer (default `spawn`). */
-  provider?: string
-  /** Reviewer model; omitted provider options fall back to the provider defaults. */
-  model?: string
-  /** Reviewer reasoning effort; same fallback as `model`. */
-  reasoningEffort?: string
-  /** Review a round with at least this many tool calls (default 12). */
+  /** A turn needs at least this many tool calls before the checkpoint is required (default 4). */
   minToolCalls?: number
-  /** Review a round that lasted at least this many minutes (default 5). */
-  minMinutes?: number
-  /** Review a round with one tool call at least this long in milliseconds (default 120000). */
-  slowCallMs?: number
-  /** Review every completed goal round regardless of cost (default false). */
-  everyRound?: boolean
-  /** One review's wall-clock bound in milliseconds (default 120000). */
-  timeoutMs?: number
-  /** Reviews a single goal may start (default 20); a reused round record is free. */
-  maxPerGoal?: number
-  /** Inject the next-round speed brief (default true). */
-  brief?: boolean
+  /** Also require a successful write or worker start (default true). */
+  requireWrite?: boolean
+  /** Refusals allowed per turn before the close is allowed UNCHECKED (default 3). */
+  maxBlocks?: number
+  /** Require a tagged worker start after a parallel checkpoint (default true). */
+  enforceParallel?: boolean
+  /** Bound for the injected checkpoint request (default 1200 characters). */
+  maxMessageChars?: number
 }
 
 /** Row configuration. Every field is optional; omission selects the documented default. */
@@ -100,8 +95,10 @@ export interface Config {
   hardMaxGoalRounds?: number
   /** Independent review of a proposed goal block (enabled by default). */
   blockReview?: BlockReviewConfig
-  /** Independent cost review of a completed goal round (enabled by default). */
-  speedReview?: SpeedReviewConfig
+  /** Structured work checkpoint at a substantial pause (enabled by default). */
+  checkpoint?: CheckpointConfig
+  /** Deprecated and ignored: accepted so an older profile still loads. */
+  speedReview?: Record<string, unknown>
 }
 
 /** Fully resolved block-review policy; the plugin never runs on partial values. */
@@ -119,19 +116,14 @@ export interface ResolvedBlockReviewConfig {
   readonly onExhausted: 'deny' | 'allow'
 }
 
-/** Fully resolved goal-round speed-review policy; the plugin never runs on partial values. */
-export interface ResolvedSpeedReviewConfig {
+/** Fully resolved work-checkpoint policy; the plugin never runs on partial values. */
+export interface ResolvedCheckpointConfig {
   readonly enabled: boolean
-  readonly provider: string
-  readonly model: string
-  readonly reasoningEffort: string
   readonly minToolCalls: number
-  readonly minMinutes: number
-  readonly slowCallMs: number
-  readonly everyRound: boolean
-  readonly timeoutMs: number
-  readonly maxPerGoal: number
-  readonly brief: boolean
+  readonly requireWrite: boolean
+  readonly maxBlocks: number
+  readonly enforceParallel: boolean
+  readonly maxMessageChars: number
 }
 
 /** Fully resolved configuration; the plugin never runs on partial values. */
@@ -144,7 +136,7 @@ export interface ResolvedConfig {
   readonly maxRoundExtensions: number
   readonly hardMaxGoalRounds: number
   readonly blockReview: ResolvedBlockReviewConfig
-  readonly speedReview: ResolvedSpeedReviewConfig
+  readonly checkpoint: ResolvedCheckpointConfig
 }
 
 /** Id of the setup-declared reviewer preset; the composition fragment repeats it. */
@@ -165,19 +157,14 @@ export const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig = Object.fre
   onExhausted: 'deny',
 })
 
-/** Documented speed-review defaults; the composition fragment repeats them. */
-export const DEFAULT_SPEED_REVIEW_CONFIG: ResolvedSpeedReviewConfig = Object.freeze({
+/** Documented work-checkpoint defaults; the composition fragment repeats them. */
+export const DEFAULT_CHECKPOINT_CONFIG: ResolvedCheckpointConfig = Object.freeze({
   enabled: true,
-  provider: 'spawn',
-  model: 'deepseek-flash',
-  reasoningEffort: 'max',
-  minToolCalls: 12,
-  minMinutes: 5,
-  slowCallMs: 120_000,
-  everyRound: false,
-  timeoutMs: 120_000,
-  maxPerGoal: 20,
-  brief: true,
+  minToolCalls: 4,
+  requireWrite: true,
+  maxBlocks: 3,
+  enforceParallel: true,
+  maxMessageChars: 1200,
 })
 
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
@@ -190,7 +177,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = Object.freeze({
   maxRoundExtensions: 2,
   hardMaxGoalRounds: 5000,
   blockReview: DEFAULT_BLOCK_REVIEW_CONFIG,
-  speedReview: DEFAULT_SPEED_REVIEW_CONFIG,
+  checkpoint: DEFAULT_CHECKPOINT_CONFIG,
 })
 
 /** Bound for one notice summary, matching the harness context-summary bound. */
@@ -284,82 +271,59 @@ function resolveBlockReview(raw: unknown): ResolvedBlockReviewConfig {
   })
 }
 
-/** Integer speed-review fields and their accepted inclusive range. */
-const SPEED_REVIEW_INTEGER_RANGES = {
-  minToolCalls: [0, 1000],
-  slowCallMs: [0, 3_600_000],
-  timeoutMs: [50, 3_600_000],
-  maxPerGoal: [0, 100],
+/** Integer work-checkpoint fields and their accepted inclusive range. */
+const CHECKPOINT_INTEGER_RANGES = {
+  minToolCalls: [1, 1000],
+  maxBlocks: [0, 100],
+  maxMessageChars: [200, 20_000],
 } as const satisfies Record<string, readonly [number, number]>
 
-/** Upper bound for the `minMinutes` threshold; fractions are accepted. */
-const MIN_MINUTES_MAX = 1440
+/** Warn once when a profile still carries the removed speed-review section. */
+let legacySpeedReviewWarned = false
+function warnLegacySpeedReview(): void {
+  if (legacySpeedReviewWarned) return
+  legacySpeedReviewWarned = true
+  console.warn(
+    'goal-continuity: `speedReview` is deprecated and ignored; the speed review no longer runs. Remove the section.',
+  )
+}
 
-/** Validate one nested speed-review policy and apply the documented defaults. */
-function resolveSpeedReview(raw: unknown): ResolvedSpeedReviewConfig {
+/** Validate one nested work-checkpoint policy and apply the documented defaults. */
+function resolveCheckpoint(raw: unknown): ResolvedCheckpointConfig {
   const input = raw === undefined ? {} : raw
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-    throw fieldError('speedReview', 'must be an object')
+    throw fieldError('checkpoint', 'must be an object')
   }
   const record = input as Record<string, unknown>
   for (const key of Object.keys(record)) {
-    if (!Object.hasOwn(DEFAULT_SPEED_REVIEW_CONFIG, key)) {
-      throw new Error(`goal-continuity: unknown config field "speedReview.${key}"`)
+    if (!Object.hasOwn(DEFAULT_CHECKPOINT_CONFIG, key)) {
+      throw new Error(`goal-continuity: unknown config field "checkpoint.${key}"`)
     }
   }
 
-  const boolean = (field: 'enabled' | 'everyRound' | 'brief'): boolean => {
+  const boolean = (field: 'enabled' | 'requireWrite' | 'enforceParallel'): boolean => {
     const value = record[field]
-    if (value === undefined) return DEFAULT_SPEED_REVIEW_CONFIG[field]
-    if (typeof value !== 'boolean') throw fieldError(`speedReview.${field}`, 'must be a boolean')
+    if (value === undefined) return DEFAULT_CHECKPOINT_CONFIG[field]
+    if (typeof value !== 'boolean') throw fieldError(`checkpoint.${field}`, 'must be a boolean')
     return value
   }
-  const text = (field: 'provider' | 'model' | 'reasoningEffort'): string => {
+  const integer = (field: keyof typeof CHECKPOINT_INTEGER_RANGES): number => {
     const value = record[field]
-    if (value === undefined) return DEFAULT_SPEED_REVIEW_CONFIG[field]
-    if (typeof value !== 'string' || value.trim() === '') {
-      throw fieldError(`speedReview.${field}`, 'must be a non-empty string')
-    }
-    return value
-  }
-  const integer = (field: keyof typeof SPEED_REVIEW_INTEGER_RANGES): number => {
-    const value = record[field]
-    if (value === undefined) return DEFAULT_SPEED_REVIEW_CONFIG[field]
-    const [min, max] = SPEED_REVIEW_INTEGER_RANGES[field]
+    if (value === undefined) return DEFAULT_CHECKPOINT_CONFIG[field]
+    const [min, max] = CHECKPOINT_INTEGER_RANGES[field]
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) {
-      throw fieldError(`speedReview.${field}`, `must be an integer between ${min} and ${max}`)
-    }
-    return value
-  }
-  const minutes = (): number => {
-    const value = record.minMinutes
-    if (value === undefined) return DEFAULT_SPEED_REVIEW_CONFIG.minMinutes
-    if (
-      typeof value !== 'number' ||
-      !Number.isFinite(value) ||
-      value < 0 ||
-      value > MIN_MINUTES_MAX
-    ) {
-      throw fieldError(
-        'speedReview.minMinutes',
-        `must be a number between 0 and ${MIN_MINUTES_MAX}`,
-      )
+      throw fieldError(`checkpoint.${field}`, `must be an integer between ${min} and ${max}`)
     }
     return value
   }
 
   return Object.freeze({
     enabled: boolean('enabled'),
-    provider: text('provider'),
-    model: text('model'),
-    reasoningEffort: text('reasoningEffort'),
     minToolCalls: integer('minToolCalls'),
-    minMinutes: minutes(),
-    slowCallMs: integer('slowCallMs'),
-    everyRound: boolean('everyRound'),
-    timeoutMs: integer('timeoutMs'),
-    maxPerGoal: integer('maxPerGoal'),
-    brief: boolean('brief'),
+    requireWrite: boolean('requireWrite'),
+    maxBlocks: integer('maxBlocks'),
+    enforceParallel: boolean('enforceParallel'),
+    maxMessageChars: integer('maxMessageChars'),
   })
 }
 
@@ -376,9 +340,16 @@ export function resolveConfig(raw: unknown): ResolvedConfig {
   }
   const record = input as Record<string, unknown>
   for (const key of Object.keys(record)) {
+    if (key === 'speedReview') continue
     if (!Object.hasOwn(DEFAULT_CONFIG, key)) {
       throw new Error(`goal-continuity: unknown config field "${key}"`)
     }
+  }
+  if (record.speedReview !== undefined) {
+    if (!isRecord(record.speedReview)) {
+      throw fieldError('speedReview', 'must be an object (deprecated; remove the section)')
+    }
+    warnLegacySpeedReview()
   }
 
   const boolean = (field: 'enabled' | 'resumeAfterRestart'): boolean => {
@@ -415,7 +386,7 @@ export function resolveConfig(raw: unknown): ResolvedConfig {
     maxRoundExtensions: integer('maxRoundExtensions'),
     hardMaxGoalRounds: integer('hardMaxGoalRounds'),
     blockReview: resolveBlockReview(record.blockReview),
-    speedReview: resolveSpeedReview(record.speedReview),
+    checkpoint: resolveCheckpoint(record.checkpoint),
   })
 }
 
@@ -478,18 +449,24 @@ interface AgentState {
   cause: StopCause | null
   /** The blocked goal revision already explained by a native-block refusal. */
   refusal: string | null
-  /** The current turn's round metrics while the plugin observed its start. */
-  round: RoundState | undefined
-  /** The turn whose first step already carried the speed brief. */
-  briefedTurn: number | null
-  /** Round keys (`<goal>:<round>`) this process already reviewed; kept after failures. */
-  attemptedRounds: Set<string>
-  /** Reviews attempted per goal id in this process, including failed record writes. */
-  reviewAttempts: Map<string, number>
-  /** Speedup ids already delivered or briefed, so a late delivery cannot repeat. */
-  announcedActions: Set<string>
-  /** Lookup keys this turn already steered for, so one action steers once per turn. */
-  steered: Set<string>
+  /** The current turn's checkpoint refusal budget. */
+  checkpointTurn: CheckpointTurnState | undefined
+  /** The last structured outcome of each shell call in this session, by call id. */
+  shellOutcomes: Map<string, ShellOutcome>
+}
+
+/** What a shell tool's structured result proves about the command's exit. */
+type ShellOutcome = 'success' | 'failure' | 'unreadable'
+
+/** Shell outcomes kept per session; older entries are dropped. */
+const MAX_SHELL_OUTCOMES = 32
+
+/** Per-turn close-gate budget; reset at every turn start and cleared at its end. */
+interface CheckpointTurnState {
+  readonly turn: number
+  refusals: number
+  /** The UNCHECKED notice already explained this close. */
+  unchecked: boolean
 }
 
 /** The three kinds of hook cancellation a turn can carry. */
@@ -608,9 +585,8 @@ function deliverNotice(agent: Agent, text: string, summary: string, max?: number
 /** Read-only tools the reviewer preset mounts and the child-scope allowlist admits. */
 const REVIEWER_TOOLS = Object.freeze(['read', 'grep', 'glob'])
 
-/** Local workspace state: goal-scoped review records, the retro records, and the grant ledger. */
+/** Local workspace state: goal-scoped review records and the grant ledger. */
 const BLOCK_REVIEW_DIR = join('.dsh', 'goal-continuity', 'block-review')
-const RETRO_DIR = join('.dsh', 'goal-continuity', 'retro')
 const GRANTS_PATH = join('.dsh', 'goal-continuity', 'grants.json')
 
 /** Bounds for the evidence bundle and the model-facing strings. */
@@ -807,6 +783,12 @@ function redact(text: string, workspace: string): string {
       .replace(
         /\b((?:access[_-]?token|refresh[_-]?token|id[_-]?token|auth[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|api[_-]?key|token|password|passwd|secret))\b\s*[:=]\s*[^\s,;]+/giu,
         '$1=[redacted]',
+      )
+      // A credential flag followed by a space-separated value, quoted or not
+      // (--token VALUE, --api-key "VALUE", --client-secret 'VALUE').
+      .replace(
+        /(\s--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|key)[A-Za-z0-9_-]*\s+)(\\?"(?:[^"\\]|\\.)*\\?"|'[^']*'|\S+)/giu,
+        '$1[redacted]',
       )
       .replace(
         /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gu,
@@ -1852,17 +1834,13 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
 }
 
 /**
- * Goal-round speed review: the second bounded model call in this plugin. It
- * measures one completed goal round from the session events the supervisor
- * already observes, starts one fresh-context read-only reviewer child, and
- * writes one local record. It never starts, continues, or cancels a turn and
- * never changes the goal.
+ * Work checkpoints: one structured decision recorded at a substantial root turn
+ * close. Detection reads the tool results the supervisor already observes; the
+ * close gate steers, but never starts, continues, or cancels a turn, and never
+ * changes the goal.
  */
 
-/** Activation label of the round reviewer child. */
-const SPEED_REVIEW_LABEL = 'goal-round-review'
-
-/** Tool names that count as worker starts in the metrics and the follow-through gate. */
+/** Tool names that count as worker starts for the trigger and the parallel gate. */
 const WORKER_START_TOOLS = Object.freeze([
   'subagent',
   'subagent_fork',
@@ -1871,713 +1849,80 @@ const WORKER_START_TOOLS = Object.freeze([
   'delegate',
 ])
 
-/** Bounds for round metrics, the round-review prompt, and model-facing strings. */
-const MAX_ROUND_ARGUMENT_CHARS = 400
-const MAX_ROUND_RESULT_CHARS = 300
-const MAX_ROUND_SLOW_CALLS = 5
-const MAX_ROUND_SLOW_SUMMARY_CHARS = 160
-const MAX_ROUND_REVIEW_PROMPT_CHARS = 12_000
-const MAX_SPEEDUP_FIELD_CHARS = 300
-const MAX_SPEED_NOTICE_CHARS = 1500
+/** Tool names whose successful result is a write for the trigger. */
+const WRITE_TOOLS = Object.freeze(['edit', 'write'])
 
-/** One tool call waiting for its result. */
-interface PendingRoundCall {
-  readonly name: string
-  readonly startedAt: number
-  readonly arguments: string
+/** Tool names whose arguments carry one shell command. */
+const SHELL_TOOLS = Object.freeze(['pwsh', 'bash', 'terminal_send'])
+
+/**
+ * Classify a shell tool's structured result. Only the canonical foreground
+ * shape with a clean exit proves success; any other shape is unreadable and
+ * must never be presented as success.
+ */
+function shellOutcomeOf(result: {
+  readonly isError?: unknown
+  readonly value?: unknown
+}): ShellOutcome {
+  if (result.isError === true) return 'failure'
+  const value = isRecord(result.value) ? result.value : undefined
+  if (value === undefined || value.kind !== 'foreground') return 'unreadable'
+  const exitCode = value.exitCode
+  const signal = value.signal
+  if (
+    (typeof exitCode !== 'number' && exitCode !== null) ||
+    (typeof signal !== 'string' && signal !== null)
+  ) {
+    return 'unreadable'
+  }
+  if (typeof value.timedOut !== 'boolean' || typeof value.aborted !== 'boolean') return 'unreadable'
+  let denied = false
+  let runnerFailed = false
+  if (value.sandbox !== undefined) {
+    if (!isRecord(value.sandbox) || typeof value.sandbox.denied !== 'boolean') return 'unreadable'
+    denied = value.sandbox.denied
+    runnerFailed = value.sandbox.runnerFailed === true
+  }
+  const clean =
+    exitCode === 0 &&
+    signal === null &&
+    value.timedOut === false &&
+    value.aborted === false &&
+    !denied &&
+    !runnerFailed
+  return clean ? 'success' : 'failure'
 }
 
-/** In-memory metrics for the current round; a restart loses an unobserved start. */
-interface RoundState {
-  readonly turn: number
-  readonly startedAt: number
-  goalId?: string
-  round?: number
-  toolCalls: number
-  errors: number
-  toolMs: number
-  readonly workers: Map<string, number>
-  readonly pending: Map<string, PendingRoundCall>
-  /** The bounded slowest completed calls; later calls can still replace an entry. */
-  readonly slowest: SlowRoundCall[]
-}
+/** The tool the model calls to record its decision. */
+const CHECKPOINT_TOOL = 'work_checkpoint'
 
-/** One slow call as it leaves the process, already bounded and redacted. */
-interface SlowRoundCall {
-  readonly name: string
-  readonly durationMs: number
-  readonly arguments: string
-  readonly result: string
-}
+/** Local checkpoint records; machine-local scratch and never a tracked file. */
+const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints')
 
-/** Bounded, redacted metrics for one completed goal round. */
-interface RoundMetrics {
-  readonly wallMs: number
-  readonly toolCalls: number
-  readonly errors: number
-  readonly workers: Readonly<Record<string, number>>
-  readonly slowCalls: readonly SlowRoundCall[]
-  /** Wall time minus the sum of observed tool durations; parallel calls are summed. */
-  readonly nonToolMs: number
-}
+/** Bounds for the record fields, the observed evidence, and the request. */
+const MAX_CHECKPOINT_ITEMS = 8
+const MAX_CHECKPOINT_ITEM_CHARS = 240
+const MAX_CHECKPOINT_NEXT_CHARS = 400
+const MAX_CHECKPOINT_SERIAL_CHARS = 400
+const MAX_CHECKPOINT_SPEEDUP_CHARS = 240
+const MAX_CHECKPOINT_PATHS = 5
+const MAX_CHECKPOINT_PATH_CHARS = 120
+const MAX_CHECKPOINT_SUMMARY_CHARS = 900
 
-/** One measured goal round, ready to be reviewed or refused by threshold. */
-interface RoundSnapshot {
-  readonly goalId: string
-  readonly round: number
-  readonly metrics: RoundMetrics
-}
-
-/** The one actionable verdict the speed reviewer may return. */
-interface SpeedupAction {
-  readonly bottleneck: string
-  readonly action: string
-  readonly handoff: string
-  readonly expectedSaving: string
-  readonly risk: string
-  readonly speedupId: string
-}
-
-/** The strict round-review verdict. */
-type SpeedVerdict =
-  | { readonly verdict: 'no-action' }
-  | { readonly verdict: 'speedup'; readonly action: SpeedupAction }
-
-/** One local round record; local scratch, never a tracked file. */
-interface RetroRecord {
-  readonly version: 1
-  readonly goal: string
-  readonly round: number
-  readonly objective: string
-  readonly metrics: RoundMetrics
-  readonly verdict: 'speedup' | 'no-action' | 'error'
-  readonly action?: SpeedupAction
-  readonly speedupId?: string
-  readonly status: 'pending' | 'started' | 'declined' | 'no-action' | 'error'
-  readonly target: ReviewTarget
-  readonly reviewMs: number
-  readonly detail?: string
-  readonly time: string
-  readonly session: string
-}
-
-/** Tool lookup the availability checks read; the registry is optional. */
-interface ReviewerToolLookup {
+/** Tool lookup the worker-start availability check reads; the registry is optional. */
+interface ToolLookup {
   get(name: string, scope?: unknown): unknown
 }
 
 /** Whether a registered tool is visible to this agent; an absent registry is absent capability. */
 function toolVisible(ctx: Context, agent: Agent, name: string): boolean {
-  const tools = optionalService<ReviewerToolLookup>(ctx, 'tools')
+  const tools = optionalService<ToolLookup>(ctx, 'tools')
   if (tools === undefined) return false
   try {
     return tools.get(name, agent) !== undefined
   } catch {
     return false
   }
-}
-
-/** Start tracking one round at its turn start. */
-function beginRoundState(state: AgentState, turn: number, startedAt: number): void {
-  state.round = {
-    turn,
-    startedAt,
-    toolCalls: 0,
-    errors: 0,
-    toolMs: 0,
-    workers: new Map(),
-    pending: new Map(),
-    slowest: [],
-  }
-}
-
-/** Mark the tracked round as the observed goal round. */
-function markRoundGoal(state: AgentState, goalId: string, round: number): void {
-  const current = state.round
-  if (current === undefined) return
-  current.goalId = goalId
-  current.round = round
-}
-
-/** Count one tool call in the current goal round. */
-function trackRoundCall(
-  state: AgentState,
-  event: Extract<SessionEvent, { type: 'tool/call' }>,
-  workspace: string,
-): void {
-  const round = state.round
-  if (round === undefined || round.goalId === undefined || event.data.turn !== round.turn) return
-  round.toolCalls += 1
-  round.pending.set(event.data.callId, {
-    name: bound(event.data.name, 80),
-    startedAt: event.time,
-    // Redact the whole text before truncation, so a cut credential cannot leak.
-    arguments: bound(redact(event.data.arguments, workspace), MAX_ROUND_ARGUMENT_CHARS),
-  })
-}
-
-/** Count one tool result, close its interval, and keep the slowest calls. */
-function trackRoundResult(
-  state: AgentState,
-  event: Extract<SessionEvent, { type: 'tool/result' }>,
-  workspace: string,
-): void {
-  const round = state.round
-  if (round === undefined || round.goalId === undefined || event.data.turn !== round.turn) return
-  if (event.data.message.isError === true) round.errors += 1
-  const call = round.pending.get(event.data.message.toolCallId)
-  if (call === undefined) return
-  round.pending.delete(event.data.message.toolCallId)
-  // A worker counts only when its call succeeded; a cached delegate record
-  // reports a reuse and started no worker.
-  if (
-    WORKER_START_TOOLS.includes(call.name) &&
-    event.data.message.isError !== true &&
-    (call.name !== 'delegate' || delegateStarted(toolResultText(event)))
-  ) {
-    round.workers.set(call.name, (round.workers.get(call.name) ?? 0) + 1)
-  }
-  const durationMs = Math.max(0, event.time - call.startedAt)
-  round.toolMs += durationMs
-  const entry: SlowRoundCall = {
-    name: call.name,
-    durationMs,
-    arguments: call.arguments,
-    // Redact the whole result before truncation, so a cut secret cannot leak.
-    result: bound(redact(toolResultText(event), workspace), MAX_ROUND_RESULT_CHARS),
-  }
-  if (round.slowest.length < MAX_ROUND_SLOW_CALLS) round.slowest.push(entry)
-  else {
-    const last = round.slowest.at(-1)
-    if (last === undefined || durationMs <= last.durationMs) return
-    round.slowest[round.slowest.length - 1] = entry
-  }
-  round.slowest.sort((left, right) => right.durationMs - left.durationMs)
-}
-
-/** Snapshot and clear the current round; an unobserved start or non-goal turn is no snapshot. */
-function snapshotRound(
-  state: AgentState,
-  endedAt: number,
-  workspace: string,
-): RoundSnapshot | undefined {
-  const round = state.round
-  state.round = undefined
-  if (round === undefined || round.goalId === undefined || round.round === undefined) {
-    return undefined
-  }
-  const wallMs = Math.max(0, endedAt - round.startedAt)
-  const slowCalls = round.slowest.map((call) => ({
-    name: call.name,
-    durationMs: call.durationMs,
-    arguments: bound(redact(call.arguments, workspace), MAX_ROUND_SLOW_SUMMARY_CHARS),
-    result: bound(redact(call.result, workspace), MAX_ROUND_SLOW_SUMMARY_CHARS),
-  }))
-  const workers: Record<string, number> = {}
-  for (const [name, count] of round.workers) workers[name] = count
-  return {
-    goalId: round.goalId,
-    round: round.round,
-    metrics: {
-      wallMs,
-      toolCalls: round.toolCalls,
-      errors: round.errors,
-      workers,
-      slowCalls,
-      nonToolMs: Math.max(0, wallMs - round.toolMs),
-    },
-  }
-}
-
-/** Whether the measured round crosses any configured review threshold. */
-function roundQualifies(metrics: RoundMetrics, config: ResolvedSpeedReviewConfig): boolean {
-  return (
-    config.everyRound ||
-    metrics.toolCalls >= config.minToolCalls ||
-    metrics.wallMs >= config.minMinutes * 60_000 ||
-    (metrics.slowCalls[0]?.durationMs ?? 0) >= config.slowCallMs
-  )
-}
-
-/** Goal-scoped retro directory under the workspace's local state. */
-function retroGoalDirectory(workspace: string, goalId: string): string {
-  return join(workspace, RETRO_DIR, goalDirectoryName(goalId))
-}
-
-/** The round-addressed record path for one reviewed round. */
-function retroRecordPath(workspace: string, goalId: string, round: number): string {
-  return join(retroGoalDirectory(workspace, goalId), `${round}.json`)
-}
-
-/** The workspace-relative record path shown in model-facing text (never an absolute path). */
-function displayRetroRecordPath(workspace: string, goalId: string, round: number): string {
-  return retroRecordPath(workspace, goalId, round)
-    .slice(workspace.length)
-    .replaceAll('\\', '/')
-    .replace(/^\//u, '')
-}
-
-/** Read one round record; an absent or malformed file is no record. */
-function readRetroRecord(path: string): RetroRecord | undefined {
-  const value = readRecordFile(path)
-  if (
-    value === undefined ||
-    typeof value.goal !== 'string' ||
-    typeof value.round !== 'number' ||
-    typeof value.status !== 'string' ||
-    typeof value.verdict !== 'string'
-  ) {
-    return undefined
-  }
-  return value as unknown as RetroRecord
-}
-
-/** Attempt markers bound the per-goal review count before a record exists. */
-const RETRO_ATTEMPTS_DIR = 'attempts'
-
-/** Goal-scoped attempts directory; it holds no `.json` records. */
-function retroAttemptsDirectory(workspace: string, goalId: string): string {
-  return join(retroGoalDirectory(workspace, goalId), RETRO_ATTEMPTS_DIR)
-}
-
-/** Review attempts this goal already charged, including failed record writes. */
-function retroAttemptCount(workspace: string, goalId: string): number {
-  try {
-    return readdirSync(retroAttemptsDirectory(workspace, goalId)).length
-  } catch {
-    return 0
-  }
-}
-
-/** Charge one attempt synchronously, before the child starts or any record exists. */
-function chargeRetroAttempt(workspace: string, goalId: string): void {
-  try {
-    const directory = retroAttemptsDirectory(workspace, goalId)
-    mkdirSync(directory, { recursive: true })
-    writeFileSync(join(directory, `${Date.now()}-${randomUUID()}`), '1', 'utf8')
-  } catch {
-    // The in-memory attempt counter still bounds this process when the disk fails.
-  }
-}
-
-/** One stored record with its workspace-relative path. */
-interface RetroEntry {
-  readonly path: string
-  readonly display: string
-  readonly record: RetroRecord
-}
-
-/** The latest stored record for one goal, optionally below a round. */
-async function latestRetroRecord(
-  workspace: string,
-  goalId: string,
-  beforeRound?: number,
-): Promise<RetroEntry | undefined> {
-  const directory = retroGoalDirectory(workspace, goalId)
-  let names: string[]
-  try {
-    names = (await readdir(directory)).filter((name) => name.endsWith('.json'))
-  } catch {
-    return undefined
-  }
-  let best: RetroEntry | undefined
-  for (const name of names) {
-    const path = join(directory, name)
-    const record = readRetroRecord(path)
-    if (record === undefined) continue
-    if (record.goal !== goalId) continue
-    if (beforeRound !== undefined && record.round >= beforeRound) continue
-    if (best === undefined || record.round > best.record.round) {
-      best = { path, display: displayRetroRecordPath(workspace, goalId, record.round), record }
-    }
-  }
-  return best
-}
-
-/** Whether a stored record still enforces a speedup action. */
-function isPendingAction(
-  record: RetroRecord,
-): record is RetroRecord & { status: 'pending'; action: SpeedupAction; speedupId: string } {
-  const action = record.action
-  return (
-    record.status === 'pending' &&
-    record.verdict === 'speedup' &&
-    action !== undefined &&
-    typeof record.speedupId === 'string' &&
-    typeof action.bottleneck === 'string' &&
-    typeof action.action === 'string' &&
-    typeof action.handoff === 'string' &&
-    typeof action.expectedSaving === 'string' &&
-    typeof action.risk === 'string' &&
-    typeof action.speedupId === 'string' &&
-    action.speedupId === record.speedupId
-  )
-}
-
-/** One stored pending-action record with its workspace-relative path. */
-type PendingRetroEntry = RetroEntry & {
-  record: RetroRecord & { action: SpeedupAction; speedupId: string }
-}
-
-/** Every record that still needs follow-through evidence, oldest round first. */
-async function pendingActions(workspace: string, goalId: string): Promise<PendingRetroEntry[]> {
-  const directory = retroGoalDirectory(workspace, goalId)
-  let names: string[]
-  try {
-    names = (await readdir(directory)).filter((name) => name.endsWith('.json'))
-  } catch {
-    return []
-  }
-  const pending: PendingRetroEntry[] = []
-  for (const name of names) {
-    const path = join(directory, name)
-    const record = readRetroRecord(path)
-    if (record === undefined || record.goal !== goalId || !isPendingAction(record)) continue
-    pending.push({
-      path,
-      display: displayRetroRecordPath(workspace, goalId, record.round),
-      record,
-    })
-  }
-  return pending.sort((left, right) => left.record.round - right.record.round)
-}
-
-/** The newest record that still needs follow-through evidence. */
-async function latestPendingAction(
-  workspace: string,
-  goalId: string,
-): Promise<PendingRetroEntry | undefined> {
-  return (await pendingActions(workspace, goalId)).at(-1)
-}
-
-/** Rewrite one record's status; a missing or changed record is left alone. */
-async function markRetroStatus(path: string, status: 'started' | 'declined'): Promise<void> {
-  const record = readRetroRecord(path)
-  if (record === undefined || !isPendingAction(record)) return
-  await writeRecord(path, { ...record, status })
-}
-
-/** Parse one strict round verdict; anything else is a review error. */
-function parseSpeedVerdict(text: string, workspace: string): SpeedVerdict {
-  const value = singleFencedJson(text)
-  if (!isRecord(value)) throw new Error('the fenced verdict must be a JSON object')
-  if (value.verdict === 'no-action') {
-    const allowed = new Set(['verdict'])
-    for (const key of Object.keys(value)) {
-      if (!allowed.has(key)) throw new Error(`the verdict has unknown field "${key}"`)
-    }
-    return { verdict: 'no-action' }
-  }
-  if (value.verdict !== 'speedup') {
-    throw new Error('the verdict must be "speedup" or "no-action"')
-  }
-  const allowed = new Set([
-    'verdict',
-    'bottleneck',
-    'action',
-    'handoff',
-    'expectedSaving',
-    'risk',
-    'speedupId',
-  ])
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) throw new Error(`the verdict has unknown field "${key}"`)
-  }
-  const nonEmpty = (field: string): string => {
-    const raw = value[field]
-    if (typeof raw !== 'string' || raw.trim() === '') {
-      throw new Error(`the verdict "${field}" must be a non-empty string`)
-    }
-    return bound(redact(raw.trim(), workspace), MAX_SPEEDUP_FIELD_CHARS)
-  }
-  const speedupId = value.speedupId
-  if (
-    typeof speedupId !== 'string' ||
-    !/^speedup-[a-z0-9][a-z0-9-]{0,39}$/u.test(speedupId.trim())
-  ) {
-    throw new Error('the verdict "speedupId" must look like "speedup-12-a1b2"')
-  }
-  return {
-    verdict: 'speedup',
-    action: {
-      bottleneck: nonEmpty('bottleneck'),
-      action: nonEmpty('action'),
-      handoff: nonEmpty('handoff'),
-      expectedSaving: nonEmpty('expectedSaving'),
-      risk: nonEmpty('risk'),
-      speedupId: speedupId.trim(),
-    },
-  }
-}
-
-/** The bundled round-review instructions; a missing asset is a review error. */
-let roundReviewerInstructions: string | undefined
-function loadRoundReviewerInstructions(): string {
-  if (roundReviewerInstructions === undefined) {
-    roundReviewerInstructions = readFileSync(
-      join(assetsDirectory, 'round-review.md'),
-      'utf8',
-    ).trim()
-  }
-  return roundReviewerInstructions
-}
-
-/** Render one slow call without letting a long summary dominate the prompt. */
-function renderSlowCall(call: SlowRoundCall): string[] {
-  return [
-    `  - ${call.name} ${call.durationMs} ms`,
-    `    arguments: ${call.arguments}`,
-    ...(call.result === '' ? [] : [`    result: ${call.result}`]),
-  ]
-}
-
-/** Render the bounded round metrics. */
-function renderRoundMetrics(metrics: RoundMetrics): string[] {
-  const workers = Object.entries(metrics.workers)
-  return [
-    `- wall time: ${metrics.wallMs} ms`,
-    `- tool calls: ${metrics.toolCalls}`,
-    `- tool errors: ${metrics.errors}`,
-    `- worker starts: ${workers.length === 0 ? 'none' : workers.map(([name, count]) => `${name}=${count}`).join(', ')}`,
-    `- approximate non-tool time: ${metrics.nonToolMs} ms`,
-    '- slowest calls:',
-    ...(metrics.slowCalls.length === 0
-      ? ['  - (no completed tool calls)']
-      : metrics.slowCalls.flatMap(renderSlowCall)),
-  ]
-}
-
-/** Render the bounded round-review prompt: instructions and metrics first. */
-function composeRoundReviewPrompt(
-  snapshot: RoundSnapshot,
-  objective: string,
-  goal: GoalView,
-  previous: RetroEntry | undefined,
-  workspace: string,
-): string {
-  const header = [
-    loadRoundReviewerInstructions(),
-    '',
-    '## Round evidence',
-    '',
-    `- Objective: ${objective}`,
-    `- Round: ${snapshot.round} (rounds started: ${goal.roundsStarted} of ${goal.maxGoalRounds})`,
-    `- Workspace (read-only): ${bound(workspace, 260)}`,
-    '',
-    '### Round metrics',
-    '',
-    ...renderRoundMetrics(snapshot.metrics),
-  ].join('\n')
-  const tail = [
-    '',
-    '### Previous speedup record',
-    '',
-    previous === undefined
-      ? '(none for this goal)'
-      : previous.record.verdict === 'speedup' && previous.record.action !== undefined
-        ? `Round ${previous.record.round}: ${previous.record.action.speedupId} status ${previous.record.status}; bottleneck: ${previous.record.action.bottleneck}; action: ${previous.record.action.action}; expected saving: ${previous.record.action.expectedSaving}.`
-        : `Round ${previous.record.round}: ${previous.record.verdict} status ${previous.record.status}.`,
-    '',
-    'Return exactly one fenced JSON block in the schema the instructions require.',
-  ].join('\n')
-  return bound(`${header}${tail}`, MAX_ROUND_REVIEW_PROMPT_CHARS)
-}
-
-/** The policy prose every next-round brief carries. */
-const SPEED_POLICY =
-  'Speed policy: split independent streams; start workers for streams that can run in parallel; keep integration in the main agent; run known-slow checks in the background; start task reviews as a batch.'
-
-/** The stable 16-hex id `task_progress` accepts for one unchecked task line. */
-function taskIdOf(text: string): string {
-  return createHash('sha256').update(text.replace(/\s+/gu, ' ').trim()).digest('hex').slice(0, 16)
-}
-
-/** A paste-ready, valid decline call for one eligible unchecked task. */
-function composeDeclineCall(taskId: string, speedupId: string): string {
-  return `task_progress(task: "${taskId}", status: "in-progress", reason: "declined ${speedupId}: not applied this round")`
-}
-
-/** The exact task_progress call, when the tool and an eligible task exist. */
-async function declineCallFor(
-  ctx: Context,
-  agent: Agent,
-  workspace: string,
-  speedupId: string,
-): Promise<string | undefined> {
-  if (!toolVisible(ctx, agent, 'task_progress')) return undefined
-  const taskId = await firstUncheckedTaskId(workspace)
-  return taskId === undefined ? undefined : composeDeclineCall(taskId, speedupId)
-}
-
-/** Active-change directory names the delegation tool considers (it skips others). */
-const ACTIVE_CHANGE_PATTERN = /^[a-z0-9][a-z0-9-]*$/u
-
-/** Nearest ancestor's `openspec/changes`, matching the delegation tool's discovery. */
-function openSpecChangesFor(directory: string): string | undefined {
-  let current = directory
-  for (;;) {
-    const candidate = join(current, 'openspec', 'changes')
-    try {
-      readdirSync(candidate)
-      return candidate
-    } catch {
-      // Keep walking up to the filesystem root.
-    }
-    const parent = dirname(current)
-    if (parent === current) return undefined
-    current = parent
-  }
-}
-
-/**
- * The first numbered unchecked task whose stable id matches exactly one task in
- * the active changes. `task_progress` rejects any duplicate match, so an id
- * that appears twice (checked or unchecked, in one change or two) is unusable
- * and the gate fails open.
- */
-async function firstUncheckedTaskId(workspace: string): Promise<string | undefined> {
-  const changes = openSpecChangesFor(workspace)
-  if (changes === undefined) return undefined
-  let names: string[]
-  try {
-    names = (await readdir(changes, { withFileTypes: true }))
-      .filter(
-        (entry) =>
-          entry.isDirectory() && entry.name !== 'archive' && ACTIVE_CHANGE_PATTERN.test(entry.name),
-      )
-      .map((entry) => entry.name)
-      .sort()
-  } catch {
-    return undefined
-  }
-  const matches = new Map<string, number>()
-  const unchecked: string[] = []
-  for (const name of names) {
-    let text: string
-    try {
-      text = await readFile(join(changes, name, 'tasks.md'), 'utf8')
-    } catch {
-      continue
-    }
-    for (const task of numberedTasksIn(text)) {
-      matches.set(task.id, (matches.get(task.id) ?? 0) + 1)
-      if (!task.checked) unchecked.push(task.id)
-    }
-  }
-  for (const id of unchecked) {
-    if (matches.get(id) === 1) return id
-  }
-  return undefined
-}
-
-/**
- * Every numbered checkbox task's stable id and state. Only the checkbox line is
- * read, matching the delegation tool's parser: wrapped continuation lines are
- * not part of the task text, so quoting and line length cannot break the call.
- */
-function numberedTasksIn(text: string): Array<{ id: string; checked: boolean }> {
-  const tasks: Array<{ id: string; checked: boolean }> = []
-  for (const line of text.split(/\r?\n/u)) {
-    const match = /^\s*-\s*\[([ xX])\]\s+\d+(?:\.\d+)*\s+(\S.*?)\s*$/u.exec(line)
-    if (match?.[1] === undefined || match[2] === undefined) continue
-    tasks.push({ id: taskIdOf(match[2]), checked: match[1] !== ' ' })
-  }
-  return tasks
-}
-
-/**
- * One pending action's notice: the mandatory record path and follow-through
- * choice are reserved first, so long descriptive fields can never truncate them.
- */
-function composeActionFollowThrough(
-  pending: RetroEntry,
-  decline: string | undefined,
-  headline: string,
-): string {
-  if (!isPendingAction(pending.record)) return ''
-  const action = pending.record.action
-  const choice =
-    decline === undefined
-      ? `Start a worker whose arguments contain ${action.speedupId}.`
-      : `Start a worker whose arguments contain ${action.speedupId}, or decline with: ${decline}`
-  const fixed = `${headline} Record: ${pending.display}. ${choice}`
-  const descriptive = `bottleneck: ${action.bottleneck}. Action: ${action.action}. Handoff: ${action.handoff}. Expected saving: ${action.expectedSaving}.`
-  const room = MAX_SPEED_NOTICE_CHARS - fixed.length - 1
-  if (room <= 0) return bound(fixed, MAX_SPEED_NOTICE_CHARS)
-  return `${bound(descriptive, room)} ${fixed}`
-}
-
-/** The next-round brief text: policy plus any pending action and follow-through choice. */
-function composeRoundBrief(pending: RetroEntry | undefined, decline: string | undefined): string {
-  if (pending === undefined || !isPendingAction(pending.record)) return SPEED_POLICY
-  const action = pending.record.action
-  return composeActionFollowThrough(
-    pending,
-    decline,
-    `${SPEED_POLICY} Pending speedup ${action.speedupId} (round ${pending.record.round}).`,
-  )
-}
-
-/** The late-action notice injected when the review finishes during a goal round. */
-function composeActionNotice(pending: RetroEntry, decline: string | undefined): string {
-  if (!isPendingAction(pending.record)) return ''
-  const action = pending.record.action
-  return composeActionFollowThrough(
-    pending,
-    decline,
-    `Speed review found a speedup for round ${pending.record.round}: ${action.speedupId}.`,
-  )
-}
-
-/** Evidence for one turn's follow-through gate. */
-type FollowThroughEvidence = 'started' | 'declined' | undefined
-
-/** Scan the current turn's successful calls for the speedup id. */
-function followThroughEvidence(
-  agent: Agent,
-  turn: number,
-  speedupId: string,
-): FollowThroughEvidence {
-  const events = sessionEvents(agent)
-  let start = 0
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]
-    if (event?.type === 'turn/start' && event.data.turn === turn) {
-      start = index
-      break
-    }
-  }
-  const calls = new Map<string, { name: string; arguments: string }>()
-  const results = new Map<string, string>()
-  for (let index = start; index < events.length; index += 1) {
-    const event = events[index]
-    if (event?.type === 'tool/call') {
-      calls.set(event.data.callId, { name: event.data.name, arguments: event.data.arguments })
-    } else if (event?.type === 'tool/result' && event.data.message.isError !== true) {
-      results.set(event.data.message.toolCallId, toolResultText(event))
-    }
-  }
-  for (const [callId, call] of calls) {
-    const resultText = results.get(callId)
-    if (resultText === undefined) continue
-    if (WORKER_START_TOOLS.includes(call.name) && call.arguments.includes(speedupId)) {
-      // A delegate can answer from a cached record without starting a target.
-      // Only the engine's first-line envelope says so; worker answers, which
-      // may contain any words, still count as a started run.
-      if (call.name === 'delegate' && !delegateStarted(resultText)) continue
-      return 'started'
-    }
-    if (call.name !== 'task_progress' || !call.arguments.includes(speedupId)) continue
-    try {
-      const args: unknown = JSON.parse(call.arguments)
-      if (isRecord(args) && typeof args.reason === 'string' && args.reason.includes(speedupId)) {
-        return 'declined'
-      }
-    } catch {
-      // A malformed task_progress payload is no evidence.
-    }
-  }
-  return undefined
 }
 
 /** Whether a delegate result's first line reports a started run rather than reuse. */
@@ -2598,6 +1943,562 @@ function delegateStarted(resultText: string): boolean {
   return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first)
 }
 
+/** The stable id one turn's checkpoint carries; a parallel worker tags its arguments with it. */
+function checkpointIdFor(sessionId: string, turn: number): string {
+  const digest = createHash('sha256').update(`${sessionId}:${turn}`).digest('hex').slice(0, 8)
+  return `checkpoint-${turn}-${digest}`
+}
+
+/** The hashed session directory under the workspace's local state. */
+function checkpointDirectory(workspace: string, sessionId: string): string {
+  return join(
+    workspace,
+    WORK_CHECKPOINT_DIR,
+    createHash('sha256').update(sessionId).digest('hex').slice(0, 16),
+  )
+}
+
+/** The one record path for one turn; a repeated call replaces the same record. */
+function checkpointPathFor(workspace: string, sessionId: string, turn: number): string {
+  return join(checkpointDirectory(workspace, sessionId), `${turn}.json`)
+}
+
+/** The workspace-relative path shown in model-facing text (never an absolute path). */
+function displayCheckpointPath(workspace: string, path: string): string {
+  return path.slice(workspace.length).replaceAll('\\', '/').replace(/^\//u, '')
+}
+
+/** The turn number of the last opened turn, or undefined when none is open. */
+function openTurnNumber(agent: Agent): number | undefined {
+  const events = sessionEvents(agent)
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type === 'turn/start') return event.data.turn
+  }
+  return undefined
+}
+
+/** One observed call in the open turn. */
+interface ObservedTurnCall {
+  readonly index: number
+  readonly name: string
+  readonly arguments: string
+  result?: 'success' | 'failure'
+  resultText: string
+}
+
+/** One successful work_checkpoint call in the open turn. */
+interface ObservedCheckpoint {
+  readonly index: number
+  readonly arguments: string
+}
+
+/** Bounded evidence for one substantial-pause decision. */
+interface CheckpointEvidence {
+  readonly toolCalls: number
+  readonly written: readonly string[]
+  readonly workers: readonly string[]
+  readonly shell:
+    | {
+        readonly index: number
+        readonly tool: string
+        readonly command: string
+        /** The structured exit state; undefined while the call has no result. */
+        outcome: ShellOutcome | undefined
+      }
+    | undefined
+  readonly failedTool: string | undefined
+  readonly lastTool: string | undefined
+  readonly checkpoint: ObservedCheckpoint | undefined
+  readonly calls: ReadonlyMap<string, ObservedTurnCall>
+}
+
+/** The bounded, redacted command one shell tool's arguments carry. */
+function shellCommandOf(argumentsText: string, workspace: string): string {
+  try {
+    const args: unknown = JSON.parse(argumentsText)
+    if (isRecord(args)) {
+      const command = typeof args.command === 'string' ? args.command : args.text
+      if (typeof command === 'string') {
+        return bound(redact(command, workspace), MAX_CHECKPOINT_PATH_CHARS)
+      }
+    }
+  } catch {
+    // A malformed argument string carries no command.
+  }
+  return '(unknown command)'
+}
+
+/** The `file_path` one write tool's arguments carry. */
+function writtenPathOf(argumentsText: string): string | undefined {
+  try {
+    const args: unknown = JSON.parse(argumentsText)
+    if (isRecord(args) && typeof args.file_path === 'string') return args.file_path
+  } catch {
+    // A malformed argument string carries no path.
+  }
+  return undefined
+}
+
+/** Collect one turn's observed tool evidence from the committed session log. */
+function checkpointEvidence(
+  agent: Agent,
+  turn: number,
+  workspace: string,
+  shellOutcomes: ReadonlyMap<string, ShellOutcome> | undefined,
+): CheckpointEvidence {
+  const events = sessionEvents(agent)
+  let start = 0
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type === 'turn/start' && event.data.turn === turn) {
+      start = index
+      break
+    }
+  }
+  const calls = new Map<string, ObservedTurnCall>()
+  let toolCalls = 0
+  let lastTool: string | undefined
+  const written: string[] = []
+  const workers: string[] = []
+  let shell: CheckpointEvidence['shell']
+  let failedTool: string | undefined
+  let checkpoint: ObservedCheckpoint | undefined
+  for (let index = start; index < events.length; index += 1) {
+    const event = events[index]
+    if (event?.type === 'tool/call') {
+      toolCalls += 1
+      lastTool = event.data.name
+      calls.set(event.data.callId, {
+        index,
+        name: event.data.name,
+        arguments: event.data.arguments,
+        resultText: '',
+      })
+      if (SHELL_TOOLS.includes(event.data.name)) {
+        shell = {
+          index,
+          tool: event.data.name,
+          command: shellCommandOf(event.data.arguments, workspace),
+          outcome: shellOutcomes?.get(String(event.data.callId)),
+        }
+      }
+      continue
+    }
+    if (event?.type !== 'tool/result') continue
+    const call = calls.get(event.data.message.toolCallId)
+    if (call === undefined) continue
+    const failed = event.data.message.isError === true
+    call.result = failed ? 'failure' : 'success'
+    call.resultText = toolResultText(event)
+    if (shell?.index === call.index) {
+      shell = { ...shell, outcome: failed ? 'failure' : shell.outcome }
+    }
+    if (failed) {
+      failedTool = call.name
+      continue
+    }
+    if (WRITE_TOOLS.includes(call.name)) {
+      const path = writtenPathOf(call.arguments)
+      if (path !== undefined) written.push(path)
+    }
+    if (
+      WORKER_START_TOOLS.includes(call.name) &&
+      (call.name !== 'delegate' || delegateStarted(call.resultText))
+    ) {
+      workers.push(call.name)
+    }
+    if (call.name === CHECKPOINT_TOOL) checkpoint = { index: call.index, arguments: call.arguments }
+  }
+  return { toolCalls, written, workers, shell, failedTool, lastTool, checkpoint, calls }
+}
+
+/** The decision one successful checkpoint carries, when it is readable. */
+function checkpointDecision(
+  evidence: CheckpointEvidence,
+): { outcome: 'done' | 'continue'; parallel: boolean } | undefined {
+  const checkpoint = evidence.checkpoint
+  if (checkpoint === undefined) return undefined
+  try {
+    const args: unknown = JSON.parse(checkpoint.arguments)
+    if (!isRecord(args)) return undefined
+    if (args.outcome !== 'done' && args.outcome !== 'continue') return undefined
+    return { outcome: args.outcome, parallel: args.parallel === true }
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether a successful worker start after the checkpoint carries its id. */
+function taggedWorkerStarted(evidence: CheckpointEvidence, id: string): boolean {
+  const checkpoint = evidence.checkpoint
+  if (checkpoint === undefined) return false
+  for (const call of evidence.calls.values()) {
+    if (call.index <= checkpoint.index || call.result !== 'success') continue
+    if (!WORKER_START_TOOLS.includes(call.name)) continue
+    if (!call.arguments.includes(id)) continue
+    // A delegate can answer from a cached record without starting a target.
+    if (call.name === 'delegate' && !delegateStarted(call.resultText)) continue
+    return true
+  }
+  return false
+}
+
+/** Whether any registered tool can start a worker for this agent. */
+function workerToolVisible(ctx: Context, agent: Agent): boolean {
+  return WORKER_START_TOOLS.some((name) => toolVisible(ctx, agent, name))
+}
+
+/** Whether the close needs a checkpoint for this turn. */
+function checkpointRequired(
+  evidence: CheckpointEvidence,
+  config: ResolvedCheckpointConfig,
+): boolean {
+  if (evidence.checkpoint !== undefined) return false
+  if (evidence.toolCalls < config.minToolCalls) return false
+  if (evidence.lastTool === 'ask_user_question') return false
+  if (config.requireWrite && evidence.written.length === 0 && evidence.workers.length === 0) {
+    return false
+  }
+  return true
+}
+
+/** The bounded checkpoint request naming the evidence and the decision questions. */
+function composeCheckpointRequest(
+  evidence: CheckpointEvidence,
+  workspace: string,
+  max: number,
+): string {
+  const paths = evidence.written
+    .slice(0, MAX_CHECKPOINT_PATHS)
+    .map((path) => bound(redact(path, workspace), MAX_CHECKPOINT_PATH_CHARS))
+  const more = evidence.written.length - paths.length
+  const pathText =
+    evidence.written.length === 0
+      ? 'none'
+      : `${paths.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`
+  const shellState =
+    evidence.shell === undefined
+      ? 'none'
+      : evidence.shell.outcome === 'success'
+        ? 'ok'
+        : evidence.shell.outcome === 'failure'
+          ? 'failed'
+          : evidence.shell.outcome === 'unreadable'
+            ? 'exit state unreadable'
+            : 'pending'
+  const shellText =
+    evidence.shell === undefined ? 'none' : `${evidence.shell.tool} \`${evidence.shell.command}\``
+  const workerText = evidence.workers.length === 0 ? 'none' : evidence.workers.join(', ')
+  // The questions and the event locator survive any maxMessageChars: only the
+  // evidence body is bounded, never the tail.
+  const head = 'Work checkpoint required (goal-continuity).'
+  const tail =
+    'work_checkpoint: done|continue, verified, remaining, parallel or serialReason, next. Done? verified? remaining? parallel lanes? next?'
+  const evidenceLines = [
+    `- Tool calls: ${evidence.toolCalls}`,
+    `- Written paths: ${pathText}`,
+    `- Last shell: ${shellText}`,
+    `- Last shell exit: ${shellState}`,
+    ...(evidence.failedTool === undefined ? [] : [`- Last failed tool: ${evidence.failedTool}`]),
+    `- Worker starts: ${workerText}`,
+  ]
+  const budget = max - head.length - tail.length - 2
+  const body = budget <= 0 ? '' : bound(redact(evidenceLines.join('\n'), workspace), budget)
+  return body === '' ? redact(`${head}\n${tail}`, workspace) : `${head}\n${body}\n${tail}`
+}
+
+/** The bounded parallel-gate steer naming the checkpoint id and both escapes. */
+function composeParallelRequest(id: string, max: number): string {
+  return bound(
+    `Work checkpoint ${id} declares parallel remaining work (goal-continuity). Start a worker whose call arguments contain ${id}, or amend the checkpoint with work_checkpoint: outcome "continue", parallel false, and a non-empty serialReason.`,
+    max,
+  )
+}
+
+/** One validated `work_checkpoint` call. */
+interface CheckpointInput {
+  readonly outcome: 'done' | 'continue'
+  readonly verified: readonly string[]
+  readonly remaining: readonly string[]
+  readonly parallel: boolean
+  readonly serialReason?: string
+  readonly next: string
+  readonly speedup?: string
+}
+
+/** One optional non-empty bounded text field, redacted before it is stored. */
+function checkpointText(
+  raw: unknown,
+  field: string,
+  max: number,
+  workspace: string,
+): string | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new Error(`work_checkpoint.${field} must be a non-empty string`)
+  }
+  return bound(redact(raw.trim(), workspace), max)
+}
+
+/** One bounded list of non-empty redacted strings. */
+function checkpointList(raw: unknown, field: string, workspace: string): string[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) {
+    throw new Error(`work_checkpoint.${field} must be a list of non-empty strings`)
+  }
+  if (raw.length > MAX_CHECKPOINT_ITEMS) {
+    throw new Error(`work_checkpoint.${field} must list at most ${MAX_CHECKPOINT_ITEMS} items`)
+  }
+  return raw.map((item) => {
+    if (typeof item !== 'string' || item.trim() === '') {
+      throw new Error(`work_checkpoint.${field} must be a list of non-empty strings`)
+    }
+    return bound(redact(item.trim(), workspace), MAX_CHECKPOINT_ITEM_CHARS)
+  })
+}
+
+/** Validate one `work_checkpoint` argument object; every rejection names its field. */
+function parseCheckpointInput(raw: unknown, workspace: string): CheckpointInput {
+  if (!isRecord(raw)) throw new Error('work_checkpoint arguments must be an object')
+  const allowed = new Set([
+    'outcome',
+    'verified',
+    'remaining',
+    'parallel',
+    'serialReason',
+    'next',
+    'speedup',
+  ])
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) throw new Error(`work_checkpoint: unknown field "${key}"`)
+  }
+  if (raw.outcome !== 'done' && raw.outcome !== 'continue') {
+    throw new Error('work_checkpoint.outcome must be "done" or "continue"')
+  }
+  if (raw.parallel !== undefined && typeof raw.parallel !== 'boolean') {
+    throw new Error('work_checkpoint.parallel must be a boolean')
+  }
+  const parallel = raw.parallel === true
+  const next = checkpointText(raw.next, 'next', MAX_CHECKPOINT_NEXT_CHARS, workspace)
+  if (next === undefined) throw new Error('work_checkpoint.next must be a non-empty string')
+  const serialReason = checkpointText(
+    raw.serialReason,
+    'serialReason',
+    MAX_CHECKPOINT_SERIAL_CHARS,
+    workspace,
+  )
+  if (raw.outcome === 'continue' && !parallel && serialReason === undefined) {
+    throw new Error(
+      'work_checkpoint.serialReason is required when outcome is "continue" and parallel is false',
+    )
+  }
+  const speedup = checkpointText(raw.speedup, 'speedup', MAX_CHECKPOINT_SPEEDUP_CHARS, workspace)
+  return {
+    outcome: raw.outcome,
+    verified: checkpointList(raw.verified, 'verified', workspace),
+    remaining: checkpointList(raw.remaining, 'remaining', workspace),
+    parallel,
+    ...(serialReason === undefined ? {} : { serialReason }),
+    next,
+    ...(speedup === undefined ? {} : { speedup }),
+  }
+}
+
+/** One canonical tool result: rendered as one text block. */
+interface CheckpointOutput {
+  readonly text: string
+}
+
+/** Output schema shared by the one tool: one rendered text result. */
+const CHECKPOINT_OUTPUT_SCHEMA: JsonSchemaNode = {
+  type: 'object',
+  properties: { text: { type: 'string' } },
+  required: ['text'],
+  additionalProperties: false,
+}
+
+/** Tool registry surface the checkpoint registration needs. */
+interface ToolRegistrar {
+  register(definition: ToolDefinition): () => void
+}
+
+/** Register the checkpoint tool; a host without a tool registry keeps running. */
+function installCheckpointTool(ctx: Context): void {
+  const tools = optionalService<ToolRegistrar>(ctx, 'tools')
+  if (tools === undefined || typeof tools.register !== 'function') return
+  tools.register({
+    name: CHECKPOINT_TOOL,
+    description:
+      'Record the work checkpoint decision at a substantial pause: outcome done or continue, verified facts, remaining items, parallel lanes or a serial reason, the next action, and an optional speedup. The turn-close gate requires one successful call per substantial turn.',
+    parameters: {
+      type: 'object',
+      properties: {
+        outcome: {
+          type: 'string',
+          enum: ['done', 'continue'],
+          description: 'Whether the work is done or continues.',
+        },
+        verified: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Verified facts for this checkpoint.',
+        },
+        remaining: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Remaining work items.',
+        },
+        parallel: {
+          type: 'boolean',
+          description:
+            'Whether the remaining work has independent lanes; false needs a serialReason when outcome is continue.',
+        },
+        serialReason: {
+          type: 'string',
+          description:
+            'Why the remaining work must stay serial; required for continue with parallel false.',
+        },
+        next: { type: 'string', description: 'The immediate next action.' },
+        speedup: { type: 'string', description: 'Optional speedup for the next turn.' },
+      },
+      required: ['outcome', 'next'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: CHECKPOINT_OUTPUT_SCHEMA,
+      render: (_args, value) => {
+        const text = isRecord(value) && typeof value.text === 'string' ? value.text : ''
+        return [{ type: 'text' as const, text }]
+      },
+    },
+    execute: async (args, exec) => {
+      const agent = exec.agent
+      if (agent === undefined) throw new Error('work_checkpoint requires a calling agent')
+      const workspace = workspaceFor(ctx, agent)
+      const input = parseCheckpointInput(args, workspace)
+      const turn = openTurnNumber(agent)
+      if (turn === undefined) throw new Error('work_checkpoint: no open turn to record')
+      const id = checkpointIdFor(agent.session.id, turn)
+      const path = checkpointPathFor(workspace, agent.session.id, turn)
+      const display = displayCheckpointPath(workspace, path)
+      // Reuse the same record path for a repeated call in the turn.
+      const written = await writeRecord(path, {
+        version: 1,
+        checkpoint: id,
+        turn,
+        outcome: input.outcome,
+        verified: input.verified,
+        remaining: input.remaining,
+        parallel: input.parallel,
+        ...(input.serialReason === undefined ? {} : { serialReason: input.serialReason }),
+        next: input.next,
+        ...(input.speedup === undefined ? {} : { speedup: input.speedup }),
+        time: new Date().toISOString(),
+        // The persisted copy is bounded and redacted like every decision field;
+        // the record path already hashed the original id.
+        session: bound(redact(agent.session.id, workspace), MAX_CHECKPOINT_ITEM_CHARS),
+      })
+      const decision = `${input.outcome}; ${input.parallel ? 'parallel' : 'serial'}; ${input.verified.length} verified, ${input.remaining.length} remaining; next: ${input.next}`
+      const text = written
+        ? `Work checkpoint ${id} recorded at ${display}. ${decision}`
+        : `Work checkpoint ${id} could not write its local record at ${display}; the close gate still counts this checkpoint. ${decision}`
+      const output: CheckpointOutput = { text: bound(text, MAX_CHECKPOINT_SUMMARY_CHARS) }
+      return output
+    },
+  })
+}
+
+/** Install the turn-close checkpoint and parallel-action gates. */
+function installCheckpointGate(
+  ctx: Context,
+  config: ResolvedCheckpointConfig,
+  stateFor: (agent: Agent) => AgentState,
+): void {
+  // The committed log does not carry a shell result's structured exit state, so
+  // observe it live and let the turn-close evidence read it back by call id.
+  ctx.on('tools/result', (exec, result) => {
+    try {
+      if (exec.agent === undefined || !SHELL_TOOLS.includes(exec.name)) return
+      const state = stateFor(exec.agent)
+      if (state.shellOutcomes.size >= MAX_SHELL_OUTCOMES) {
+        const oldest = state.shellOutcomes.keys().next()
+        if (oldest.done !== true) state.shellOutcomes.delete(oldest.value)
+      }
+      state.shellOutcomes.set(String(exec.callId), shellOutcomeOf(result))
+    } catch {
+      // Observation must never affect the turn.
+    }
+  })
+  ctx.on('agent/turn-stopping', async (payload) => {
+    try {
+      evaluate(payload.agent, payload.turn)
+    } catch {
+      // Fail open: an internal state error must never fail a turn.
+    }
+  })
+
+  /** One close decision: steer one more step, or allow the close. */
+  function evaluate(agent: Agent, turn: number): void {
+    if (!isRootAgent(agent)) return
+    const state = stateFor(agent)
+    const budget = state.checkpointTurn
+    if (budget === undefined || budget.turn !== turn || budget.unchecked) return
+    const workspace = workspaceFor(ctx, agent)
+    const evidence = checkpointEvidence(agent, turn, workspace, state.shellOutcomes)
+    const decision = checkpointDecision(evidence)
+    if (decision !== undefined) {
+      if (!config.enforceParallel || decision.outcome === 'done' || !decision.parallel) return
+      const id = checkpointIdFor(agent.session.id, turn)
+      if (taggedWorkerStarted(evidence, id)) return
+      if (!workerToolVisible(ctx, agent)) return
+      refuse(
+        agent,
+        budget,
+        composeParallelRequest(id, config.maxMessageChars),
+        `goal-continuity: work checkpoint ${id} needs a parallel worker`,
+        id,
+      )
+      return
+    }
+    if (!checkpointRequired(evidence, config)) return
+    refuse(
+      agent,
+      budget,
+      composeCheckpointRequest(evidence, workspace, config.maxMessageChars),
+      'goal-continuity: work checkpoint required',
+    )
+  }
+
+  /** Steer once per refusal, then allow the close with one UNCHECKED notice. */
+  function refuse(
+    agent: Agent,
+    budget: CheckpointTurnState,
+    text: string,
+    summary: string,
+    id?: string,
+  ): void {
+    if (budget.refusals >= config.maxBlocks) {
+      budget.unchecked = true
+      const detail =
+        id === undefined
+          ? 'this turn closed without a successful work_checkpoint after the refusal cap'
+          : `this turn closed without a tagged worker start for ${id} after the refusal cap`
+      deliverNotice(
+        agent,
+        `Work checkpoint UNCHECKED: ${detail} (${config.maxBlocks} refusals). This is not a pass; the next substantial turn must still checkpoint its work.`,
+        'goal-continuity: work checkpoint UNCHECKED',
+      )
+      return
+    }
+    budget.refusals += 1
+    try {
+      agent.steer(createNotice(text, summary, config.maxMessageChars))
+    } catch {
+      // A disposed agent cannot be steered; the turn is already over.
+    }
+  }
+}
 /** The roster shape the Web client reads through `agentPresets/list`. */
 interface PresetRoster {
   presets: readonly { id: string }[]
@@ -2636,14 +2537,14 @@ function installReviewerPresetHiding(ctx: Context): void {
 }
 
 /**
- * Install the continuity supervisor, the block-review gate, and the round speed
- * review. The configuration is validated at load, so a bad profile fails
- * loudly; supervision itself fails open and both reviews fail open.
+ * Install the continuity supervisor, the block-review gate, and the work
+ * checkpoint. The configuration is validated at load, so a bad profile fails
+ * loudly; supervision itself fails open and both gates fail open.
  */
 export function apply(ctx: Context, config?: Config): void {
   const resolved = resolveConfig(config)
   if (!resolved.enabled) return
-  if (resolved.blockReview.enabled || resolved.speedReview.enabled) {
+  if (resolved.blockReview.enabled) {
     installReviewerScope(ctx, resolved.blockReview.reviewerPreset)
   }
   installBlockReview(ctx, resolved.blockReview)
@@ -2651,6 +2552,10 @@ export function apply(ctx: Context, config?: Config): void {
   const mountedAt = Date.now()
 
   const states = new WeakMap<Agent, AgentState>()
+  if (resolved.checkpoint.enabled) {
+    installCheckpointTool(ctx)
+    installCheckpointGate(ctx, resolved.checkpoint, stateFor)
+  }
 
   function stateFor(agent: Agent): AgentState {
     let state = states.get(agent)
@@ -2666,12 +2571,8 @@ export function apply(ctx: Context, config?: Config): void {
         pending: false,
         cause: null,
         refusal: null,
-        round: undefined,
-        briefedTurn: null,
-        attemptedRounds: new Set(),
-        reviewAttempts: new Map(),
-        announcedActions: new Set(),
-        steered: new Set(),
+        checkpointTurn: undefined,
+        shellOutcomes: new Map(),
       }
       states.set(agent, state)
     }
@@ -2684,256 +2585,6 @@ export function apply(ctx: Context, config?: Config): void {
       return ctx.goals.get(agent)
     } catch {
       return undefined
-    }
-  }
-
-  /** Start one bounded round review when a qualifying round has no record yet. */
-  function startRoundReview(agent: Agent, state: AgentState, snapshot: RoundSnapshot): void {
-    const key = `${snapshot.goalId}:${snapshot.round}`
-    // Retained after completion: a failed record write must not allow this
-    // round to start a second child.
-    if (state.attemptedRounds.has(key)) return
-    const workspace = workspaceFor(ctx, agent)
-    if (
-      readRetroRecord(retroRecordPath(workspace, snapshot.goalId, snapshot.round)) !== undefined
-    ) {
-      return
-    }
-    const attempted =
-      state.reviewAttempts.get(snapshot.goalId) ?? retroAttemptCount(workspace, snapshot.goalId)
-    if (attempted >= resolved.speedReview.maxPerGoal) return
-    // Charge the attempt synchronously: a failed record write cannot free a slot.
-    state.reviewAttempts.set(snapshot.goalId, attempted + 1)
-    state.attemptedRounds.add(key)
-    chargeRetroAttempt(workspace, snapshot.goalId)
-    void reviewRound(agent, state, snapshot, workspace).catch(() => undefined)
-  }
-
-  /** Run one round review in the background and write its local record. */
-  async function reviewRound(
-    agent: Agent,
-    state: AgentState,
-    snapshot: RoundSnapshot,
-    workspace: string,
-  ): Promise<void> {
-    const goal = readGoal(agent)
-    if (goal === undefined || goal.id !== snapshot.goalId) return
-    const target: ReviewTarget = {
-      provider: resolved.speedReview.provider,
-      model: resolved.speedReview.model,
-      reasoningEffort: resolved.speedReview.reasoningEffort,
-      preset: resolved.blockReview.reviewerPreset,
-    }
-    const startedAt = Date.now()
-    let outcome: ChildOutcome
-    try {
-      const previous = await latestRetroRecord(workspace, snapshot.goalId, snapshot.round)
-      const prompt = composeRoundReviewPrompt(
-        snapshot,
-        bound(redact(goal.objective, workspace), 500),
-        goal,
-        previous,
-        workspace,
-      )
-      outcome = await runReviewChild(
-        ctx,
-        agent,
-        workspace,
-        prompt,
-        {
-          provider: resolved.speedReview.provider,
-          model: resolved.speedReview.model,
-          reasoningEffort: resolved.speedReview.reasoningEffort,
-          reviewerPreset: resolved.blockReview.reviewerPreset,
-          timeoutMs: resolved.speedReview.timeoutMs,
-          label: SPEED_REVIEW_LABEL,
-        },
-        new AbortController().signal,
-      )
-    } catch (error) {
-      outcome = {
-        kind: 'error',
-        detail: `the round review could not run: ${errorMessage(error)}`,
-        started: false,
-      }
-    }
-    const reviewMs = Math.max(0, Date.now() - startedAt)
-    let verdict: RetroRecord['verdict'] = 'error'
-    let action: SpeedupAction | undefined
-    let status: RetroRecord['status'] = 'error'
-    let detail: string | undefined
-    if (outcome.kind === 'text') {
-      try {
-        const parsed = parseSpeedVerdict(outcome.text, workspace)
-        if (parsed.verdict === 'speedup') {
-          verdict = 'speedup'
-          action = parsed.action
-          status = 'pending'
-        } else {
-          verdict = 'no-action'
-          status = 'no-action'
-        }
-      } catch (error) {
-        detail = `the reviewer verdict is invalid: ${errorMessage(error)}`
-      }
-    } else {
-      detail = outcome.detail
-    }
-    if (detail !== undefined) detail = bound(redact(detail, workspace), 1000)
-    const record: RetroRecord = {
-      version: 1,
-      goal: snapshot.goalId,
-      round: snapshot.round,
-      objective: bound(redact(goal.objective, workspace), 500),
-      metrics: snapshot.metrics,
-      verdict,
-      ...(action === undefined ? {} : { action, speedupId: action.speedupId }),
-      status,
-      target,
-      reviewMs,
-      ...(detail === undefined ? {} : { detail }),
-      time: new Date().toISOString(),
-      session: agent.session.id,
-    }
-    const path = retroRecordPath(workspace, snapshot.goalId, snapshot.round)
-    const written = await writeRecord(path, record)
-    if (!written) return
-    if (action === undefined || verdict !== 'speedup') return
-    if (state.announcedActions.has(action.speedupId)) return
-    // Deliver the just-written action while the next goal round is running; a
-    // newer pending record must not re-target this notice.
-    if (!resolved.speedReview.brief || !state.goalRound) return
-    const destinationTurn = state.turn
-    const current = readGoal(agent)
-    if (current === undefined || current.id !== snapshot.goalId || current.phase !== 'active') {
-      return
-    }
-    const decline = await declineCallFor(ctx, agent, workspace, action.speedupId)
-    // The late lookup awaits; deliver only if the same goal round is still open
-    // and a concurrent admission did not already announce this action.
-    if (!state.goalRound || state.turn !== destinationTurn) return
-    if (state.announcedActions.has(action.speedupId)) return
-    const live = readGoal(agent)
-    if (live === undefined || live.id !== snapshot.goalId || live.phase !== 'active') return
-    const text = composeActionNotice(
-      {
-        path,
-        display: displayRetroRecordPath(workspace, snapshot.goalId, snapshot.round),
-        record,
-      },
-      decline,
-    )
-    if (text === '') return
-    state.announcedActions.add(action.speedupId)
-    deliverNotice(
-      agent,
-      text,
-      `goal-continuity: speedup action ${action.speedupId}`,
-      MAX_SPEED_NOTICE_CHARS,
-    )
-  }
-
-  /**
-   * The brief message for the first step of a goal round, or no message. The
-   * goal-round message is claimed for this step but logged only after the
-   * pre-step, so the step's own messages are the round signal here.
-   */
-  async function roundBriefMessage(
-    agent: Agent,
-    turn: number,
-    messages: readonly UserMessage[],
-  ): Promise<UserMessage | undefined> {
-    if (!isRootAgent(agent) || !resolved.speedReview.enabled || !resolved.speedReview.brief) {
-      return undefined
-    }
-    const state = states.get(agent)
-    if (state === undefined || state.turn !== turn) return undefined
-    if (state.briefedTurn === turn) return undefined
-    const goalMessage = messages.find((message) => message.source.kind === 'goal')
-    if (goalMessage === undefined) return undefined
-    state.briefedTurn = turn
-    const goal = readGoal(agent)
-    if (goal === undefined || goal.phase !== 'active') return undefined
-    const workspace = workspaceFor(ctx, agent)
-    const pending = await latestPendingAction(workspace, goal.id)
-    const decline =
-      pending === undefined
-        ? undefined
-        : await declineCallFor(ctx, agent, workspace, pending.record.action.speedupId)
-    if (pending !== undefined) state.announcedActions.add(pending.record.speedupId)
-    return createNotice(
-      composeRoundBrief(pending, decline),
-      'goal-continuity: speed review brief',
-      MAX_SPEED_NOTICE_CHARS,
-    )
-  }
-
-  /**
-   * Deliver a pending action that completed while the goal step was being
-   * admitted, after the brief for that step had already been composed.
-   */
-  async function announcePendingAction(agent: Agent, state: AgentState): Promise<void> {
-    if (!resolved.speedReview.enabled || !resolved.speedReview.brief) return
-    if (!isRootAgent(agent) || !state.goalRound) return
-    const turn = state.turn
-    const goal = readGoal(agent)
-    if (goal === undefined || goal.phase !== 'active') return
-    const workspace = workspaceFor(ctx, agent)
-    for (const pending of await pendingActions(workspace, goal.id)) {
-      if (state.announcedActions.has(pending.record.speedupId)) continue
-      if (!state.goalRound || state.turn !== turn) return
-      const decline = await declineCallFor(ctx, agent, workspace, pending.record.speedupId)
-      if (!state.goalRound || state.turn !== turn) return
-      if (state.announcedActions.has(pending.record.speedupId)) continue
-      const live = readGoal(agent)
-      if (live === undefined || live.id !== goal.id || live.phase !== 'active') return
-      const text = composeActionNotice(pending, decline)
-      if (text === '') continue
-      state.announcedActions.add(pending.record.speedupId)
-      deliverNotice(
-        agent,
-        text,
-        `goal-continuity: speedup action ${pending.record.speedupId}`,
-        MAX_SPEED_NOTICE_CHARS,
-      )
-    }
-  }
-
-  /** Enforce one pending speedup action at the close of a goal round. */
-  async function enforceFollowThrough(agent: Agent, turn: number): Promise<void> {
-    if (!isRootAgent(agent)) return
-    const state = states.get(agent)
-    if (state === undefined || !state.goalRound || state.turn !== turn) return
-    const goal = readGoal(agent)
-    if (goal === undefined || goal.phase !== 'active') return
-    const workspace = workspaceFor(ctx, agent)
-    const pending = await latestPendingAction(workspace, goal.id)
-    if (pending === undefined) return
-    const evidence = followThroughEvidence(agent, turn, pending.record.action.speedupId)
-    if (evidence === 'started') {
-      await markRetroStatus(pending.path, 'started')
-      return
-    }
-    if (evidence === 'declined') {
-      await markRetroStatus(pending.path, 'declined')
-      return
-    }
-    if (!WORKER_START_TOOLS.some((name) => toolVisible(ctx, agent, name))) return
-    const decline = await declineCallFor(ctx, agent, workspace, pending.record.speedupId)
-    if (decline === undefined) return
-    const key = `${pending.record.speedupId}:${turn}`
-    if (state.steered.has(key)) return
-    state.steered.add(key)
-    try {
-      agent.steer(
-        createNotice(
-          `Speedup ${pending.record.speedupId} is still pending. Start a worker whose call arguments contain ${pending.record.speedupId}, or decline with: ${decline} Record: ${pending.display}.`,
-          `goal-continuity: speedup ${pending.record.speedupId} needs follow-through`,
-          MAX_SPEED_NOTICE_CHARS,
-        ),
-      )
-    } catch {
-      // A disposed agent cannot be steered; the turn is already over.
     }
   }
 
@@ -3318,26 +2969,10 @@ export function apply(ctx: Context, config?: Config): void {
     schedule(agent, state, 'restart')
   }
 
-  function handleTurnEnd(
-    agent: Agent,
-    state: AgentState,
-    reason: TurnEndReason,
-    endedAt: number,
-  ): void {
+  function handleTurnEnd(agent: Agent, state: AgentState, reason: TurnEndReason): void {
     const goalRound = state.goalRound
     state.goalRound = false
-    if (state.round?.goalId !== undefined && resolved.speedReview.enabled) {
-      const snapshot = snapshotRound(state, endedAt, workspaceFor(ctx, agent))
-      if (snapshot !== undefined && roundQualifies(snapshot.metrics, resolved.speedReview)) {
-        try {
-          startRoundReview(agent, state, snapshot)
-        } catch {
-          // A review start never fails the turn.
-        }
-      }
-    } else {
-      state.round = undefined
-    }
+    state.checkpointTurn = undefined
     const hook = hookCause(reason)
     if (hook !== undefined) {
       const cause: StopCause =
@@ -3422,60 +3057,22 @@ export function apply(ctx: Context, config?: Config): void {
       case 'turn/start':
         state.turn = event.data.turn
         state.goalRound = false
-        state.briefedTurn = null
-        state.steered.clear()
-        if (resolved.speedReview.enabled) beginRoundState(state, event.data.turn, event.time)
-        else state.round = undefined
+        state.checkpointTurn = { turn: event.data.turn, refusals: 0, unchecked: false }
         return
       case 'user/message':
         if (event.data.source.kind === 'goal') {
           state.goalRound = true
-          if (resolved.speedReview.enabled) {
-            markRoundGoal(state, event.data.source.goalId, event.data.source.round)
-            // The action may have finished while this step was being admitted,
-            // after that step's brief was already composed.
-            void announcePendingAction(agent, state).catch(() => undefined)
-          }
         } else if (event.data.source.kind === 'user') {
           state.suppression = null
           state.cause = null
         }
         return
-      case 'tool/call':
-        if (resolved.speedReview.enabled) trackRoundCall(state, event, workspaceFor(ctx, agent))
-        return
-      case 'tool/result':
-        if (resolved.speedReview.enabled) trackRoundResult(state, event, workspaceFor(ctx, agent))
-        return
       case 'turn/end':
-        handleTurnEnd(agent, state, event.data.reason, event.time)
+        handleTurnEnd(agent, state, event.data.reason)
         return
       default:
         return
     }
-  }
-
-  if (resolved.speedReview.enabled) {
-    // The brief rides the first step's admitted messages: non-waking, and it
-    // cannot miss the request the way a queued inject can.
-    ctx.on('agent/pre-step', async (payload, next) => {
-      let message: UserMessage | undefined
-      try {
-        message = await roundBriefMessage(payload.agent, payload.turn, payload.messages)
-      } catch {
-        message = undefined
-      }
-      const decision = await next()
-      if (message === undefined || decision.kind !== 'enter') return decision
-      return { ...decision, messages: [...decision.messages, message] }
-    })
-    ctx.on('agent/turn-stopping', async (payload) => {
-      try {
-        await enforceFollowThrough(payload.agent, payload.turn)
-      } catch {
-        // A gate failure never fails a turn.
-      }
-    })
   }
 
   for (const agent of ctx.agents.list()) observeAgent(agent)

@@ -18,3 +18,21 @@ export declare function boundTools(row: Row): string[];
  * Guidance rows have no status at all; the caller renders their guidance label.
  */
 export declare function rowState(row: Row, aggregate: RowAggregate | undefined, registry: ReadonlySet<string>): RowState | undefined;
+/** How a guidance row's declared prompt contribution checked out. */
+export type Readiness = 'mounted' | 'not mounted' | 'readiness unknown';
+/**
+ * Live registry observations for readiness. An absent set means that registry
+ * is unavailable, which is unknown rather than absent.
+ */
+export interface ReadinessSources {
+    readonly sections?: ReadonlySet<string>;
+    readonly skills?: ReadonlySet<string>;
+    /** Whether skill discovery completed; an incomplete catalog cannot prove absence. */
+    readonly skillsComplete: boolean;
+}
+/**
+ * Check a guidance row's declared prompt section and/or skill against the live
+ * registries. `not mounted` wins over unknown, because a confirmed absence is
+ * the only evidence that needs attention. An undeclared row has no readiness.
+ */
+export declare function guidanceReadiness(row: Row, sources: ReadinessSources): Readiness | undefined;

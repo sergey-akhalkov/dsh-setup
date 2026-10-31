@@ -25,7 +25,7 @@ one prompt section and one skill provider over the Markdown files that ship insi
 | Contribution                         | Size        | Cost per model step |
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
-| This working contract (with footer)  | 5,997 bytes | ~1.5k tokens        |
+| This working contract (with footer)  | 5,993 bytes | ~1.5k tokens        |
 | **Both, active (this page)**         |             | **~2.2k tokens**    |
 
 The setup also ships the [RTK token workflow](rtk.md) routing rule and the [Serena code

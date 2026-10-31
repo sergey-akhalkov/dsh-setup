@@ -44,6 +44,8 @@ export interface AggregateTotals {
     readonly toolCalls: number;
     readonly errors: number;
     readonly records: number;
+    /** Distinct sessions that contributed an in-window record. */
+    readonly sessions: number;
 }
 /** The pure aggregate over one window. */
 export interface Aggregate {

@@ -9,7 +9,8 @@ export class RowConfigError extends Error {
         this.name = 'RowConfigError';
     }
 }
-const ROW_FIELDS = new Set(['id', 'label', 'kind', 'match']);
+const ROW_FIELDS = new Set(['id', 'label', 'kind', 'match', 'trigger', 'mounted']);
+const MOUNTED_FIELDS = new Set(['section', 'skill']);
 const PREDICATE_FIELDS = new Set([
     'eventType',
     'tool',
@@ -63,6 +64,20 @@ function readPredicate(value, at) {
     }
     return predicate;
 }
+function readMounted(value, at) {
+    if (!isRecord(value))
+        throw new RowConfigError(`${at} must be a mapping`);
+    rejectUnknownFields(value, MOUNTED_FIELDS, at);
+    const mounted = {};
+    for (const field of ['section', 'skill']) {
+        if (value[field] !== undefined)
+            mounted[field] = readText(value[field], `${at}.${field}`);
+    }
+    if (Object.keys(mounted).length === 0) {
+        throw new RowConfigError(`${at} must name "section" or "skill"`);
+    }
+    return mounted;
+}
 function readRow(value, at) {
     if (!isRecord(value))
         throw new RowConfigError(`${at} must be a mapping`);
@@ -73,11 +88,20 @@ function readRow(value, at) {
     if (kind !== 'signal' && kind !== 'guidance') {
         throw new RowConfigError(`${at}.kind must be "signal" or "guidance"`);
     }
+    const descriptors = {
+        ...(value.trigger === undefined ? {} : { trigger: readText(value.trigger, `${at}.trigger`) }),
+    };
+    if (value.mounted !== undefined) {
+        if (kind === 'signal') {
+            throw new RowConfigError(`${at}.mounted is not allowed on a signal row`);
+        }
+        descriptors.mounted = readMounted(value.mounted, `${at}.mounted`);
+    }
     if (kind === 'guidance') {
         if (value.match !== undefined) {
             throw new RowConfigError(`${at}.match is not allowed on a guidance row`);
         }
-        return { id, label, kind };
+        return { id, label, kind, ...descriptors };
     }
     if (value.match === undefined) {
         throw new RowConfigError(`${at}.match is required on a signal row`);
@@ -86,7 +110,7 @@ function readRow(value, at) {
     if (raw.length === 0)
         throw new RowConfigError(`${at}.match must not be empty`);
     const match = raw.map((predicate, index) => readPredicate(predicate, `${at}.match[${index}]`));
-    return { id, label, kind, match };
+    return { id, label, kind, match, ...descriptors };
 }
 /**
  * Validate the configured row list. An absent list is valid: the built-in
@@ -115,4 +139,24 @@ export function parseRows(raw) {
         parsed.push(row);
     });
     return parsed;
+}
+/**
+ * The argument fields configured predicates read, per tool. Extraction keeps
+ * only these values, so raw tool arguments never enter a neutral record.
+ */
+export function configuredArgumentFields(rows) {
+    const fields = new Map();
+    for (const row of rows) {
+        for (const predicate of row.match ?? []) {
+            if (predicate.tool === undefined || predicate.argument === undefined)
+                continue;
+            let names = fields.get(predicate.tool);
+            if (names === undefined) {
+                names = new Set();
+                fields.set(predicate.tool, names);
+            }
+            names.add(predicate.argument.field);
+        }
+    }
+    return fields;
 }

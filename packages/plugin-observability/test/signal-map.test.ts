@@ -49,8 +49,15 @@ function pluginCode(id: string): string {
   return files.map((file) => readFileSync(file, 'utf8')).join('\n')
 }
 
-/** A context whose missing services are inert stubs, so `apply` can register its tools. */
-function stubContext(names: Set<string>): unknown {
+/** Registries one plugin's entrypoint contributed under the stub context. */
+interface CapturedRegistry {
+  readonly tools: Set<string>
+  readonly sections: Set<string>
+  readonly skills: Set<string>
+}
+
+/** A context whose missing services are inert stubs, so `apply` can register its contributions. */
+function stubContext(captured: CapturedRegistry, pending: Array<() => unknown>): unknown {
   const stub: object = new Proxy(() => {}, {
     get: () => stub,
     apply: () => stub,
@@ -63,16 +70,39 @@ function stubContext(names: Set<string>): unknown {
     },
     on: () => () => {},
     inject: () => () => {},
-    get: () => undefined,
+    // Optional-service access: a plugin that registers its tool through `ctx.get('tools')`
+    // (as goal-continuity does) still contributes it to the captured registry.
+    get: (name: string) =>
+      name === 'tools'
+        ? {
+            register: (definition: { name?: unknown }) => {
+              if (typeof definition.name === 'string') captured.tools.add(definition.name)
+              return () => {}
+            },
+            restrict: () => () => {},
+            schemas: () => [],
+          }
+        : undefined,
     tools: {
       register: (definition: { name?: unknown }) => {
-        if (typeof definition.name === 'string') names.add(definition.name)
+        if (typeof definition.name === 'string') captured.tools.add(definition.name)
         return () => {}
       },
       schemas: () => [],
     },
-    skills: { registerProvider: () => () => {}, register: () => () => {} },
-    systemPrompt: { section: () => () => {} },
+    skills: {
+      registerProvider: (factory: () => unknown) => {
+        pending.push(factory)
+        return () => {}
+      },
+      register: () => () => {},
+    },
+    systemPrompt: {
+      section: (definition: { name?: unknown }) => {
+        if (typeof definition.name === 'string') captured.sections.add(definition.name)
+        return () => {}
+      },
+    },
   }
   return new Proxy(base, {
     get(target, property) {
@@ -81,19 +111,33 @@ function stubContext(names: Set<string>): unknown {
   })
 }
 
-/** Tools the plugin's own entrypoint registers when applied with stub services. */
-async function capturedTools(id: string): Promise<Set<string> | undefined> {
+/** Contributions the plugin's own entrypoint registers when applied with stub services. */
+async function capturedRegistry(id: string): Promise<CapturedRegistry | undefined> {
+  const captured: CapturedRegistry = { tools: new Set(), sections: new Set(), skills: new Set() }
+  const pending: Array<() => unknown> = []
   try {
     const module = (await import(pathToFileURL(join(pluginDir(id), 'lib', 'index.js')).href)) as {
       apply?: (ctx: unknown, config: unknown) => unknown
     }
-    const names = new Set<string>()
     try {
-      await module.apply?.(stubContext(names), {})
+      await module.apply?.(stubContext(captured, pending), {})
     } catch {
       // Later services can be missing; registrations made before the failure still count.
     }
-    return names
+    // Skill providers expose their catalog through `list()`, so resolve them after apply.
+    for (const factory of pending) {
+      try {
+        const provider = factory() as {
+          list?: () => Promise<readonly { name?: unknown }[]>
+        }
+        for (const candidate of (await provider.list?.()) ?? []) {
+          if (typeof candidate.name === 'string') captured.skills.add(candidate.name)
+        }
+      } catch {
+        // An unavailable provider contributes nothing to the captured catalog.
+      }
+    }
+    return captured
   } catch {
     return undefined
   }
@@ -136,10 +180,10 @@ describe('shipped observability signal map', () => {
         predicate.tool === undefined ? [] : [predicate.tool],
       )
       if (mapped.length === 0) continue
-      const captured = await capturedTools(row.id)
+      const captured = await capturedRegistry(row.id)
       for (const tool of mapped) {
-        if (captured !== undefined && captured.size > 0) {
-          expect(captured.has(tool), `${row.id} must register ${tool}`).toBe(true)
+        if (captured !== undefined && captured.tools.size > 0) {
+          expect(captured.tools.has(tool), `${row.id} must register ${tool}`).toBe(true)
           continue
         }
         // The Codex fork's module graph cannot be imported in this repo (a peer
@@ -187,5 +231,63 @@ describe('shipped observability signal map', () => {
         'tools.register',
       )
     }
+  })
+
+  it('every row states what it waits for while it is silent', () => {
+    for (const row of shippedRows()) {
+      expect(typeof row.trigger, `${row.id} must carry a trigger`).toBe('string')
+      expect(row.trigger?.trim(), `${row.id} trigger must not be empty`).not.toBe('')
+    }
+  })
+
+  it('attributes the work_checkpoint tool to the goal-continuity row', () => {
+    const row = shippedRows().find((candidate) => candidate.id === 'goal-continuity')
+    const predicate = row?.match?.find((candidate) => candidate.tool === 'work_checkpoint')
+    expect(predicate, 'goal-continuity must map the work_checkpoint tool').toBeDefined()
+    expect(predicate?.sourceKind).toBeUndefined()
+  })
+
+  it('every guidance row declares its contribution and the named plugin registers it', async () => {
+    for (const row of shippedRows()) {
+      if (row.kind !== 'guidance') continue
+      expect(row.mounted, `${row.id} must declare its mounted names`).toBeDefined()
+      expect(
+        [row.mounted?.section, row.mounted?.skill].filter((name) => name !== undefined).length,
+        `${row.id} must name a section or a skill`,
+      ).toBeGreaterThan(0)
+      const captured = await capturedRegistry(row.id)
+      if (captured === undefined) {
+        throw new Error(`${row.id}: the built module could not be applied under the stub context`)
+      }
+      if (row.mounted?.section !== undefined) {
+        expect(
+          captured.sections.has(row.mounted.section),
+          `${row.id} must register prompt section ${row.mounted.section}`,
+        ).toBe(true)
+      }
+      if (row.mounted?.skill !== undefined) {
+        expect(
+          captured.skills.has(row.mounted.skill),
+          `${row.id} must publish skill ${row.mounted.skill}`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('the documented custom-signal example validates against the row schema', () => {
+    const doc = readFileSync(join(root, 'docs', 'plugins.md'), 'utf8')
+    const start = doc.indexOf('To add a custom signal')
+    const example = /```yaml\n([\s\S]*?)```/u.exec(doc.slice(start))
+    if (example?.[1] === undefined) throw new Error('the documented example is missing')
+    const document: unknown = parse(example[1])
+    if (!Array.isArray(document)) throw new Error('the documented example must be an array')
+    const entry = (document as DefaultsEntry[]).find(
+      (value) => value.id === 'dsh-setup-observability',
+    )
+    if (entry === undefined) throw new Error('the documented example has no observability entry')
+    const rows = parseRows(entry.config)
+    expect(rows.map((row) => row.id)).toEqual(['my-tool', 'my-notes-writes', 'my-skill'])
+    for (const row of rows)
+      expect(row.trigger, `${row.id} example must carry a trigger`).toBeDefined()
   })
 })

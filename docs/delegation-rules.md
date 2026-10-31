@@ -80,7 +80,8 @@ result contract is a code extension.
 
 The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
 must not be strict (an answer writes no record). `lane-boundary` is deprecated and kept only for
-existing profiles; the shipped fan-out rule uses `lane-assignment`.
+existing profiles; the shipped defaults no longer include an automatic progress or fan-out rule,
+and the `implementation-work` and `lane-assignment` triggers remain available to profile rules.
 
 The change-scoped triggers evaluate only for changes attributed to the current session. A session
 is involved in a change when it created or modified it in this workspace; observation, a
@@ -411,8 +412,6 @@ The shipped defaults live in this package's composition fragment:
 | -------------------- | ------------------------- | ---------------------------------- | ------ |
 | `spec-review`        | `spec-ready`              | review, whole, phase `spec`        | strict |
 | `task-review`        | `spec-task-ready`         | review, task                       | strict |
-| `task-progress`      | `implementation-work`     | note                               | strict |
-| `lane-fanout`        | `lane-assignment`         | note                               | strict |
 | `blocker`            | `failure-streak`          | answer                             | soft   |
 | `research`           | `manual`                  | answer                             | none   |
 | `advisor`            | `manual`                  | answer                             | none   |
@@ -420,6 +419,11 @@ The shipped defaults live in this package's composition fragment:
 | `worker-deep`        | `manual`                  | answer                             | none   |
 | `bug-fix`            | `manual`                  | patch                              | none   |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
+
+The shipped set intentionally omits the automatic `task-progress` and `lane-fanout` rules. The
+`implementation-work` and `lane-assignment` triggers and the `note` contract remain available to
+profile rules; the goal-continuity `work-checkpoints` capability owns the pause-time progress and
+parallel decision and requires a `work_checkpoint` call at each substantial pause.
 
 `advisor` is a manual, read-only second opinion. Use it only when the decision is expensive to
 reverse, security or data integrity is at stake, the design spans modules, or two attempts have
@@ -440,7 +444,9 @@ The gate exists to make incremental review the normal path:
 3. Run `delegate(rule: "task-review", change: "<change>")` immediately, before starting the next
    task.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`.
-5. If the turn must stop mid-task, call `task_progress` for that task instead of ticking it.
+5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call
+   `task_progress` for that task instead of ticking it; otherwise the goal-continuity
+   `work-checkpoints` checkpoint covers the pause.
 
 A task-scoped `PASS` is a historical snapshot: later tasks do not invalidate it. The optional
 integration review covers the current combined worktree, because a later task can regress an
@@ -458,11 +464,11 @@ The turn-stopping gate refuses a code-changing turn close unless:
 - when the session's tick makes the task list fully checked, every checked task in the change has a
   portable task-review `PASS` (not only the tasks this session attributed); before completion the
   per-task scope is unchanged, so parallel writers do not review each other's work early;
-- the turn has a newly checked-and-reviewed task or a progress note matching the current worktree
-  digest;
+- the turn has a newly checked-and-reviewed task, or a progress note matching the current worktree
+  digest when a profile configures the `task-progress` rule;
 - every non-serial lane with unchecked tasks in a plan with at least two non-serial lanes is the
-  lane this turn ticked, carries a tagged worker start, or has a serial note (the `lane-fanout`
-  rule);
+  lane this turn ticked, carries a tagged worker start, or has a serial note, when a profile
+  configures the `lane-fanout` rule;
 - every strict whole-spec rule applies with a matching record for the current spec digest when
   this session created the change or changed its spec artifacts;
 - the optional integration rule is met when this session's work completed the task list.
@@ -491,8 +497,9 @@ task_progress(task: "2.1 Extract the parser", status: "in-progress", reason: "ha
 
 `task_progress` writes `.dsh/delegation/task-progress/<change>.json` with the task id, status
 (`in-progress` or `blocked`), reason, current worktree digest, and time. It runs no model and
-writes no `PASS`. The note authorizes a code-changing turn to close only while its digest still
-matches the worktree and the task is still unchecked. Any further file change makes it stale, so
+writes no `PASS`. When a profile configures a `task-progress` rule on `implementation-work`, the note
+authorizes a code-changing turn to close only while its digest still matches the worktree and the
+task is still unchecked. Any further file change makes it stale, so
 the next turn must refresh the note or tick the task and run its review. A checked task never
 accepts a note and a note never counts as a task-review `PASS`. A note may be written from any
 session, and it attributes the change to that session; task lookup skips an unrelated change whose
@@ -517,7 +524,7 @@ digest, so decide ownership before the work starts:
   default ceremony.
 
 The review records, digests, triggers, and turn-stopping gate are unchanged by this guidance; it
-describes how to assign write-capable work. The `lane-fanout` rule described below makes the
+describes how to assign write-capable work. A profile `lane-fanout` rule described below makes the
 assignment happen at the first unassigned lane, rather than only when a lane completes.
 
 ### The lane assignment gate
@@ -573,14 +580,14 @@ A heading containing `serial` (case-insensitive) is the integration tail and nev
 parallel work, because generated output and the full repository gate cannot run concurrently. The
 trigger fails open: an unreadable `tasks.md`, a change without level-2 headings, an unassigned lane
 without owned paths, and a turn that neither ticked a task nor changed implementation files report
-nothing. A change with exactly one non-serial lane in the plan reports nothing. The shipped
-`lane-fanout` rule uses this trigger.
+nothing. A change with exactly one non-serial lane in the plan reports nothing. The trigger and the
+`lane-fanout` rule shape remain available to profile rules; the shipped defaults no longer
+configure them.
 
 `lane-boundary` is deprecated. It remains accepted for existing profiles and keeps its documented
 completion-boundary behavior (a completed lane plus a per-turn worker start or a matching note), but
 no shipped rule uses it and its per-turn boolean forgets a worker started in an earlier turn. A
-profile that replaces the whole `rules` config must restate `lane-fanout` with `lane-assignment` to
-keep the new behavior.
+profile that adds a fan-out rule configures `lane-fanout` with `lane-assignment`.
 
 ## Digests and records
 
@@ -655,7 +662,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
   (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 17309 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 18188 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`

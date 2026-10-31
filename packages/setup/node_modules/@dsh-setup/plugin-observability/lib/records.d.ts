@@ -15,14 +15,25 @@ export interface TraceRecord {
     readonly sourceKind?: string;
     readonly abortPrefix?: string;
     readonly command?: string;
-    /** Raw tool-call argument JSON, kept unparsed until a predicate needs a field. */
-    readonly arguments?: string;
+    /** Only the argument fields a configured predicate reads; raw arguments never survive. */
+    readonly argumentValues?: Readonly<Record<string, string>>;
     readonly failed?: true;
+    /** Tool call identity, shared by a call and its result. */
+    readonly callId?: string;
+    /** A failed tool result's recorded error name. */
+    readonly errorName?: string;
+    /** A failed result's code, or the turn failure's stable `LlmFailure.code`. */
+    readonly errorCode?: string;
+    /** `turn/end` reason kind, so a cut is distinguishable from a failure. */
+    readonly turnEnd?: string;
 }
+/** The argument fields the configured predicates read, per tool. */
+export type ArgumentFieldMap = ReadonlyMap<string, ReadonlySet<string>>;
 /**
  * Extract the aggregation records a session owns.
  *
  * `start` is the session's durable inheritance boundary: a fork seed copies a
- * parent prefix and owns only what follows it.
+ * parent prefix and owns only what follows it. `fields` names the argument
+ * fields a configured predicate reads; anything else in the arguments is dropped.
  */
-export declare function extractRecords(sessionId: string, events: readonly SessionEvent[], start?: number): TraceRecord[];
+export declare function extractRecords(sessionId: string, events: readonly SessionEvent[], start?: number, fields?: ArgumentFieldMap): TraceRecord[];

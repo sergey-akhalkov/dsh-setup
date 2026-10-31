@@ -52,8 +52,6 @@ describe('configuration validation', () => {
     expect(config.rules.map((rule) => rule.id)).toEqual([
       'spec-review',
       'task-review',
-      'task-progress',
-      'lane-fanout',
       'blocker',
       'research',
       'advisor',
@@ -62,6 +60,8 @@ describe('configuration validation', () => {
       'bug-fix',
       'integration-review',
     ])
+    expect(config.rules.map((rule) => rule.when)).not.toContain('implementation-work')
+    expect(config.rules.map((rule) => rule.when)).not.toContain('lane-assignment')
     expect([...config.targets.keys()]).toEqual([
       'codex',
       'codex-write',
@@ -104,15 +104,13 @@ describe('configuration validation', () => {
         gate: 'none',
       })
     }
-    const advisor = config.rules.find((rule) => rule.id === 'advisor')
-    expect(advisor).toMatchObject({
+    expect(config.rules.find((rule) => rule.id === 'advisor')).toMatchObject({
       when: 'manual',
       to: 'codex-astra',
       contract: 'answer',
       gate: 'none',
       instruction: 'bundled:advisor',
     })
-    expect(config.rules.find((rule) => rule.id === 'lane-fanout')?.when).toBe('lane-assignment')
     expect(config.failureStreak).toBe(3)
     const integration = config.rules.find((rule) => rule.id === 'integration-review')
     expect(integration).toMatchObject({
@@ -192,6 +190,20 @@ describe('configuration validation', () => {
         }),
       ),
     ).toThrow(/lane-assignment is satisfied only by a lane assignment or a task progress note/)
+  })
+
+  it('accepts profile note rules on the implementation-work and lane-assignment triggers', () => {
+    const config = {
+      targets: { codex: { provider: 'codex-subagent' } },
+      rules: [
+        { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
+        { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
+      ],
+    }
+    expect(validateConfig(config).rules.map((rule) => rule.when)).toEqual([
+      'implementation-work',
+      'lane-assignment',
+    ])
   })
 
   const invalid: Array<[string, Record<string, unknown>, RegExp]> = [

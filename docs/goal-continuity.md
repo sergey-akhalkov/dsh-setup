@@ -1,9 +1,10 @@
-# Goal continuity, block review, and speed review
+# Goal continuity, block review, and work checkpoints
 
-`@dsh-setup/plugin-goal-continuity` keeps an active goal alive across recoverable harness stops and
-makes two bounded, read-only model calls: it reviews every model-proposed goal block before it can
-end the run, and it reviews one expensive goal round for a concrete speedup. The supervisor is
-deterministic; neither review starts, continues, or cancels a turn, and neither changes the goal.
+`@dsh-setup/plugin-goal-continuity` keeps an active goal alive across recoverable harness stops,
+reviews every model-proposed goal block before it can end the run, and requires one structured work
+checkpoint before a substantial root turn closes. The supervisor is deterministic; the block review
+is one bounded, read-only model call; the checkpoint gate steers but never starts, continues, or
+cancels a turn, and never changes the goal.
 
 ## Blocker definition
 
@@ -36,13 +37,13 @@ and injects a notice naming the exact user-only action that the closing message 
 
 ## Shared read-only reviewer
 
-Both reviews use the same fresh-context child, started through `ctx.subagents.startActivation` with
-the configured provider, model, reasoning effort, and the independent `goal-reviewer` preset. The
+The block review uses a fresh-context child, started through `ctx.subagents.startActivation` with the
+configured provider, model, reasoning effort, and the independent `goal-reviewer` preset. The
 fragment declares that preset with `@deepseek-ai/dsh-agent-preset`: a persona, `read` only (no
 `write`/`edit`), and `grep`/`glob`. The bundle applies the enforcement, not the preset list alone:
 when the child is announced through `agent/created`, the plugin calls
-`agent.ctx.tools.restrict({ allow: ['read', 'grep', 'glob'] })` on the child's own scope. The speed
-review selects the same preset and the same allowlist; there is no second preset row.
+`agent.ctx.tools.restrict({ allow: ['read', 'grep', 'glob'] })` on the child's own scope. That
+allowlist is the only reader of the preset; there is no second preset row.
 
 The preset is not a human choice, so the plugin keeps it out of the Web mode roster: it filters the
 `agentPresets/list` Remote projection that the client's picker reads, while the registry keeps the
@@ -56,12 +57,10 @@ and throw; the child scope is the only correct place. A parent `danger-full-acce
 re-add a mutation tool through the sandbox: the effective tool surface is the allowlist, so the
 session sandbox is deliberately not the enforcement. A provider that cannot select the preset, a
 missing provider or preset, a child that inherits the parent context, or a failed restriction makes
-the review unavailable; an unavailable block review follows `onUnavailable`, and an unavailable
-speed review produces no action and the goal continues.
+the review unavailable; an unavailable block review follows `onUnavailable`.
 
-Both prompts ship as assets in the package: `assets/blocker-review.md` for the block decision and
-`assets/round-review.md` for the round speed review. The package manifest lists both, so the setup
-vendors them with the plugin.
+The block-review prompt ships as `assets/blocker-review.md` in the package, and the manifest lists it
+so the setup vendors it with the plugin.
 
 ## Block-review evidence
 
@@ -105,96 +104,135 @@ unverified block (`onUnavailable`, `onReviewError`, or `onExhausted` set to `all
 marked `verified: false` and injects a visible notice naming the policy. An `allow` policy is the
 only way an unverified block can take effect.
 
-## Goal-round speed review
+## Work checkpoints
 
-At the end of a goal round the plugin snapshots the cost of that round from the session events it
-already observes and, when a threshold is crossed, starts at most one read-only review child in the
-background. The round review never delays or blocks the next round:
+A work checkpoint is one structured, machine-checkable decision recorded at a substantial pause. It
+names whether the work is done, what is verified, what remains, whether the remainder has independent
+parallel lanes, and the next action. The close gate requires the checkpoint before the turn closes,
+so a pause cannot silently drop the decision; the checkpoint is self-review, not an independent
+review, and the block review remains the independent check for blockers.
 
-- the round had at least `minToolCalls` tool calls (default 12);
-- the round lasted at least `minMinutes` minutes (default 5);
-- a single tool call lasted at least `slowCallMs` milliseconds (default 120000);
-- `everyRound` is true (a deliberate maximum-pressure setting).
+### Trigger
 
-A round whose start the plugin did not observe has no wall time and is never reviewed. A restart
-mid-round loses the in-memory metrics and skips that review; a completed record survives.
+The plugin evaluates a root agent's turn close from the tool results it already observes. A
+substantial pause requires one checkpoint when all of these hold:
 
-### Round metrics
+- the turn has at least `minToolCalls` tool calls (default 4);
+- when `requireWrite` is true (the default), at least one successful `edit`/`write` or worker start
+  (one of `subagent`, `subagent_fork`, `spawn_teammate`, `workflow`, `delegate`) occurred;
+- the last tool call of the turn is not `ask_user_question`.
 
-The review input and the local record carry bounded, redacted metrics from the observed round:
+No checkpoint is required for a subagent turn, an aborted turn, a turn whose session state cannot be
+read, or a turn that already contains a successful `work_checkpoint` call. At most one checkpoint is
+required per turn; the checkpoint record path is fixed by the turn, so a repeated call replaces the
+same record.
 
-- start-to-end wall time;
-- tool-call count and failed tool-result count;
-- worker starts by tool name (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`, `delegate`);
-- the slowest completed calls with their durations and bounded argument and result summaries;
-- approximate non-tool time: wall time minus the sum of observed tool durations (parallel calls are
-  summed, so it is a hint rather than a precise measurement).
+### Checkpoint request
 
-Every completed call is timed; only the five slowest keep argument and result summaries. Machine
-paths and obvious credentials are redacted before the metrics reach the reviewer or the record.
+The plugin steers one bounded checkpoint request at the turn-close boundary. It names the observed
+evidence: the tool-call count, up to five written paths, the last shell command and its exit state,
+the last failed tool, and the worker starts. It asks whether the work is done, what is verified, what
+remains, whether the remaining lanes are independent (parallel), and the next action. The request is
+attributed to the `goal-continuity` source, is redacted (machine paths and obvious credentials), is
+capped at `maxMessageChars` (default 1200), and is delivered with `agent.steer`: it never starts an
+idle agent and never wakes one.
 
-### Strict round verdict
+### The `work_checkpoint` tool and record
 
-The `assets/round-review.md` prompt asks for one action, not a report, and exactly one fenced JSON
-verdict:
+The Host registers one `work_checkpoint` tool with these fields:
 
-- `{"verdict":"no-action"}` when no concrete change is expected to save meaningful time;
-- `{"verdict":"speedup", ...}` with one bottleneck, one action, a worker handoff, an expected
-  saving, a risk, and a short `speedup-id` such as `speedup-12-a1b2`.
+- `outcome`: `done` or `continue`;
+- `verified`: a list of verified facts (optional);
+- `remaining`: a list of remaining items (optional);
+- `parallel`: whether the remainder has independent lanes (default false);
+- `serialReason`: required when `outcome` is `continue` and `parallel` is false;
+- `next`: the next action (required);
+- `speedup`: an optional speedup for the next turn.
 
-Prose only, several fenced blocks, a missing or unknown field, or a malformed `speedup-id` is a
-review error: no action is recorded and the goal continues. The action is a handoff for the next
-round, not an automatic write; the main agent starts a write-capable worker and reviews its result.
+A call and its record look like this (the record is written by the tool; the model only sends the
+arguments):
 
-### Round records and status
+```json
+{
+  "outcome": "continue",
+  "verified": ["the parser test fails on the empty input"],
+  "remaining": ["guard the empty input", "add a regression test"],
+  "parallel": false,
+  "serialReason": "the test must be written after the guard exists",
+  "next": "add the guard, then the test"
+}
+```
 
-Each reviewed round writes one atomic record under the workspace's local state:
+```json
+{
+  "version": 1,
+  "checkpoint": "checkpoint-3-1a2b3c4d",
+  "turn": 3,
+  "outcome": "continue",
+  "verified": ["the parser test fails on the empty input"],
+  "remaining": ["guard the empty input", "add a regression test"],
+  "parallel": false,
+  "serialReason": "the test must be written after the guard exists",
+  "next": "add the guard, then the test",
+  "time": "2026-10-31T12:00:00.000Z",
+  "session": "session-83a9285d-c895-4235-a36b-5e302e02e035"
+}
+```
+
+An unknown field, an unknown outcome, a missing next action, and a continuation without a serial
+reason are rejected with a field diagnostic. Every successful call writes one atomic local record:
 
 ```
-.dsh/goal-continuity/retro/<goal-id>/<round>.json
+.dsh/work-checkpoints/<hashed-session>/<turn>.json
 ```
 
-The record carries the bounded metrics, the verdict, the action (when any), the `speedup-id`, the
-status, the review target, the review duration, the time, and the session. `status` is `pending` for
-an action, `started` or `declined` after the follow-through gate, `no-action` for a quiet verdict,
-and `error` for a failed, timed-out, malformed, or unavailable review. A record for the goal and
-round is reused instead of starting a second child, so a duplicate round end or a resumed session
-never spends a second call for that round. `maxPerGoal` (default 20) bounds the started reviews for
-one goal; only raising it allows another. The record is local scratch: it is never a tracked file.
+The session key is the SHA-256 prefix of the session id, matching the delegation session ledger; the
+record carries the decision, a stable checkpoint id (`checkpoint-<turn>-<hash>`), the turn, the time,
+and the session. Each field is bounded and redacted, and the record is replaced rather than
+duplicated when the same turn calls the tool again. The record is machine-local scratch under
+`.dsh/` and is never a tracked file. The tool result is a short summary with the checkpoint id and
+the workspace-relative record path.
 
-The next review also receives the previous record, so it can see whether the earlier action was
-started, declined, or still pending.
+A write failure still counts as a successful checkpoint for the close gate: the tool returns the
+decision with a bounded warning naming the record failure, and never claims that a record exists.
 
-### Next-round brief
+### Close gate and the UNCHECKED cap
 
-At the first step of a goal round the plugin adds one bounded, non-waking notice to the step:
+After a substantial pause the `agent/turn-stopping` listener refuses the close by steering the
+checkpoint request; a successful checkpoint for the turn allows the close. The gate allows at most
+`maxBlocks` refusals (default 3) per turn and then allows the close with a visible `UNCHECKED` notice
+that states it is not a pass. The refusal budget is shared with the parallel-action gate. An
+internal state error fails open: the close is allowed and no verification or checkpoint is claimed.
+A subagent turn is never evaluated.
 
-- the speed policy: split independent streams, start workers for the ones that can run in parallel,
-  keep integration in the main agent, run known-slow checks in the background, and start task
-  reviews as a batch;
-- any pending action from an earlier round: bottleneck, action, handoff, expected saving,
-  `speedup-id`, record path, the start-a-worker-or-decline instruction, and the exact
-  `task_progress` decline call (using the eligible unchecked task's id) when that path is available.
+### Parallel-action gate and the serial escape
 
-The brief never starts a turn, never wakes an idle agent, and appears only in a goal round. When
-`brief` is false, no brief is injected, and a pending action is still enforced by the follow-through
-gate. If the review child finishes after the next goal round starts, the action is injected as a
-bounded notice during that round.
+When a `continue` checkpoint declares `parallel: true` and `enforceParallel` is true (the default),
+the turn may close only after one of these:
 
-### Follow-through gate
+- a successful worker start after the checkpoint whose serialized arguments contain the checkpoint
+  id (one of `subagent`, `subagent_fork`, `spawn_teammate`, `workflow`, `delegate`; a cached
+  `delegate` reuse does not count);
+- an amendment that replaces the checkpoint with `parallel: false` and a non-empty serial reason.
 
-At the close of a goal round with a pending action, the plugin accepts either piece of evidence:
+A failed worker start, an untagged worker start, and a worker start before the checkpoint do not
+satisfy the gate. Each unsatisfied close steers with the checkpoint id, shares the `maxBlocks` budget,
+and reaches the same `UNCHECKED` notice at the cap. The gate reports nothing when no worker-start tool
+is registered or when the checkpoint outcome is `done`. The serial reason is the explicit escape for
+a genuinely sequential remainder; if almost every checkpoint is serial, the measurement shows the
+gate is not changing behavior.
 
-- a successful worker start whose arguments contain the `speedup-id` (one of `subagent`,
-  `subagent_fork`, `spawn_teammate`, `workflow`, `delegate`);
-- a successful `task_progress` note whose reason contains the `speedup-id`.
+### Goal rounds
 
-Either one marks the record `started` or `declined` and the gate is silent for that action. When
-neither exists, the gate steers once with the action id, the record path, and the exact decline
-call; a second close in the same turn does not steer again. The gate fails open (reports nothing and
-the goal continues) when the record is missing or unreadable, when `task_progress` is not
-registered, when no active OpenSpec change has an eligible unchecked task, or when no worker-start
-tool is registered. It skips subagent turns entirely.
+A goal round ends through the same turn-close path, so the checkpoint is required before the round
+closes and the next round sees the decision through the session log. The checkpoint never changes the
+goal: it does not block, pause, complete, or resume it, and the goal driver may continue after the
+turn closes. The block review is independent and still runs when the same turn proposes a block. No
+goal-round-specific checkpoint, brief, or record exists.
+
+The injected request and the `work_checkpoint` tool call are attributable to the shipped
+`goal-continuity` observability row through the source kind and a `work_checkpoint` tool match; no
+separate log or storage surface is written.
 
 ## Configuration
 
@@ -213,27 +251,26 @@ tool is registered. It skips subagent turns entirely.
       onReviewError: deny
       onUnavailable: allow
       onExhausted: deny
-    speedReview:
+    checkpoint:
       enabled: true
-      provider: spawn
-      model: deepseek-flash
-      reasoningEffort: max
-      minToolCalls: 12
-      minMinutes: 5
-      slowCallMs: 120000
-      everyRound: false
-      timeoutMs: 120000
-      maxPerGoal: 20
-      brief: true
+      minToolCalls: 4
+      requireWrite: true
+      maxBlocks: 3
+      enforceParallel: true
+      maxMessageChars: 1200
 ```
 
-- `speedReview.enabled: false` disables only the speed review, its brief, and its follow-through
-  gate; continuity supervision and the block review still run.
-- `speedReview.reviewerPreset` does not exist: the speed review reuses
-  `blockReview.reviewerPreset`, so both reviews share the `goal-reviewer` declaration and the
-  read-only child scope.
-- `blockReview.enabled: false` disables only the block gate; continuity supervision and the speed
-  review still run.
+- `checkpoint.enabled: false` disables only the checkpoint tool, the trigger, and the close and
+  parallel gates; continuity supervision and the block review still run.
+- `checkpoint.minToolCalls` raises or lowers the pause threshold; `checkpoint.requireWrite: false`
+  also checkpoints a read-only turn.
+- `checkpoint.maxBlocks: 0` closes immediately with the `UNCHECKED` notice; `maxBlocks` is the shared
+  refusal budget for both gates.
+- `checkpoint.enforceParallel: false` keeps the checkpoint but drops the tagged-worker requirement.
+- `speedReview` is deprecated: a profile may still carry the object, the plugin loads, reports one
+  warning, and runs no speed review. Remove the section.
+- `blockReview.enabled: false` disables only the block gate; continuity supervision and the work
+  checkpoint still run.
 - `blockedAfterConsecutiveRounds` is the block gate's view of the goal tool's setting in the
   selected preset/row. Keep the two values equal: a lower gate value spends a review the goal tool
   would reject, and a higher one skips a review the goal tool would accept.
@@ -242,11 +279,11 @@ tool is registered. It skips subagent turns entirely.
   (the default preserves the goal).
 - Unknown, mistyped, or out-of-range fields in either section fail plugin load with a field
   diagnostic.
-- Disabling the plugin row, or setting `enabled: false`, removes continuity supervision and both
-  reviews with their brief and gate; the `preset-goal-reviewer` declaration remains installed but is
-  only selected by the two reviews.
+- Disabling the plugin row, or setting `enabled: false`, removes continuity supervision, the block
+  review, and the work checkpoint; the `preset-goal-reviewer` declaration remains installed but is
+  only selected by the block review.
 
-The reviewer selector for each review is `provider` + the shared `reviewerPreset`; the setup ships
-the preset row and the fragment generator allows it as the approved Harness-provided declaration
-without duplicating its packages as setup dependencies. A profile may override or disable the
-preset; both reviews treat a missing, non-read-only, or unrestrictable preset as unavailable.
+The block reviewer's selector is `provider` + the shared `reviewerPreset`; the setup ships the
+preset row and the fragment generator allows it as the approved Harness-provided declaration without
+duplicating its packages as setup dependencies. A profile may override or disable the preset; the
+block review treats a missing, non-read-only, or unrestrictable preset as unavailable.

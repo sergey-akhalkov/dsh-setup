@@ -471,6 +471,37 @@ describe('target resolution', () => {
     expect(subagents.runs[1]?.agentOptions).toEqual({ reasoningEffort: 'max' })
   })
 
+  it('keeps the removed progress and lane triggers available to profile rules', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task' }])
+    const fragment = parse(readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')) as {
+      rows: Array<{ config: BundleConfigLike }>
+    }
+    const shipped = fragment.rows[0]?.config
+    if (shipped === undefined) throw new Error('missing shipped config')
+    const shippedRules = shipped.rules ?? []
+    expect(shippedRules.map((rule) => rule.when)).not.toContain('implementation-work')
+    expect(shippedRules.map((rule) => rule.when)).not.toContain('lane-assignment')
+    const harness = harnessFor(root, {
+      ...shipped,
+      rules: [
+        ...shippedRules,
+        { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
+        { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
+      ],
+    })
+    await harness.preStep(1)
+    await harness.writeResult(
+      join(dir, 'proposal.md'),
+      '# Proposal\n\nWhy.\n',
+      '# Proposal\n\nWhy changed.\n',
+    )
+    harness.git.status = ' M packages/engine.ts\0'
+    harness.git.diff = 'M engine'
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent).join('\n')).toContain('changed implementation files')
+  })
+
   it('reports an unavailable worker provider with the target next action and no record', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])

@@ -264,3 +264,95 @@ describe('row schema', () => {
     expect(rejection(() => parseRows({ rows: 'nope' }))).toContain('config.rows must be an array')
   })
 })
+
+describe('row descriptors', () => {
+  it('accepts a trigger on a signal row and on a guidance row', () => {
+    expect(
+      parseRows({
+        rows: [
+          {
+            id: 'loop',
+            label: 'Loop',
+            kind: 'signal',
+            trigger: 'a turn aborts because a loop was detected',
+            match: [{ tool: 'loop' }],
+          },
+          { id: 'pony', label: 'Ponytail', kind: 'guidance', trigger: 'a ruleset is loaded' },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: 'loop',
+        label: 'Loop',
+        kind: 'signal',
+        trigger: 'a turn aborts because a loop was detected',
+        match: [{ tool: 'loop' }],
+      },
+      { id: 'pony', label: 'Ponytail', kind: 'guidance', trigger: 'a ruleset is loaded' },
+    ])
+  })
+
+  it('accepts a mounted section, a mounted skill, and both on a guidance row', () => {
+    expect(
+      parseRows({
+        rows: [
+          { id: 'a', label: 'A', kind: 'guidance', mounted: { section: 'dsh-setup:ponytail' } },
+          { id: 'b', label: 'B', kind: 'guidance', mounted: { skill: 'ponytail' } },
+          {
+            id: 'c',
+            label: 'C',
+            kind: 'guidance',
+            mounted: { section: 'dsh-setup:rtk', skill: 'rtk' },
+          },
+        ],
+      }),
+    ).toEqual([
+      { id: 'a', label: 'A', kind: 'guidance', mounted: { section: 'dsh-setup:ponytail' } },
+      { id: 'b', label: 'B', kind: 'guidance', mounted: { skill: 'ponytail' } },
+      {
+        id: 'c',
+        label: 'C',
+        kind: 'guidance',
+        mounted: { section: 'dsh-setup:rtk', skill: 'rtk' },
+      },
+    ])
+  })
+
+  it('rejects an empty mounted object and mounted on a signal row', () => {
+    expect(
+      rejection(() =>
+        parseRows({ rows: [{ id: 'a', label: 'A', kind: 'guidance', mounted: {} }] }),
+      ),
+    ).toBe('observability config: rows[0].mounted must name "section" or "skill"')
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [
+            {
+              id: 'a',
+              label: 'A',
+              kind: 'signal',
+              match: [{ tool: 'x' }],
+              mounted: { section: 'x' },
+            },
+          ],
+        }),
+      ),
+    ).toBe('observability config: rows[0].mounted is not allowed on a signal row')
+  })
+
+  it('names an unknown mounted field and a mistyped trigger', () => {
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'guidance', mounted: { prompt: 'x' } }],
+        }),
+      ),
+    ).toBe('observability config: rows[0].mounted: unknown field "prompt"')
+    expect(
+      rejection(() =>
+        parseRows({ rows: [{ id: 'a', label: 'A', kind: 'guidance', trigger: '' }] }),
+      ),
+    ).toBe('observability config: rows[0].trigger must be a non-empty string')
+  })
+})
