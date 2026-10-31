@@ -128,53 +128,70 @@ five metadata-only recent traces per row), the shipped per-plugin signal map in 
 defaults, and the abort-token rule that keeps streamed model text out of row ids and labels. It amends
 `portable-setup` with the signal-map default and adds no telemetry pipeline or second log.
 
+The changes archived on 2026-10-31 are `improve-observability-actionability`, which sharpened
+`observability` into an action surface: a failure list with severity (`turn failure`, `turn cut`, `tool
+failure`) and per-turn recovery, session titles, per-tool call outcomes that keep the failing share
+inside the call count, inspector/session/prefilled-draft actions with copy-only degradation, declared
+`trigger` sentences and `mounted` readiness for shipped rows checked against the live prompt and skill
+registries, and proportional stacked tool bars (15 tasks, 15/15 portable approvals; the owner verified
+the view in the running Desktop app), and
+`replace-rare-triggers-with-work-checkpoints`, which removed the goal-continuity speed review and the
+shipped `task-progress`/`lane-fanout` delegation rules, and added the `work-checkpoints` capability
+delivered by the existing goal-continuity bundle: the substantial-pause trigger and bounded non-waking
+request, the `work_checkpoint` tool with its atomic local record, the close gate with the shared
+`UNCHECKED` cap, the parallel-action gate with the tagged-worker or serial-reason escape, the
+goal-as-work-unit and checkpoint clauses in the always-on contract within the 1500 estimated-token
+budget, and the `work_checkpoint` observability attribution (19 tasks, 18/19 portable approvals).
+
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
-was written (2026-10-30). Read the entry's `proposal.md` and `design.md` for what it changed, and its
+was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for what it changed, and its
 `tasks.md` for the open boxes.
 
-| Change                                               | Recorded tasks |
-| ---------------------------------------------------- | -------------- |
-| `2026-10-25-add-ponytail-skill-plugin`               | 15/15          |
-| `2026-10-26-add-codex-bundle-and-target-options`     | 15/19          |
-| `2026-10-26-add-delegation-guidance`                 | 6/6            |
-| `2026-10-26-add-delegation-rules`                    | 51/61          |
-| `2026-10-26-add-nuphus-mcp-plugin`                   | 8/8            |
-| `2026-10-26-add-openspec-skills-plugin`              | 16/16          |
-| `2026-10-26-add-portable-dsh-setup`                  | 32/35          |
-| `2026-10-26-add-rtk-token-workflow-guidance`         | 12/12          |
-| `2026-10-26-add-serena-always-on-guidance`           | 11/11          |
-| `2026-10-26-add-serena-mcp-plugin`                   | 11/11          |
-| `2026-10-26-add-working-ruleset-plugins`             | 21/21          |
-| `2026-10-26-fix-delegation-async-and-review-session` | 8/10           |
-| `2026-10-26-fix-delegation-thread-scope`             | 6/8            |
-| `2026-10-27-add-admin-indicator`                     | 12/12          |
-| `2026-10-27-add-loop-guard`                          | 19/19          |
-| `2026-10-27-add-one-line-installer`                  | 8/8            |
-| `2026-10-27-fix-delegation-foreign-change-digest`    | 4/4            |
-| `2026-10-27-fix-delegation-session-scope`            | 14/14          |
-| `2026-10-27-fix-delegation-test-run-flake`           | 4/4            |
-| `2026-10-27-publish-first-market-index`              | 8/8            |
-| `2026-10-28-add-goal-continuity`                     | 22/24          |
-| `2026-10-28-add-lazy-mcp`                            | 29/29          |
-| `2026-10-28-lazy-only-mcp-servers`                   | 25/26          |
-| `2026-10-28-ship-serena-disabled`                    | 5/5            |
-| `2026-10-29-add-goal-block-review`                   | 17/18          |
-| `2026-10-29-add-hindsight-memory`                    | 25/28          |
-| `2026-10-29-add-codex-advisor-rule`                  | 6/6            |
-| `2026-10-29-add-hindsight-export`                    | 18/18          |
-| `2026-10-29-add-review-approval-gate`                | 24/24          |
-| `2026-10-29-adopt-agent-best-practices`              | 20/21          |
-| `2026-10-29-fix-delegation-review-build-inputs`      | 11/11          |
-| `2026-10-29-add-task-lane-guidance`                  | 9/9            |
-| `2026-10-30-add-lane-boundary-gate`                  | 8/8            |
-| `2026-10-30-add-answer-page-skill`                   | 15/16          |
-| `2026-10-30-add-effort-tiers`                        | 11/11          |
-| `2026-10-30-add-goal-round-retro`                    | 10/10          |
-| `2026-10-30-add-lane-assignment-ledger`              | 8/8            |
-| `2026-10-30-fix-delegation-review-fallback`          | 5/5            |
-| `2026-10-31-add-observability`                       | 19/19          |
+| Change                                                   | Recorded tasks |
+| -------------------------------------------------------- | -------------- |
+| `2026-10-25-add-ponytail-skill-plugin`                   | 15/15          |
+| `2026-10-26-add-codex-bundle-and-target-options`         | 15/19          |
+| `2026-10-26-add-delegation-guidance`                     | 6/6            |
+| `2026-10-26-add-delegation-rules`                        | 51/61          |
+| `2026-10-26-add-nuphus-mcp-plugin`                       | 8/8            |
+| `2026-10-26-add-openspec-skills-plugin`                  | 16/16          |
+| `2026-10-26-add-portable-dsh-setup`                      | 32/35          |
+| `2026-10-26-add-rtk-token-workflow-guidance`             | 12/12          |
+| `2026-10-26-add-serena-always-on-guidance`               | 11/11          |
+| `2026-10-26-add-serena-mcp-plugin`                       | 11/11          |
+| `2026-10-26-add-working-ruleset-plugins`                 | 21/21          |
+| `2026-10-26-fix-delegation-async-and-review-session`     | 8/10           |
+| `2026-10-26-fix-delegation-thread-scope`                 | 6/8            |
+| `2026-10-27-add-admin-indicator`                         | 12/12          |
+| `2026-10-27-add-loop-guard`                              | 19/19          |
+| `2026-10-27-add-one-line-installer`                      | 8/8            |
+| `2026-10-27-fix-delegation-foreign-change-digest`        | 4/4            |
+| `2026-10-27-fix-delegation-session-scope`                | 14/14          |
+| `2026-10-27-fix-delegation-test-run-flake`               | 4/4            |
+| `2026-10-27-publish-first-market-index`                  | 8/8            |
+| `2026-10-28-add-goal-continuity`                         | 22/24          |
+| `2026-10-28-add-lazy-mcp`                                | 29/29          |
+| `2026-10-28-lazy-only-mcp-servers`                       | 25/26          |
+| `2026-10-28-ship-serena-disabled`                        | 5/5            |
+| `2026-10-29-add-goal-block-review`                       | 17/18          |
+| `2026-10-29-add-hindsight-memory`                        | 25/28          |
+| `2026-10-29-add-codex-advisor-rule`                      | 6/6            |
+| `2026-10-29-add-hindsight-export`                        | 18/18          |
+| `2026-10-29-add-review-approval-gate`                    | 24/24          |
+| `2026-10-29-adopt-agent-best-practices`                  | 20/21          |
+| `2026-10-29-fix-delegation-review-build-inputs`          | 11/11          |
+| `2026-10-29-add-task-lane-guidance`                      | 9/9            |
+| `2026-10-30-add-lane-boundary-gate`                      | 8/8            |
+| `2026-10-30-add-answer-page-skill`                       | 15/16          |
+| `2026-10-30-add-effort-tiers`                            | 11/11          |
+| `2026-10-30-add-goal-round-retro`                        | 10/10          |
+| `2026-10-30-add-lane-assignment-ledger`                  | 8/8            |
+| `2026-10-30-fix-delegation-review-fallback`              | 5/5            |
+| `2026-10-31-add-observability`                           | 19/19          |
+| `2026-10-31-improve-observability-actionability`         | 15/15          |
+| `2026-10-31-replace-rare-triggers-with-work-checkpoints` | 18/19          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -300,3 +317,15 @@ lists `@dsh-setup/setup` and the new `@dsh-setup/plugin-observability` at 0.18.0
 and retains every earlier setup version. The owner installed the dashboard during the change and
 accepted it; installing the published 0.18.0 from the market is the step that keeps the desktop profile
 on the tagged build.
+
+The archived `2026-10-31-replace-rare-triggers-with-work-checkpoints` tasks record 18/19; the open 10.3
+is the post-install measurement for one to two weeks (eligible turns by the trigger definition, the
+checkpointed share, the parallel share and worker-start conversion, the serial rate, UNCHECKED cap hits,
+and median steps and wall time against the pre-change baseline), with the keep/tune/revert decision
+recorded in its task review. The comparison baseline is `.dsh/work-checkpoint-baseline.json` (gitignored
+local scratch): 12 root sessions over 14 days, 21 closed substantial pauses, 10 followed by a next turn,
+5 next-turn worker starts, median 51 steps and 967,566 ms. The installed build was verified live before
+archiving: the close gate refused a substantial pause with the evidence and the five questions, a
+`work_checkpoint` call recorded (and replaced) the same turn file, the parallel gate refused a parallel
+declaration by naming its id, and the serial amendment was accepted. The cap and the block-review
+coexistence were covered by the shipped tests, as the owner accepted.
