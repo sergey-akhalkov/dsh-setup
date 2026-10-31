@@ -68,6 +68,8 @@ export interface HypothesisResult {
     readonly window: Range;
     readonly minSamples: number;
     readonly samples: number;
+    /** The baseline window's sample count, when a baseline exists. */
+    readonly baselineSamples?: number;
     readonly baseline?: number;
     readonly current?: number;
     readonly guardrail?: GuardrailResult;

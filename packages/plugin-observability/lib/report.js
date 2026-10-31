@@ -1,6 +1,6 @@
 import { aggregate } from './aggregate.js';
 import { builtinRows, matchesOwnedTool, testableRow } from './builtins.js';
-import { addUsage, buildEpisodes, clipIntervals, laneIntervals, NO_USAGE } from './episodes.js';
+import { addUsage, buildEpisodes, clipIntervals, intervalLength, laneIntervals, NO_USAGE, } from './episodes.js';
 import { serialRunFindings } from './findings.js';
 import { evaluateHypotheses } from './hypotheses.js';
 import { autonomySummary, costSummary, cutoffOf, dataQuality, episodeWork, FULL_WINDOW, overlapsWindow, qualitySummary, speedSummary, startsIn, subagentSummary, usageCoverage, } from './metrics.js';
@@ -161,10 +161,15 @@ function episodesOf(records, sessions) {
     }
     return inputs;
 }
-/** Milliseconds the parent waited on a delegate call inside the window. */
+/** Usage from the episode's start through the cutoff, including pre-window work. */
+function usageUntil(episode, cutoff) {
+    const records = [...episode.records, ...episode.children.flatMap((child) => child.records)];
+    return records.reduce((total, record) => record.usage === undefined || record.time >= cutoff ? total : addUsage(total, record.usage), NO_USAGE);
+}
+/** Milliseconds the parent waited on delegate calls inside the window, unioned. */
 function parentWait(work) {
     const callTimes = new Map();
-    let waited = 0;
+    const intervals = [];
     for (const record of work.ownRecords) {
         if (record.eventType === 'tool/call' &&
             record.tool === 'delegate' &&
@@ -177,10 +182,11 @@ function parentWait(work) {
         const from = callTimes.get(record.callId);
         if (from === undefined)
             continue;
-        waited += record.time - from;
+        intervals.push({ from, to: record.time });
         callTimes.delete(record.callId);
     }
-    return waited;
+    // Overlapping delegate waits count once, matching the summary's union.
+    return intervalLength(clipIntervals(intervals, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY));
 }
 /** The widest number of children active at once in one episode. */
 function episodeParallel(work) {
@@ -229,6 +235,7 @@ function episodeReport(work, titles, rows) {
         activeMsFull: episode.activeMs,
         usage: work.usage,
         fullUsage: work.fullUsage,
+        throughCutoffUsage: usageUntil(episode, work.cutoff),
         costBasis: work.costBasis,
         goals: work.goals,
         checkpoints: work.checkpoints,

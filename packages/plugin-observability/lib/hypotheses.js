@@ -177,7 +177,10 @@ export function evaluateHypotheses(hypotheses, current, baseline) {
         const baselineValue = baseline === undefined ? undefined : metricValue(baseline, hypothesis.metric);
         const guardrail = guardrailOf(hypothesis.guardrail, current, baseline);
         let status;
-        if (current.samples < hypothesis.minSamples || currentValue === undefined) {
+        // The sample minimum applies to both sides: a thin baseline cannot support
+        // or refute a hypothesis, however large the current window is.
+        const baselineTooSmall = baseline !== undefined && baseline.samples < hypothesis.minSamples;
+        if (current.samples < hypothesis.minSamples || currentValue === undefined || baselineTooSmall) {
             status = 'collecting';
         }
         else if (baselineValue === undefined) {
@@ -209,6 +212,7 @@ export function evaluateHypotheses(hypotheses, current, baseline) {
             window: hypothesis.window,
             minSamples: hypothesis.minSamples,
             samples: current.samples,
+            ...(baseline === undefined ? {} : { baselineSamples: baseline.samples }),
             ...(baselineValue === undefined ? {} : { baseline: baselineValue }),
             ...(currentValue === undefined ? {} : { current: currentValue }),
             ...(guardrail === undefined ? {} : { guardrail }),

@@ -138,6 +138,8 @@ export interface EpisodeReport {
     readonly usage: TokenUsage;
     /** Usage of the whole episode. */
     readonly fullUsage: TokenUsage;
+    /** Usage from the episode's start through the window cutoff, including its prefixed work. */
+    readonly throughCutoffUsage: TokenUsage;
     readonly costBasis: 'through cutoff' | 'full episode';
     readonly goals: EpisodeGoals;
     readonly checkpoints: EpisodeCheckpoints;

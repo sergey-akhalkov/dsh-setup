@@ -217,6 +217,8 @@ export interface HypothesisResult {
   readonly window: Range
   readonly minSamples: number
   readonly samples: number
+  /** The baseline window's sample count, when a baseline exists. */
+  readonly baselineSamples?: number
   readonly baseline?: number
   readonly current?: number
   readonly guardrail?: GuardrailResult
@@ -282,7 +284,10 @@ export function evaluateHypotheses(
       baseline === undefined ? undefined : metricValue(baseline, hypothesis.metric)
     const guardrail = guardrailOf(hypothesis.guardrail, current, baseline)
     let status: HypothesisStatus
-    if (current.samples < hypothesis.minSamples || currentValue === undefined) {
+    // The sample minimum applies to both sides: a thin baseline cannot support
+    // or refute a hypothesis, however large the current window is.
+    const baselineTooSmall = baseline !== undefined && baseline.samples < hypothesis.minSamples
+    if (current.samples < hypothesis.minSamples || currentValue === undefined || baselineTooSmall) {
       status = 'collecting'
     } else if (baselineValue === undefined) {
       status = 'inconclusive'
@@ -311,6 +316,7 @@ export function evaluateHypotheses(
       window: hypothesis.window,
       minSamples: hypothesis.minSamples,
       samples: current.samples,
+      ...(baseline === undefined ? {} : { baselineSamples: baseline.samples }),
       ...(baselineValue === undefined ? {} : { baseline: baselineValue }),
       ...(currentValue === undefined ? {} : { current: currentValue }),
       ...(guardrail === undefined ? {} : { guardrail }),

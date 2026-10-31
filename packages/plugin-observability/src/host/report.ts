@@ -9,7 +9,15 @@ import type {
   EpisodeOutcome,
   SessionInput,
 } from './episodes.js'
-import { addUsage, buildEpisodes, clipIntervals, laneIntervals, NO_USAGE } from './episodes.js'
+import {
+  addUsage,
+  buildEpisodes,
+  clipIntervals,
+  type Episode,
+  intervalLength,
+  laneIntervals,
+  NO_USAGE,
+} from './episodes.js'
 import type { Finding } from './findings.js'
 import { serialRunFindings } from './findings.js'
 import type { Hypothesis, HypothesisResult, MetricValues } from './hypotheses.js'
@@ -189,6 +197,8 @@ export interface EpisodeReport {
   readonly usage: TokenUsage
   /** Usage of the whole episode. */
   readonly fullUsage: TokenUsage
+  /** Usage from the episode's start through the window cutoff, including its prefixed work. */
+  readonly throughCutoffUsage: TokenUsage
   readonly costBasis: 'through cutoff' | 'full episode'
   readonly goals: EpisodeGoals
   readonly checkpoints: EpisodeCheckpoints
@@ -411,10 +421,20 @@ function episodesOf(
   return inputs
 }
 
-/** Milliseconds the parent waited on a delegate call inside the window. */
+/** Usage from the episode's start through the cutoff, including pre-window work. */
+function usageUntil(episode: Episode, cutoff: number): TokenUsage {
+  const records = [...episode.records, ...episode.children.flatMap((child) => child.records)]
+  return records.reduce(
+    (total, record) =>
+      record.usage === undefined || record.time >= cutoff ? total : addUsage(total, record.usage),
+    NO_USAGE,
+  )
+}
+
+/** Milliseconds the parent waited on delegate calls inside the window, unioned. */
 function parentWait(work: EpisodeWork): number {
   const callTimes = new Map<string, number>()
-  let waited = 0
+  const intervals: EpisodeInterval[] = []
   for (const record of work.ownRecords) {
     if (
       record.eventType === 'tool/call' &&
@@ -427,10 +447,13 @@ function parentWait(work: EpisodeWork): number {
     if (record.eventType !== 'tool/result' || record.callId === undefined) continue
     const from = callTimes.get(record.callId)
     if (from === undefined) continue
-    waited += record.time - from
+    intervals.push({ from, to: record.time })
     callTimes.delete(record.callId)
   }
-  return waited
+  // Overlapping delegate waits count once, matching the summary's union.
+  return intervalLength(
+    clipIntervals(intervals, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY),
+  )
 }
 
 /** The widest number of children active at once in one episode. */
@@ -484,6 +507,7 @@ function episodeReport(
     activeMsFull: episode.activeMs,
     usage: work.usage,
     fullUsage: work.fullUsage,
+    throughCutoffUsage: usageUntil(episode, work.cutoff),
     costBasis: work.costBasis,
     goals: work.goals,
     checkpoints: work.checkpoints,

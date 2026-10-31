@@ -240,9 +240,11 @@ export function intervalLength(intervals) {
 function sorted(records) {
     return [...records].sort((left, right) => left.time - right.time || left.seq - right.seq);
 }
-function makeEpisode(session, index, records, children = [], ownIntervals) {
+function makeEpisode(session, index, records, children = [], ownIntervals, boundaryEnd) {
     const start = records[0]?.time ?? 0;
-    const end = records[records.length - 1]?.time ?? start;
+    // The end is the episode's boundary — the next human message — not its last
+    // event, so an interval that crosses the boundary is split, not dropped.
+    const end = boundaryEnd ?? records[records.length - 1]?.time ?? start;
     const { outcome, failures } = outcomeOf(records);
     const checkpoints = checkpointEvidence(records);
     // Child intervals are unioned with the parent's, so work that runs while the
@@ -289,11 +291,10 @@ export function deriveEpisodes(session, idleGapMs) {
     let current = [];
     let started = false;
     let previous;
-    const flush = () => {
+    const flush = (boundaryEnd) => {
         if (current.length > 0) {
             const start = current[0]?.time ?? 0;
-            const end = current[current.length - 1]?.time ?? start;
-            episodes.push(makeEpisode(session, episodes.length, current, [], clipIntervals(raw, start, end)));
+            episodes.push(makeEpisode(session, episodes.length, current, [], clipIntervals(raw, start, boundaryEnd ?? Number.POSITIVE_INFINITY), boundaryEnd));
         }
         current = [];
         started = false;
@@ -303,7 +304,9 @@ export function deriveEpisodes(session, idleGapMs) {
             flush();
         }
         if (isHumanMessage(record)) {
-            flush();
+            // The next human message is this episode's boundary; a crossing interval
+            // is split at it, so neither side loses its active share.
+            flush(record.time);
             started = true;
             current = [record];
             previous = record.time;

@@ -480,7 +480,7 @@ describe('episode quality and active time', () => {
     expect(work?.outcome).toBe('open')
   })
 
-  it('clips a tool interval that crosses a human message boundary', () => {
+  it('splits a tool interval that crosses a human message boundary', () => {
     const events = [
       human(BASE),
       call('c1', 'read', BASE + MINUTE),
@@ -489,8 +489,10 @@ describe('episode quality and active time', () => {
       closer('completed', BASE + 4 * MINUTE),
     ]
     const [first, second] = workOf(episodesOf([session('s', events)]))
-    expect(first?.episode.activeMs).toBe(0)
+    expect(first?.episode.activeMs).toBe(MINUTE)
     expect(second?.episode.activeMs).toBe(MINUTE)
+    // The two-minute tool interval is conserved, not lost at the boundary.
+    expect((first?.episode.activeMs ?? 0) + (second?.episode.activeMs ?? 0)).toBe(2 * MINUTE)
   })
 
   it('clips a step interval that crosses a human message boundary', () => {
@@ -500,8 +502,10 @@ describe('episode quality and active time', () => {
       human(BASE + 2 * MINUTE),
       event('step/end', { turn: 1, step: 1 }, BASE + 4 * MINUTE),
     ]
-    const [, second] = workOf(episodesOf([session('s', events)]))
+    const [first, second] = workOf(episodesOf([session('s', events)]))
+    expect(first?.episode.activeMs).toBe(MINUTE)
     expect(second?.episode.activeMs).toBe(2 * MINUTE)
+    expect((first?.episode.activeMs ?? 0) + (second?.episode.activeMs ?? 0)).toBe(3 * MINUTE)
   })
 
   it('reports p50 and p90 active minutes', () => {

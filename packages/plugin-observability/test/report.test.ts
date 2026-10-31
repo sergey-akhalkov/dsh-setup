@@ -522,6 +522,9 @@ describe('window accounting', () => {
     expect(second.cohortCount).toBe(0)
     // Its in-window work still counts here, by event time.
     expect(second.episodes[0]?.usage.total).toBe(300)
+    // Its cost from the episode start through this cutoff keeps the earlier work.
+    expect(second.episodes[0]?.throughCutoffUsage.total).toBe(400)
+    expect(second.episodes[0]?.fullUsage.total).toBe(400)
     expect(second.episodes[0]?.fullUsage.total).toBe(400)
     expect(second.episodes[0]?.activeMs).toBe(2 * MINUTE)
     expect(second.episodes[0]?.activeMsFull).toBe(3 * MINUTE)
@@ -549,7 +552,60 @@ describe('window accounting', () => {
     // The episode's full usage keeps the later work, labelled for the detail view.
     const episode = report.episodes.find((entry) => entry.sessionId === 's')
     expect(episode?.usage.total).toBe(100)
+    expect(episode?.throughCutoffUsage.total).toBe(100)
     expect(episode?.fullUsage.total).toBe(600)
+    expect(episode?.fullUsage.total).toBe(600)
+  })
+
+  it('unions overlapping delegate waits in the episode detail', () => {
+    const records = extractRecords('s', [
+      humanEvent(NOW - 30 * MINUTE),
+      event(
+        'tool/call',
+        { turn: 1, step: 1, callId: 'd1', name: 'delegate', arguments: '{}' },
+        NOW - 28 * MINUTE,
+      ),
+      event(
+        'tool/call',
+        { turn: 1, step: 1, callId: 'd2', name: 'delegate', arguments: '{}' },
+        NOW - 27 * MINUTE,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: 'd1' },
+            toolCallId: 'd1',
+            isError: false,
+          },
+        },
+        NOW - 24 * MINUTE,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: 'd2' },
+            toolCallId: 'd2',
+            isError: false,
+          },
+        },
+        NOW - 23 * MINUTE,
+      ),
+      closerEvent(NOW - 22 * MINUTE),
+    ])
+    const report = reportAt(NOW, records)
+    // The two waits overlap: the union is five minutes, not their six-minute sum.
+    expect(report.episodes[0]?.parentWaitMs).toBe(5 * MINUTE)
+    expect(report.subagents.parentWaitMs.p50).toBe(5 * MINUTE)
   })
 
   it('keeps an episode active across a window whose events bracket it', () => {

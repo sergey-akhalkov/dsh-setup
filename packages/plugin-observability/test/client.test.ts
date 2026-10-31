@@ -554,6 +554,7 @@ interface LoadedModule {
   ActivityPanel?: (props: Record<string, unknown>) => unknown
   DataQualityStrip?: (props: Record<string, unknown>) => unknown
   scorecardStatus?: (card: Scorecard) => string
+  BaselineStrip?: (props: Record<string, unknown>) => unknown
   ScorecardCard?: (props: Record<string, unknown>) => unknown
   ScorecardList?: (props: Record<string, unknown>) => unknown
   visibleEpisodes?: (
@@ -2538,6 +2539,7 @@ function episodeFixture(overrides: Partial<EpisodeReport> = {}): EpisodeReport {
     activeMsFull: 8 * MINUTE,
     usage: { input: 600, output: 200, cacheRead: 1000, cacheWrite: 0, total: 1800 },
     fullUsage: { input: 600, output: 200, cacheRead: 1000, cacheWrite: 0, total: 1800 },
+    throughCutoffUsage: { input: 600, output: 200, cacheRead: 1000, cacheWrite: 0, total: 1800 },
     costBasis: 'through cutoff',
     goals: { created: 1, paused: 0, resumed: 0, completed: 1, rounds: 1, phase: 'completed' },
     checkpoints: { total: 1, closes: 1, verified: 1 },
@@ -2557,6 +2559,10 @@ function episodeFixture(overrides: Partial<EpisodeReport> = {}): EpisodeReport {
       callsCount: 0,
     },
     ...overrides,
+    // The through-cutoff cost follows an overridden window usage unless set.
+    ...(overrides.throughCutoffUsage === undefined && overrides.usage !== undefined
+      ? { throughCutoffUsage: overrides.usage }
+      : {}),
   }
 }
 
@@ -2619,6 +2625,7 @@ function hypothesisFixture(overrides: Partial<HypothesisResult> = {}): Hypothesi
     window: 'week',
     minSamples: 20,
     samples: 40,
+    baselineSamples: 15,
     baseline: 0.5,
     current: 0.8,
     status: 'supported',
@@ -3277,6 +3284,7 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
       id: 'session-1#9',
       steps: 2,
       usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, total: 120 },
+      throughCutoffUsage: { input: 300, output: 100, cacheRead: 0, cacheWrite: 0, total: 400 },
       fullUsage: { input: 400, output: 100, cacheRead: 0, cacheWrite: 0, total: 500 },
       activeMs: 5 * MINUTE,
       activeMsFull: 20 * MINUTE,
@@ -3295,7 +3303,7 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
         onSelect: () => {},
       }),
     )
-    expect(childText(table)).toContain('120')
+    expect(childText(table)).toContain('400')
     // The token header states the cost basis, from the registered dictionary.
     expect(module.EN?.['tasks.columnTokens']).toBe('Tokens (through cutoff)')
     const unfinished = renderTree(
@@ -3324,12 +3332,12 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
     const text = childText(detail)
     expect(text).toContain('tasks.throughCutoff')
     expect(text).toContain('(cutoff.through)')
-    expect(text).toContain('120')
+    expect(text).toContain('400')
     expect(text).toContain('tasks.fullEpisode')
     expect(text).toContain('(cutoff.full)')
     expect(text).toContain('500')
     expect(text).toContain('tasks.tokenPerStep')
-    expect(text).toContain('60')
+    expect(text).toContain('200')
     expect(text).toContain('tasks.checkpoints')
     expect(text).toContain('tasks.noChildren')
     expect(text).toContain('tasks.episodeSpan')
@@ -3406,6 +3414,8 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
     expect(text).toContain('hypothesis.threshold')
     expect(text).toContain('hypothesis.samples')
     expect(text).toContain('40/20')
+    // The baseline sample count is shown beside the current one.
+    expect(text).toContain('15/20')
     expect(text).toContain('hypothesis.window')
     expect(text).toContain('range.week')
     expect(text).toContain('hypothesis.association')
@@ -3581,6 +3591,52 @@ describe('attention findings', () => {
 })
 
 describe('overview details', () => {
+  it('shows the previous window beside the current metrics, with both samples', () => {
+    const { module } = loadBundle()
+    const base = richReport()
+    const baseline = {
+      kind: 'previous equal window' as const,
+      from: 0,
+      to: 1,
+      episodes: 7,
+      quality: { ...base.quality, verifiedShare: 0.4 },
+      cost: { ...base.cost, tokensPerEpisode: { p50: 50, p90: 60, n: 7 } },
+      speed: { ...base.speed, activeMinutes: { p50: 2, p90: 3, n: 7 } },
+      autonomy: { ...base.autonomy, stepsPerHumanMessage: { p50: 1.5, p90: 2, n: 7 } },
+      subagents: base.subagents,
+      metrics: {},
+    }
+    const text = childText(
+      renderTree(module.BaselineStrip?.({ report: { ...base, baseline }, t: translate })),
+    )
+    expect(text).toContain('baseline.previousWindow')
+    expect(text).toContain('baseline.association')
+    expect(text).toContain('baseline.n')
+    expect(text).toContain('7')
+    expect(text).toContain('40%')
+    expect(text).toContain('50')
+    const absent = childText(
+      renderTree(
+        module.BaselineStrip?.({ report: { ...base, baseline: undefined }, t: translate }),
+      ),
+    )
+    expect(absent).toContain('baseline.none')
+  })
+
+  it('shows the cache hit ratio and context per step on the cost tile', () => {
+    const { module } = loadBundle()
+    const base = richReport()
+    const report = {
+      ...base,
+      cost: { ...base.cost, cacheHitRatio: 0.25, contextPerStep: 424242 },
+    }
+    const text = childText(renderTree(module.OutcomeTiles?.({ report, t: translate })))
+    expect(text).toContain('tile.cacheHit')
+    expect(text).toContain('25%')
+    expect(text).toContain('tile.contextPerStep')
+    expect(text).toContain('424242')
+  })
+
   it('uses the configured episode minimum for the sufficiency verdict', () => {
     const { module } = loadBundle()
     const base = richReport()

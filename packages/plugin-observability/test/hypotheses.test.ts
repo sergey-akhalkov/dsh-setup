@@ -185,6 +185,13 @@ describe('hypothesis evaluation', () => {
     expect(result?.guardrail?.current).toBe(0.1)
   })
 
+  it('requires the sample minimum on both sides', () => {
+    const [result] = evaluateHypotheses([supported], READY, { ...READY, samples: 5 })
+    expect(result?.status).toBe('collecting')
+    expect(result?.samples).toBe(READY.samples)
+    expect(result?.baselineSamples).toBe(5)
+  })
+
   it('does not support a hypothesis whose guardrail is unobserved', () => {
     const guarded = { ...supported, guardrail: 'verified-completion-rate' as const }
     const qualifying = { ...READY, stepsPerHumanMessage: 12 }

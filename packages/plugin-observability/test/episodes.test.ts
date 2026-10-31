@@ -296,10 +296,11 @@ describe('episode boundaries', () => {
     const episodes = deriveEpisodes(session('session-a', events), IDLE)
     expect(episodes.map((episode) => episode.id)).toEqual(['session-a#1', 'session-a#2'])
     expect(episodes[0]?.start).toBe(BASE)
-    expect(episodes[0]?.end).toBe(BASE + 2 * MINUTE)
+    // The episode ends at its boundary, the next human message.
+    expect(episodes[0]?.end).toBe(BASE + 10 * MINUTE)
     expect(episodes[1]?.start).toBe(BASE + 10 * MINUTE)
     expect(episodes[1]?.end).toBe(BASE + 15 * MINUTE)
-    expect(episodes[0]!.end).toBeLessThan(episodes[1]!.start)
+    expect(episodes[0]!.end).toBeLessThanOrEqual(episodes[1]!.start)
   })
 
   it('ends an episode after the idle gap and leaves the later activity outside it', () => {

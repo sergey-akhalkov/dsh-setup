@@ -267,6 +267,22 @@ export const EN: Record<string, string> = {
   'tile.verified': 'verified',
   'tile.failed': 'failed',
   'tile.cutoff': 'cutoff',
+  'tile.cacheHit': 'cache hit',
+  'tile.contextPerStep': 'context / step',
+  'baseline.title': 'Compared with',
+  'baseline.previousWindow': 'previous equal window',
+  'baseline.previousSession': 'previous completed session',
+  'baseline.none': 'No baseline data for the previous window.',
+  'baseline.n': 'episodes',
+  'baseline.current': 'current',
+  'baseline.previous': 'baseline',
+  'baseline.delta': 'delta',
+  'baseline.association': 'association, not proof',
+  'baseline.verified': 'verified completions',
+  'baseline.failure': 'failure rate',
+  'baseline.tokens': 'tokens per episode',
+  'baseline.active': 'active minutes',
+  'baseline.steps': 'steps per human message',
   'tile.humanMessages': 'human messages',
   'tile.completed': 'completed',
   'cutoff.through': 'through cutoff',
@@ -1205,6 +1221,8 @@ export function OutcomeTiles({ report, t }: { report: Report; t: Translate }): R
       values: [
         { label: t('tile.p50'), value: String(Math.round(cost.tokensPerEpisode.p50)) },
         { label: t('tile.p90'), value: String(Math.round(cost.tokensPerEpisode.p90)) },
+        { label: t('tile.cacheHit'), value: percent(cost.cacheHitRatio) },
+        { label: t('tile.contextPerStep'), value: String(Math.round(cost.contextPerStep)) },
       ],
       note: `${t('tile.cutoff')}: ${t(cost.cutoffLabel === 'through cutoff' ? 'cutoff.through' : 'cutoff.full')}`,
     },
@@ -1258,6 +1276,100 @@ export function OutcomeTiles({ report, t }: { report: Report; t: Translate }): R
           </article>
         ))}
       </div>
+    </section>
+  )
+}
+
+/** The previous window or session beside the current outcome metrics. */
+export function BaselineStrip({ report, t }: { report: Report; t: Translate }): ReactNode {
+  const baseline = report.baseline
+  const format = (
+    value: number | undefined,
+    kind: 'percent' | 'number' | 'minutes' | 'decimal',
+  ): string => {
+    if (value === undefined) return '—'
+    if (kind === 'percent') return percent(value)
+    if (kind === 'minutes') return minutesText(value, t)
+    if (kind === 'decimal') return value.toFixed(1)
+    return String(Math.round(value))
+  }
+  if (baseline === undefined) {
+    return (
+      <section className="dsh-obs-panel" aria-label={t('baseline.title')} data-baseline="none">
+        <header className="dsh-obs-panel-head">
+          <h2>{t('baseline.title')}</h2>
+        </header>
+        <p className="dsh-obs-muted">{t('baseline.none')}</p>
+      </section>
+    )
+  }
+  const rows = [
+    {
+      key: 'verified',
+      label: t('baseline.verified'),
+      current: report.quality.verifiedShare,
+      previous: baseline.quality.verifiedShare,
+      kind: 'percent' as const,
+    },
+    {
+      key: 'failure',
+      label: t('baseline.failure'),
+      current: report.quality.failureRate,
+      previous: baseline.quality.failureRate,
+      kind: 'percent' as const,
+    },
+    {
+      key: 'tokens',
+      label: t('baseline.tokens'),
+      current: report.cost.tokensPerEpisode.p50,
+      previous: baseline.cost.tokensPerEpisode.p50,
+      kind: 'number' as const,
+    },
+    {
+      key: 'active',
+      label: t('baseline.active'),
+      current: report.speed.activeMinutes.p50,
+      previous: baseline.speed.activeMinutes.p50,
+      kind: 'minutes' as const,
+    },
+    {
+      key: 'steps',
+      label: t('baseline.steps'),
+      current: report.autonomy.stepsPerHumanMessage.p50,
+      previous: baseline.autonomy.stepsPerHumanMessage.p50,
+      kind: 'decimal' as const,
+    },
+  ]
+  return (
+    <section
+      className="dsh-obs-panel"
+      aria-label={t('baseline.title')}
+      data-baseline={baseline.kind}
+    >
+      <header className="dsh-obs-panel-head">
+        <h2>{t('baseline.title')}</h2>
+        <span className="dsh-obs-muted">
+          {t(
+            baseline.kind === 'previous equal window'
+              ? 'baseline.previousWindow'
+              : 'baseline.previousSession',
+          )}
+        </span>
+      </header>
+      <p className="dsh-obs-muted">
+        {`${t('baseline.n')} ${String(report.quality.episodes)} ${t('baseline.current')} · ${String(baseline.episodes)} ${t('baseline.previous')}`}
+      </p>
+      <dl className="dsh-obs-compare">
+        {rows.map((row) => (
+          <div key={row.key}>
+            <dt>{row.label}</dt>
+            <dd>
+              {`${format(row.current, row.kind)} ${t('baseline.current')} · ${format(row.previous, row.kind)} ${t('baseline.previous')}`}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="dsh-obs-muted">{t('baseline.association')}</p>
     </section>
   )
 }
@@ -1530,7 +1642,7 @@ function taskSortValue(episode: EpisodeReport, key: TaskSortKey): number | strin
     case 'steps':
       return episode.steps
     case 'tokens':
-      return episode.usage.total
+      return episode.throughCutoffUsage.total
     case 'active':
       return episode.activeMs
     case 'outcome':
@@ -1594,7 +1706,9 @@ export function EpisodeDetail({
     },
   ]
   const perStep =
-    episode.steps === 0 ? 0 : Math.round(episode.usage.total / Math.max(1, episode.steps))
+    episode.steps === 0
+      ? 0
+      : Math.round(episode.throughCutoffUsage.total / Math.max(1, episode.steps))
   return (
     <section
       className="dsh-obs-panel"
@@ -1621,7 +1735,7 @@ export function EpisodeDetail({
         </div>
         <div>
           <dt>{`${t('tasks.throughCutoff')} (${t('cutoff.through')})`}</dt>
-          <dd>{String(episode.usage.total)}</dd>
+          <dd>{String(episode.throughCutoffUsage.total)}</dd>
         </div>
         <div>
           <dt>{`${t('tasks.fullEpisode')} (${t('cutoff.full')})`}</dt>
@@ -1790,7 +1904,7 @@ export function TasksView({
                     </td>
                     <td>{stepsPerHuman(episode).toFixed(1)}</td>
                     <td>{String(episode.steps)}</td>
-                    <td>{String(episode.usage.total)}</td>
+                    <td>{String(episode.throughCutoffUsage.total)}</td>
                     <td>{minutesText(episode.activeMs / 60_000, t)}</td>
                     <td>{t(OUTCOME_KEYS[episode.outcome])}</td>
                     <td>{episode.verified ? t('tasks.verifiedYes') : t('tasks.verifiedNo')}</td>
@@ -1894,6 +2008,12 @@ function HypothesisCard({ result, t }: { result: HypothesisResult; t: Translate 
           <dt>{t('hypothesis.samples')}</dt>
           <dd>{`${String(result.samples)}/${String(result.minSamples)}`}</dd>
         </div>
+        {result.baselineSamples === undefined ? null : (
+          <div>
+            <dt>{`${t('hypothesis.samples')} (${t('baseline.previous')})`}</dt>
+            <dd>{`${String(result.baselineSamples)}/${String(result.minSamples)}`}</dd>
+          </div>
+        )}
         <div>
           <dt>{t('hypothesis.window')}</dt>
           <dd>{t(`range.${result.window}`)}</dd>
@@ -2020,6 +2140,7 @@ export function OverviewView({
       <div className="dsh-obs-columns">
         <div className="dsh-obs-col">
           <OutcomeTiles report={report} t={t} />
+          <BaselineStrip report={report} t={t} />
           <TokenMix
             cacheRead={report.cost.cacheRead}
             input={report.cost.input}

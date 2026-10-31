@@ -26,6 +26,7 @@ window.__ModuleLoader__.load({
     var index_exports = {};
     __export(index_exports, {
       ActivityPanel: () => ActivityPanel,
+      BaselineStrip: () => BaselineStrip,
       BlindSpots: () => BlindSpots,
       DataQualityStrip: () => DataQualityStrip,
       DataSufficiency: () => DataSufficiency,
@@ -257,6 +258,22 @@ window.__ModuleLoader__.load({
       "tile.verified": "verified",
       "tile.failed": "failed",
       "tile.cutoff": "cutoff",
+      "tile.cacheHit": "cache hit",
+      "tile.contextPerStep": "context / step",
+      "baseline.title": "Compared with",
+      "baseline.previousWindow": "previous equal window",
+      "baseline.previousSession": "previous completed session",
+      "baseline.none": "No baseline data for the previous window.",
+      "baseline.n": "episodes",
+      "baseline.current": "current",
+      "baseline.previous": "baseline",
+      "baseline.delta": "delta",
+      "baseline.association": "association, not proof",
+      "baseline.verified": "verified completions",
+      "baseline.failure": "failure rate",
+      "baseline.tokens": "tokens per episode",
+      "baseline.active": "active minutes",
+      "baseline.steps": "steps per human message",
       "tile.humanMessages": "human messages",
       "tile.completed": "completed",
       "cutoff.through": "through cutoff",
@@ -993,7 +1010,9 @@ window.__ModuleLoader__.load({
           n: cost.tokensPerEpisode.n,
           values: [
             { label: t("tile.p50"), value: String(Math.round(cost.tokensPerEpisode.p50)) },
-            { label: t("tile.p90"), value: String(Math.round(cost.tokensPerEpisode.p90)) }
+            { label: t("tile.p90"), value: String(Math.round(cost.tokensPerEpisode.p90)) },
+            { label: t("tile.cacheHit"), value: percent(cost.cacheHitRatio) },
+            { label: t("tile.contextPerStep"), value: String(Math.round(cost.contextPerStep)) }
           ],
           note: `${t("tile.cutoff")}: ${t(cost.cutoffLabel === "through cutoff" ? "cutoff.through" : "cutoff.full")}`
         },
@@ -1037,6 +1056,81 @@ window.__ModuleLoader__.load({
           tile.note === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted dsh-obs-tile-note", children: tile.note })
         ] }, tile.key)) })
       ] });
+    }
+    function BaselineStrip({ report, t }) {
+      const baseline = report.baseline;
+      const format = (value, kind) => {
+        if (value === void 0) return "\u2014";
+        if (kind === "percent") return percent(value);
+        if (kind === "minutes") return minutesText(value, t);
+        if (kind === "decimal") return value.toFixed(1);
+        return String(Math.round(value));
+      };
+      if (baseline === void 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("baseline.title"), "data-baseline": "none", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("baseline.title") }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("baseline.none") })
+        ] });
+      }
+      const rows = [
+        {
+          key: "verified",
+          label: t("baseline.verified"),
+          current: report.quality.verifiedShare,
+          previous: baseline.quality.verifiedShare,
+          kind: "percent"
+        },
+        {
+          key: "failure",
+          label: t("baseline.failure"),
+          current: report.quality.failureRate,
+          previous: baseline.quality.failureRate,
+          kind: "percent"
+        },
+        {
+          key: "tokens",
+          label: t("baseline.tokens"),
+          current: report.cost.tokensPerEpisode.p50,
+          previous: baseline.cost.tokensPerEpisode.p50,
+          kind: "number"
+        },
+        {
+          key: "active",
+          label: t("baseline.active"),
+          current: report.speed.activeMinutes.p50,
+          previous: baseline.speed.activeMinutes.p50,
+          kind: "minutes"
+        },
+        {
+          key: "steps",
+          label: t("baseline.steps"),
+          current: report.autonomy.stepsPerHumanMessage.p50,
+          previous: baseline.autonomy.stepsPerHumanMessage.p50,
+          kind: "decimal"
+        }
+      ];
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "section",
+        {
+          className: "dsh-obs-panel",
+          "aria-label": t("baseline.title"),
+          "data-baseline": baseline.kind,
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("baseline.title") }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: t(
+                baseline.kind === "previous equal window" ? "baseline.previousWindow" : "baseline.previousSession"
+              ) })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: `${t("baseline.n")} ${String(report.quality.episodes)} ${t("baseline.current")} \xB7 ${String(baseline.episodes)} ${t("baseline.previous")}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", { className: "dsh-obs-compare", children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: row.label }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${format(row.current, row.kind)} ${t("baseline.current")} \xB7 ${format(row.previous, row.kind)} ${t("baseline.previous")}` })
+            ] }, row.key)) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("baseline.association") })
+          ]
+        }
+      );
     }
     function ActivityPanel({ report, t }) {
       if (report.range === "session" && report.timeline !== void 0) {
@@ -1211,7 +1305,7 @@ window.__ModuleLoader__.load({
         case "steps":
           return episode.steps;
         case "tokens":
-          return episode.usage.total;
+          return episode.throughCutoffUsage.total;
         case "active":
           return episode.activeMs;
         case "outcome":
@@ -1258,7 +1352,7 @@ window.__ModuleLoader__.load({
           rowLabel: t("tasks.episodeSpan")
         }
       ];
-      const perStep = episode.steps === 0 ? 0 : Math.round(episode.usage.total / Math.max(1, episode.steps));
+      const perStep = episode.steps === 0 ? 0 : Math.round(episode.throughCutoffUsage.total / Math.max(1, episode.steps));
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
         "section",
         {
@@ -1282,7 +1376,7 @@ window.__ModuleLoader__.load({
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: `${t("tasks.throughCutoff")} (${t("cutoff.through")})` }),
-                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(episode.usage.total) })
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(episode.throughCutoffUsage.total) })
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: `${t("tasks.fullEpisode")} (${t("cutoff.full")})` }),
@@ -1389,7 +1483,7 @@ window.__ModuleLoader__.load({
                   ) }),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: stepsPerHuman(episode).toFixed(1) }),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.steps) }),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.usage.total) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.throughCutoffUsage.total) }),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: minutesText(episode.activeMs / 6e4, t) }),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: t(OUTCOME_KEYS[episode.outcome]) }),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: episode.verified ? t("tasks.verifiedYes") : t("tasks.verifiedNo") }),
@@ -1466,6 +1560,10 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.samples") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${String(result.samples)}/${String(result.minSamples)}` })
+          ] }),
+          result.baselineSamples === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: `${t("hypothesis.samples")} (${t("baseline.previous")})` }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${String(result.baselineSamples)}/${String(result.minSamples)}` })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.window") }),
@@ -1549,6 +1647,7 @@ window.__ModuleLoader__.load({
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-columns", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-col", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutcomeTiles, { report, t }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BaselineStrip, { report, t }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
               TokenMix,
               {

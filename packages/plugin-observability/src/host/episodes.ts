@@ -375,9 +375,12 @@ function makeEpisode(
   records: readonly TraceRecord[],
   children: readonly EpisodeChild[] = [],
   ownIntervals?: readonly EpisodeInterval[],
+  boundaryEnd?: number,
 ): Episode {
   const start = records[0]?.time ?? 0
-  const end = records[records.length - 1]?.time ?? start
+  // The end is the episode's boundary — the next human message — not its last
+  // event, so an interval that crosses the boundary is split, not dropped.
+  const end = boundaryEnd ?? records[records.length - 1]?.time ?? start
   const { outcome, failures } = outcomeOf(records)
   const checkpoints = checkpointEvidence(records)
   // Child intervals are unioned with the parent's, so work that runs while the
@@ -427,12 +430,18 @@ export function deriveEpisodes(session: SessionInput, idleGapMs: number): Episod
   let current: TraceRecord[] = []
   let started = false
   let previous: number | undefined
-  const flush = (): void => {
+  const flush = (boundaryEnd?: number): void => {
     if (current.length > 0) {
       const start = current[0]?.time ?? 0
-      const end = current[current.length - 1]?.time ?? start
       episodes.push(
-        makeEpisode(session, episodes.length, current, [], clipIntervals(raw, start, end)),
+        makeEpisode(
+          session,
+          episodes.length,
+          current,
+          [],
+          clipIntervals(raw, start, boundaryEnd ?? Number.POSITIVE_INFINITY),
+          boundaryEnd,
+        ),
       )
     }
     current = []
@@ -443,7 +452,9 @@ export function deriveEpisodes(session: SessionInput, idleGapMs: number): Episod
       flush()
     }
     if (isHumanMessage(record)) {
-      flush()
+      // The next human message is this episode's boundary; a crossing interval
+      // is split at it, so neither side loses its active share.
+      flush(record.time)
       started = true
       current = [record]
       previous = record.time
