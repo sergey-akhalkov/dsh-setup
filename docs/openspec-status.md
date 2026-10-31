@@ -386,3 +386,11 @@ The gate was green before archiving: `pnpm check` (1469 tests), `pnpm gen:check`
 fixed with regression tests before their PASS. No release followed; installing the next release from
 the market (or re-running the installer from an external PowerShell with the app closed) is the owner
 step that activates the shipped defaults.
+
+Those three changes shipped in v0.21.0 (tag on commit `cc178fd`) after the release workflow passed
+DSH 0.2.1-rc.3 and 0.2.1-rc.5, the publish job and the Pages deployment, and the `validate` workflow
+on `main` passed. The published index returns HTTP 200, lists all 18 setup and plugin packages at
+0.21.0 pinned to that commit, and retains the earlier versions. The owner's desktop profile runs the
+code through the linked setup bundle; installing the published 0.21.0 from the market (or re-running
+the installer from an external PowerShell with the app closed) is what makes the tagged build the
+installed one, and it is also the first live check of the question gate and the Process panel.
