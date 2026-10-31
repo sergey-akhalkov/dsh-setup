@@ -51,7 +51,7 @@
 
 - [x] 7.1 Run the local gate: `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, and `pnpm build && git diff --exit-code`; fix what fails.
 - [x] 7.2 Run `pnpm dogfood` and verify the composed observability row carries every shipped goal and eligibility predicate and that no other row changed.
-- [ ] 7.3 Owner verifies in the running Desktop app after an external install: the four sub-views, the thin-data verdict, the session timeline, the range series, token mix, scorecards, the Tasks table, hypotheses, and both themes.
+- [x] 7.3 Owner verifies in the running Desktop app after an external install: the four sub-views, the thin-data verdict, the session timeline, the range series, token mix, scorecards, the Tasks table, hypotheses, and both themes.
 
 ## 8. Attention findings (P0)
 
