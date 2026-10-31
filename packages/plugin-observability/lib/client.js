@@ -1109,12 +1109,21 @@ window.__ModuleLoader__.load({
           kind: "decimal"
         }
       ];
+      const insufficient = report.quality.episodes < report.minEpisodes || baseline.episodes < report.minEpisodes;
+      const deltaText = (row) => {
+        if (row.current === void 0 || row.previous === void 0) return void 0;
+        const diff = row.current - row.previous;
+        const sign = diff >= 0 ? "+" : "\u2212";
+        const value = row.kind === "percent" ? `${sign}${String(Math.round(Math.abs(diff) * 100))} ${t("scorecard.points")}` : row.kind === "number" ? `${sign}${String(Math.round(Math.abs(diff)))}` : row.kind === "minutes" ? `${sign}${Math.abs(diff).toFixed(1)} ${t("unit.minutes")}` : `${sign}${Math.abs(diff).toFixed(1)}`;
+        return `${t("baseline.delta")} ${value}`;
+      };
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
         "section",
         {
           className: "dsh-obs-panel",
           "aria-label": t("baseline.title"),
           "data-baseline": baseline.kind,
+          "data-insufficient": insufficient ? "true" : void 0,
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("baseline.title") }),
@@ -1123,10 +1132,14 @@ window.__ModuleLoader__.load({
               ) })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: `${t("baseline.n")} ${String(report.quality.episodes)} ${t("baseline.current")} \xB7 ${String(baseline.episodes)} ${t("baseline.previous")}` }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", { className: "dsh-obs-compare", children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: row.label }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${format(row.current, row.kind)} ${t("baseline.current")} \xB7 ${format(row.previous, row.kind)} ${t("baseline.previous")}` })
-            ] }, row.key)) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", { className: "dsh-obs-compare", children: rows.map((row) => {
+              const delta = deltaText(row);
+              return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: row.label }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${format(row.current, row.kind)} ${t("baseline.current")} \xB7 ${format(row.previous, row.kind)} ${t("baseline.previous")}${delta === void 0 ? "" : ` \xB7 ${delta}`}` })
+              ] }, row.key);
+            }) }),
+            insufficient ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("scorecard.insufficientNote") }) : null,
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("baseline.association") })
           ]
         }
@@ -1352,7 +1365,7 @@ window.__ModuleLoader__.load({
           rowLabel: t("tasks.episodeSpan")
         }
       ];
-      const perStep = episode.steps === 0 ? 0 : Math.round(episode.throughCutoffUsage.total / Math.max(1, episode.steps));
+      const perStep = episode.steps === 0 ? 0 : Math.round(episode.usage.total / Math.max(1, episode.steps));
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
         "section",
         {

@@ -3337,7 +3337,7 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
     expect(text).toContain('(cutoff.full)')
     expect(text).toContain('500')
     expect(text).toContain('tasks.tokenPerStep')
-    expect(text).toContain('200')
+    expect(text).toContain('60')
     expect(text).toContain('tasks.checkpoints')
     expect(text).toContain('tasks.noChildren')
     expect(text).toContain('tasks.episodeSpan')
@@ -3613,6 +3613,8 @@ describe('overview details', () => {
     expect(text).toContain('baseline.association')
     expect(text).toContain('baseline.n')
     expect(text).toContain('7')
+    expect(text).toContain('scorecard.insufficientNote')
+    expect(text).toContain('baseline.delta')
     expect(text).toContain('40%')
     expect(text).toContain('50')
     const absent = childText(

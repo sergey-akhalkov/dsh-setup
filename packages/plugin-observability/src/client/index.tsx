@@ -1340,11 +1340,28 @@ export function BaselineStrip({ report, t }: { report: Report; t: Translate }): 
       kind: 'decimal' as const,
     },
   ]
+  const insufficient =
+    report.quality.episodes < report.minEpisodes || baseline.episodes < report.minEpisodes
+  const deltaText = (row: (typeof rows)[number]): string | undefined => {
+    if (row.current === undefined || row.previous === undefined) return undefined
+    const diff = row.current - row.previous
+    const sign = diff >= 0 ? '+' : '−'
+    const value =
+      row.kind === 'percent'
+        ? `${sign}${String(Math.round(Math.abs(diff) * 100))} ${t('scorecard.points')}`
+        : row.kind === 'number'
+          ? `${sign}${String(Math.round(Math.abs(diff)))}`
+          : row.kind === 'minutes'
+            ? `${sign}${Math.abs(diff).toFixed(1)} ${t('unit.minutes')}`
+            : `${sign}${Math.abs(diff).toFixed(1)}`
+    return `${t('baseline.delta')} ${value}`
+  }
   return (
     <section
       className="dsh-obs-panel"
       aria-label={t('baseline.title')}
       data-baseline={baseline.kind}
+      data-insufficient={insufficient ? 'true' : undefined}
     >
       <header className="dsh-obs-panel-head">
         <h2>{t('baseline.title')}</h2>
@@ -1360,15 +1377,19 @@ export function BaselineStrip({ report, t }: { report: Report; t: Translate }): 
         {`${t('baseline.n')} ${String(report.quality.episodes)} ${t('baseline.current')} · ${String(baseline.episodes)} ${t('baseline.previous')}`}
       </p>
       <dl className="dsh-obs-compare">
-        {rows.map((row) => (
-          <div key={row.key}>
-            <dt>{row.label}</dt>
-            <dd>
-              {`${format(row.current, row.kind)} ${t('baseline.current')} · ${format(row.previous, row.kind)} ${t('baseline.previous')}`}
-            </dd>
-          </div>
-        ))}
+        {rows.map((row) => {
+          const delta = deltaText(row)
+          return (
+            <div key={row.key}>
+              <dt>{row.label}</dt>
+              <dd>
+                {`${format(row.current, row.kind)} ${t('baseline.current')} · ${format(row.previous, row.kind)} ${t('baseline.previous')}${delta === undefined ? '' : ` · ${delta}`}`}
+              </dd>
+            </div>
+          )
+        })}
       </dl>
+      {insufficient ? <p className="dsh-obs-muted">{t('scorecard.insufficientNote')}</p> : null}
       <p className="dsh-obs-muted">{t('baseline.association')}</p>
     </section>
   )
@@ -1706,9 +1727,7 @@ export function EpisodeDetail({
     },
   ]
   const perStep =
-    episode.steps === 0
-      ? 0
-      : Math.round(episode.throughCutoffUsage.total / Math.max(1, episode.steps))
+    episode.steps === 0 ? 0 : Math.round(episode.usage.total / Math.max(1, episode.steps))
   return (
     <section
       className="dsh-obs-panel"

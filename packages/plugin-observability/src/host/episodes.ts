@@ -577,7 +577,16 @@ export function buildEpisodes(
     (derived.get(session.id) ?? []).map((episode) => {
       const children = joined.get(episode.id)
       if (children === undefined) return episode
-      return makeEpisode(session, episode.index, episode.records, children, episode.intervals)
+      // Keep the corrected boundary when children join, so a crossing interval
+      // is still split at the next human message.
+      return makeEpisode(
+        session,
+        episode.index,
+        episode.records,
+        children,
+        episode.intervals,
+        episode.end,
+      )
     }),
   )
   return { episodes, unlinked }
