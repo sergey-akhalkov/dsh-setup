@@ -46,7 +46,7 @@
 ## 10. Integration and measurement
 
 - [x] 10.1 Run the local gate: `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer`, and `pnpm build && git diff --exit-code`; fix what fails.
-- [ ] 10.2 Owner installs the regenerated setup from an external PowerShell with the app closed, then in a substantial pause verifies the checkpoint request, a successful `work_checkpoint` call, a parallel declaration that either starts a tagged worker or records a serial reason, the cap behavior, and no conflict with a block review. Record the observed behavior in the task review.
+- [x] 10.2 Owner installs the regenerated setup from an external PowerShell with the app closed, then in a substantial pause verifies the checkpoint request, a successful `work_checkpoint` call, a parallel declaration that either starts a tagged worker or records a serial reason, the cap behavior, and no conflict with a block review. Record the observed behavior in the task review.
 - [ ] 10.3 Measure the post-install window for one to two weeks: count eligible turns by the trigger definition, successful checkpoints per turn (deduplicating amendments), and UNCHECKED closes separately; report the checkpointed share, parallel share, worker-start conversion, serial rate, and UNCHECKED cap hits; compare median steps and wall time with the pre-change baseline; record the keep, tune, or revert decision in the task review.
 
 ## Workflow follow-up
