@@ -3534,8 +3534,8 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
     const rendered = renderTree(module.ObservabilityPanel?.(panelProps(fixtureReport())))
     const css = childText(nodesOf(rendered, 'style')[0])
     expect(css).toContain('@media (min-width: 901px)')
-    expect(css).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
-    expect(css).toContain('grid-template-columns: minmax(0, 1fr)')
+    expect(css).toContain('columns: 2')
+    expect(css).toContain('columns: 1')
     for (const token of [
       '--dsw-alias-label-primary',
       '--dsw-alias-label-secondary',

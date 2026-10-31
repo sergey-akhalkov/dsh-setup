@@ -98,6 +98,10 @@ export const EPISODE_TABLE_LIMIT = 200
 // upgrade once the report exposes the configured minimum.
 export const MIN_EPISODES = 10
 
+/** A short-lived client cache: switching tabs shows the last report at once. */
+const REPORT_CACHE_MS = 30_000
+const reportCache = new Map<string, { at: number; report: Report }>()
+
 const SUB_VIEW_KEYS: Record<SubView, string> = {
   overview: 'tab.overview',
   plugins: 'tab.plugins',
@@ -2157,28 +2161,24 @@ export function OverviewView({
         onRevealFailures={report.failureTotals.total === 0 ? undefined : onRevealFailures}
       />
       <div className="dsh-obs-columns">
-        <div className="dsh-obs-col">
-          <OutcomeTiles report={report} t={t} />
-          <BaselineStrip report={report} t={t} />
-          <TokenMix
-            cacheRead={report.cost.cacheRead}
-            input={report.cost.input}
-            output={report.cost.output}
-            t={t}
-          />
-          <ActivityPanel report={report} t={t} />
-          <DataQualityStrip report={report} t={t} />
-        </div>
-        <div className="dsh-obs-col">
-          <ScorecardList
-            scorecards={report.scorecards.filter((card) => !silentIds.has(card.rowId))}
-            t={t}
-            onOpenRow={onOpenRow}
-          />
-          <SilentRows rows={silent} report={report} t={t} />
-          <ToolsPanel outcomes={report.toolOutcomes} t={t} />
-          <SignalsPanel rows={report.rows} t={t} />
-        </div>
+        <OutcomeTiles report={report} t={t} />
+        <BaselineStrip report={report} t={t} />
+        <TokenMix
+          cacheRead={report.cost.cacheRead}
+          input={report.cost.input}
+          output={report.cost.output}
+          t={t}
+        />
+        <ActivityPanel report={report} t={t} />
+        <DataQualityStrip report={report} t={t} />
+        <ScorecardList
+          scorecards={report.scorecards.filter((card) => !silentIds.has(card.rowId))}
+          t={t}
+          onOpenRow={onOpenRow}
+        />
+        <SilentRows rows={silent} report={report} t={t} />
+        <ToolsPanel outcomes={report.toolOutcomes} t={t} />
+        <SignalsPanel rows={report.rows} t={t} />
       </div>
       <FailureList
         failures={report.failures}
@@ -2893,7 +2893,11 @@ export function ObservabilityView({
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     let active = true
-    setReport(null)
+    const key = `${range}|${sessionId ?? ''}`
+    const cached = reportCache.get(key)
+    // Show the last report for this range at once while the fresh one loads.
+    if (cached !== undefined && Date.now() - cached.at < REPORT_CACHE_MS) setReport(cached.report)
+    else setReport(null)
     setError(null)
     setNow(Date.now())
     fetch(reportUrl(range, sessionId), {
@@ -2914,6 +2918,7 @@ export function ObservabilityView({
         return (await response.json()) as Report
       })
       .then((value) => {
+        reportCache.set(key, { at: Date.now(), report: value })
         if (active) setReport(value)
       })
       .catch((cause: unknown) => {
@@ -3577,20 +3582,17 @@ button.dsh-obs-kpi:focus-visible {
   gap: 16px;
 }
 .dsh-obs-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
+  columns: 1;
+  column-gap: 16px;
 }
 @media (min-width: 901px) {
   .dsh-obs-columns {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    columns: 2;
   }
 }
-.dsh-obs-col {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
+.dsh-obs-columns > * {
+  break-inside: avoid;
+  margin: 0 0 16px;
 }
 .dsh-obs-tiles {
   display: grid;

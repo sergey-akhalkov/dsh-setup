@@ -98,6 +98,8 @@ window.__ModuleLoader__.load({
     var SUB_VIEWS = ["overview", "plugins", "tasks", "hypotheses"];
     var EPISODE_TABLE_LIMIT = 200;
     var MIN_EPISODES = 10;
+    var REPORT_CACHE_MS = 3e4;
+    var reportCache = /* @__PURE__ */ new Map();
     var SUB_VIEW_KEYS = {
       overview: "tab.overview",
       plugins: "tab.plugins",
@@ -1658,34 +1660,30 @@ window.__ModuleLoader__.load({
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-columns", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-col", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutcomeTiles, { report, t }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BaselineStrip, { report, t }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              TokenMix,
-              {
-                cacheRead: report.cost.cacheRead,
-                input: report.cost.input,
-                output: report.cost.output,
-                t
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityPanel, { report, t }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DataQualityStrip, { report, t })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-col", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              ScorecardList,
-              {
-                scorecards: report.scorecards.filter((card) => !silentIds.has(card.rowId)),
-                t,
-                onOpenRow
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SilentRows, { rows: silent, report, t }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ToolsPanel, { outcomes: report.toolOutcomes, t }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignalsPanel, { rows: report.rows, t })
-          ] })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutcomeTiles, { report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BaselineStrip, { report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            TokenMix,
+            {
+              cacheRead: report.cost.cacheRead,
+              input: report.cost.input,
+              output: report.cost.output,
+              t
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityPanel, { report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DataQualityStrip, { report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            ScorecardList,
+            {
+              scorecards: report.scorecards.filter((card) => !silentIds.has(card.rowId)),
+              t,
+              onOpenRow
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SilentRows, { rows: silent, report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ToolsPanel, { outcomes: report.toolOutcomes, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignalsPanel, { rows: report.rows, t })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           FailureList,
@@ -2195,7 +2193,10 @@ window.__ModuleLoader__.load({
       const [now, setNow] = (0, import_react.useState)(() => Date.now());
       (0, import_react.useEffect)(() => {
         let active = true;
-        setReport(null);
+        const key = `${range}|${sessionId ?? ""}`;
+        const cached = reportCache.get(key);
+        if (cached !== void 0 && Date.now() - cached.at < REPORT_CACHE_MS) setReport(cached.report);
+        else setReport(null);
         setError(null);
         setNow(Date.now());
         fetch(reportUrl(range, sessionId), {
@@ -2210,6 +2211,7 @@ window.__ModuleLoader__.load({
           }
           return await response.json();
         }).then((value) => {
+          reportCache.set(key, { at: Date.now(), report: value });
           if (active) setReport(value);
         }).catch((cause) => {
           if (active) setError(cause instanceof Error ? cause.message : String(cause));
@@ -2872,20 +2874,17 @@ window.__ModuleLoader__.load({
       gap: 16px;
     }
     .dsh-obs-columns {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 16px;
+      columns: 1;
+      column-gap: 16px;
     }
     @media (min-width: 901px) {
       .dsh-obs-columns {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        columns: 2;
       }
     }
-    .dsh-obs-col {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      min-width: 0;
+    .dsh-obs-columns > * {
+      break-inside: avoid;
+      margin: 0 0 16px;
     }
     .dsh-obs-tiles {
       display: grid;

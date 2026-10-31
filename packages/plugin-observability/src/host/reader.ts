@@ -68,7 +68,7 @@ export async function readSessionTitles(
 }
 
 /** How many sessions the reader opens at once. */
-export const READ_CONCURRENCY = 4
+export const READ_CONCURRENCY = 8
 
 async function mapLimit<T, R>(
   items: readonly T[],

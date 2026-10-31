@@ -29,7 +29,7 @@ export interface TitleObservation {
 /** Resolve titles for the unique failure sessions; every failure mode drops a title only. */
 export declare function readSessionTitles(query: SessionQueryService, sessionIds: readonly SessionId[]): Promise<Map<string, string>>;
 /** How many sessions the reader opens at once. */
-export declare const READ_CONCURRENCY = 4;
+export declare const READ_CONCURRENCY = 8;
 export interface ReadSessionsOptions {
     readonly query: SessionQueryService;
     readonly range: Range;

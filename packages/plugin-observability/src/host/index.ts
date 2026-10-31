@@ -133,50 +133,78 @@ export async function computeReport(
     argumentFields,
   })
   const currentWindow = rangeWindow(range, now, 0)
-  const baseline = await readBaseline({
-    query: ctx.sessionQuery,
-    range,
-    now,
-    sessionId,
-    cache,
-    argumentFields,
-    windowFrom: currentWindow.from,
-    windowTo: currentWindow.to,
-  })
+  // The baseline and the hypothesis windows are independent corpora: read them
+  // together, so a week hypothesis does not add its latency to the first paint.
+  const windowRanges = [
+    ...new Set(config.hypotheses.map((hypothesis) => hypothesis.window)),
+  ].filter((window) => window !== range)
+  const [baseline, readiness, ...windowCorpora] = await Promise.all([
+    readBaseline({
+      query: ctx.sessionQuery,
+      range,
+      now,
+      sessionId,
+      cache,
+      argumentFields,
+      windowFrom: currentWindow.from,
+      windowTo: currentWindow.to,
+    }),
+    readReadiness(ctx as unknown as Context),
+    ...windowRanges.map(async (windowRange) => {
+      const window = rangeWindow(windowRange, now, 0)
+      const [corpus, previous] = await Promise.all([
+        readSessions({
+          query: ctx.sessionQuery,
+          range: windowRange,
+          now,
+          sessionId,
+          cache,
+          argumentFields,
+        }),
+        readBaseline({
+          query: ctx.sessionQuery,
+          range: windowRange,
+          now,
+          sessionId,
+          cache,
+          argumentFields,
+          windowFrom: window.from,
+          windowTo: window.to,
+        }),
+      ])
+      return { windowRange, corpus, previous }
+    }),
+  ])
   const registry = new Set(ctx.tools.schemas().map((schema) => schema.name))
-  const readiness = await readReadiness(ctx as unknown as Context)
   // A hypothesis is evaluated over the window it declares, even when another
   // range is requested; distinct windows are read once each and cached.
   const hypothesisValues = new Map<Range, { current: MetricValues; baseline?: MetricValues }>()
-  for (const hypothesis of config.hypotheses) {
-    if (hypothesisValues.has(hypothesis.window)) continue
-    const windowRange = hypothesis.window
+  if (config.hypotheses.some((hypothesis) => hypothesis.window === range)) {
+    const observed =
+      range === 'session' ? FULL_WINDOW : { from: currentWindow.from, to: currentWindow.to }
+    const currentValues = metricValuesFor({
+      records,
+      sessions,
+      idleGapMinutes: config.idleGapMinutes,
+      window: observed,
+    })
+    const baselineValues =
+      baseline === undefined
+        ? undefined
+        : metricValuesFor({
+            records: baseline.records,
+            sessions: baseline.sessions,
+            idleGapMinutes: config.idleGapMinutes,
+            window: { from: baseline.from, to: baseline.to },
+          })
+    hypothesisValues.set(range, {
+      current: currentValues,
+      ...(baselineValues === undefined ? {} : { baseline: baselineValues }),
+    })
+  }
+  for (const { windowRange, corpus, previous } of windowCorpora) {
     const window = rangeWindow(windowRange, now, 0)
     const observed = windowRange === 'session' ? FULL_WINDOW : { from: window.from, to: window.to }
-    const corpus =
-      windowRange === range
-        ? { records, sessions }
-        : await readSessions({
-            query: ctx.sessionQuery,
-            range: windowRange,
-            now,
-            sessionId,
-            cache,
-            argumentFields,
-          })
-    const forBaseline =
-      windowRange === range
-        ? baseline
-        : await readBaseline({
-            query: ctx.sessionQuery,
-            range: windowRange,
-            now,
-            sessionId,
-            cache,
-            argumentFields,
-            windowFrom: window.from,
-            windowTo: window.to,
-          })
     const currentValues = metricValuesFor({
       records: corpus.records,
       sessions: corpus.sessions,
@@ -184,13 +212,13 @@ export async function computeReport(
       window: observed,
     })
     const baselineValues =
-      forBaseline === undefined
+      previous === undefined
         ? undefined
         : metricValuesFor({
-            records: forBaseline.records,
-            sessions: forBaseline.sessions,
+            records: previous.records,
+            sessions: previous.sessions,
             idleGapMinutes: config.idleGapMinutes,
-            window: { from: forBaseline.from, to: forBaseline.to },
+            window: { from: previous.from, to: previous.to },
           })
     hypothesisValues.set(windowRange, {
       current: currentValues,
@@ -236,6 +264,23 @@ export async function computeReport(
 export function apply(ctx: HostContext, rawConfig?: Config): void {
   const config = parseConfig(rawConfig)
   const cache = new SessionCache()
+  // shortcut: a 10-second report cache, fine for a dashboard and refreshed by
+  // reopening after the TTL; move to an event-driven invalidation if writes
+  // ever need to show immediately.
+  const reports = new Map<string, { at: number; value: Promise<Report> }>()
+  const REPORT_CACHE_MS = 10_000
+  const cachedReport = (
+    key: string,
+    now: number,
+    compute: () => Promise<Report>,
+  ): Promise<Report> => {
+    const hit = reports.get(key)
+    if (hit !== undefined && now - hit.at < REPORT_CACHE_MS) return hit.value
+    const value = compute()
+    reports.set(key, { at: now, value })
+    value.catch(() => reports.delete(key))
+    return value
+  }
   ctx.effect(() =>
     ctx.webServer.register({
       kind: 'exact',
@@ -262,13 +307,15 @@ export function apply(ctx: HostContext, rawConfig?: Config): void {
         const session = url.searchParams.get('session')
         const now = Date.now()
         try {
-          const report = await computeReport(
-            ctx,
-            range,
-            session === null || session === '' ? undefined : (session as unknown as SessionId),
-            now,
-            cache,
-            config,
+          const report = await cachedReport(`${range}|${session ?? ''}`, now, () =>
+            computeReport(
+              ctx,
+              range,
+              session === null || session === '' ? undefined : (session as unknown as SessionId),
+              now,
+              cache,
+              config,
+            ),
           )
           writeJson(res, 200, report)
         } catch (error) {

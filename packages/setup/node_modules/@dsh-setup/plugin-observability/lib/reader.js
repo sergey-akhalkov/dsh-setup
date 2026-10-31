@@ -32,7 +32,7 @@ export async function readSessionTitles(query, sessionIds) {
     return titles;
 }
 /** How many sessions the reader opens at once. */
-export const READ_CONCURRENCY = 4;
+export const READ_CONCURRENCY = 8;
 async function mapLimit(items, limit, run) {
     const results = new Array(items.length);
     let next = 0;

@@ -296,6 +296,36 @@ describe('report route', () => {
     expect(body.timeline).toBeUndefined()
   })
 
+  it('serves a repeated report from the short-lived cache', async () => {
+    const base = failureQuery(undefined, true)
+    let reads = 0
+    const query: SessionQueryService = {
+      ...base,
+      async listSessions() {
+        reads += 1
+        return base.listSessions()
+      },
+    }
+    const test = harness({ query })
+    const first = new FakeResponse()
+    await test.route.handler(
+      request(`${REPORT_PATH}?range=day&session=session-1`),
+      first as unknown as ServerResponse,
+    )
+    expect(first.status).toBe(200)
+    const afterFirst = reads
+    expect(afterFirst).toBeGreaterThan(0)
+    const second = new FakeResponse()
+    await test.route.handler(
+      request(`${REPORT_PATH}?range=day&session=session-1`),
+      second as unknown as ServerResponse,
+    )
+    expect(second.status).toBe(200)
+    // The second request within the TTL does not read the corpus again.
+    expect(reads).toBe(afterFirst)
+    expect(second.json()).toEqual(first.json())
+  })
+
   it('writes nothing under the Harness home while reading a baseline', async () => {
     const { mkdtempSync, readdirSync, rmSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
