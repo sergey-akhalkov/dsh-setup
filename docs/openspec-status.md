@@ -329,3 +329,11 @@ archiving: the close gate refused a substantial pause with the evidence and the 
 `work_checkpoint` call recorded (and replaced) the same turn file, the parallel gate refused a parallel
 declaration by naming its id, and the serial amendment was accepted. The cap and the block-review
 coexistence were covered by the shipped tests, as the owner accepted.
+
+The `2026-10-31-improve-observability-actionability` and
+`2026-10-31-replace-rare-triggers-with-work-checkpoints` changes shipped in v0.19.0 (tag on commit
+`b920e18`) after the release workflow passed DSH 0.2.1-rc.3 and 0.2.1-rc.5 and the publish job. The
+published index returns HTTP 200, lists every setup and plugin package at 0.19.0 pinned to that
+commit, and retains the earlier versions. The owner's desktop profile runs the code through the linked
+setup bundle; installing the published 0.19.0 from the market (or re-running the installer from an
+external PowerShell with the app closed) is what makes the tagged build the installed one.
