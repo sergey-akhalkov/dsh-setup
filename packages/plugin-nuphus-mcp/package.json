@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-nuphus-mcp",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "Nuphus MCP guidance: the nuphus-discipline skill for desktop automation (screen, windows, mouse and keyboard, Chrome); the setup configures nuphus-mcp through the lazy MCP row (mcp_tools/mcp_call), not a static adapter row",
   "license": "MIT",
   "icon": "./icon.svg",
