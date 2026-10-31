@@ -109,7 +109,8 @@ function serveIndex(home: string, document: unknown): { url: string; stop: () =>
 
 /**
  * A stand-in plugin manager for the version comparison: it answers the version
- * query and the dump, and on install records a chosen installed version.
+ * query and the dump, and on install records a chosen installed version without
+ * selecting the setup bundle, reproducing the Desktop CLI's dependency-only add.
  */
 function writeStubCli(home: string): string {
   const stub = join(home, 'stub-dsh.ps1')
@@ -129,8 +130,6 @@ function writeStubCli(home: string): string {
       '  $manifestPath = Join-Path $profileDir "package.json"',
       '  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json',
       '  $manifest.dependencies | Add-Member -NotePropertyName "@dsh-setup/setup" -NotePropertyValue "stub" -Force',
-      '  $bundles = @($manifest.dsh.profile.bundles) + "@dsh-setup/setup"',
-      '  $manifest.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue $bundles -Force',
       '  $manifest | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $manifestPath',
       '  $packageDir = Join-Path (Join-Path $profileDir "node_modules") "@dsh-setup/setup"',
       '  New-Item -ItemType Directory -Force -Path $packageDir | Out-Null',

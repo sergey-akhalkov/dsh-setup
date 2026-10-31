@@ -1885,16 +1885,17 @@ try {
   Invoke-DshPlugin @('add', $setupSpec)
   Write-Ok "installed: $SetupPackage"
 
-  # An existing setup entry is not moved by `dsh plugin add`; place it last so
-  # the setup defaults outrank the profile's own bundles.
+  # The CLI can install the dependency without selecting its bundle, and an
+  # existing entry is not moved by `dsh plugin add`. Ensure it is selected last
+  # so the setup defaults outrank the profile's own bundles.
   $manifest = Read-JsonFile $profileManifestPath
   $bundles = @(Get-ProfileBundles $manifest)
-  if ($bundles -contains $SetupPackage -and $bundles[$bundles.Count - 1] -ne $SetupPackage) {
+  if ($bundles -notcontains $SetupPackage -or $bundles[$bundles.Count - 1] -ne $SetupPackage) {
     $reordered = @($bundles | Where-Object { $_ -ne $SetupPackage })
     $reordered += $SetupPackage
     $manifest = Set-ProfileBundles $manifest $reordered
     Save-JsonFile $profileManifestPath $manifest
-    Write-Ok 'moved the setup bundle last so its defaults win'
+    Write-Ok 'selected the setup bundle last so its defaults win'
   }
 
   if ($NoDesktopShortcut) {
