@@ -358,3 +358,12 @@ published index returns HTTP 200, lists every setup and plugin package at 0.19.0
 commit, and retains the earlier versions. The owner's desktop profile runs the code through the linked
 setup bundle; installing the published 0.19.0 from the market (or re-running the installer from an
 external PowerShell with the app closed) is what makes the tagged build the installed one.
+
+The `2026-10-31-add-observability-outcomes` change shipped in v0.20.0 (tag on commit `0e20823`) after
+the release workflow passed DSH 0.2.1-rc.3 and 0.2.1-rc.5 and the publish job, and the `validate`
+workflow on `main` passed. The published index returns HTTP 200, lists every setup and plugin package
+at 0.20.0 pinned to that commit, and retains the earlier versions. The release also carries the
+installer fix that selects the setup bundle last when the CLI adds only the dependency. The owner's
+desktop profile runs the code through the linked setup bundle; installing the published 0.20.0 from the
+market (or re-running the installer from an external PowerShell with the app closed) is what makes the
+tagged build the installed one.
