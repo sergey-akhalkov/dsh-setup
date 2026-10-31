@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-hindsight",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Hindsight long-term memory: the official native DSH plugin with a local-only default endpoint",
   "license": "MIT",
   "icon": "./icon.svg",

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-goal-continuity",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Goal continuity: re-arms a disarmed active goal after recoverable harness stops, resumes after a loop-guard reset, extends the round cap within bounds, and reviews every proposed block with an independent read-only subagent before it can end the run",
   "license": "MIT",
   "icon": "./icon.svg",
