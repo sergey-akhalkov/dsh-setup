@@ -13,6 +13,7 @@ const SERIAL = {
   outcome: 'continue',
   parallel: false,
   serialReason: 'the remaining work is one ordered edit',
+  bottleneck: 'the guard must exist before the test can pass',
   next: 'finish the edit',
 }
 

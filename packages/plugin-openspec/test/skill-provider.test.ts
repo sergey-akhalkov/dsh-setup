@@ -148,6 +148,21 @@ describe('openspec plugin', () => {
     }
   })
 
+  it('requires a work-only single-lane reason and one apply-start lane check', () => {
+    const text = guidance.replace(/\s+/gu, ' ')
+    expect(text).toContain("Name each lane's owned paths in its heading")
+    expect(text).toContain(
+      'one work constraint, meaning a shared hot file, generated output, or a serial gate',
+    )
+    expect(text).toContain(
+      'A task-review or archive process is not a work constraint and is never a single-lane reason',
+    )
+    expect(text).toContain(
+      'When applying, before the first implementation task, read the level-2 headings once and assign each independent lane to a worker or record its serial decision',
+    )
+    expect(text).toContain('no new tool or state')
+  })
+
   it('ships the task-lane guidance outside the pinned asset directory', () => {
     const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
       files: string[]

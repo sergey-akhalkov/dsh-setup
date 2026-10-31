@@ -162,6 +162,7 @@ interface HarnessOptions {
   readonly reflect?: { get(name: string): unknown }
   readonly rows?: unknown[]
   readonly hypotheses?: unknown[]
+  readonly interventionAt?: string
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -200,6 +201,7 @@ function harness(options: HarnessOptions = {}): Harness {
         { id: 'delegation', label: 'Delegation', kind: 'signal', match: [{ tool: 'delegate' }] },
       ] as never),
     ...(options.hypotheses === undefined ? {} : { hypotheses: options.hypotheses }),
+    ...(options.interventionAt === undefined ? {} : { interventionAt: options.interventionAt }),
   })
   if (route === undefined) throw new Error('route not registered')
   return {
@@ -294,6 +296,27 @@ describe('report route', () => {
     expect(body.dataQuality.usageCoverage).toBe(0)
     expect(body.dataQuality.comparisonSample).toBe(0)
     expect(body.timeline).toBeUndefined()
+  })
+
+  it('carries the configured intervention date into the process comparison', async () => {
+    const test = harness({ interventionAt: '2026-10-01T00:00:00Z' })
+    const response = new FakeResponse()
+    await test.route.handler(
+      request(`${REPORT_PATH}?range=week&session=session-1`),
+      response as unknown as ServerResponse,
+    )
+    expect(response.status).toBe(200)
+    const body = response.json() as {
+      process: {
+        summary: { episodes: number }
+        comparison?: { basis: string; interventionAt?: number; status: string; label: string }
+      }
+    }
+    expect(body.process.summary.episodes).toBe(0)
+    expect(body.process.comparison?.basis).toBe('intervention date')
+    expect(body.process.comparison?.interventionAt).toBe(Date.parse('2026-10-01T00:00:00Z'))
+    expect(body.process.comparison?.status).toBe('insufficient')
+    expect(body.process.comparison?.label).toBe('insufficient data')
   })
 
   it('serves a repeated report from the short-lived cache', async () => {

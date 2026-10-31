@@ -104,8 +104,11 @@ This is the intended loop for an OpenSpec change:
 
 1. Implement the smallest reviewable task.
 2. Mark that task `[x]` in `tasks.md`.
-3. Run `delegate(rule: "task-review", change: "<change>", task: "<task id>")` immediately, before
-   starting the next task. The gate names the explicit task id it wants; use it.
+3. Run `delegate(rule: "task-review", change: "<change>", task: "<task id>")` immediately after
+   the tick. The gate names the explicit task id it wants; use it. Keep implementing an independent
+   task while the run uses a frozen snapshot. When the run reports the live worktree, a write can
+   discard its verdict: restore snapshot support and re-run, or defer writes until the run settles.
+   No blocking sleep.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`. A task-scoped `PASS` is a
    historical snapshot: later tasks do not invalidate it.
 5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call

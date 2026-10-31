@@ -131,6 +131,39 @@ describe('bundled prompts', () => {
     expect(text).toContain('"digest"')
   })
 
+  it('checks the plan lane shape and exempts a work-level single-lane reason', () => {
+    const text = read('review-spec.md').replace(/\s+/gu, ' ')
+    expect(text).toContain("Check the plan's work lanes before implementation")
+    expect(text).toContain(
+      'two or more level-2 task groups and no heading names owned paths, unless the plan states one work-level single-lane reason: a shared hot file, generated output, or a serial gate',
+    )
+    expect(text).toContain(
+      'A stated single-lane reason that is the task-review or archive process instead of a work constraint is also a P1 finding',
+    )
+    expect(text).toContain('The evidence names the headings or the reason')
+    expect(text).toContain('the fix asks for the owned paths or for one work-level reason')
+  })
+
+  it('starts the task review immediately and conditions overlap on a frozen snapshot', () => {
+    const agentsPath = join(packageDir, '..', '..', 'AGENTS.md')
+    const skill = read('SKILL.md').replace(/\s+/gu, ' ')
+    const docs = readFileSync(docsPath, 'utf8').replace(/\s+/gu, ' ')
+    const agents = readFileSync(agentsPath, 'utf8').replace(/\s+/gu, ' ')
+    expect(skill).toContain('immediately after the tick')
+    expect(docs).toContain('immediately after the tick')
+    expect(agents).toContain('start its task-scoped review immediately')
+    for (const text of [skill, docs, agents]) {
+      expect(text).toContain(
+        'Keep implementing an independent task while the run uses a frozen snapshot',
+      )
+      expect(text).toContain(
+        'When the run reports the live worktree, a write can discard its verdict: restore snapshot support and re-run, or defer writes until the run settles',
+      )
+      expect(text).toContain('No blocking sleep')
+      expect(text).not.toContain('before starting the next task')
+    }
+  })
+
   it('carries the task-scope rubric and the historical-snapshot boundary', () => {
     const text = read('review-task.md')
     expect(text).toContain('task')

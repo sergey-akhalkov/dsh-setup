@@ -3,9 +3,9 @@ import { type Row, RowConfigError, readRows } from './rows.js'
 
 /**
  * The plugin configuration: declarative rows, the episode boundaries, the
- * comparison minimum, and the inert hypothesis list. A configuration patch
- * replaces the whole `config` object, so a profile that overrides rows must
- * restate every field it declares.
+ * comparison minimum, the inert hypothesis list, and the optional process
+ * intervention date. A configuration patch replaces the whole `config` object,
+ * so a profile that overrides rows must restate every field it declares.
  */
 
 /** The default idle gap: no event for this long ends an episode. */
@@ -20,6 +20,8 @@ export interface PluginConfig {
   readonly idleGapMinutes: number
   readonly minEpisodes: number
   readonly hypotheses: readonly Hypothesis[]
+  /** Epoch milliseconds of the declared intervention date, when configured. */
+  readonly interventionAt?: number
 }
 
 const CONFIG_FIELDS: ReadonlySet<string> = new Set([
@@ -27,6 +29,7 @@ const CONFIG_FIELDS: ReadonlySet<string> = new Set([
   'idleGapMinutes',
   'minEpisodes',
   'hypotheses',
+  'interventionAt',
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -49,6 +52,48 @@ function positiveInteger(value: unknown, at: string, fallback: number): number {
   return value
 }
 
+/** ISO 8601 date or date-time with an optional zone; `Date.parse` still supplies the instant. */
+const ISO_DATE =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:[Zz]|[+-]\d{2}:\d{2})?)?$/
+
+/** Whether a four-digit year, month, and day name a real calendar day. */
+function isCalendarDay(year: number, month: number, day: number): boolean {
+  const date = new Date(0)
+  date.setUTCFullYear(year, month - 1, day)
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  )
+}
+
+/**
+ * An optional ISO date-time. Syntax and the calendar day are checked before
+ * `Date.parse`, which would otherwise roll an impossible day into the next month
+ * and accept non-ISO formats such as `10/11/2026`.
+ */
+function isoDate(value: unknown, at: string): number | undefined {
+  if (value === undefined) return undefined
+  const match = typeof value === 'string' ? ISO_DATE.exec(value) : null
+  if (match !== null) {
+    const year = Number(match[1])
+    const month = Number(match[2])
+    const day = Number(match[3])
+    const hour = match[4] === undefined ? 0 : Number(match[4])
+    const minute = match[5] === undefined ? 0 : Number(match[5])
+    const second = match[6] === undefined ? 0 : Number(match[6])
+    const time = Date.parse(value as string)
+    if (
+      !Number.isNaN(time) &&
+      isCalendarDay(year, month, day) &&
+      hour <= 23 &&
+      minute <= 59 &&
+      second <= 59
+    ) {
+      return time
+    }
+  }
+  throw new RowConfigError(`${at} must be an ISO 8601 date-time; received ${JSON.stringify(value)}`)
+}
+
 /**
  * Validate the whole plugin configuration. An absent configuration is valid:
  * the built-in rows, the default episode boundaries, and no hypotheses.
@@ -67,6 +112,7 @@ export function parseConfig(raw: unknown): PluginConfig {
     if (!CONFIG_FIELDS.has(key)) throw new RowConfigError(`config: unknown field "${key}"`)
   }
   try {
+    const interventionAt = isoDate(raw.interventionAt, 'config.interventionAt')
     return {
       rows: readRows(raw.rows ?? []),
       idleGapMinutes: positive(
@@ -76,6 +122,7 @@ export function parseConfig(raw: unknown): PluginConfig {
       ),
       minEpisodes: positiveInteger(raw.minEpisodes, 'config.minEpisodes', DEFAULT_MIN_EPISODES),
       hypotheses: parseHypotheses(raw.hypotheses),
+      ...(interventionAt === undefined ? {} : { interventionAt }),
     }
   } catch (error) {
     // Both error classes already carry the config prefix; keep one type at the boundary.

@@ -113,6 +113,7 @@
         hardMaxGoalRounds: 5000
         blockReview:
           enabled: true
+          reviewQuestions: true
           provider: spawn
           model: deepseek-flash
           reasoningEffort: max
@@ -130,6 +131,7 @@
           maxBlocks: 3
           enforceParallel: true
           maxMessageChars: 1200
+          stepInterval: 40
     - id: preset-goal-reviewer
       name: "@deepseek-ai/dsh-agent-preset"
       config:

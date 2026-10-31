@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-goal-question-review",
+  "scope": "task",
+  "taskId": "50d3b674dfe85c2e",
+  "digest": "c0c384b3c24b23a5e376ab024dc3497022f4f6a63bffa7950fef9af5367a33f8",
+  "worktreeDigest": "8cb7e4a162e271efce7a96ccdb585757dacaecee3b13f07090c9a0f3da4ddd14",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-10-31T19:42:21.612Z"
+}

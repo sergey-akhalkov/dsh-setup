@@ -177,6 +177,7 @@ includeHypotheses = true) {
             idleGapMinutes: config.idleGapMinutes,
             minEpisodes: config.minEpisodes,
             hypotheses: config.hypotheses,
+            ...(config.interventionAt === undefined ? {} : { interventionAt: config.interventionAt }),
         },
         hypothesisValues,
         ...(baseline === undefined

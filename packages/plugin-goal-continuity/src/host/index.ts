@@ -35,10 +35,12 @@ export const name = '@dsh-setup/plugin-goal-continuity'
 /** Services the supervisor and the checkpoint tool need. */
 export const inject = ['agents', 'goals', 'tools']
 
-/** Independent block-review policy nested under `blockReview`. */
+/** Independent user-decision review policy nested under `blockReview`. */
 export interface BlockReviewConfig {
   /** Review proposed blocks at all (default true); the supervisor keeps running when false. */
   enabled?: boolean
+  /** Review a goal-round `ask_user_question` call too (default true). */
+  reviewQuestions?: boolean
   /** Registered subagent provider that starts the reviewer (default `spawn`). */
   provider?: string
   /** Reviewer model; omitted provider options fall back to the provider defaults. */
@@ -75,6 +77,8 @@ export interface CheckpointConfig {
   enforceParallel?: boolean
   /** Bound for the injected checkpoint request (default 1200 characters). */
   maxMessageChars?: number
+  /** Model steps between mid-turn checkpoint requests (default 40). */
+  stepInterval?: number
 }
 
 /** Row configuration. Every field is optional; omission selects the documented default. */
@@ -104,6 +108,7 @@ export interface Config {
 /** Fully resolved block-review policy; the plugin never runs on partial values. */
 export interface ResolvedBlockReviewConfig {
   readonly enabled: boolean
+  readonly reviewQuestions: boolean
   readonly provider: string
   readonly model: string
   readonly reasoningEffort: string
@@ -124,6 +129,7 @@ export interface ResolvedCheckpointConfig {
   readonly maxBlocks: number
   readonly enforceParallel: boolean
   readonly maxMessageChars: number
+  readonly stepInterval: number
 }
 
 /** Fully resolved configuration; the plugin never runs on partial values. */
@@ -145,6 +151,7 @@ const REVIEWER_PRESET_ID = 'goal-reviewer'
 /** Documented block-review defaults; the composition fragment repeats them. */
 export const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig = Object.freeze({
   enabled: true,
+  reviewQuestions: true,
   provider: 'spawn',
   model: 'deepseek-flash',
   reasoningEffort: 'max',
@@ -165,6 +172,7 @@ export const DEFAULT_CHECKPOINT_CONFIG: ResolvedCheckpointConfig = Object.freeze
   maxBlocks: 3,
   enforceParallel: true,
   maxMessageChars: 1200,
+  stepInterval: 40,
 })
 
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
@@ -224,7 +232,7 @@ function resolveBlockReview(raw: unknown): ResolvedBlockReviewConfig {
     }
   }
 
-  const boolean = (field: 'enabled'): boolean => {
+  const boolean = (field: 'enabled' | 'reviewQuestions'): boolean => {
     const value = record[field]
     if (value === undefined) return DEFAULT_BLOCK_REVIEW_CONFIG[field]
     if (typeof value !== 'boolean') throw fieldError(`blockReview.${field}`, 'must be a boolean')
@@ -258,6 +266,7 @@ function resolveBlockReview(raw: unknown): ResolvedBlockReviewConfig {
 
   return Object.freeze({
     enabled: boolean('enabled'),
+    reviewQuestions: boolean('reviewQuestions'),
     provider: text('provider'),
     model: text('model'),
     reasoningEffort: text('reasoningEffort'),
@@ -276,6 +285,7 @@ const CHECKPOINT_INTEGER_RANGES = {
   minToolCalls: [1, 1000],
   maxBlocks: [0, 100],
   maxMessageChars: [200, 20_000],
+  stepInterval: [1, 1000],
 } as const satisfies Record<string, readonly [number, number]>
 
 /** Warn once when a profile still carries the removed speed-review section. */
@@ -324,6 +334,7 @@ function resolveCheckpoint(raw: unknown): ResolvedCheckpointConfig {
     maxBlocks: integer('maxBlocks'),
     enforceParallel: boolean('enforceParallel'),
     maxMessageChars: integer('maxMessageChars'),
+    stepInterval: integer('stepInterval'),
   })
 }
 
@@ -451,6 +462,14 @@ interface AgentState {
   refusal: string | null
   /** The current turn's checkpoint refusal budget. */
   checkpointTurn: CheckpointTurnState | undefined
+  /** The turn whose pre-step boundaries `steps` counts. */
+  stepTurn: number | undefined
+  /** Pre-step boundaries observed in the current turn. */
+  steps: number
+  /** `steps` when the latest successful checkpoint ran, if one did. */
+  checkpointStep: number | undefined
+  /** `steps` when the mid-turn trigger last steered. */
+  steerStep: number
   /** The last structured outcome of each shell call in this session, by call id. */
   shellOutcomes: Map<string, ShellOutcome>
 }
@@ -467,6 +486,15 @@ interface CheckpointTurnState {
   refusals: number
   /** The UNCHECKED notice already explained this close. */
   unchecked: boolean
+}
+
+/** Start the step counter of a turn; in-memory state resets on a new turn. */
+function beginStepTurn(state: AgentState, turn: number): void {
+  if (state.stepTurn === turn) return
+  state.stepTurn = turn
+  state.steps = 0
+  state.checkpointStep = undefined
+  state.steerStep = 0
 }
 
 /** The three kinds of hook cancellation a turn can carry. */
@@ -604,12 +632,17 @@ const MAX_VERDICT_EVIDENCE = 5
 const MAX_VERDICT_EVIDENCE_CHARS = 300
 const MAX_REVIEW_ACTION_CHARS = 400
 const MAX_DENY_REASON_CHARS = 1200
+const MAX_SUBJECT_CHARS = 2000
 
 /** Visible error codes: a denial names its cause and the record. */
 const REJECTED_CODE = 'GOAL_BLOCK_REVIEW_REJECTED'
+const QUESTION_REJECTED_CODE = 'GOAL_QUESTION_REVIEW_REJECTED'
 const UNAVAILABLE_CODE = 'GOAL_BLOCK_REVIEW_UNAVAILABLE'
 const REVIEW_ERROR_CODE = 'GOAL_BLOCK_REVIEW_ERROR'
 const EXHAUSTED_CODE = 'GOAL_BLOCK_REVIEW_EXHAUSTED'
+
+/** What one review judges: a proposed block or a goal-round question. */
+type ReviewSubject = 'block' | 'question'
 
 /** The reviewer's read-only preset id, selected only by this gate. */
 const REVIEW_LABEL = 'goal-block-review'
@@ -659,7 +692,7 @@ interface EvidenceRound {
 /** The bounded, redacted evidence bundle; never contains the raw workspace path. */
 interface ReviewEvidence {
   readonly objective: string
-  readonly blockReason: string
+  readonly subject: string
   readonly rounds: readonly EvidenceRound[]
   readonly userMessages: readonly string[]
   readonly runtimePolicy: string
@@ -948,7 +981,7 @@ function runtimePolicyFrom(message: UserMessage, workspace: string): string {
 function buildEvidence(
   agent: Agent,
   goal: GoalView,
-  blockReason: string,
+  subject: string,
   workspace: string,
 ): ReviewEvidence {
   const events = sessionEvents(agent)
@@ -1017,7 +1050,7 @@ function buildEvidence(
 
   return {
     objective: bound(redact(goal.objective, workspace), 2000),
-    blockReason: bound(redact(blockReason, workspace), 2000),
+    subject: bound(redact(subject, workspace), MAX_SUBJECT_CHARS),
     rounds,
     userMessages: userMessages.slice(-MAX_EVIDENCE_USER_MESSAGES),
     runtimePolicy,
@@ -1029,13 +1062,19 @@ function buildEvidence(
   }
 }
 
-/** SHA-256 over the objective, block reason, and the redacted evidence bundle. */
-function evidenceDigest(objective: string, blockReason: string, evidence: ReviewEvidence): string {
+/** SHA-256 over the objective, the subject kind and text, and the redacted evidence bundle. */
+function evidenceDigest(
+  objective: string,
+  subjectKind: ReviewSubject,
+  subject: string,
+  evidence: ReviewEvidence,
+): string {
   return createHash('sha256')
     .update(
       JSON.stringify({
         objective,
-        blockReason,
+        subjectKind,
+        subject,
         rounds: evidence.rounds,
         userMessages: evidence.userMessages,
         runtimePolicy: evidence.runtimePolicy,
@@ -1044,6 +1083,11 @@ function evidenceDigest(objective: string, blockReason: string, evidence: Review
       }),
     )
     .digest('hex')
+}
+
+/** The JSON-normalized, bounded, redacted call arguments a question review judges. */
+function questionSubject(argumentsValue: unknown, workspace: string): string {
+  return bound(redact(JSON.stringify(argumentsValue) ?? '', workspace), MAX_SUBJECT_CHARS)
 }
 
 /** One filesystem-safe goal directory name. */
@@ -1229,7 +1273,12 @@ function loadReviewerInstructions(): string {
 }
 
 /** Render the bounded reviewer prompt: required evidence first, tool history within the rest. */
-function composeReviewPrompt(evidence: ReviewEvidence, workspace: string, goal: GoalView): string {
+function composeReviewPrompt(
+  evidence: ReviewEvidence,
+  workspace: string,
+  goal: GoalView,
+  subjectKind: ReviewSubject,
+): string {
   const header = [
     loadReviewerInstructions(),
     '',
@@ -1238,7 +1287,7 @@ function composeReviewPrompt(evidence: ReviewEvidence, workspace: string, goal: 
     `- Workspace (read-only): ${bound(workspace, 260)}`,
     `- Objective: ${evidence.objective}`,
     `- Rounds started: ${goal.roundsStarted} of ${goal.maxGoalRounds}`,
-    `- Block reason: ${evidence.blockReason}`,
+    `- ${subjectKind === 'question' ? 'Proposed question' : 'Block reason'}: ${evidence.subject}`,
     '',
     '### Last goal rounds',
     '',
@@ -1548,27 +1597,37 @@ async function runReview(
 }
 
 /** Deny with the reviewer's next action and a visible code. */
-function denyWith(reason: string, code: string): PreToolDecision {
+function denyWith(reason: string, code: string, name = 'goal-block-review'): PreToolDecision {
   return {
     kind: 'deny',
     reason: bound(reason, MAX_DENY_REASON_CHARS),
-    info: { name: 'goal-block-review', code },
+    info: { name, code },
   }
 }
 
-/** The tool decision for one strict verdict; a verified blocker gets a notice. */
+/** The tool decision for one strict verdict; a verified block gets a notice. */
 function verdictDecision(
   agent: Agent,
   verdict: ReviewVerdict,
   reused: boolean,
   recordPath: string,
+  subjectKind: ReviewSubject,
 ): PreToolDecision | undefined {
   if (verdict.verdict === 'not-blocker') {
+    if (subjectKind === 'question') {
+      return denyWith(
+        `The independent question review rejected this question: ${verdict.nextStep} The goal stays active. Do that next step now and record the assumption in your next work_checkpoint; do not ask the user for this decision. Record: ${recordPath}.`,
+        QUESTION_REJECTED_CODE,
+        'goal-question-review',
+      )
+    }
     return denyWith(
       `The independent block review rejected this goal block: ${verdict.nextStep} The goal stays active. Do that next step now; do not ask the user for permission this review already covers. Record: ${recordPath}.`,
       REJECTED_CODE,
     )
   }
+  // An allowed question simply reaches the user; only a block needs the notice.
+  if (subjectKind === 'question') return undefined
   deliverNotice(
     agent,
     `Block review ${reused ? '(cached) ' : ''}confirmed a user-only blocker. The closing message must name exactly this user action: ${verdict.userAction}. Record: ${recordPath}.`,
@@ -1583,6 +1642,7 @@ async function recordPolicy(
   workspace: string,
   goal: GoalView,
   digest: string,
+  subjectKind: ReviewSubject,
   verdict: 'unavailable' | 'review-error' | 'exhausted',
   policy: 'onUnavailable' | 'onReviewError' | 'onExhausted',
   detail: string,
@@ -1596,6 +1656,8 @@ async function recordPolicy(
     revision: goal.revision,
     objective: bound(redact(goal.objective, workspace), 500),
     digest,
+    subject: subjectKind,
+    subjectText: evidence?.subject ?? '',
     verdict,
     verified: false,
     reviewed,
@@ -1617,18 +1679,19 @@ async function recordPolicy(
   return displayRecordPath(workspace, goal.id, digest)
 }
 
-/** Visible notice for a policy-allowed unverified block. */
+/** Visible notice for a policy-allowed unverified proposal. */
 function notifyUnverified(
   agent: Agent,
+  subjectKind: ReviewSubject,
   record: string,
   policy: 'onUnavailable' | 'onReviewError' | 'onExhausted',
   detail: string,
 ): void {
-  deliverNotice(
-    agent,
-    `Block review allowed this goal block UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The goal will block without a confirmed user-only action.`,
-    `goal-continuity: unverified block allowed (${policy})`,
-  )
+  const text =
+    subjectKind === 'question'
+      ? `Question review allowed this question UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The question will reach the user without a confirmed user-only answer.`
+      : `Block review allowed this goal block UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The goal will block without a confirmed user-only action.`
+  deliverNotice(agent, text, `goal-continuity: unverified ${subjectKind} allowed (${policy})`)
 }
 
 /** Install the shared reviewer child-scope allowlist used by both reviews. */
@@ -1672,24 +1735,43 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
   ): Promise<PreToolDecision> {
     const agent = exec.agent
     if (agent === undefined || !isRootAgent(agent)) return next()
-    if (exec.name !== 'update_goal') return next()
-    const args = exec.arguments
-    if (!isRecord(args) || args.action !== 'blocked') return next()
+    const subjectKind: ReviewSubject | undefined =
+      exec.name === 'update_goal'
+        ? 'block'
+        : exec.name === 'ask_user_question'
+          ? 'question'
+          : undefined
+    if (subjectKind === undefined) return next()
     const goal = readCurrentGoal(ctx, agent)
     if (goal === undefined || goal.phase !== 'active') return next()
-    if (args.goal_id !== goal.id || args.revision !== goal.revision) return next()
-    const blockReason = typeof args.blocked_reason === 'string' ? args.blocked_reason : ''
-    if (blockReason.trim() === '') return next()
     const turn = openTurn(agent, goal)
-    if (explicitBlockRequest(turn.directMessages)) return next()
-    if (turn.goalRound && goal.roundsStarted < config.blockedAfterConsecutiveRounds) return next()
-
     const workspace = workspaceFor(ctx, agent)
-    const evidence = buildEvidence(agent, goal, blockReason, workspace)
-    const digest = evidenceDigest(goal.objective, blockReason, evidence)
+
+    let subject: string
+    if (subjectKind === 'question') {
+      // Only a goal round is supervised; a direct-human turn is not a pause.
+      if (!config.reviewQuestions || !turn.goalRound) return next()
+      subject = questionSubject(exec.arguments, workspace)
+    } else {
+      const args = exec.arguments
+      if (!isRecord(args) || args.action !== 'blocked') return next()
+      if (args.goal_id !== goal.id || args.revision !== goal.revision) return next()
+      const blockReason = typeof args.blocked_reason === 'string' ? args.blocked_reason : ''
+      if (blockReason.trim() === '') return next()
+      if (explicitBlockRequest(turn.directMessages)) return next()
+      if (turn.goalRound && goal.roundsStarted < config.blockedAfterConsecutiveRounds) return next()
+      subject = blockReason
+    }
+
+    const label = subjectKind === 'question' ? 'Question review' : 'Block review'
+    const denialName = subjectKind === 'question' ? 'goal-question-review' : 'goal-block-review'
+    const evidence = buildEvidence(agent, goal, subject, workspace)
+    const digest = evidenceDigest(goal.objective, subjectKind, subject, evidence)
     const record = displayRecordPath(workspace, goal.id, digest)
     const cached = cachedVerdict(workspace, goal.id, digest)
-    if (cached !== undefined) return verdictDecision(agent, cached, true, record) ?? next()
+    if (cached !== undefined) {
+      return verdictDecision(agent, cached, true, record, subjectKind) ?? next()
+    }
 
     const target: ReviewTarget = {
       provider: config.provider,
@@ -1705,6 +1787,7 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         workspace,
         goal,
         digest,
+        subjectKind,
         'exhausted',
         'onExhausted',
         detail,
@@ -1713,18 +1796,19 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         evidence,
       )
       if (config.onExhausted === 'allow') {
-        notifyUnverified(agent, written, 'onExhausted', detail)
+        notifyUnverified(agent, subjectKind, written, 'onExhausted', detail)
         return next()
       }
       return denyWith(
-        `Block review rejected this proposal: ${detail}. The goal stays active. Continue the objective with another authorized route, or record why only the user can proceed; raising maxReviewsPerGoal allows another review. Record: ${record}.`,
+        `${label} rejected this proposal: ${detail}. The goal stays active. Continue the objective with another authorized route, or record why only the user can proceed; raising maxReviewsPerGoal allows another review. Record: ${record}.`,
         EXHAUSTED_CODE,
+        denialName,
       )
     }
 
     let prompt: string
     try {
-      prompt = composeReviewPrompt(evidence, workspace, goal)
+      prompt = composeReviewPrompt(evidence, workspace, goal, subjectKind)
     } catch (error) {
       const detail = `the reviewer prompt could not be built: ${errorMessage(error)}`
       const written = await recordPolicy(
@@ -1732,6 +1816,7 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         workspace,
         goal,
         digest,
+        subjectKind,
         'review-error',
         'onReviewError',
         detail,
@@ -1740,12 +1825,13 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         evidence,
       )
       if (config.onReviewError === 'allow') {
-        notifyUnverified(agent, written, 'onReviewError', detail)
+        notifyUnverified(agent, subjectKind, written, 'onReviewError', detail)
         return next()
       }
       return denyWith(
-        `Block review could not run (${detail}) and onReviewError is "deny". The goal stays active. Fix the review target or set blockReview.onReviewError to "allow". Record: ${record}.`,
+        `${label} could not run (${detail}) and onReviewError is "deny". The goal stays active. Fix the review target or set blockReview.onReviewError to "allow". Record: ${record}.`,
         REVIEW_ERROR_CODE,
+        denialName,
       )
     }
 
@@ -1761,6 +1847,7 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         workspace,
         goal,
         digest,
+        subjectKind,
         'unavailable',
         'onUnavailable',
         detail,
@@ -1769,12 +1856,13 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         evidence,
       )
       if (config.onUnavailable === 'allow') {
-        notifyUnverified(agent, written, 'onUnavailable', detail)
+        notifyUnverified(agent, subjectKind, written, 'onUnavailable', detail)
         return next()
       }
       return denyWith(
-        `Block review is unavailable (${detail}) and onUnavailable is "deny". The goal stays active. Fix the reviewer provider or preset, or set blockReview.onUnavailable to "allow". Record: ${record}.`,
+        `${label} is unavailable (${detail}) and onUnavailable is "deny". The goal stays active. Fix the reviewer provider or preset, or set blockReview.onUnavailable to "allow". Record: ${record}.`,
         UNAVAILABLE_CODE,
+        denialName,
       )
     }
     if (outcome.kind === 'error') {
@@ -1784,6 +1872,7 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         workspace,
         goal,
         digest,
+        subjectKind,
         'review-error',
         'onReviewError',
         detail,
@@ -1792,12 +1881,13 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
         evidence,
       )
       if (config.onReviewError === 'allow') {
-        notifyUnverified(agent, written, 'onReviewError', detail)
+        notifyUnverified(agent, subjectKind, written, 'onReviewError', detail)
         return next()
       }
       return denyWith(
-        `Block review failed (${detail}) and onReviewError is "deny". The goal stays active. Fix the reviewer target or set blockReview.onReviewError to "allow". Record: ${record}.`,
+        `${label} failed (${detail}) and onReviewError is "deny". The goal stays active. Fix the reviewer target or set blockReview.onReviewError to "allow". Record: ${record}.`,
         REVIEW_ERROR_CODE,
+        denialName,
       )
     }
 
@@ -1808,6 +1898,8 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
       revision: goal.revision,
       objective: bound(redact(goal.objective, workspace), 500),
       digest,
+      subject: subjectKind,
+      subjectText: evidence.subject,
       verdict: outcome.verdict.verdict,
       verified: true,
       reviewed: true,
@@ -1828,7 +1920,7 @@ function installBlockReview(ctx: Context, config: ResolvedBlockReviewConfig): vo
       time: new Date().toISOString(),
       session: agent.session.id,
     })
-    const decision = verdictDecision(agent, outcome.verdict, false, record)
+    const decision = verdictDecision(agent, outcome.verdict, false, record, subjectKind)
     return decision ?? next()
   }
 }
@@ -1904,6 +1996,7 @@ const MAX_CHECKPOINT_ITEMS = 8
 const MAX_CHECKPOINT_ITEM_CHARS = 240
 const MAX_CHECKPOINT_NEXT_CHARS = 400
 const MAX_CHECKPOINT_SERIAL_CHARS = 400
+const MAX_CHECKPOINT_BOTTLENECK_CHARS = 400
 const MAX_CHECKPOINT_SPEEDUP_CHARS = 240
 const MAX_CHECKPOINT_PATHS = 5
 const MAX_CHECKPOINT_PATH_CHARS = 120
@@ -2149,12 +2242,11 @@ function workerToolVisible(ctx: Context, agent: Agent): boolean {
   return WORKER_START_TOOLS.some((name) => toolVisible(ctx, agent, name))
 }
 
-/** Whether the close needs a checkpoint for this turn. */
+/** Whether the close needs a checkpoint for this turn; freshness is checked first. */
 function checkpointRequired(
   evidence: CheckpointEvidence,
   config: ResolvedCheckpointConfig,
 ): boolean {
-  if (evidence.checkpoint !== undefined) return false
   if (evidence.toolCalls < config.minToolCalls) return false
   if (evidence.lastTool === 'ask_user_question') return false
   if (config.requireWrite && evidence.written.length === 0 && evidence.workers.length === 0) {
@@ -2168,6 +2260,7 @@ function composeCheckpointRequest(
   evidence: CheckpointEvidence,
   workspace: string,
   max: number,
+  step?: { readonly step: number; readonly interval: number },
 ): string {
   const paths = evidence.written
     .slice(0, MAX_CHECKPOINT_PATHS)
@@ -2194,8 +2287,9 @@ function composeCheckpointRequest(
   // evidence body is bounded, never the tail.
   const head = 'Work checkpoint required (goal-continuity).'
   const tail =
-    'work_checkpoint: done|continue, verified, remaining, parallel or serialReason, next. Done? verified? remaining? parallel lanes? next?'
+    'work_checkpoint: done|continue, verified, remaining, parallel or serialReason, bottleneck, next. Done? verified? remaining? lanes? bottleneck? next action?'
   const evidenceLines = [
+    ...(step === undefined ? [] : [`- Steps: ${step.step} of ${step.interval}`]),
     `- Tool calls: ${evidence.toolCalls}`,
     `- Written paths: ${pathText}`,
     `- Last shell: ${shellText}`,
@@ -2223,6 +2317,7 @@ interface CheckpointInput {
   readonly remaining: readonly string[]
   readonly parallel: boolean
   readonly serialReason?: string
+  readonly bottleneck?: string
   readonly next: string
   readonly speedup?: string
 }
@@ -2267,6 +2362,7 @@ function parseCheckpointInput(raw: unknown, workspace: string): CheckpointInput 
     'remaining',
     'parallel',
     'serialReason',
+    'bottleneck',
     'next',
     'speedup',
   ])
@@ -2293,6 +2389,15 @@ function parseCheckpointInput(raw: unknown, workspace: string): CheckpointInput 
       'work_checkpoint.serialReason is required when outcome is "continue" and parallel is false',
     )
   }
+  const bottleneck = checkpointText(
+    raw.bottleneck,
+    'bottleneck',
+    MAX_CHECKPOINT_BOTTLENECK_CHARS,
+    workspace,
+  )
+  if (raw.outcome === 'continue' && bottleneck === undefined) {
+    throw new Error('work_checkpoint.bottleneck is required when outcome is "continue"')
+  }
   const speedup = checkpointText(raw.speedup, 'speedup', MAX_CHECKPOINT_SPEEDUP_CHARS, workspace)
   return {
     outcome: raw.outcome,
@@ -2300,6 +2405,7 @@ function parseCheckpointInput(raw: unknown, workspace: string): CheckpointInput 
     remaining: checkpointList(raw.remaining, 'remaining', workspace),
     parallel,
     ...(serialReason === undefined ? {} : { serialReason }),
+    ...(bottleneck === undefined ? {} : { bottleneck }),
     next,
     ...(speedup === undefined ? {} : { speedup }),
   }
@@ -2324,13 +2430,13 @@ interface ToolRegistrar {
 }
 
 /** Register the checkpoint tool; a host without a tool registry keeps running. */
-function installCheckpointTool(ctx: Context): void {
+function installCheckpointTool(ctx: Context, stateFor: (agent: Agent) => AgentState): void {
   const tools = optionalService<ToolRegistrar>(ctx, 'tools')
   if (tools === undefined || typeof tools.register !== 'function') return
   tools.register({
     name: CHECKPOINT_TOOL,
     description:
-      'Record the work checkpoint decision at a substantial pause: outcome done or continue, verified facts, remaining items, parallel lanes or a serial reason, the next action, and an optional speedup. The turn-close gate requires one successful call per substantial turn.',
+      'Record the work checkpoint decision at a substantial pause: outcome done or continue, verified facts, remaining items, parallel lanes or a serial reason, the current bottleneck (required for continue), the next action, and an optional speedup. The turn-close gate requires one successful call per substantial turn.',
     parameters: {
       type: 'object',
       properties: {
@@ -2359,6 +2465,11 @@ function installCheckpointTool(ctx: Context): void {
           description:
             'Why the remaining work must stay serial; required for continue with parallel false.',
         },
+        bottleneck: {
+          type: 'string',
+          description:
+            'The current bottleneck and the next action that removes it; required for continue.',
+        },
         next: { type: 'string', description: 'The immediate next action.' },
         speedup: { type: 'string', description: 'Optional speedup for the next turn.' },
       },
@@ -2379,6 +2490,9 @@ function installCheckpointTool(ctx: Context): void {
       const input = parseCheckpointInput(args, workspace)
       const turn = openTurnNumber(agent)
       if (turn === undefined) throw new Error('work_checkpoint: no open turn to record')
+      const state = stateFor(agent)
+      beginStepTurn(state, turn)
+      state.checkpointStep = state.steps
       const id = checkpointIdFor(agent.session.id, turn)
       const path = checkpointPathFor(workspace, agent.session.id, turn)
       const display = displayCheckpointPath(workspace, path)
@@ -2392,6 +2506,7 @@ function installCheckpointTool(ctx: Context): void {
         remaining: input.remaining,
         parallel: input.parallel,
         ...(input.serialReason === undefined ? {} : { serialReason: input.serialReason }),
+        ...(input.bottleneck === undefined ? {} : { bottleneck: input.bottleneck }),
         next: input.next,
         ...(input.speedup === undefined ? {} : { speedup: input.speedup }),
         time: new Date().toISOString(),
@@ -2399,7 +2514,7 @@ function installCheckpointTool(ctx: Context): void {
         // the record path already hashed the original id.
         session: bound(redact(agent.session.id, workspace), MAX_CHECKPOINT_ITEM_CHARS),
       })
-      const decision = `${input.outcome}; ${input.parallel ? 'parallel' : 'serial'}; ${input.verified.length} verified, ${input.remaining.length} remaining; next: ${input.next}`
+      const decision = `${input.outcome}; ${input.parallel ? 'parallel' : 'serial'}; ${input.verified.length} verified, ${input.remaining.length} remaining; bottleneck: ${input.bottleneck ?? 'none'}; next: ${input.next}`
       const text = written
         ? `Work checkpoint ${id} recorded at ${display}. ${decision}`
         : `Work checkpoint ${id} could not write its local record at ${display}; the close gate still counts this checkpoint. ${decision}`
@@ -2409,12 +2524,21 @@ function installCheckpointTool(ctx: Context): void {
   })
 }
 
-/** Install the turn-close checkpoint and parallel-action gates. */
+/** Install the periodic mid-turn checkpoint trigger and the turn-close gates. */
 function installCheckpointGate(
   ctx: Context,
   config: ResolvedCheckpointConfig,
   stateFor: (agent: Agent) => AgentState,
 ): void {
+  // A running root turn gets one request at each step interval, never a wake.
+  ctx.on('agent/pre-step', (payload, next) => {
+    try {
+      evaluateStep(payload.agent, payload.turn)
+    } catch {
+      // An observer never fails a step.
+    }
+    return next()
+  })
   // The committed log does not carry a shell result's structured exit state, so
   // observe it live and let the turn-close evidence read it back by call id.
   ctx.on('tools/result', (exec, result) => {
@@ -2438,6 +2562,50 @@ function installCheckpointGate(
     }
   })
 
+  /** Steer one non-waking message; a disposed agent cannot be steered. */
+  function steer(agent: Agent, text: string, summary: string): void {
+    try {
+      agent.steer(createNotice(text, summary, config.maxMessageChars))
+    } catch {
+      // A disposed agent cannot be steered; the turn is already over.
+    }
+  }
+
+  /** Whether the latest checkpoint is younger than one step interval. */
+  function freshCheckpoint(evidence: CheckpointEvidence, state: AgentState): boolean {
+    // A checkpoint this process never observed at a known step cannot be proven
+    // fresh; the close asks for one it can verify instead of trusting an age.
+    if (evidence.checkpoint === undefined || state.checkpointStep === undefined) return false
+    return state.steps - state.checkpointStep < config.stepInterval
+  }
+
+  /** One pre-step boundary: count it and steer at the interval, never at a wake. */
+  function evaluateStep(agent: Agent, turn: number): void {
+    if (!isRootAgent(agent)) return
+    const state = stateFor(agent)
+    beginStepTurn(state, turn)
+    state.steps += 1
+    // Anchored to the turn start, the latest checkpoint, or the last steer, so
+    // an ignored request repeats only once per interval.
+    const since = Math.max(state.checkpointStep ?? 0, state.steerStep)
+    if (state.steps - since < config.stepInterval) return
+    const workspace = workspaceFor(ctx, agent)
+    const evidence = checkpointEvidence(agent, turn, workspace, state.shellOutcomes)
+    if (evidence.lastTool === 'ask_user_question') return
+    if (config.requireWrite && evidence.written.length === 0 && evidence.workers.length === 0) {
+      return
+    }
+    state.steerStep = state.steps
+    steer(
+      agent,
+      composeCheckpointRequest(evidence, workspace, config.maxMessageChars, {
+        step: state.steps,
+        interval: config.stepInterval,
+      }),
+      'goal-continuity: periodic work checkpoint',
+    )
+  }
+
   /** One close decision: steer one more step, or allow the close. */
   function evaluate(agent: Agent, turn: number): void {
     if (!isRootAgent(agent)) return
@@ -2446,8 +2614,11 @@ function installCheckpointGate(
     if (budget === undefined || budget.turn !== turn || budget.unchecked) return
     const workspace = workspaceFor(ctx, agent)
     const evidence = checkpointEvidence(agent, turn, workspace, state.shellOutcomes)
-    const decision = checkpointDecision(evidence)
-    if (decision !== undefined) {
+    if (freshCheckpoint(evidence, state)) {
+      const decision = checkpointDecision(evidence)
+      // A logged successful call is a checkpoint even if its arguments are
+      // unreadable; only a readable parallel decision still gates the close.
+      if (decision === undefined) return
       if (!config.enforceParallel || decision.outcome === 'done' || !decision.parallel) return
       const id = checkpointIdFor(agent.session.id, turn)
       if (taggedWorkerStarted(evidence, id)) return
@@ -2492,11 +2663,7 @@ function installCheckpointGate(
       return
     }
     budget.refusals += 1
-    try {
-      agent.steer(createNotice(text, summary, config.maxMessageChars))
-    } catch {
-      // A disposed agent cannot be steered; the turn is already over.
-    }
+    steer(agent, text, summary)
   }
 }
 /** The roster shape the Web client reads through `agentPresets/list`. */
@@ -2553,7 +2720,7 @@ export function apply(ctx: Context, config?: Config): void {
 
   const states = new WeakMap<Agent, AgentState>()
   if (resolved.checkpoint.enabled) {
-    installCheckpointTool(ctx)
+    installCheckpointTool(ctx, stateFor)
     installCheckpointGate(ctx, resolved.checkpoint, stateFor)
   }
 
@@ -2572,6 +2739,10 @@ export function apply(ctx: Context, config?: Config): void {
         cause: null,
         refusal: null,
         checkpointTurn: undefined,
+        stepTurn: undefined,
+        steps: 0,
+        checkpointStep: undefined,
+        steerStep: 0,
         shellOutcomes: new Map(),
       }
       states.set(agent, state)
@@ -3058,6 +3229,7 @@ export function apply(ctx: Context, config?: Config): void {
         state.turn = event.data.turn
         state.goalRound = false
         state.checkpointTurn = { turn: event.data.turn, refusals: 0, unchecked: false }
+        beginStepTurn(state, event.data.turn)
         return
       case 'user/message':
         if (event.data.source.kind === 'goal') {

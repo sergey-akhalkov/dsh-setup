@@ -19,6 +19,8 @@ export interface Config {
     readonly idleGapMinutes?: unknown;
     readonly minEpisodes?: unknown;
     readonly hypotheses?: unknown;
+    /** Optional ISO date splitting the process panel before and after. */
+    readonly interventionAt?: unknown;
 }
 interface ConnectionService {
     requestRejection(request: {

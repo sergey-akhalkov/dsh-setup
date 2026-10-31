@@ -10,6 +10,9 @@ import type {
   FailureTotals,
   Finding,
   HypothesisResult,
+  ProcessComparison,
+  ProcessSummary,
+  ProcessTimelineData,
   Report,
   ReportRow,
   Scorecard,
@@ -196,6 +199,34 @@ export const EN: Record<string, string> = {
   'timeline.humanMessage': 'human message',
   'timeline.minute': 'm',
   'timeline.second': 's',
+  'process.title': 'Process',
+  'process.empty': 'No episodes in this window.',
+  'process.noWorkers': 'No worker was observed; this is not evidence that decomposition ran.',
+  'process.noDecomposition': 'No decomposition was observed in this window.',
+  'process.activeWorkers': 'Active workers',
+  'process.decomposition': 'Decomposition',
+  'process.reflection': 'Reflection',
+  'process.stepRate': 'Steps per bucket',
+  'process.workers': 'workers',
+  'process.episodes': 'episodes',
+  'process.activations': 'worker activations',
+  'process.episodesWithWorker': 'episodes with a worker',
+  'process.maxConcurrency': 'maximum concurrent workers',
+  'process.timeToFirst': 'time to first worker',
+  'process.stepsBetween': 'steps between reflections',
+  'process.reflectionsPerEpisode': 'reflections per episode',
+  'process.reflectionCoverage': 'reflection coverage',
+  'process.stepsSince': 'steps since the previous reflection',
+  'process.metric': 'Metric',
+  'process.value': 'Value',
+  'process.p50': 'p50',
+  'process.p90': 'p90',
+  'process.n': 'n',
+  'process.after': 'after',
+  'process.before': 'before',
+  'process.comparison': 'Compared with',
+  'process.interventionAt': 'Configured intervention date',
+  'process.basisIntervention': 'the configured intervention date',
   'series.title': 'Activity in the range',
   'series.empty': 'No activity in this range.',
   'tokens.title': 'Token mix',
@@ -987,6 +1018,356 @@ export function RangeSeries({
           </text>
         ) : null}
       </svg>
+    </section>
+  )
+}
+
+/** One line of the process summary table. */
+interface ProcessMetricRow {
+  readonly key: string
+  readonly label: string
+  readonly value: (summary: ProcessSummary) => string
+}
+
+/** A percentile pair with its sample size; an empty sample reads absent, never zero. */
+function processDistributionText(
+  distribution: ProcessSummary['timeToFirstWorker'],
+  kind: 'minutes' | 'steps',
+  t: Translate,
+): string {
+  if (distribution.n === 0) return '—'
+  const show = (value: number): string =>
+    kind === 'minutes'
+      ? minutesText(value / 60_000, t)
+      : `${String(Math.round(value))} ${t('unit.steps')}`
+  return `${t('process.p50')} ${show(distribution.p50)} · ${t('process.p90')} ${show(distribution.p90)} · ${t('process.n')} ${String(distribution.n)}`
+}
+
+/** The summary's metrics in table order. */
+function processMetricRows(t: Translate): readonly ProcessMetricRow[] {
+  return [
+    {
+      key: 'workers',
+      label: 'process.workers',
+      value: (summary) => String(summary.workers),
+    },
+    {
+      key: 'episodesWithWorker',
+      label: 'process.episodesWithWorker',
+      value: (summary) => String(summary.episodesWithWorker),
+    },
+    {
+      key: 'activations',
+      label: 'process.activations',
+      value: (summary) => String(summary.activations),
+    },
+    {
+      key: 'maxConcurrency',
+      label: 'process.maxConcurrency',
+      value: (summary) => String(summary.maxConcurrency),
+    },
+    {
+      key: 'timeToFirst',
+      label: 'process.timeToFirst',
+      value: (summary) => processDistributionText(summary.timeToFirstWorker, 'minutes', t),
+    },
+    {
+      key: 'stepsBetween',
+      label: 'process.stepsBetween',
+      value: (summary) => processDistributionText(summary.stepsBetweenReflections, 'steps', t),
+    },
+    {
+      key: 'reflectionsPerEpisode',
+      label: 'process.reflectionsPerEpisode',
+      value: (summary) =>
+        summary.reflectionsPerEpisode === undefined
+          ? '—'
+          : summary.reflectionsPerEpisode.toFixed(1),
+    },
+    {
+      key: 'reflectionCoverage',
+      label: 'process.reflectionCoverage',
+      value: (summary) =>
+        summary.reflectionCoverage === undefined ? '—' : percent(summary.reflectionCoverage),
+    },
+  ]
+}
+
+/** The comparison's source, named rather than implied. */
+function processBasisLabel(basis: ProcessComparison['basis'], t: Translate): string {
+  if (basis === 'intervention date') return t('process.basisIntervention')
+  return t(
+    basis === 'previous equal window' ? 'baseline.previousWindow' : 'baseline.previousSession',
+  )
+}
+
+/** The declared intervention date, as the reader configured it. */
+function formatIntervention(time: number): string {
+  return new Date(time).toLocaleDateString()
+}
+
+/**
+ * Worker concurrency over time as a step line, with decomposition and
+ * reflection markers on the same axis and the step-rate strip below. Titles
+ * carry time and counts only.
+ */
+export function ProcessTimeline({
+  process,
+  labels,
+  t,
+}: {
+  process: ProcessTimelineData
+  labels: readonly string[]
+  t: Translate
+}): ReactNode {
+  const measured = useChartWidth()
+  const width = measured.width
+  const height = 170
+  const pad = { left: 44, right: 8, top: 8, bottom: 18 }
+  const plotWidth = Math.max(0, width - pad.left - pad.right)
+  const scale = timeScale(process.from, process.to, plotWidth)
+  const at = (time: number): number => pad.left + scale(time)
+  const concurrencyTop = pad.top
+  const concurrencyBottom = 98
+  const stripTop = 116
+  const stripBottom = 140
+  // The scale may be normalised, but the axis and the line's title state the
+  // absolute worker count so one worker never looks like two.
+  const peak = Math.max(0, ...process.concurrency.map((point) => point.active))
+  const maxActive = Math.max(1, peak)
+  const activeY = (active: number): number =>
+    concurrencyBottom - (Math.max(0, active) / maxActive) * (concurrencyBottom - concurrencyTop)
+  const ordered = [...process.concurrency].sort((left, right) => left.time - right.time)
+  const stepPath =
+    ordered.length === 0
+      ? undefined
+      : `M ${String(at(process.from))} ${String(activeY(0))}${ordered
+          .map((point) => ` H ${String(at(point.time))} V ${String(activeY(point.active))}`)
+          .join('')} H ${String(at(process.to))}`
+  const maxSteps = Math.max(1, ...process.stepRate.map((bucket) => bucket.steps))
+  const band = process.stepRate.length === 0 ? 0 : plotWidth / process.stepRate.length
+  const ticks = [
+    ...new Set([process.from, process.from + (process.to - process.from) / 2, process.to]),
+  ]
+  return (
+    <svg
+      ref={measured.ref}
+      className="dsh-obs-process-chart"
+      viewBox={`0 0 ${String(width)} ${String(height)}`}
+      role="img"
+      aria-label={t('process.title')}
+    >
+      <text className="dsh-obs-tl-label" x={2} y={concurrencyTop + 10}>
+        {t('process.activeWorkers')}
+      </text>
+      <text className="dsh-obs-tl-label" x={2} y={stripTop + 16}>
+        {t('process.stepRate')}
+      </text>
+      {Array.from({ length: peak + 1 }, (_unused, workers) => (
+        <text
+          key={`workers-${String(workers)}`}
+          className="dsh-obs-axis dsh-obs-process-tick"
+          x={pad.left - 4}
+          y={activeY(workers) + 4}
+          textAnchor="end"
+        >
+          {String(workers)}
+        </text>
+      ))}
+      {stepPath === undefined ? null : (
+        <path className="dsh-obs-process-line" d={stepPath}>
+          <title>
+            {`${t('process.activeWorkers')}: ${t('process.maxConcurrency')} ${String(peak)}`}
+          </title>
+        </path>
+      )}
+      {process.decomposition.map((marker, index) => (
+        <line
+          key={`decomposition-${String(index)}`}
+          className="dsh-obs-process-marker"
+          data-tone="decomposition"
+          x1={at(marker.time)}
+          x2={at(marker.time)}
+          y1={concurrencyTop}
+          y2={concurrencyBottom}
+        >
+          <title>
+            {`${formatTime(marker.time)} · ${t('process.decomposition')} · ${String(marker.workers)} ${t('process.workers')} · ${marker.episodeId}`}
+          </title>
+        </line>
+      ))}
+      {process.reflections.map((marker, index) => (
+        <line
+          key={`reflection-${String(index)}`}
+          className="dsh-obs-process-marker"
+          data-tone="reflection"
+          x1={at(marker.time)}
+          x2={at(marker.time)}
+          y1={concurrencyTop}
+          y2={concurrencyBottom}
+        >
+          <title>
+            {`${formatTime(marker.time)} · ${t('process.reflection')} · ${marker.outcome} · ${String(marker.stepsSince)} ${t('process.stepsSince')} · ${marker.episodeId}`}
+          </title>
+        </line>
+      ))}
+      {process.stepRate.map((bucket, index) => {
+        // Calendar buckets carry their real bounds and share the markers' time
+        // scale; turn buckets (0/0) keep the even index layout.
+        const timed = bucket.from > 0 && bucket.to > 0
+        const x = timed ? at(bucket.from) : pad.left + index * band
+        const width = timed ? Math.max(1, at(bucket.to) - x - 1) : Math.max(1, band - 1)
+        const top = stripBottom - (Math.max(0, bucket.steps) / maxSteps) * (stripBottom - stripTop)
+        return (
+          <rect
+            key={`bucket-${String(index)}`}
+            className="dsh-obs-process-step"
+            x={x}
+            y={top}
+            width={width}
+            height={stripBottom - top}
+          >
+            <title>{`${labels[index] ?? String(index + 1)}: ${String(bucket.steps)} ${t('unit.steps')}`}</title>
+          </rect>
+        )
+      })}
+      {ticks.map((time, index) => (
+        <text
+          key={`axis-${String(time)}`}
+          className="dsh-obs-axis"
+          x={at(time)}
+          y={height - 5}
+          textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'}
+        >
+          {clock(time)}
+        </text>
+      ))}
+      {process.summary.workers === 0 ? (
+        <text
+          className="dsh-obs-chart-empty"
+          x={pad.left + plotWidth / 2}
+          y={(concurrencyTop + concurrencyBottom) / 2}
+          textAnchor="middle"
+        >
+          {t('process.noWorkers')}
+        </text>
+      ) : null}
+    </svg>
+  )
+}
+
+/** The compact process summary: one row per metric, before/after when compared. */
+export function ProcessSummaryTable({
+  process,
+  t,
+}: {
+  process: ProcessTimelineData
+  t: Translate
+}): ReactNode {
+  const comparison = process.comparison
+  const rows = processMetricRows(t)
+  const episodes = (summary: ProcessSummary): string =>
+    `${String(summary.episodes)} ${t('process.episodes')}`
+  return (
+    <table
+      className="dsh-obs-table dsh-obs-process-summary"
+      data-insufficient={comparison?.status === 'insufficient' ? 'true' : undefined}
+    >
+      <thead>
+        <tr>
+          <th>{t('process.metric')}</th>
+          {comparison === undefined ? (
+            <th>{`${t('process.value')} (${episodes(process.summary)})`}</th>
+          ) : (
+            <>
+              <th>{`${t('process.after')} (${episodes(comparison.after.summary)})`}</th>
+              <th>{`${t('process.before')} (${episodes(comparison.before.summary)})`}</th>
+            </>
+          )}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.key} data-process-metric={row.key}>
+            <td>{t(row.label)}</td>
+            {comparison === undefined ? (
+              <td>{row.value(process.summary)}</td>
+            ) : (
+              <>
+                <td>{row.value(comparison.after.summary)}</td>
+                <td>{row.value(comparison.before.summary)}</td>
+              </>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+/** The Overview's Process panel: one time axis, its markers, and the summary. */
+export function ProcessPanel({
+  process,
+  labels,
+  t,
+}: {
+  process: ProcessTimelineData
+  labels: readonly string[]
+  t: Translate
+}): ReactNode {
+  const comparison = process.comparison
+  // The configured date is printed whenever present, including the empty state.
+  const intervention =
+    comparison?.interventionAt === undefined ? null : (
+      <p className="dsh-obs-muted" data-process-intervention="true">
+        {`${t('process.interventionAt')}: ${formatIntervention(comparison.interventionAt)}`}
+      </p>
+    )
+  if (process.summary.episodes === 0) {
+    return (
+      <section className="dsh-obs-panel" aria-label={t('process.title')} data-process="empty">
+        <header className="dsh-obs-panel-head">
+          <h2>{t('process.title')}</h2>
+        </header>
+        <p className="dsh-obs-muted">{t('process.empty')}</p>
+        {intervention}
+      </section>
+    )
+  }
+  return (
+    <section className="dsh-obs-panel" aria-label={t('process.title')} data-process="timeline">
+      <header className="dsh-obs-panel-head">
+        <h2>{t('process.title')}</h2>
+        <div className="dsh-obs-legend">
+          <span className="dsh-obs-legend-item">
+            <i className="dsh-obs-swatch" data-tone="workers" aria-hidden="true" />
+            {t('process.activeWorkers')}
+          </span>
+          <span className="dsh-obs-legend-item">
+            <i className="dsh-obs-swatch" data-tone="decomposition" aria-hidden="true" />
+            {t('process.decomposition')}
+          </span>
+          <span className="dsh-obs-legend-item">
+            <i className="dsh-obs-swatch" data-tone="reflection" aria-hidden="true" />
+            {t('process.reflection')}
+          </span>
+        </div>
+      </header>
+      <ProcessTimeline process={process} labels={labels} t={t} />
+      {comparison === undefined ? null : (
+        <p
+          className="dsh-obs-muted"
+          data-process-comparison={comparison.basis}
+          data-process-status={comparison.status}
+        >
+          {`${t('process.comparison')} ${processBasisLabel(comparison.basis, t)} · ${comparison.label}`}
+        </p>
+      )}
+      {intervention}
+      <ProcessSummaryTable process={process} t={t} />
+      {process.summary.decompositionObserved ? null : (
+        <p className="dsh-obs-muted">{t('process.noDecomposition')}</p>
+      )}
     </section>
   )
 }
@@ -2172,6 +2553,7 @@ export function OverviewView({
           t={t}
         />
         <ActivityPanel report={report} t={t} />
+        <ProcessPanel process={report.process} labels={report.bucketLabels} t={t} />
         <DataQualityStrip report={report} t={t} />
         <ScorecardList
           scorecards={report.scorecards.filter((card) => !silentIds.has(card.rowId))}
@@ -3516,6 +3898,42 @@ button.dsh-obs-kpi:focus-visible {
 }
 .dsh-obs-tl-tick[data-tone="errors"] {
   stroke: var(--dsw-alias-state-error-primary);
+}
+.dsh-obs-process-chart {
+  display: block;
+  width: 100%;
+  height: 170px;
+}
+.dsh-obs-process-line {
+  fill: none;
+  stroke: var(--dsw-alias-state-business-primary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.dsh-obs-process-marker[data-tone="decomposition"] {
+  stroke: var(--dsw-alias-brand-primary);
+  stroke-width: 1.5;
+}
+.dsh-obs-process-marker[data-tone="reflection"] {
+  stroke: var(--dsw-alias-state-success-primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+.dsh-obs-process-step {
+  fill: var(--dsw-alias-state-business-primary);
+  opacity: 0.55;
+}
+.dsh-obs-swatch[data-tone="workers"] {
+  background: var(--dsw-alias-state-business-primary);
+}
+.dsh-obs-swatch[data-tone="decomposition"] {
+  background: var(--dsw-alias-brand-primary);
+}
+.dsh-obs-swatch[data-tone="reflection"] {
+  background: var(--dsw-alias-state-success-primary);
+}
+.dsh-obs-process-summary {
+  margin-top: 8px;
 }
 .dsh-obs-turn-rows {
   display: flex;

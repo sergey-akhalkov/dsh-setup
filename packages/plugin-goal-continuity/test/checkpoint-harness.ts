@@ -275,6 +275,27 @@ export class CheckpointHarness {
     })
   }
 
+  /** Run one `agent/pre-step` boundary through the registered waterfall. */
+  async preStep(turn = 1, agent: Agent = this.agent): Promise<void> {
+    const waterfall = this.ctx.waterfall as unknown as (
+      name: string,
+      payload: unknown,
+      next: unknown,
+    ) => Promise<unknown>
+    await waterfall.call(
+      this.ctx,
+      'agent/pre-step',
+      {
+        agent,
+        messages: [],
+        turn,
+        step: 1,
+        signal: new AbortController().signal,
+      },
+      async () => ({ kind: 'enter', messages: [] }),
+    )
+  }
+
   /** Run one tool definition the plugin registered. */
   async execute(name: string, args: unknown): Promise<unknown> {
     const definition = this.tools.get(name)

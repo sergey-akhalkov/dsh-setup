@@ -25,6 +25,13 @@ Report a finding only when it breaks the change or would cost real work to disco
   dependency or interface mismatch with the cited code, or a stated constraint that the
   design silently drops.
 
+Check the plan's work lanes before implementation. Report a P1 finding when `tasks.md` has two or
+more level-2 task groups and no heading names owned paths, unless the plan states one work-level
+single-lane reason: a shared hot file, generated output, or a serial gate. A stated single-lane
+reason that is the task-review or archive process instead of a work constraint is also a P1
+finding. The evidence names the headings or the reason, and the fix asks for the owned paths or for
+one work-level reason.
+
 Do not report style, wording, naming, formatting, or speculative future features. Do not
 report anything you cannot tie to a requirement, scenario, task, or code fact. If you are not
 sure something is wrong, it is not a finding.

@@ -85,10 +85,12 @@ tasks) -> **sync** deltas into main specs -> **archive**. Use the packaged OpenS
 available, otherwise follow the same flow manually. A behavior change that touches a documented
 requirement updates its delta spec and design rationale in the same change.
 
-When delegation-rules is active, apply is task-by-task: mark a task `[x]` only when complete, then
-immediately run its task-scoped review before the next task; stop mid-task with `task_progress`
-instead of ticking. The gate refuses a code-changing turn without that; see
-[docs/delegation-rules.md](docs/delegation-rules.md).
+When delegation-rules is active, apply is task-by-task: mark a task `[x]` only when complete and
+start its task-scoped review immediately. Keep implementing an independent task while the run uses a
+frozen snapshot. When the run reports the live worktree, a write can discard its verdict: restore
+snapshot support and re-run, or defer writes until the run settles. No blocking sleep. Stop mid-task
+with `task_progress` instead of ticking. The gate refuses a code-changing turn without the record;
+see [docs/delegation-rules.md](docs/delegation-rules.md).
 
 A checked task is approved only by a committed `openspec/changes/<change>/reviews/<taskId>.json`
 task-review PASS. When `openspec/review-approval.json` sets `archiveGate: true`, the engine refuses

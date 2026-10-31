@@ -12,6 +12,7 @@ const SERIAL = {
   outcome: 'continue',
   parallel: false,
   serialReason: 'the remaining work is one ordered edit',
+  bottleneck: 'the guard must exist before the test can pass',
   next: 'finish the edit',
 }
 
@@ -159,7 +160,183 @@ describe('substantial-pause trigger', () => {
   })
 })
 
+describe('periodic mid-turn trigger', () => {
+  async function steps(harness: CheckpointHarness, count: number, turn = 1): Promise<void> {
+    for (let index = 0; index < count; index += 1) await harness.preStep(turn)
+  }
+
+  it('steers one request when a working root turn reaches the interval', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    workingTurn(harness)
+    await steps(harness, 4)
+    expect(harness.steers).toHaveLength(0)
+    await steps(harness, 1)
+    expect(harness.steers).toHaveLength(1)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Work checkpoint required')
+    expect(text).toContain('Steps: 5 of 5')
+  })
+
+  it('uses the default 40-step interval', async () => {
+    const harness = await create()
+    workingTurn(harness)
+    await steps(harness, 39)
+    expect(harness.steers).toHaveLength(0)
+    await steps(harness, 1)
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('Steps: 40 of 40')
+  })
+
+  it('does not steer within the interval of a checkpoint recorded at step 3', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    workingTurn(harness)
+    await steps(harness, 3)
+    expect(harness.steers).toHaveLength(0)
+    await harness.checkpoint(SERIAL)
+    // Steps 4-7 stay inside the checkpoint's interval; a trigger that anchored
+    // only to the previous request would steer at step 5.
+    await steps(harness, 4)
+    expect(harness.steers).toHaveLength(0)
+    await steps(harness, 1)
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('Steps: 8 of 5')
+  })
+
+  it('requests once per interval across consecutive intervals', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    workingTurn(harness)
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(1)
+    // Steps 6-9 belong to the first interval: losing the steer anchor would
+    // request on every step instead of once per interval.
+    await steps(harness, 4)
+    expect(harness.steers).toHaveLength(1)
+    await steps(harness, 1)
+    expect(harness.steers).toHaveLength(2)
+    expect(noticeText(harness.steers[1] as never)).toContain('Steps: 10 of 5')
+    // The next window repeats the same cadence.
+    await steps(harness, 4)
+    expect(harness.steers).toHaveLength(2)
+  })
+
+  it('steers a worker-only turn at the interval', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    harness.turnStart()
+    // No edit/write at all: only the successful worker start can satisfy the
+    // mid-turn eligibility check.
+    const worker = harness.toolCall('subagent', { prompt: 'take the docs lane' })
+    harness.toolResult(worker, 'started')
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(1)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Worker starts: subagent')
+    expect(text).toContain('Steps: 5 of 5')
+  })
+
+  it('restarts the step count in a new turn', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    workingTurn(harness)
+    await steps(harness, 4)
+    expect(harness.steers).toHaveLength(0)
+    harness.turnStart(2)
+    const call = harness.toolCall('edit', { file_path: 'src/b.ts' })
+    harness.toolResult(call, 'ok')
+    // A counter that carried over from turn 1 would request on the first step.
+    await steps(harness, 4, 2)
+    expect(harness.steers).toHaveLength(0)
+    await steps(harness, 1, 2)
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('Steps: 5 of 5')
+  })
+
+  it('does not steer for a read-only turn', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts', 'c.ts', 'd.ts']) {
+      const call = harness.toolCall('read', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('steers a read-only turn when writes are not required', async () => {
+    const harness = await create({
+      config: { checkpoint: { requireWrite: false, stepInterval: 5 } },
+    })
+    harness.turnStart()
+    for (const path of ['a.ts', 'b.ts', 'c.ts', 'd.ts']) {
+      const call = harness.toolCall('read', { file_path: path })
+      harness.toolResult(call, 'ok')
+    }
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(1)
+  })
+
+  it('does not steer while the last tool call awaits the user', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    workingTurn(harness)
+    const question = harness.toolCall('ask_user_question', { question: 'which lane?' })
+    harness.toolResult(question, 'answered')
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('does not steer a subagent turn', async () => {
+    const harness = await create({
+      config: { checkpoint: { stepInterval: 5 } },
+      header: { origin: 'subagent', delegationDepth: 1, parentSession: 'root-agent' },
+    })
+    workingTurn(harness)
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('steers a goal round and leaves the goal unchanged', async () => {
+    const harness = await create({
+      config: { checkpoint: { stepInterval: 5 } },
+      goal: {
+        id: 'goal-1',
+        revision: 1,
+        objective: 'Ship the migration.',
+        phase: 'active',
+        maxGoalRounds: 256,
+        roundsStarted: 1,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        activation: 'armed',
+      },
+    })
+    harness.turnStart()
+    harness.goalMessage(1)
+    const call = harness.toolCall('edit', { file_path: 'src/a.ts' })
+    harness.toolResult(call, 'ok')
+    await steps(harness, 5)
+    expect(harness.steers).toHaveLength(1)
+    expect(harness.goalCalls).toEqual([])
+  })
+
+  it('is a non-waking steer attributed to goal-continuity', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 5 } } })
+    workingTurn(harness)
+    await steps(harness, 5)
+    expect(harness.injected).toHaveLength(0)
+    expect(harness.steers[0]?.source.kind).toBe('goal-continuity')
+    const source = harness.steers[0]?.source as { form?: string } | undefined
+    expect(source?.form).toBe('notice')
+  })
+})
+
 describe('checkpoint request', () => {
+  it('asks for the current bottleneck and the next action that removes it', async () => {
+    const harness = await create()
+    workingTurn(harness)
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('bottleneck')
+    expect(text).toContain('next action')
+  })
+
   it('names the tool-call count, the written paths, and worker starts', async () => {
     const harness = await create()
     workingTurn(harness)
@@ -282,7 +459,7 @@ describe('checkpoint request', () => {
     const text = noticeText(harness.steers[0] as never)
     expect(text.length).toBeLessThanOrEqual(200)
     expect(text).toContain('work_checkpoint:')
-    expect(text).toContain('Done? verified? remaining? parallel lanes? next?')
+    expect(text).toContain('Done? verified? remaining? lanes? bottleneck? next action?')
   })
 
   it('is attributed to goal-continuity and is a non-waking steer', async () => {

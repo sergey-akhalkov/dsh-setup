@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Goal Continuity",
-    "description": "Keeps an active goal alive across recoverable harness stops: re-arms a disarmed goal, resumes after a loop-guard reset, extends the round cap within bounds, and reviews every proposed block with an independent read-only subagent before it can end the run"
+    "description": "Keeps an active goal alive across recoverable harness stops: re-arms a disarmed goal, resumes after a loop-guard reset, extends the round cap within bounds, reviews every proposed block and every goal-round question with an independent read-only subagent before they can end or pause the run, and requires a work checkpoint at a substantial pause and at each configured step interval"
   }
 }

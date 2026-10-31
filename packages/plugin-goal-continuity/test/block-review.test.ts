@@ -325,6 +325,276 @@ describe('block review verdict mapping', () => {
   })
 })
 
+describe('question review gate', () => {
+  it('denies a goal-round question when an authorized route exists', async () => {
+    const harness = await create({
+      respond: () => validNotBlocker('add the test-only activation hook yourself'),
+    })
+    roundTurn(harness, 3)
+    const { decision, next } = await harness.question()
+    expect(next).not.toHaveBeenCalled()
+    expect(decisionCode(decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    expect(JSON.stringify(decision)).toContain('add the test-only activation hook yourself')
+    expect(harness.goal?.phase).toBe('active')
+    expect(harness.injected).toHaveLength(0)
+    expect(harness.startCalls).toHaveLength(1)
+  })
+
+  it('allows a question only the user can answer', async () => {
+    const harness = await create({
+      respond: () => validBlocker('provide the deployment credential'),
+    })
+    roundTurn(harness, 3)
+    const { decision, next } = await harness.question()
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(harness.startCalls).toHaveLength(1)
+    expect(harness.injected).toHaveLength(0)
+    expect(harness.goal?.phase).toBe('active')
+  })
+
+  it('leaves the recommended option as the reviewer route, not evidence', async () => {
+    const harness = await create({
+      respond: () => validNotBlocker('add the test-only hook now'),
+    })
+    roundTurn(harness, 3)
+    const { decision } = await harness.question()
+    expect(decisionCode(decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    expect(harness.lastPrompt()).toContain('(Recommended)')
+  })
+
+  it('does not review a direct-human turn', async () => {
+    const harness = await create()
+    humanTurn(harness, 'keep going')
+    const { decision, next } = await harness.question()
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(harness.startCalls).toHaveLength(0)
+  })
+
+  it('does not review a subagent question', async () => {
+    const harness = await create()
+    roundTurn(harness, 3)
+    // The subagent sees the exact same goal-round log, so only the root-agent
+    // exclusion can keep the review from starting here.
+    const subagent = {
+      id: 'subagent-1',
+      session: {
+        id: 'subagent-1',
+        header: {
+          version: 1,
+          id: 'subagent-1',
+          createdAt: Date.now(),
+          isSeeded: false,
+          origin: 'subagent',
+        },
+        snapshotEvents: () => harness.events,
+      },
+    } as unknown as Agent
+    const { decision, next } = await harness.question({}, subagent)
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(harness.startCalls).toHaveLength(0)
+  })
+
+  it('does not review without an active goal', async () => {
+    const harness = await create()
+    harness.goal = undefined
+    harness.turnStart()
+    expect((await harness.question()).decision).toEqual({ kind: 'allow' })
+    expect(harness.startCalls).toHaveLength(0)
+
+    // A matching goal-round message keeps only the phase check from approving
+    // this question for review.
+    const paused = harness.setGoal({ phase: 'paused' })
+    harness.turnStart()
+    harness.goalRound(paused, 0)
+    expect((await harness.question()).decision).toEqual({ kind: 'allow' })
+    expect(harness.startCalls).toHaveLength(0)
+  })
+
+  it('does not review when reviewQuestions is false', async () => {
+    const harness = await create({}, { reviewQuestions: false })
+    roundTurn(harness, 3)
+    const { decision, next } = await harness.question()
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(harness.startCalls).toHaveLength(0)
+  })
+
+  it('reuses a matching question digest without a second subagent run', async () => {
+    const harness = await create()
+    roundTurn(harness, 3)
+    expect(decisionCode((await harness.question()).decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    expect(decisionCode((await harness.question()).decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    expect(harness.startCalls).toHaveLength(1)
+    expect(await recordsFor(harness)).toHaveLength(1)
+  })
+
+  it('keeps question and block verdicts separate for identical subject text', async () => {
+    const harness = await create()
+    roundTurn(harness, 3)
+    // The question subject is JSON-normalized arguments; the block subject is
+    // the block reason. With no further evidence between the calls, only the
+    // subject kind can keep the two digests apart.
+    const subject = '{"questions":[]}'
+    const question = await harness.question({ questions: [] })
+    expect(decisionCode(question.decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    const block = await harness.block({ blocked_reason: subject })
+    expect(decisionCode(block.decision)).toBe('GOAL_BLOCK_REVIEW_REJECTED')
+    expect(harness.startCalls).toHaveLength(2)
+    const names = await recordsFor(harness)
+    expect(names).toHaveLength(2)
+    expect(new Set(names).size).toBe(2)
+    const parsed = await Promise.all(
+      names.map((name) => harness.readRecord('goal-1', name.replace('.json', ''))),
+    )
+    expect(parsed.map((record) => record.subject).sort()).toEqual(['block', 'question'])
+  })
+
+  it('shares the per-goal bound with block reviews', async () => {
+    const harness = await create({}, { maxReviewsPerGoal: 1 })
+    roundTurn(harness, 3)
+    expect(decisionCode((await harness.question()).decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    const second = await harness.question({
+      questions: [{ question: 'Should I narrow the scope and stop early?' }],
+    })
+    expect(decisionCode(second.decision)).toBe('GOAL_BLOCK_REVIEW_EXHAUSTED')
+    expect(second.next).not.toHaveBeenCalled()
+    expect(harness.startCalls).toHaveLength(1)
+    expect(harness.goal?.phase).toBe('active')
+  })
+
+  it('exhausts one shared bound after a block review spends it', async () => {
+    const harness = await create({}, { maxReviewsPerGoal: 1 })
+    roundTurn(harness, 3)
+    expect(decisionCode((await harness.block()).decision)).toBe('GOAL_BLOCK_REVIEW_REJECTED')
+    expect(harness.startCalls).toHaveLength(1)
+    // The block review above spent the only unit; this question must not start
+    // a second reviewer even though it is a different subject and digest.
+    const question = await harness.question({
+      questions: [{ question: 'Should I narrow the scope and stop early?' }],
+    })
+    expect(decisionCode(question.decision)).toBe('GOAL_BLOCK_REVIEW_EXHAUSTED')
+    expect(question.next).not.toHaveBeenCalled()
+    expect(harness.startCalls).toHaveLength(1)
+    expect(harness.goal?.phase).toBe('active')
+    const names = await recordsFor(harness)
+    const records = await Promise.all(
+      names.map((name) => harness.readRecord('goal-1', name.replace('.json', ''))),
+    )
+    expect(records.map((record) => record.subject).sort()).toEqual(['block', 'question'])
+    expect(records.find((record) => record.subject === 'question')?.verdict).toBe('exhausted')
+  })
+
+  it('denies a question when its reviewer errors under the default policy', async () => {
+    const harness = await create({ respond: () => 'no fenced verdict' })
+    roundTurn(harness, 3)
+    const { decision, next } = await harness.question()
+    expect(next).not.toHaveBeenCalled()
+    expect(decisionCode(decision)).toBe('GOAL_BLOCK_REVIEW_ERROR')
+    expect(harness.startCalls).toHaveLength(1)
+    expect(harness.goal?.phase).toBe('active')
+    const [name] = await recordsFor(harness)
+    const record = await harness.readRecord('goal-1', (name as string).replace('.json', ''))
+    expect(record).toMatchObject({ subject: 'question', verdict: 'review-error', reviewed: true })
+  })
+
+  it('allows an unverified question when the error policy is allow', async () => {
+    const harness = await create({ respond: () => 'no fenced verdict' }, { onReviewError: 'allow' })
+    roundTurn(harness, 3)
+    const { decision, next } = await harness.question()
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(harness.startCalls).toHaveLength(1)
+    expect(harness.goal?.phase).toBe('active')
+    expect(noticeText(harness)).toContain('UNVERIFIED')
+    expect(noticeText(harness)).toContain('onReviewError')
+    expect(noticeText(harness)).toContain('Question review')
+    const [name] = await recordsFor(harness)
+    const record = await harness.readRecord('goal-1', (name as string).replace('.json', ''))
+    expect(record).toMatchObject({
+      subject: 'question',
+      verdict: 'review-error',
+      reviewed: true,
+      verified: false,
+      policy: 'onReviewError',
+    })
+  })
+
+  it('allows a question when the exhausted policy is allow', async () => {
+    const harness = await create({}, { maxReviewsPerGoal: 1, onExhausted: 'allow' })
+    roundTurn(harness, 3)
+    expect(decisionCode((await harness.question()).decision)).toBe('GOAL_QUESTION_REVIEW_REJECTED')
+    const second = await harness.question({
+      questions: [{ question: 'Should I defer the rest of the scope?' }],
+    })
+    expect(second.decision).toEqual({ kind: 'allow' })
+    expect(second.next).toHaveBeenCalledTimes(1)
+    expect(harness.startCalls).toHaveLength(1)
+    expect(noticeText(harness)).toContain('UNVERIFIED')
+    expect(noticeText(harness)).toContain('onExhausted')
+    const names = await recordsFor(harness)
+    const records = await Promise.all(
+      names.map((name) => harness.readRecord('goal-1', name.replace('.json', ''))),
+    )
+    expect(records.find((record) => record.verdict === 'exhausted')).toMatchObject({
+      subject: 'question',
+      verified: false,
+      reviewed: false,
+      policy: 'onExhausted',
+    })
+  })
+
+  it('follows the unavailable policy for a question', async () => {
+    const harness = await create(
+      { restrictError: new Error('scope is missing') },
+      { onUnavailable: 'deny' },
+    )
+    roundTurn(harness, 3)
+    const { decision, next } = await harness.question()
+    expect(next).not.toHaveBeenCalled()
+    expect(decisionCode(decision)).toBe('GOAL_BLOCK_REVIEW_UNAVAILABLE')
+    expect(harness.goal?.phase).toBe('active')
+    // A policy decision is recorded with the same subject as a verdict record.
+    const [name] = await recordsFor(harness)
+    const record = await harness.readRecord('goal-1', (name as string).replace('.json', ''))
+    expect(record).toMatchObject({ subject: 'question', verdict: 'unavailable', verified: false })
+  })
+
+  it('allows an unverified question under the default unavailable policy', async () => {
+    const harness = await create({ restrictError: new Error('scope is missing') })
+    roundTurn(harness, 3)
+    const { decision } = await harness.question()
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(noticeText(harness)).toContain('UNVERIFIED')
+    expect(noticeText(harness)).toContain('Question review')
+  })
+
+  it('records the subject and the bounded question text', async () => {
+    const harness = await create()
+    roundTurn(harness, 3)
+    await harness.question()
+    const [name] = await recordsFor(harness)
+    const record = await harness.readRecord('goal-1', (name as string).replace('.json', ''))
+    expect(record.subject).toBe('question')
+    expect(String(record.subjectText)).toContain('Only a test-only activation hook')
+    expect(record.verdict).toBe('not-blocker')
+  })
+})
+
+describe('review subject on the record', () => {
+  it('records a block review with the block subject', async () => {
+    const harness = await create()
+    humanTurn(harness)
+    await harness.block()
+    const [name] = await recordsFor(harness)
+    const record = await harness.readRecord('goal-1', (name as string).replace('.json', ''))
+    expect(record.subject).toBe('block')
+    expect(String(record.subjectText)).toContain('sibling automation repository')
+  })
+})
+
 describe('block review execution', () => {
   it('starts a fresh-context reviewer with the configured preset and model', async () => {
     const harness = await create({}, { provider: 'spawn' })
@@ -374,6 +644,7 @@ describe('block review execution', () => {
     const [record] = await recordsFor(harness)
     const parsed = await harness.readRecord('goal-1', (record as string).replace('.json', ''))
     expect(parsed).toMatchObject({
+      subject: 'block',
       verdict: 'unavailable',
       verified: false,
       policy: 'onUnavailable',
@@ -744,6 +1015,27 @@ describe('bounded and redacted evidence', () => {
 })
 
 describe('reviewer prompt asset', () => {
+  it('labels a question review and carries the question rules', async () => {
+    const harness = await create()
+    roundTurn(harness, 3)
+    await harness.question()
+    const prompt = harness.lastPrompt()
+    expect(prompt).toContain('Proposed question')
+    expect(prompt).toContain('## Questions')
+    expect(prompt).toContain('answer this itself')
+    expect(prompt).toContain('(Recommended)')
+    expect(prompt).toContain('reversible choice')
+  })
+
+  it('labels a block review', async () => {
+    const harness = await create()
+    humanTurn(harness)
+    await harness.block()
+    const prompt = harness.lastPrompt()
+    expect(prompt).toContain('Block reason')
+    expect(prompt).not.toContain('Proposed question')
+  })
+
   it('carries the user-only definition, defaults, and strict output within its bound', async () => {
     const asset = await readFile(
       join(process.cwd(), 'packages', 'plugin-goal-continuity', 'assets', 'blocker-review.md'),
@@ -759,6 +1051,10 @@ describe('reviewer prompt asset', () => {
       'untrusted data',
       '"verdict": "blocker"',
       '"nextStep"',
+      'proposed user question',
+      'answer this itself',
+      '(Recommended)',
+      'reversible choice',
     ]) {
       expect(asset).toContain(phrase)
     }
@@ -771,6 +1067,7 @@ describe('default configuration', () => {
   it('keeps the documented block-review defaults', () => {
     expect(DEFAULT_BLOCK_REVIEW_CONFIG).toEqual({
       enabled: true,
+      reviewQuestions: true,
       provider: 'spawn',
       model: 'deepseek-flash',
       reasoningEffort: 'max',

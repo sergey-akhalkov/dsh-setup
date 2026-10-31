@@ -46,6 +46,8 @@ import {
   subagentSummary,
   usageCoverage,
 } from './metrics.js'
+import type { ProcessSummary, ProcessTimelineData, StepBucket } from './process.js'
+import { buildProcessTimeline, processSummary } from './process.js'
 import type { SessionMeta, TokenUsage, TraceRecord } from './records.js'
 import type { Row } from './rows.js'
 import { scorecards as buildScorecards, type Scorecard } from './scorecards.js'
@@ -61,6 +63,17 @@ import {
 /** The client renders these beside the report; re-exported so one module is enough. */
 export type { Finding } from './findings.js'
 export type { HypothesisResult } from './hypotheses.js'
+export type {
+  ConcurrencyPoint,
+  DecompositionMarker,
+  ProcessComparison,
+  ProcessSide,
+  ProcessSummary,
+  ProcessTimelineData,
+  ReflectionMarker,
+  StepBucket,
+  WorkerSpan,
+} from './process.js'
 export type { Scorecard } from './scorecards.js'
 
 /** Metadata for one drill-down entry; never message text or tool arguments. */
@@ -247,6 +260,8 @@ export interface BaselineComparison {
   readonly subagents: SubagentSummary
   /** The metric values a hypothesis compares against. */
   readonly metrics: MetricValues
+  /** The baseline window's process summary, for the before-and-after comparison. */
+  readonly process: ProcessSummary
 }
 
 /** What the view must state it cannot observe, not hide. */
@@ -756,7 +771,31 @@ function baselineComparison(options: {
     autonomy,
     subagents,
     metrics: metricValues(cohort, quality, cost, autonomy, subagents),
+    process: processSummary(
+      work.filter((entry) => overlapsWindow(entry.episode, window)),
+      window,
+    ),
   }
+}
+
+/** The step starts per calendar bucket, carrying the aggregate bucket bounds. */
+function bucketSteps(records: readonly TraceRecord[], buckets: Aggregate['buckets']): StepBucket[] {
+  const counts = new Array<number>(buckets.length).fill(0)
+  for (const record of records) {
+    if (record.eventType !== 'step/start') continue
+    for (let index = 0; index < buckets.length; index += 1) {
+      const bucket = buckets[index]
+      if (bucket !== undefined && record.time >= bucket.from && record.time < bucket.to) {
+        counts[index] = (counts[index] ?? 0) + 1
+        break
+      }
+    }
+  }
+  return buckets.map((bucket, index) => ({
+    from: bucket.from,
+    to: bucket.to,
+    steps: counts[index] ?? 0,
+  }))
 }
 
 /** The bucket series; the session range uses time buckets, never turns. */
@@ -764,12 +803,13 @@ function timeSeries(
   records: readonly TraceRecord[],
   range: Range,
   window: Aggregate,
-): { labels: string[]; activity: number[]; errorSeries: number[] } {
+): { labels: string[]; activity: number[]; errorSeries: number[]; steps: StepBucket[] } {
   if (range !== 'session') {
     return {
       labels: window.buckets.map((bucket) => bucket.label),
       activity: [...window.activity],
       errorSeries: [...window.errorSeries],
+      steps: bucketSteps(records, window.buckets),
     }
   }
   const buckets = 24
@@ -778,6 +818,7 @@ function timeSeries(
       labels: Array.from({ length: buckets }, (_unused, index) => `b${String(index + 1)}`),
       activity: new Array<number>(buckets).fill(0),
       errorSeries: new Array<number>(buckets).fill(0),
+      steps: Array.from({ length: buckets }, () => ({ from: 0, to: 0, steps: 0 })),
     }
   }
   let from = Number.POSITIVE_INFINITY
@@ -790,6 +831,7 @@ function timeSeries(
   const width = span / buckets
   const activity = new Array<number>(buckets).fill(0)
   const errorSeries = new Array<number>(buckets).fill(0)
+  const steps = new Array<number>(buckets).fill(0)
   const labels = Array.from({ length: buckets }, (_unused, index) => {
     const time = from + index * width
     const date = new Date(time)
@@ -798,9 +840,33 @@ function timeSeries(
   for (const record of records) {
     const index = Math.min(buckets - 1, Math.max(0, Math.floor((record.time - from) / width)))
     activity[index] = (activity[index] ?? 0) + 1
+    if (record.eventType === 'step/start') steps[index] = (steps[index] ?? 0) + 1
     if (record.failed === true) errorSeries[index] = (errorSeries[index] ?? 0) + 1
   }
-  return { labels, activity, errorSeries }
+  // The session range's slices have no calendar bounds; the panel keeps index layout.
+  return {
+    labels,
+    activity,
+    errorSeries,
+    steps: steps.map((count) => ({ from: 0, to: 0, steps: count })),
+  }
+}
+
+/** The concrete bounds the process timeline draws; the session range has no fixed window. */
+function processWindowOf(
+  range: Range,
+  window: Aggregate,
+  records: readonly TraceRecord[],
+): { from: number; to: number } {
+  if (range !== 'session') return { from: window.from, to: window.to }
+  if (records.length === 0) return { from: 0, to: 0 }
+  let from = Number.POSITIVE_INFINITY
+  let to = Number.NEGATIVE_INFINITY
+  for (const record of records) {
+    if (record.time < from) from = record.time
+    if (record.time > to) to = record.time
+  }
+  return { from, to: to + 1 }
 }
 
 /** The metric values a window's records produce; used for a hypothesis's own window. */
@@ -863,6 +929,8 @@ export interface Report {
   /** Uncapped active time of the window, attributed by event time. */
   readonly windowActiveMs: number
   readonly baseline?: BaselineComparison
+  /** Workers, concurrency, decomposition and reflection markers, and the process summary. */
+  readonly process: ProcessTimelineData
   /** Only the session range, whose buckets are time rather than turns. */
   readonly timeline?: SessionTimelineData
   readonly blindSpots: readonly string[]
@@ -884,11 +952,13 @@ export function buildReport(options: {
   readonly readiness?: ReadinessSources
   /** Session header metadata from the reader, used to join child sessions. */
   readonly sessions?: readonly SessionMeta[]
-  /** Episode boundaries, comparison minimum, and hypotheses. */
+  /** Episode boundaries, comparison minimum, hypotheses, and intervention date. */
   readonly config?: {
     readonly idleGapMinutes: number
     readonly minEpisodes: number
     readonly hypotheses: readonly Hypothesis[]
+    /** Epoch milliseconds of the configured process intervention date. */
+    readonly interventionAt?: number
   }
   /** The previous window or session, when the reader resolved one. */
   readonly baseline?: {
@@ -1042,6 +1112,19 @@ export function buildReport(options: {
     .filter((entry) => overlapsWindow(entry.episode, observed))
     .sort((left, right) => right.episode.start - left.episode.start)
   const series = timeSeries(options.records, options.range, window)
+  const timeline = options.range === 'session' ? sessionTimeline(options.records) : undefined
+  const process = buildProcessTimeline({
+    work: bounded,
+    window: processWindowOf(options.range, window, options.records),
+    stepRate: series.steps,
+    minEpisodes,
+    ...(options.config?.interventionAt === undefined
+      ? {}
+      : { interventionAt: options.config.interventionAt }),
+    ...(comparison === undefined
+      ? {}
+      : { baseline: { kind: comparison.kind, summary: comparison.process } }),
+  })
   return {
     range: options.range,
     from: window.from,
@@ -1071,7 +1154,8 @@ export function buildReport(options: {
     findings: serialRunFindings(cohort),
     windowActiveMs: work.reduce((sum, entry) => sum + entry.activeMs, 0),
     ...(comparison === undefined ? {} : { baseline: comparison }),
-    ...(options.range === 'session' ? { timeline: sessionTimeline(options.records) } : {}),
+    process,
+    ...(timeline === undefined ? {} : { timeline }),
     blindSpots: BLIND_SPOTS,
     cutoffLabel: cost.cutoffLabel,
     minEpisodes,

@@ -441,8 +441,10 @@ The gate exists to make incremental review the normal path:
 
 1. Implement the smallest reviewable task.
 2. Mark that task `[x]` in the change's `tasks.md`.
-3. Run `delegate(rule: "task-review", change: "<change>")` immediately, before starting the next
-   task.
+3. Run `delegate(rule: "task-review", change: "<change>")` immediately after the tick, then keep
+   working. Keep implementing an independent task while the run uses a frozen snapshot. When the run
+   reports the live worktree, a write can discard its verdict: restore snapshot support and re-run,
+   or defer writes until the run settles. No blocking sleep.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`.
 5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call
    `task_progress` for that task instead of ticking it; otherwise the goal-continuity
@@ -453,9 +455,10 @@ integration review covers the current combined worktree, because a later task ca
 earlier one.
 
 The task review takes its snapshot when the call is made: the reviewer reads the task's completion
-state, and a write after that point neither invalidates the run nor enters its evidence. Keep
-implementing while it runs; the turn still cannot close until every checked task this session
-attributed has a record.
+state, and a write after that point neither invalidates the run nor enters its evidence. A review
+whose snapshot cannot be built reads live inputs, where a write invalidates the verdict as the
+numbered step says. The turn still cannot close until every checked task this session attributed
+has a record.
 
 The turn-stopping gate refuses a code-changing turn close unless:
 
@@ -662,7 +665,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
   (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 18188 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 18425 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`

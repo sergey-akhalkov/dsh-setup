@@ -23,9 +23,13 @@ copying files into a project:
 
 The propose, update-change, and apply-change bodies also append a short plugin-owned "Task lanes"
 addendum before the adapter note. It defines an execution lane as a top-level task group with
-disjoint owned paths, asks for a lane cut or a one-line single-lane reason, and keeps shared files,
-generated output, and the full repository gate in a serial tail. The explore, sync-specs, and
-archive-change skills do not carry it, and no project `openspec/config.yaml` rule is needed.
+disjoint owned paths and fixes the lane shape at plan time: each level-2 heading names its owned
+paths, or `tasks.md` states one single-lane reason that is a work constraint — a shared hot file,
+generated output, or a serial gate — never the task-review or archive process. Before the first
+implementation task, apply reads those headings once and assigns each independent lane to a worker
+or records its serial decision, with no new tool or state. Shared files, generated output, and the
+full repository gate stay in a serial tail. The explore, sync-specs, and archive-change skills do
+not carry it, and no project `openspec/config.yaml` rule is needed.
 
 The full skill bodies load only when the model or a user invokes one; the catalog carries the
 descriptions. The plugin writes no files, adds no always-on prompt section, and has no configuration.

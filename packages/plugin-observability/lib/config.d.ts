@@ -2,9 +2,9 @@ import { type Hypothesis } from './hypotheses.js';
 import { type Row } from './rows.js';
 /**
  * The plugin configuration: declarative rows, the episode boundaries, the
- * comparison minimum, and the inert hypothesis list. A configuration patch
- * replaces the whole `config` object, so a profile that overrides rows must
- * restate every field it declares.
+ * comparison minimum, the inert hypothesis list, and the optional process
+ * intervention date. A configuration patch replaces the whole `config` object,
+ * so a profile that overrides rows must restate every field it declares.
  */
 /** The default idle gap: no event for this long ends an episode. */
 export declare const DEFAULT_IDLE_GAP_MINUTES = 30;
@@ -16,6 +16,8 @@ export interface PluginConfig {
     readonly idleGapMinutes: number;
     readonly minEpisodes: number;
     readonly hypotheses: readonly Hypothesis[];
+    /** Epoch milliseconds of the declared intervention date, when configured. */
+    readonly interventionAt?: number;
 }
 /**
  * Validate the whole plugin configuration. An absent configuration is valid:

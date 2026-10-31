@@ -5,7 +5,13 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
 import type { HypothesisResult } from '../src/host/hypotheses.ts'
 import { extractRecords } from '../src/host/records.ts'
-import type { EpisodeReport, FailureEntry } from '../src/host/report.ts'
+import type {
+  EpisodeReport,
+  FailureEntry,
+  ProcessComparison,
+  ProcessSummary,
+  ProcessTimelineData,
+} from '../src/host/report.ts'
 import { buildReport, type Report } from '../src/host/report.ts'
 import { parseRows } from '../src/host/rows.ts'
 import type { Scorecard } from '../src/host/scorecards.ts'
@@ -552,6 +558,9 @@ interface LoadedModule {
   DataSufficiency?: (props: Record<string, unknown>) => unknown
   OutcomeTiles?: (props: Record<string, unknown>) => unknown
   ActivityPanel?: (props: Record<string, unknown>) => unknown
+  ProcessTimeline?: (props: Record<string, unknown>) => unknown
+  ProcessSummaryTable?: (props: Record<string, unknown>) => unknown
+  ProcessPanel?: (props: Record<string, unknown>) => unknown
   DataQualityStrip?: (props: Record<string, unknown>) => unknown
   scorecardStatus?: (card: Scorecard) => string
   BaselineStrip?: (props: Record<string, unknown>) => unknown
@@ -3798,5 +3807,518 @@ describe('overview details', () => {
     }
     const undeclaredText = childText(renderTree(module.OverviewView?.(panelProps(undeclared))))
     expect(undeclaredText).toContain('scorecard.noEligibility')
+  })
+})
+
+/** The process panel's bucket labels; the strip reads them in order. */
+const PROCESS_LABELS = ['a', 'b', 'c', 'd']
+
+/** Turn buckets carry no epoch bounds, so the strip keeps the even index layout. */
+function turnBuckets(steps: readonly number[]): ProcessTimelineData['stepRate'] {
+  return steps.map((value) => ({ from: 0, to: 0, steps: value }))
+}
+
+/** One process summary with stable sample sizes; override one field per test. */
+function processSummaryFixture(overrides: Partial<ProcessSummary> = {}): ProcessSummary {
+  return {
+    episodes: 2,
+    workers: 2,
+    episodesWithWorker: 1,
+    activations: 2,
+    maxConcurrency: 2,
+    timeToFirstWorker: { p50: MINUTE, p90: 3 * MINUTE, n: 1 },
+    reflections: 2,
+    stepsBetweenReflections: { p50: 12, p90: 20, n: 2 },
+    reflectionsPerEpisode: 1,
+    reflectionCoverage: 0.5,
+    decompositionObserved: true,
+    ...overrides,
+  }
+}
+
+/** One process timeline; two workers overlap at the same instant. */
+function processDataFixture(overrides: Partial<ProcessTimelineData> = {}): ProcessTimelineData {
+  const from = NOW - 10 * MINUTE
+  const to = NOW
+  return {
+    from,
+    to,
+    workers: [
+      {
+        sessionId: 'child-1',
+        episodeId: 'session-1#1',
+        from: from + MINUTE,
+        to: from + 4 * MINUTE,
+      },
+      {
+        sessionId: 'child-2',
+        episodeId: 'session-1#1',
+        from: from + 2 * MINUTE,
+        to: from + 6 * MINUTE,
+      },
+    ],
+    concurrency: [
+      { time: from, active: 0 },
+      { time: from + MINUTE, active: 1 },
+      { time: from + 2 * MINUTE, active: 2 },
+      { time: from + 4 * MINUTE, active: 1 },
+      { time: from + 6 * MINUTE, active: 0 },
+    ],
+    decomposition: [{ time: from + MINUTE, episodeId: 'session-1#1', workers: 2 }],
+    reflections: [
+      { time: from + 5 * MINUTE, episodeId: 'session-1#1', outcome: 'done', stepsSince: 12 },
+    ],
+    stepRate: turnBuckets([1, 2, 0, 3]),
+    summary: processSummaryFixture(),
+    ...overrides,
+  }
+}
+
+/** A window that holds no episode, so the panel shows its empty state. */
+function emptyProcessFixture(): ProcessTimelineData {
+  return processDataFixture({
+    from: NOW - 5 * MINUTE,
+    to: NOW - 5 * MINUTE,
+    workers: [],
+    concurrency: [],
+    decomposition: [],
+    reflections: [],
+    stepRate: turnBuckets([0, 0, 0, 0]),
+    summary: processSummaryFixture({
+      episodes: 0,
+      workers: 0,
+      episodesWithWorker: 0,
+      activations: 0,
+      maxConcurrency: 0,
+      timeToFirstWorker: { p50: 0, p90: 0, n: 0 },
+      reflections: 0,
+      stepsBetweenReflections: { p50: 0, p90: 0, n: 0 },
+      reflectionsPerEpisode: 0,
+      reflectionCoverage: 0,
+      decompositionObserved: false,
+    }),
+  })
+}
+
+/** A report whose process section the process tests control. */
+function processReport(overrides: Partial<ProcessTimelineData> = {}): Report {
+  return {
+    ...richReport(),
+    bucketLabels: PROCESS_LABELS,
+    process: processDataFixture(overrides),
+  }
+}
+
+describe('process timeline and its Overview panel', () => {
+  function comparisonFixture(overrides: Partial<ProcessComparison> = {}): ProcessComparison {
+    return {
+      basis: 'intervention date',
+      interventionAt: NOW - 5 * MINUTE,
+      before: {
+        summary: processSummaryFixture({ episodes: 4, workers: 0, decompositionObserved: false }),
+      },
+      after: { summary: processSummaryFixture({ episodes: 6 }) },
+      status: 'association',
+      label: 'association, not proof',
+      minEpisodes: 10,
+      ...overrides,
+    }
+  }
+
+  it('draws the concurrency step line, the markers, and the step-rate strip on one axis', () => {
+    const { module } = loadBundle()
+    const rendered = renderTree(
+      module.ProcessTimeline?.({
+        process: processDataFixture(),
+        labels: PROCESS_LABELS,
+        t: translate,
+      }),
+    )
+    const svg = nodesOf(rendered, 'svg')[0]
+    expect(svg?.props.role).toBe('img')
+    expect(svg?.props['aria-label']).toBe('process.title')
+    expect(svg?.props.preserveAspectRatio).toBeUndefined()
+    expect(
+      nodesOf(rendered, 'path', (element) => element.props.className === 'dsh-obs-process-line'),
+    ).toHaveLength(1)
+    const steps = nodesOf(
+      rendered,
+      'rect',
+      (element) => element.props.className === 'dsh-obs-process-step',
+    )
+    expect(steps.map(childText)).toEqual([
+      'a: 1 unit.steps',
+      'b: 2 unit.steps',
+      'c: 0 unit.steps',
+      'd: 3 unit.steps',
+    ])
+    expect(
+      nodesOf(rendered, 'text', (element) => element.props.className === 'dsh-obs-axis'),
+    ).toHaveLength(3)
+  })
+
+  it('places step-rate buckets on the time scale so a step and a marker align', () => {
+    const { module } = loadBundle()
+    const day = 24 * 60 * MINUTE
+    const windowFrom = new Date(2026, 9, 20, 0, 0, 0).getTime()
+    const dayStart = (index: number): number => windowFrom + index * day
+    // A week truncated at 00:30: the last bucket is half an hour, not a full day.
+    const windowTo = dayStart(6) + 30 * MINUTE
+    const buckets = Array.from({ length: 7 }, (_unused, index) => ({
+      from: dayStart(index),
+      to: index === 6 ? windowTo : dayStart(index + 1),
+      steps: index === 6 ? 2 : index === 5 ? 1 : 0,
+    }))
+    const reflectionTime = dayStart(5) + 18 * 60 * MINUTE
+    const process = processDataFixture({
+      from: windowFrom,
+      to: windowTo,
+      reflections: [
+        { time: reflectionTime, episodeId: 'session-1#1', outcome: 'done', stepsSince: 4 },
+      ],
+      stepRate: buckets,
+    })
+    const rendered = renderTree(
+      module.ProcessTimeline?.({
+        process,
+        labels: ['0', '1', '2', '3', '4', '5', '6'],
+        t: translate,
+      }),
+    )
+    const axis = nodesOf(rendered, 'text', (element) => element.props.className === 'dsh-obs-axis')
+    const axisFrom = Number(axis[0]?.props.x)
+    const axisTo = Number(axis[axis.length - 1]?.props.x)
+    const expectedX = (time: number): number =>
+      axisFrom + ((time - windowFrom) / (windowTo - windowFrom)) * (axisTo - axisFrom)
+    const bars = nodesOf(
+      rendered,
+      'rect',
+      (element) => element.props.className === 'dsh-obs-process-step',
+    )
+    expect(bars).toHaveLength(7)
+    // The bars carry the calendar bounds on the markers' own scale.
+    expect(Number(bars[5]?.props.x)).toBeCloseTo(expectedX(dayStart(5)), 3)
+    expect(Number(bars[6]?.props.x)).toBeCloseTo(expectedX(dayStart(6)), 3)
+    expect(Number(bars[6]?.props.width)).toBeCloseTo(
+      expectedX(windowTo) - expectedX(dayStart(6)) - 1,
+      3,
+    )
+    // The truncated bucket is far narrower than an even index share.
+    expect(Number(bars[6]?.props.width)).toBeLessThan((axisTo - axisFrom) / 7 / 2)
+    // The 18:00 reflection falls inside its own step bucket, not an even band.
+    const reflection = nodesOf(
+      rendered,
+      'line',
+      (element) => element.props['data-tone'] === 'reflection',
+    )[0]
+    const markerX = Number(reflection?.props.x1)
+    expect(markerX).toBeCloseTo(expectedX(reflectionTime), 3)
+    expect(markerX).toBeGreaterThan(Number(bars[5]?.props.x))
+    expect(markerX).toBeLessThan(Number(bars[5]?.props.x) + Number(bars[5]?.props.width))
+  })
+
+  it('reads two active workers at the same instant and marks the burst start once', () => {
+    const { module } = loadBundle()
+    const rendered = renderTree(
+      module.ProcessPanel?.({
+        process: processDataFixture(),
+        labels: PROCESS_LABELS,
+        t: translate,
+      }),
+    )
+    const line = nodesOf(
+      rendered,
+      'path',
+      (element) => element.props.className === 'dsh-obs-process-line',
+    )[0]
+    const levels = [...String(line?.props.d).matchAll(/V ([\d.]+)/g)].map((match) => match[1])
+    // The step line reaches 0, 1, and 2 active workers.
+    expect(new Set(levels).size).toBe(3)
+    const markers = nodesOf(
+      rendered,
+      'line',
+      (element) => element.props.className === 'dsh-obs-process-marker',
+    )
+    const decomposition = markers.filter((marker) => marker.props['data-tone'] === 'decomposition')
+    expect(decomposition).toHaveLength(1)
+    expect(childText(decomposition[0])).toContain('2 process.workers')
+    expect(childText(decomposition[0])).toContain('session-1#1')
+    const row = nodesOf(
+      rendered,
+      'tr',
+      (element) => element.props['data-process-metric'] === 'maxConcurrency',
+    )[0]
+    expect(childText(row)).toBe('process.maxConcurrency2')
+  })
+
+  it('labels the concurrency chart with absolute worker counts', () => {
+    const { module } = loadBundle()
+    const from = NOW - 10 * MINUTE
+    const spanning = (active: number): ProcessTimelineData =>
+      processDataFixture({
+        workers: Array.from({ length: active }, (_unused, index) => ({
+          sessionId: `child-${String(index + 1)}`,
+          episodeId: 'session-1#1',
+          from,
+          to: NOW,
+        })),
+        concurrency: [
+          { time: from, active },
+          { time: NOW, active: 0 },
+        ],
+        // No in-window decomposition marker: only the series' values differ.
+        decomposition: [],
+        reflections: [],
+        summary: processSummaryFixture({ workers: active, maxConcurrency: active }),
+      })
+    const one = renderTree(
+      module.ProcessTimeline?.({ process: spanning(1), labels: PROCESS_LABELS, t: translate }),
+    )
+    const two = renderTree(
+      module.ProcessTimeline?.({ process: spanning(2), labels: PROCESS_LABELS, t: translate }),
+    )
+    const ticks = (tree: unknown): string[] =>
+      nodesOf(tree, 'text', (element) =>
+        String(element.props.className ?? '').includes('dsh-obs-process-tick'),
+      ).map(childText)
+    expect(ticks(one)).toEqual(['0', '1'])
+    expect(ticks(two)).toEqual(['0', '1', '2'])
+    const lineTitle = (tree: unknown): string =>
+      childText(
+        nodesOf(tree, 'path', (element) => element.props.className === 'dsh-obs-process-line')[0],
+      )
+    expect(lineTitle(one)).toContain('process.maxConcurrency 1')
+    expect(lineTitle(two)).toContain('process.maxConcurrency 2')
+    // The readable values differ with no decomposition marker on either chart.
+    expect(
+      nodesOf(one, 'line', (element) => element.props['data-tone'] === 'decomposition'),
+    ).toHaveLength(0)
+    expect(
+      nodesOf(two, 'line', (element) => element.props['data-tone'] === 'decomposition'),
+    ).toHaveLength(0)
+  })
+
+  it('places decomposition and reflection markers with times and counts only', () => {
+    const { module } = loadBundle()
+    const from = NOW - 10 * MINUTE
+    const process = {
+      ...processDataFixture(),
+      decomposition: [
+        { time: from + MINUTE, episodeId: 'session-1#1', workers: 2, message: SECRET },
+      ],
+      reflections: [
+        {
+          time: from + 5 * MINUTE,
+          episodeId: 'session-1#1',
+          outcome: 'done',
+          stepsSince: 12,
+          arguments: SECRET,
+        },
+      ],
+    } as unknown as ProcessTimelineData
+    const rendered = renderTree(
+      module.ProcessTimeline?.({ process, labels: PROCESS_LABELS, t: translate }),
+    )
+    const titles = nodesOf(rendered, 'title').map(childText)
+    const decomposition = titles.find((text) => text.includes('process.decomposition')) ?? ''
+    expect(decomposition).toContain(new Date(from + MINUTE).toLocaleString())
+    expect(decomposition).toContain('2 process.workers')
+    expect(decomposition).toContain('session-1#1')
+    const reflection = titles.find((text) => text.includes('process.reflection')) ?? ''
+    expect(reflection).toContain(new Date(from + 5 * MINUTE).toLocaleString())
+    expect(reflection).toContain('done')
+    expect(reflection).toContain('12 process.stepsSince')
+    expect(JSON.stringify(rendered)).not.toContain(SECRET)
+  })
+
+  it('summarizes a single worker with its counts, percentiles, and sample sizes', () => {
+    const { module } = loadBundle()
+    const from = NOW - 10 * MINUTE
+    const process = processDataFixture({
+      workers: [
+        {
+          sessionId: 'child-1',
+          episodeId: 'session-1#1',
+          from: from + MINUTE,
+          to: from + 3 * MINUTE,
+        },
+      ],
+      concurrency: [
+        { time: from, active: 0 },
+        { time: from + MINUTE, active: 1 },
+        { time: from + 3 * MINUTE, active: 0 },
+      ],
+      decomposition: [{ time: from + MINUTE, episodeId: 'session-1#1', workers: 1 }],
+      reflections: [],
+      stepRate: turnBuckets([2, 0, 0, 0]),
+      summary: processSummaryFixture({
+        episodes: 1,
+        workers: 1,
+        episodesWithWorker: 1,
+        activations: 1,
+        maxConcurrency: 1,
+        timeToFirstWorker: { p50: MINUTE, p90: MINUTE, n: 1 },
+        reflections: 0,
+        stepsBetweenReflections: { p50: 0, p90: 0, n: 0 },
+        reflectionsPerEpisode: 0,
+        reflectionCoverage: 0,
+        decompositionObserved: true,
+      }),
+    })
+    const rendered = renderTree(
+      module.ProcessPanel?.({ process, labels: PROCESS_LABELS, t: translate }),
+    )
+    const row = (key: string): string =>
+      childText(
+        nodesOf(rendered, 'tr', (element) => element.props['data-process-metric'] === key)[0],
+      )
+    expect(row('workers')).toBe('process.workers1')
+    expect(row('episodesWithWorker')).toBe('process.episodesWithWorker1')
+    expect(row('activations')).toBe('process.activations1')
+    expect(row('maxConcurrency')).toBe('process.maxConcurrency1')
+    expect(row('timeToFirst')).toContain('p50 1.0 unit.minutes')
+    expect(row('timeToFirst')).toContain('p90 1.0 unit.minutes')
+    expect(row('timeToFirst')).toContain('n 1')
+    expect(row('stepsBetween')).toContain('—')
+    expect(row('reflectionCoverage')).toBe('process.reflectionCoverage0%')
+    const text = childText(rendered)
+    expect(text).toContain('process.value (1 process.episodes)')
+    expect(text).not.toContain('process.noWorkers')
+  })
+
+  it('states that no worker was observed and never claims decomposition ran', () => {
+    const { module } = loadBundle()
+    const process = processDataFixture({
+      workers: [],
+      concurrency: [],
+      decomposition: [],
+      reflections: [],
+      stepRate: turnBuckets([3, 2, 1, 0]),
+      summary: processSummaryFixture({
+        episodes: 3,
+        workers: 0,
+        episodesWithWorker: 0,
+        activations: 0,
+        maxConcurrency: 0,
+        timeToFirstWorker: { p50: 0, p90: 0, n: 0 },
+        reflections: 0,
+        stepsBetweenReflections: { p50: 0, p90: 0, n: 0 },
+        reflectionsPerEpisode: 0,
+        reflectionCoverage: 0,
+        decompositionObserved: false,
+      }),
+    })
+    const rendered = renderTree(
+      module.ProcessPanel?.({ process, labels: PROCESS_LABELS, t: translate }),
+    )
+    const text = childText(rendered)
+    expect(text).toContain('process.noWorkers')
+    expect(text).toContain('process.noDecomposition')
+    expect(
+      nodesOf(rendered, 'line', (element) => element.props.className === 'dsh-obs-process-marker'),
+    ).toHaveLength(0)
+    expect(
+      nodesOf(rendered, 'path', (element) => element.props.className === 'dsh-obs-process-line'),
+    ).toHaveLength(0)
+    const row = nodesOf(
+      rendered,
+      'tr',
+      (element) => element.props['data-process-metric'] === 'workers',
+    )[0]
+    expect(childText(row)).toBe('process.workers0')
+    expect(text).not.toContain('improvement')
+  })
+
+  it('renders the empty state and no marker when the window holds no episode', () => {
+    const { module } = loadBundle()
+    const rendered = renderTree(
+      module.ProcessPanel?.({ process: emptyProcessFixture(), labels: [], t: translate }),
+    )
+    const text = childText(rendered)
+    expect(text).toContain('process.empty')
+    expect(nodesOf(rendered, 'svg')).toHaveLength(0)
+    expect(nodesOf(rendered, 'line')).toHaveLength(0)
+    expect(nodesOf(rendered, 'rect')).toHaveLength(0)
+    expect(nodesOf(rendered, 'table')).toHaveLength(0)
+  })
+
+  it('reads an insufficient comparison instead of an improvement', () => {
+    const { module } = loadBundle()
+    const comparison = comparisonFixture({
+      before: { summary: processSummaryFixture({ episodes: 3 }) },
+      after: { summary: processSummaryFixture({ episodes: 4 }) },
+      status: 'insufficient',
+      label: 'insufficient data',
+      minEpisodes: 10,
+    })
+    const rendered = renderTree(
+      module.ProcessPanel?.({
+        process: processDataFixture({ comparison }),
+        labels: PROCESS_LABELS,
+        t: translate,
+      }),
+    )
+    const text = childText(rendered)
+    expect(text).toContain('insufficient data')
+    expect(text).toContain('process.after (4 process.episodes)')
+    expect(text).toContain('process.before (3 process.episodes)')
+    expect(nodesOf(rendered, 'table')[0]?.props['data-insufficient']).toBe('true')
+    const status = nodesOf(
+      rendered,
+      'p',
+      (element) => element.props['data-process-status'] !== undefined,
+    )[0]
+    expect(status?.props['data-process-status']).toBe('insufficient')
+    expect(text).toContain(
+      `process.interventionAt: ${new Date(NOW - 5 * MINUTE).toLocaleDateString()}`,
+    )
+    expect(text).not.toContain('improvement')
+  })
+
+  it('renders the process panel beside the activity chart and prints the date', () => {
+    const { module } = loadBundle()
+    const report = processReport({ comparison: comparisonFixture() })
+    const rendered = renderTree(module.OverviewView?.(panelProps(report)))
+    const text = childText(rendered)
+    expect(text).toContain('timeline.title')
+    expect(text).toContain('process.title')
+    expect(text.indexOf('timeline.title')).toBeLessThan(text.indexOf('process.title'))
+    expect(text).toContain('process.interventionAt')
+    expect(text).toContain(new Date(NOW - 5 * MINUTE).toLocaleDateString())
+    expect(text).toContain('process.after (6 process.episodes)')
+    expect(text).toContain('process.before (4 process.episodes)')
+    // The strip is labelled from the report's own buckets.
+    expect(text).toContain('a: 1 unit.steps')
+    // Existing Overview pieces are unchanged.
+    expect(text).toContain('tokens.title')
+    expect(text).toContain('scorecards.title')
+    expect(text).toContain('section.silent')
+  })
+
+  it('renders the process empty state in the Overview', () => {
+    const { module } = loadBundle()
+    const report = processReport({ ...emptyProcessFixture() })
+    const text = childText(renderTree(module.OverviewView?.(panelProps(report))))
+    expect(text).toContain('process.empty')
+    expect(text).toContain('timeline.title')
+    expect(text).toContain('tokens.title')
+    expect(text).toContain('scorecards.title')
+  })
+
+  it('prints the configured intervention date in the empty state', () => {
+    const { module } = loadBundle()
+    const report = processReport({
+      ...emptyProcessFixture(),
+      comparison: comparisonFixture(),
+    })
+    const rendered = renderTree(module.OverviewView?.(panelProps(report)))
+    const text = childText(rendered)
+    expect(text).toContain('process.empty')
+    expect(text).toContain(
+      `process.interventionAt: ${new Date(NOW - 5 * MINUTE).toLocaleDateString()}`,
+    )
+    expect(
+      nodesOf(rendered, 'p', (element) => element.props['data-process-intervention'] === 'true'),
+    ).toHaveLength(1)
   })
 })

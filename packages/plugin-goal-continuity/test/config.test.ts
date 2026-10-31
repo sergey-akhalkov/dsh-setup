@@ -16,6 +16,7 @@ import {
 
 const BLOCK_REVIEW_DEFAULTS = {
   enabled: true,
+  reviewQuestions: true,
   provider: 'spawn',
   model: 'deepseek-flash',
   reasoningEffort: 'max',
@@ -35,6 +36,7 @@ const CHECKPOINT_DEFAULTS = {
   maxBlocks: 3,
   enforceParallel: true,
   maxMessageChars: 1200,
+  stepInterval: 40,
 }
 
 describe('goal continuity configuration', () => {
@@ -74,6 +76,7 @@ describe('goal continuity configuration', () => {
         hardMaxGoalRounds: 1,
         blockReview: {
           enabled: false,
+          reviewQuestions: false,
           provider: 'fork',
           model: 'other-model',
           reasoningEffort: 'high',
@@ -92,6 +95,7 @@ describe('goal continuity configuration', () => {
           maxBlocks: 0,
           enforceParallel: false,
           maxMessageChars: 200,
+          stepInterval: 25,
         },
       }),
     ).toEqual({
@@ -104,6 +108,7 @@ describe('goal continuity configuration', () => {
       hardMaxGoalRounds: 1,
       blockReview: {
         enabled: false,
+        reviewQuestions: false,
         provider: 'fork',
         model: 'other-model',
         reasoningEffort: 'high',
@@ -122,6 +127,7 @@ describe('goal continuity configuration', () => {
         maxBlocks: 0,
         enforceParallel: false,
         maxMessageChars: 200,
+        stepInterval: 25,
       },
     })
   })
@@ -134,8 +140,10 @@ describe('goal continuity configuration', () => {
     expect(resolved.maxSessionResumes).toBe(3)
     expect(resolved.enabled).toBe(true)
     expect(resolved.blockReview.reviewerPreset).toBe('goal-reviewer')
+    expect(resolved.blockReview.reviewQuestions).toBe(true)
     expect(resolved.checkpoint.minToolCalls).toBe(7)
     expect(resolved.checkpoint.requireWrite).toBe(true)
+    expect(resolved.checkpoint.stepInterval).toBe(40)
   })
 
   it('rejects a non-object config', () => {
@@ -180,6 +188,9 @@ describe('goal continuity configuration', () => {
     for (const value of ['yes', 1, 0, null]) {
       expect(() => resolveConfig({ blockReview: { enabled: value } })).toThrow(
         /blockReview\.enabled/u,
+      )
+      expect(() => resolveConfig({ blockReview: { reviewQuestions: value } })).toThrow(
+        /blockReview\.reviewQuestions/u,
       )
     }
     for (const field of ['enabled', 'requireWrite', 'enforceParallel']) {
@@ -257,11 +268,14 @@ describe('goal continuity configuration', () => {
     expect(
       resolveConfig({ checkpoint: { maxMessageChars: 20_000 } }).checkpoint.maxMessageChars,
     ).toBe(20_000)
+    expect(resolveConfig({ checkpoint: { stepInterval: 1 } }).checkpoint.stepInterval).toBe(1)
+    expect(resolveConfig({ checkpoint: { stepInterval: 1000 } }).checkpoint.stepInterval).toBe(1000)
 
     const invalid: Record<string, unknown[]> = {
       minToolCalls: [0, 1001, 1.5, '4', Number.NaN],
       maxBlocks: [-1, 101, 1.5, '3'],
       maxMessageChars: [199, 20_001, 1.5, '1200', Number.POSITIVE_INFINITY],
+      stepInterval: [0, -1, 1001, 1.5, '40', Number.NaN],
     }
     for (const [field, values] of Object.entries(invalid)) {
       for (const value of values) {
@@ -310,6 +324,12 @@ describe('goal continuity configuration', () => {
     )
     expect(() => apply(ctx, { checkpoint: { enforceParallel: 'yes' } } as never)).toThrow(
       /checkpoint\.enforceParallel/u,
+    )
+    expect(() => apply(ctx, { blockReview: { reviewQuestions: 'yes' } } as never)).toThrow(
+      /blockReview\.reviewQuestions/u,
+    )
+    expect(() => apply(ctx, { checkpoint: { stepInterval: 0 } } as never)).toThrow(
+      /checkpoint\.stepInterval/u,
     )
   })
 })

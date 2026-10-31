@@ -399,6 +399,42 @@ export class BlockReviewHarness {
     return { decision, next }
   }
 
+  /** Run one `ask_user_question` call through the registered pre-execute waterfall. */
+  async question(
+    args: Record<string, unknown> = {},
+    agent: Agent = this.agent,
+    signal = new AbortController().signal,
+  ): Promise<{ decision: unknown; next: ReturnType<typeof vi.fn> }> {
+    const next = vi.fn(async () => ({ kind: 'allow' }))
+    const waterfall = this.ctx.waterfall as unknown as (
+      name: string,
+      exec: unknown,
+      next: unknown,
+    ) => Promise<unknown>
+    const decision = await waterfall(
+      'tools/pre-execute',
+      {
+        agent,
+        name: 'ask_user_question',
+        arguments: {
+          questions: [
+            {
+              question: 'Only a test-only activation hook makes the HMI testable; approve it?',
+              options: [{ label: 'Add the test-only hook (Recommended)' }, { label: 'Stop here' }],
+            },
+          ],
+          ...args,
+        },
+        signal,
+        callId: 'call-1',
+        rootCallId: 'call-1',
+        token: Symbol('token'),
+      },
+      next,
+    )
+    return { decision, next }
+  }
+
   async writeFile(relativePath: string, content: string): Promise<void> {
     const path = join(this.workspaceDirectory, relativePath)
     await mkdir(dirname(path), { recursive: true })

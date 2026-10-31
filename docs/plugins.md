@@ -171,8 +171,12 @@ model.
 
 The same row makes one bounded, read-only review call and delivers the work-checkpoint capability:
 
-- a **block review** gates a proposed `blocked` update through a `tools/pre-execute` decision, using
-  the shared `goal-reviewer` preset;
+- a **user-decision review** gates both a proposed `blocked` update and an `ask_user_question` call
+  through a `tools/pre-execute` decision, using the shared `goal-reviewer` preset: a `blocker`
+  verdict allows the call, and a `not-blocker` verdict denies it with the reviewer's next action, so
+  an unjustified question never holds the turn open; the block and the question share the
+  digest-bound record (which keeps the `block` or `question` subject), the per-goal review bound, and
+  the error, unavailable, and exhausted policies;
 - a **work checkpoint** requires one structured `work_checkpoint` decision at a substantial root
   turn close: it steers a bounded request naming the turn's tool calls, written paths, last shell
   result, failed tool, and worker starts, refuses the close until a successful checkpoint exists for
@@ -182,12 +186,14 @@ The same row makes one bounded, read-only review call and delivers the work-chec
 
 The row ships enabled with `resumeAfterRestart: false`, `resumeAfterUserStop: non-goal`,
 `maxSessionResumes: 20`, `roundExtension: 1000`, `maxRoundExtensions: 2`, `hardMaxGoalRounds: 5000`,
-`blockReview.enabled: true`, and `checkpoint.enabled: true`. The checkpoint defaults to
-`minToolCalls: 4`, `requireWrite: true`, `maxBlocks: 3`, `enforceParallel: true`, and
-`maxMessageChars: 1200`. Restart resume is opt-in: set `resumeAfterRestart: true` on the row in the
-profile's `cordis.patch.yml`. Set `checkpoint.enabled: false` to keep continuity and the block review
-while disabling only the checkpoint, or set `enabled: false`/disable the row to restore stock DSH goal
-behavior with no disarm, resume, extension, block, suppression, notice, block review, or checkpoint.
+`blockReview.enabled: true`, `blockReview.reviewQuestions: true`, and `checkpoint.enabled: true`. The
+checkpoint defaults to `minToolCalls: 4`, `requireWrite: true`, `maxBlocks: 3`, `enforceParallel:
+true`, `stepInterval: 40`, and `maxMessageChars: 1200`. Restart resume is opt-in: set
+`resumeAfterRestart: true` on the row in the profile's `cordis.patch.yml`. Set
+`blockReview.reviewQuestions: false` to review only blocks and leave questions unexamined, set
+`checkpoint.enabled: false` to keep continuity and the review while disabling only the checkpoint, or
+set `enabled: false`/disable the row to restore stock DSH goal behavior with no disarm, resume,
+extension, block, suppression, notice, user-decision review, or checkpoint.
 
 The checkpoint was added by the `replace-rare-triggers-with-work-checkpoints` change, which removed
 the earlier goal-round speed review; a leftover `speedReview` object in a profile is accepted, warns
@@ -262,6 +268,32 @@ and are observed at the window cutoff: a child that starts after the cutoff is n
 whose failure lies after the cutoff still reads open. The report carries delegate calls, episodes with a
 child, parallel width, parent wait between a delegate call and its result, child tokens, child
 outcomes, and the unlinked count.
+
+**Process timeline.** A worker is a joined child session of an episode: its activation is its first own
+record, its end is its last, and its span is clipped to the window. One time axis draws the number of
+workers active over time, a decomposition marker where an episode's first worker activates while no
+worker is already running (carrying the episode id and that episode's worker count), and a reflection
+marker for every `work_checkpoint` call whose outcome word parsed (its time, episode id, outcome word,
+and the steps since the previous reflection or the episode start). A malformed checkpoint call is not a
+reflection: it never becomes a marker, does not reset the cadence, and does not count toward coverage,
+though it remains in the raw checkpoint count. The step-rate strip below the axis counts recorded
+`step/start` events per bucket: the range's own buckets for day, week, and month, and 24 equal parts of
+the session timeline for the session range. Everything carried is a time, count, id, or outcome word;
+message text, tool arguments, goal objectives, and checkpoint list text never enter the report. The
+summary reports workers (distinct joined child sessions), episodes with a worker, worker activations,
+maximum concurrency, time from episode start to the first worker (p50/p90), steps between reflections
+(p50/p90), reflections per episode, and reflection coverage. An empty window reports zero workers and
+states that no decomposition was observed; that is absence of evidence, not compliance.
+
+**Intervention comparison.** The plugin accepts one optional `interventionAt` ISO date. When set, the
+timeline splits the window's episodes by start at that instant, reports both summaries with their
+episode counts, prints the date it used, and labels the comparison an association, not proof; below
+`minEpisodes` on either side it reads insufficient data instead of an improvement. Without the date it
+compares against the report's baseline — the previous equal window, or the previous completed session
+for the session range — and names that baseline, or carries no comparison when there is none. The date
+is configuration data, not a logged configuration history, and the panel states that it is the reader's
+declared marker. The process view does not read prompts or skill text, decide whether the model chose to
+decompose, or store an experiment registry.
 
 **Scorecards.** Every signal row may declare a business `goal` and an `eligible` predicate list (signal
 rows only). The scorecard shows eligible episodes, the share of them where the row fired (activation),
@@ -363,8 +395,8 @@ currency, per-session configuration or version snapshots, review verdicts, and C
 
 To add a custom signal, override the row in the profile's `cordis.patch.yml`. A configuration patch
 replaces the whole `config` object, so restate every row the profile needs **and** the plugin's other
-fields (`idleGapMinutes`, `minEpisodes`, `hypotheses`) from the shipped map in
-`packages/setup/defaults.yml`:
+fields (`idleGapMinutes`, `minEpisodes`, `hypotheses`, and the optional `interventionAt`) from the
+shipped map in `packages/setup/defaults.yml`:
 
 ```yaml
 - id: dsh-setup-observability

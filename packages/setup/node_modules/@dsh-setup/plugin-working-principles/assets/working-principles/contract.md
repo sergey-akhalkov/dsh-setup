@@ -21,9 +21,9 @@ silent and does not restate it; a direct user instruction outranks both.
 
 ## Delegate only to parallelize
 
-- One agent is the default; delegate only an independent piece (separate files or data) returning
-  a compact parallel result, or fresh-context verification. Do not build a team for
-  sequential work or restatement; a handoff needing clarification stays in the main loop.
+- One agent is the default. Multi-file or multi-step work names independent streams and owned files
+  in the plan before the first edit; start a worker per stream or state one serial reason; verify in
+  a fresh context.
 
 ## Dissent, then commit
 
@@ -64,7 +64,8 @@ silent and does not restate it; a direct user instruction outranks both.
   action or knowledge. Difficulty, uncertainty, remaining work, tooling or test changes, and a
   permission the runtime grants are not blockers; a blocker names one user-only action, not a menu.
   `complete` needs current evidence for every requirement; omit `max_goal_rounds` unless asked.
-- A substantial pause ends with `work_checkpoint`: done, verified, remaining, and parallel lanes.
+- A substantial pause and each configured step interval end with `work_checkpoint`: done,
+  verified, remaining, parallel lanes, `bottleneck`, its remedy.
   A parallel declaration starts a worker for at least one lane before the turn closes, integrating
   in the main agent; serial work names its reason in `serialReason`.
 - A proposed block is independently reviewed before it takes effect; a denial is a continuation

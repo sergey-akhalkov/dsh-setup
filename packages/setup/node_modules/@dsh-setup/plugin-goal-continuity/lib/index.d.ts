@@ -11,10 +11,12 @@ declare module '@deepseek-ai/dsh-llm' {
 export declare const name = "@dsh-setup/plugin-goal-continuity";
 /** Services the supervisor and the checkpoint tool need. */
 export declare const inject: string[];
-/** Independent block-review policy nested under `blockReview`. */
+/** Independent user-decision review policy nested under `blockReview`. */
 export interface BlockReviewConfig {
     /** Review proposed blocks at all (default true); the supervisor keeps running when false. */
     enabled?: boolean;
+    /** Review a goal-round `ask_user_question` call too (default true). */
+    reviewQuestions?: boolean;
     /** Registered subagent provider that starts the reviewer (default `spawn`). */
     provider?: string;
     /** Reviewer model; omitted provider options fall back to the provider defaults. */
@@ -50,6 +52,8 @@ export interface CheckpointConfig {
     enforceParallel?: boolean;
     /** Bound for the injected checkpoint request (default 1200 characters). */
     maxMessageChars?: number;
+    /** Model steps between mid-turn checkpoint requests (default 40). */
+    stepInterval?: number;
 }
 /** Row configuration. Every field is optional; omission selects the documented default. */
 export interface Config {
@@ -77,6 +81,7 @@ export interface Config {
 /** Fully resolved block-review policy; the plugin never runs on partial values. */
 export interface ResolvedBlockReviewConfig {
     readonly enabled: boolean;
+    readonly reviewQuestions: boolean;
     readonly provider: string;
     readonly model: string;
     readonly reasoningEffort: string;
@@ -96,6 +101,7 @@ export interface ResolvedCheckpointConfig {
     readonly maxBlocks: number;
     readonly enforceParallel: boolean;
     readonly maxMessageChars: number;
+    readonly stepInterval: number;
 }
 /** Fully resolved configuration; the plugin never runs on partial values. */
 export interface ResolvedConfig {

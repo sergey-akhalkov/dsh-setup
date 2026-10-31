@@ -15,6 +15,7 @@ const SERIAL = {
   outcome: 'continue',
   parallel: false,
   serialReason: 'the remaining work is one ordered edit',
+  bottleneck: 'the guard must exist before the test can pass',
   next: 'finish the edit',
 }
 
@@ -81,18 +82,25 @@ describe('work_checkpoint tool', () => {
     harness.turnStart()
     const result = await harness.checkpoint(SERIAL)
     expect(result.text).toContain('continue; serial')
+    expect(result.text).toContain(SERIAL.bottleneck)
     const record = await harness.readRecord()
     expect(record).toMatchObject({
       outcome: 'continue',
       parallel: false,
       serialReason: SERIAL.serialReason,
+      bottleneck: SERIAL.bottleneck,
     })
   })
 
   it('accepts a parallel continuation without a serial reason', async () => {
     const harness = await create()
     harness.turnStart()
-    await harness.checkpoint({ outcome: 'continue', parallel: true, next: 'start the lanes' })
+    await harness.checkpoint({
+      outcome: 'continue',
+      parallel: true,
+      bottleneck: 'the host report shape is unknown',
+      next: 'start the lanes',
+    })
     expect(await harness.readRecord()).toMatchObject({ outcome: 'continue', parallel: true })
   })
 
@@ -124,8 +132,42 @@ describe('work_checkpoint tool', () => {
     const harness = await create()
     harness.turnStart()
     await expect(
-      harness.execute('work_checkpoint', { outcome: 'continue', parallel: false, next: 'x' }),
+      harness.execute('work_checkpoint', {
+        outcome: 'continue',
+        parallel: false,
+        bottleneck: 'the guard is missing',
+        next: 'x',
+      }),
     ).rejects.toThrow(/serialReason/u)
+  })
+
+  it('rejects continue without a bottleneck', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'continue', parallel: true, next: 'x' }),
+    ).rejects.toThrow(/work_checkpoint\.bottleneck/u)
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'continue',
+        parallel: false,
+        serialReason: 'one ordered edit',
+        next: 'x',
+      }),
+    ).rejects.toThrow(/work_checkpoint\.bottleneck/u)
+  })
+
+  it('rejects an empty bottleneck', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'continue',
+        parallel: true,
+        bottleneck: '   ',
+        next: 'x',
+      }),
+    ).rejects.toThrow(/work_checkpoint\.bottleneck/u)
   })
 
   it('rejects an empty serial reason and a mistyped parallel flag', async () => {
@@ -201,11 +243,13 @@ describe('work checkpoint record', () => {
       outcome: 'done',
       next: 'x'.repeat(2000),
       verified: ['y'.repeat(2000)],
+      bottleneck: 'w'.repeat(2000),
       speedup: 'z'.repeat(2000),
     })
     const record = await harness.readRecord()
     expect(String(record.next).length).toBeLessThanOrEqual(400)
     expect((record.verified as string[])[0]?.length).toBeLessThanOrEqual(240)
+    expect(String(record.bottleneck).length).toBeLessThanOrEqual(400)
     expect(String(record.speedup).length).toBeLessThanOrEqual(240)
   })
 
@@ -214,9 +258,11 @@ describe('work checkpoint record', () => {
     harness.turnStart()
     const machinePath = join(harness.workspace, 'private', 'notes.txt')
     await harness.checkpoint({
-      outcome: 'done',
+      outcome: 'continue',
+      parallel: true,
       next: `finish with sk-abcdefgh12345678 at ${machinePath}`,
       verified: [`read ${machinePath}`],
+      bottleneck: `the credential sk-abcdefgh12345678 is at ${machinePath}`,
     })
     const text = JSON.stringify(await harness.readRecord())
     expect(text).not.toContain('sk-abcdefgh12345678')
@@ -244,12 +290,18 @@ describe('work checkpoint record', () => {
   it('reuses the same record for a repeated call in the turn', async () => {
     const harness = await create()
     harness.turnStart()
-    await harness.checkpoint({ outcome: 'continue', parallel: true, next: 'fan out' })
+    await harness.checkpoint({
+      outcome: 'continue',
+      parallel: true,
+      bottleneck: 'the host report shape is unknown',
+      next: 'fan out',
+    })
     const id = (await harness.readRecord()).checkpoint
     const second = await harness.checkpoint({
       outcome: 'continue',
       parallel: false,
       serialReason: 'the lanes are ordered',
+      bottleneck: 'the review gate must settle first',
       next: 'finish serially',
     })
     expect(second.text).toContain(String(id))
@@ -294,6 +346,32 @@ describe('close gate', () => {
     await harness.checkpoint(SERIAL)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
+  })
+
+  it('accepts a checkpoint recorded two steps before the close', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 10 } } })
+    workingTurn(harness)
+    await harness.preStep()
+    await harness.preStep()
+    await harness.checkpoint(SERIAL)
+    await harness.preStep()
+    await harness.preStep()
+    await harness.preStep()
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('refuses the close when the latest checkpoint is stale', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 10 } } })
+    workingTurn(harness)
+    await harness.preStep()
+    await harness.preStep()
+    await harness.checkpoint(SERIAL)
+    for (let step = 0; step < 10; step += 1) await harness.preStep()
+    // The interval also steered once; the close still refuses the stale checkpoint.
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(2)
+    expect(noticeText(harness.steers.at(-1) as never)).toContain('Work checkpoint required')
   })
 
   it('allows the close UNCHECKED after maxBlocks refusals', async () => {
@@ -387,7 +465,12 @@ describe('close gate', () => {
 describe('parallel-action gate', () => {
   async function parallelCheckpoint(harness: CheckpointHarness): Promise<string> {
     harness.turnStart()
-    await harness.checkpoint({ outcome: 'continue', parallel: true, next: 'start the lanes' })
+    await harness.checkpoint({
+      outcome: 'continue',
+      parallel: true,
+      bottleneck: 'the host report shape is unknown',
+      next: 'start the lanes',
+    })
     return String((await harness.readRecord()).checkpoint)
   }
 
@@ -437,7 +520,12 @@ describe('parallel-action gate', () => {
       .slice(0, 8)}`
     const early = harness.toolCall('subagent', { prompt: `take lane one for ${id}` })
     harness.toolResult(early, 'started')
-    await harness.checkpoint({ outcome: 'continue', parallel: true, next: 'start the lanes' })
+    await harness.checkpoint({
+      outcome: 'continue',
+      parallel: true,
+      bottleneck: 'the lanes cannot start yet',
+      next: 'start the lanes',
+    })
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
     expect(noticeText(harness.steers[0] as never)).toContain(id)
@@ -477,6 +565,7 @@ describe('parallel-action gate', () => {
         await harness.checkpoint({
           outcome: 'continue',
           parallel: true,
+          bottleneck: 'the lanes cannot start yet',
           next: 'start the lanes',
         })
       ).text.match(/checkpoint-\d+-[0-9a-f]{8}/u)?.[0],

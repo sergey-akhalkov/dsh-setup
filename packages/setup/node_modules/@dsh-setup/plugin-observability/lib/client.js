@@ -49,6 +49,9 @@ window.__ModuleLoader__.load({
       OverviewView: () => OverviewView,
       PluginBoard: () => PluginBoard,
       PluginCard: () => PluginCard,
+      ProcessPanel: () => ProcessPanel,
+      ProcessSummaryTable: () => ProcessSummaryTable,
+      ProcessTimeline: () => ProcessTimeline,
       REPORT_PATH: () => REPORT_PATH,
       RangeSelector: () => RangeSelector,
       RangeSeries: () => RangeSeries,
@@ -186,6 +189,34 @@ window.__ModuleLoader__.load({
       "timeline.humanMessage": "human message",
       "timeline.minute": "m",
       "timeline.second": "s",
+      "process.title": "Process",
+      "process.empty": "No episodes in this window.",
+      "process.noWorkers": "No worker was observed; this is not evidence that decomposition ran.",
+      "process.noDecomposition": "No decomposition was observed in this window.",
+      "process.activeWorkers": "Active workers",
+      "process.decomposition": "Decomposition",
+      "process.reflection": "Reflection",
+      "process.stepRate": "Steps per bucket",
+      "process.workers": "workers",
+      "process.episodes": "episodes",
+      "process.activations": "worker activations",
+      "process.episodesWithWorker": "episodes with a worker",
+      "process.maxConcurrency": "maximum concurrent workers",
+      "process.timeToFirst": "time to first worker",
+      "process.stepsBetween": "steps between reflections",
+      "process.reflectionsPerEpisode": "reflections per episode",
+      "process.reflectionCoverage": "reflection coverage",
+      "process.stepsSince": "steps since the previous reflection",
+      "process.metric": "Metric",
+      "process.value": "Value",
+      "process.p50": "p50",
+      "process.p90": "p90",
+      "process.n": "n",
+      "process.after": "after",
+      "process.before": "before",
+      "process.comparison": "Compared with",
+      "process.interventionAt": "Configured intervention date",
+      "process.basisIntervention": "the configured intervention date",
       "series.title": "Activity in the range",
       "series.empty": "No activity in this range.",
       "tokens.title": "Token mix",
@@ -833,6 +864,260 @@ window.__ModuleLoader__.load({
             ]
           }
         )
+      ] });
+    }
+    function processDistributionText(distribution, kind, t) {
+      if (distribution.n === 0) return "\u2014";
+      const show = (value) => kind === "minutes" ? minutesText(value / 6e4, t) : `${String(Math.round(value))} ${t("unit.steps")}`;
+      return `${t("process.p50")} ${show(distribution.p50)} \xB7 ${t("process.p90")} ${show(distribution.p90)} \xB7 ${t("process.n")} ${String(distribution.n)}`;
+    }
+    function processMetricRows(t) {
+      return [
+        {
+          key: "workers",
+          label: "process.workers",
+          value: (summary) => String(summary.workers)
+        },
+        {
+          key: "episodesWithWorker",
+          label: "process.episodesWithWorker",
+          value: (summary) => String(summary.episodesWithWorker)
+        },
+        {
+          key: "activations",
+          label: "process.activations",
+          value: (summary) => String(summary.activations)
+        },
+        {
+          key: "maxConcurrency",
+          label: "process.maxConcurrency",
+          value: (summary) => String(summary.maxConcurrency)
+        },
+        {
+          key: "timeToFirst",
+          label: "process.timeToFirst",
+          value: (summary) => processDistributionText(summary.timeToFirstWorker, "minutes", t)
+        },
+        {
+          key: "stepsBetween",
+          label: "process.stepsBetween",
+          value: (summary) => processDistributionText(summary.stepsBetweenReflections, "steps", t)
+        },
+        {
+          key: "reflectionsPerEpisode",
+          label: "process.reflectionsPerEpisode",
+          value: (summary) => summary.reflectionsPerEpisode === void 0 ? "\u2014" : summary.reflectionsPerEpisode.toFixed(1)
+        },
+        {
+          key: "reflectionCoverage",
+          label: "process.reflectionCoverage",
+          value: (summary) => summary.reflectionCoverage === void 0 ? "\u2014" : percent(summary.reflectionCoverage)
+        }
+      ];
+    }
+    function processBasisLabel(basis, t) {
+      if (basis === "intervention date") return t("process.basisIntervention");
+      return t(
+        basis === "previous equal window" ? "baseline.previousWindow" : "baseline.previousSession"
+      );
+    }
+    function formatIntervention(time) {
+      return new Date(time).toLocaleDateString();
+    }
+    function ProcessTimeline({
+      process,
+      labels,
+      t
+    }) {
+      const measured = useChartWidth();
+      const width = measured.width;
+      const height = 170;
+      const pad = { left: 44, right: 8, top: 8, bottom: 18 };
+      const plotWidth = Math.max(0, width - pad.left - pad.right);
+      const scale = timeScale(process.from, process.to, plotWidth);
+      const at = (time) => pad.left + scale(time);
+      const concurrencyTop = pad.top;
+      const concurrencyBottom = 98;
+      const stripTop = 116;
+      const stripBottom = 140;
+      const peak = Math.max(0, ...process.concurrency.map((point) => point.active));
+      const maxActive = Math.max(1, peak);
+      const activeY = (active) => concurrencyBottom - Math.max(0, active) / maxActive * (concurrencyBottom - concurrencyTop);
+      const ordered = [...process.concurrency].sort((left, right) => left.time - right.time);
+      const stepPath = ordered.length === 0 ? void 0 : `M ${String(at(process.from))} ${String(activeY(0))}${ordered.map((point) => ` H ${String(at(point.time))} V ${String(activeY(point.active))}`).join("")} H ${String(at(process.to))}`;
+      const maxSteps = Math.max(1, ...process.stepRate.map((bucket) => bucket.steps));
+      const band = process.stepRate.length === 0 ? 0 : plotWidth / process.stepRate.length;
+      const ticks = [
+        .../* @__PURE__ */ new Set([process.from, process.from + (process.to - process.from) / 2, process.to])
+      ];
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "svg",
+        {
+          ref: measured.ref,
+          className: "dsh-obs-process-chart",
+          viewBox: `0 0 ${String(width)} ${String(height)}`,
+          role: "img",
+          "aria-label": t("process.title"),
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", { className: "dsh-obs-tl-label", x: 2, y: concurrencyTop + 10, children: t("process.activeWorkers") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", { className: "dsh-obs-tl-label", x: 2, y: stripTop + 16, children: t("process.stepRate") }),
+            Array.from({ length: peak + 1 }, (_unused, workers) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "text",
+              {
+                className: "dsh-obs-axis dsh-obs-process-tick",
+                x: pad.left - 4,
+                y: activeY(workers) + 4,
+                textAnchor: "end",
+                children: String(workers)
+              },
+              `workers-${String(workers)}`
+            )),
+            stepPath === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { className: "dsh-obs-process-line", d: stepPath, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${t("process.activeWorkers")}: ${t("process.maxConcurrency")} ${String(peak)}` }) }),
+            process.decomposition.map((marker, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "line",
+              {
+                className: "dsh-obs-process-marker",
+                "data-tone": "decomposition",
+                x1: at(marker.time),
+                x2: at(marker.time),
+                y1: concurrencyTop,
+                y2: concurrencyBottom,
+                children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${formatTime(marker.time)} \xB7 ${t("process.decomposition")} \xB7 ${String(marker.workers)} ${t("process.workers")} \xB7 ${marker.episodeId}` })
+              },
+              `decomposition-${String(index)}`
+            )),
+            process.reflections.map((marker, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "line",
+              {
+                className: "dsh-obs-process-marker",
+                "data-tone": "reflection",
+                x1: at(marker.time),
+                x2: at(marker.time),
+                y1: concurrencyTop,
+                y2: concurrencyBottom,
+                children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${formatTime(marker.time)} \xB7 ${t("process.reflection")} \xB7 ${marker.outcome} \xB7 ${String(marker.stepsSince)} ${t("process.stepsSince")} \xB7 ${marker.episodeId}` })
+              },
+              `reflection-${String(index)}`
+            )),
+            process.stepRate.map((bucket, index) => {
+              const timed = bucket.from > 0 && bucket.to > 0;
+              const x = timed ? at(bucket.from) : pad.left + index * band;
+              const width2 = timed ? Math.max(1, at(bucket.to) - x - 1) : Math.max(1, band - 1);
+              const top = stripBottom - Math.max(0, bucket.steps) / maxSteps * (stripBottom - stripTop);
+              return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "rect",
+                {
+                  className: "dsh-obs-process-step",
+                  x,
+                  y: top,
+                  width: width2,
+                  height: stripBottom - top,
+                  children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${labels[index] ?? String(index + 1)}: ${String(bucket.steps)} ${t("unit.steps")}` })
+                },
+                `bucket-${String(index)}`
+              );
+            }),
+            ticks.map((time, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "text",
+              {
+                className: "dsh-obs-axis",
+                x: at(time),
+                y: height - 5,
+                textAnchor: index === 0 ? "start" : index === ticks.length - 1 ? "end" : "middle",
+                children: clock(time)
+              },
+              `axis-${String(time)}`
+            )),
+            process.summary.workers === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "text",
+              {
+                className: "dsh-obs-chart-empty",
+                x: pad.left + plotWidth / 2,
+                y: (concurrencyTop + concurrencyBottom) / 2,
+                textAnchor: "middle",
+                children: t("process.noWorkers")
+              }
+            ) : null
+          ]
+        }
+      );
+    }
+    function ProcessSummaryTable({
+      process,
+      t
+    }) {
+      const comparison = process.comparison;
+      const rows = processMetricRows(t);
+      const episodes = (summary) => `${String(summary.episodes)} ${t("process.episodes")}`;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "table",
+        {
+          className: "dsh-obs-table dsh-obs-process-summary",
+          "data-insufficient": comparison?.status === "insufficient" ? "true" : void 0,
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("process.metric") }),
+              comparison === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: `${t("process.value")} (${episodes(process.summary)})` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: `${t("process.after")} (${episodes(comparison.after.summary)})` }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: `${t("process.before")} (${episodes(comparison.before.summary)})` })
+              ] })
+            ] }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { "data-process-metric": row.key, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: t(row.label) }),
+              comparison === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.value(process.summary) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.value(comparison.after.summary) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.value(comparison.before.summary) })
+              ] })
+            ] }, row.key)) })
+          ]
+        }
+      );
+    }
+    function ProcessPanel({
+      process,
+      labels,
+      t
+    }) {
+      const comparison = process.comparison;
+      const intervention = comparison?.interventionAt === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", "data-process-intervention": "true", children: `${t("process.interventionAt")}: ${formatIntervention(comparison.interventionAt)}` });
+      if (process.summary.episodes === 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("process.title"), "data-process": "empty", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("process.title") }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("process.empty") }),
+          intervention
+        ] });
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("process.title"), "data-process": "timeline", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("process.title") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-legend", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-obs-legend-item", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "workers", "aria-hidden": "true" }),
+              t("process.activeWorkers")
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-obs-legend-item", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "decomposition", "aria-hidden": "true" }),
+              t("process.decomposition")
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-obs-legend-item", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "reflection", "aria-hidden": "true" }),
+              t("process.reflection")
+            ] })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProcessTimeline, { process, labels, t }),
+        comparison === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "p",
+          {
+            className: "dsh-obs-muted",
+            "data-process-comparison": comparison.basis,
+            "data-process-status": comparison.status,
+            children: `${t("process.comparison")} ${processBasisLabel(comparison.basis, t)} \xB7 ${comparison.label}`
+          }
+        ),
+        intervention,
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProcessSummaryTable, { process, t }),
+        process.summary.decompositionObserved ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("process.noDecomposition") })
       ] });
     }
     function TokenMix({
@@ -1674,6 +1959,7 @@ window.__ModuleLoader__.load({
             }
           ),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityPanel, { report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProcessPanel, { process: report.process, labels: report.bucketLabels, t }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DataQualityStrip, { report, t }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
             ScorecardList,
@@ -2797,6 +3083,42 @@ window.__ModuleLoader__.load({
     }
     .dsh-obs-tl-tick[data-tone="errors"] {
       stroke: var(--dsw-alias-state-error-primary);
+    }
+    .dsh-obs-process-chart {
+      display: block;
+      width: 100%;
+      height: 170px;
+    }
+    .dsh-obs-process-line {
+      fill: none;
+      stroke: var(--dsw-alias-state-business-primary);
+      stroke-width: 2;
+      stroke-linejoin: round;
+    }
+    .dsh-obs-process-marker[data-tone="decomposition"] {
+      stroke: var(--dsw-alias-brand-primary);
+      stroke-width: 1.5;
+    }
+    .dsh-obs-process-marker[data-tone="reflection"] {
+      stroke: var(--dsw-alias-state-success-primary);
+      stroke-width: 1.5;
+      stroke-dasharray: 3 2;
+    }
+    .dsh-obs-process-step {
+      fill: var(--dsw-alias-state-business-primary);
+      opacity: 0.55;
+    }
+    .dsh-obs-swatch[data-tone="workers"] {
+      background: var(--dsw-alias-state-business-primary);
+    }
+    .dsh-obs-swatch[data-tone="decomposition"] {
+      background: var(--dsw-alias-brand-primary);
+    }
+    .dsh-obs-swatch[data-tone="reflection"] {
+      background: var(--dsw-alias-state-success-primary);
+    }
+    .dsh-obs-process-summary {
+      margin-top: 8px;
     }
     .dsh-obs-turn-rows {
       display: flex;

@@ -12,6 +12,7 @@ const REVIEWER_PRESET_ID = 'goal-reviewer';
 /** Documented block-review defaults; the composition fragment repeats them. */
 export const DEFAULT_BLOCK_REVIEW_CONFIG = Object.freeze({
     enabled: true,
+    reviewQuestions: true,
     provider: 'spawn',
     model: 'deepseek-flash',
     reasoningEffort: 'max',
@@ -31,6 +32,7 @@ export const DEFAULT_CHECKPOINT_CONFIG = Object.freeze({
     maxBlocks: 3,
     enforceParallel: true,
     maxMessageChars: 1200,
+    stepInterval: 40,
 });
 /** Documented defaults; the composition fragment repeats them for the generated patch. */
 export const DEFAULT_CONFIG = Object.freeze({
@@ -117,6 +119,7 @@ function resolveBlockReview(raw) {
     };
     return Object.freeze({
         enabled: boolean('enabled'),
+        reviewQuestions: boolean('reviewQuestions'),
         provider: text('provider'),
         model: text('model'),
         reasoningEffort: text('reasoningEffort'),
@@ -134,6 +137,7 @@ const CHECKPOINT_INTEGER_RANGES = {
     minToolCalls: [1, 1000],
     maxBlocks: [0, 100],
     maxMessageChars: [200, 20_000],
+    stepInterval: [1, 1000],
 };
 /** Warn once when a profile still carries the removed speed-review section. */
 let legacySpeedReviewWarned = false;
@@ -180,6 +184,7 @@ function resolveCheckpoint(raw) {
         maxBlocks: integer('maxBlocks'),
         enforceParallel: boolean('enforceParallel'),
         maxMessageChars: integer('maxMessageChars'),
+        stepInterval: integer('stepInterval'),
     });
 }
 /**
@@ -246,6 +251,15 @@ export function resolveConfig(raw) {
 }
 /** Shell outcomes kept per session; older entries are dropped. */
 const MAX_SHELL_OUTCOMES = 32;
+/** Start the step counter of a turn; in-memory state resets on a new turn. */
+function beginStepTurn(state, turn) {
+    if (state.stepTurn === turn)
+        return;
+    state.stepTurn = turn;
+    state.steps = 0;
+    state.checkpointStep = undefined;
+    state.steerStep = 0;
+}
 /** Only a root session is supervised; forks and subagents are left untouched. */
 function isRootAgent(agent) {
     const header = agent.session.header;
@@ -367,8 +381,10 @@ const MAX_VERDICT_EVIDENCE = 5;
 const MAX_VERDICT_EVIDENCE_CHARS = 300;
 const MAX_REVIEW_ACTION_CHARS = 400;
 const MAX_DENY_REASON_CHARS = 1200;
+const MAX_SUBJECT_CHARS = 2000;
 /** Visible error codes: a denial names its cause and the record. */
 const REJECTED_CODE = 'GOAL_BLOCK_REVIEW_REJECTED';
+const QUESTION_REJECTED_CODE = 'GOAL_QUESTION_REVIEW_REJECTED';
 const UNAVAILABLE_CODE = 'GOAL_BLOCK_REVIEW_UNAVAILABLE';
 const REVIEW_ERROR_CODE = 'GOAL_BLOCK_REVIEW_ERROR';
 const EXHAUSTED_CODE = 'GOAL_BLOCK_REVIEW_EXHAUSTED';
@@ -594,7 +610,7 @@ function runtimePolicyFrom(message, workspace) {
     return bound(redact(messageText(message), workspace), MAX_RUNTIME_POLICY_CHARS);
 }
 /** Build the bounded, redacted evidence bundle from the session log and workspace files. */
-function buildEvidence(agent, goal, blockReason, workspace) {
+function buildEvidence(agent, goal, subject, workspace) {
     const events = sessionEvents(agent);
     const buckets = new Map();
     const called = new Map();
@@ -659,7 +675,7 @@ function buildEvidence(agent, goal, blockReason, workspace) {
     }));
     return {
         objective: bound(redact(goal.objective, workspace), 2000),
-        blockReason: bound(redact(blockReason, workspace), 2000),
+        subject: bound(redact(subject, workspace), MAX_SUBJECT_CHARS),
         rounds,
         userMessages: userMessages.slice(-MAX_EVIDENCE_USER_MESSAGES),
         runtimePolicy,
@@ -667,12 +683,13 @@ function buildEvidence(agent, goal, blockReason, workspace) {
         grants: redact(readBoundedFile(join(workspace, GRANTS_PATH), MAX_GRANTS_CHARS), workspace),
     };
 }
-/** SHA-256 over the objective, block reason, and the redacted evidence bundle. */
-function evidenceDigest(objective, blockReason, evidence) {
+/** SHA-256 over the objective, the subject kind and text, and the redacted evidence bundle. */
+function evidenceDigest(objective, subjectKind, subject, evidence) {
     return createHash('sha256')
         .update(JSON.stringify({
         objective,
-        blockReason,
+        subjectKind,
+        subject,
         rounds: evidence.rounds,
         userMessages: evidence.userMessages,
         runtimePolicy: evidence.runtimePolicy,
@@ -680,6 +697,10 @@ function evidenceDigest(objective, blockReason, evidence) {
         grants: evidence.grants,
     }))
         .digest('hex');
+}
+/** The JSON-normalized, bounded, redacted call arguments a question review judges. */
+function questionSubject(argumentsValue, workspace) {
+    return bound(redact(JSON.stringify(argumentsValue) ?? '', workspace), MAX_SUBJECT_CHARS);
 }
 /** One filesystem-safe goal directory name. */
 function goalDirectoryName(goalId) {
@@ -858,7 +879,7 @@ function loadReviewerInstructions() {
     return reviewerInstructions;
 }
 /** Render the bounded reviewer prompt: required evidence first, tool history within the rest. */
-function composeReviewPrompt(evidence, workspace, goal) {
+function composeReviewPrompt(evidence, workspace, goal, subjectKind) {
     const header = [
         loadReviewerInstructions(),
         '',
@@ -867,7 +888,7 @@ function composeReviewPrompt(evidence, workspace, goal) {
         `- Workspace (read-only): ${bound(workspace, 260)}`,
         `- Objective: ${evidence.objective}`,
         `- Rounds started: ${goal.roundsStarted} of ${goal.maxGoalRounds}`,
-        `- Block reason: ${evidence.blockReason}`,
+        `- ${subjectKind === 'question' ? 'Proposed question' : 'Block reason'}: ${evidence.subject}`,
         '',
         '### Last goal rounds',
         '',
@@ -1130,29 +1151,37 @@ async function runReview(ctx, agent, workspace, prompt, config, signal) {
     }
 }
 /** Deny with the reviewer's next action and a visible code. */
-function denyWith(reason, code) {
+function denyWith(reason, code, name = 'goal-block-review') {
     return {
         kind: 'deny',
         reason: bound(reason, MAX_DENY_REASON_CHARS),
-        info: { name: 'goal-block-review', code },
+        info: { name, code },
     };
 }
-/** The tool decision for one strict verdict; a verified blocker gets a notice. */
-function verdictDecision(agent, verdict, reused, recordPath) {
+/** The tool decision for one strict verdict; a verified block gets a notice. */
+function verdictDecision(agent, verdict, reused, recordPath, subjectKind) {
     if (verdict.verdict === 'not-blocker') {
+        if (subjectKind === 'question') {
+            return denyWith(`The independent question review rejected this question: ${verdict.nextStep} The goal stays active. Do that next step now and record the assumption in your next work_checkpoint; do not ask the user for this decision. Record: ${recordPath}.`, QUESTION_REJECTED_CODE, 'goal-question-review');
+        }
         return denyWith(`The independent block review rejected this goal block: ${verdict.nextStep} The goal stays active. Do that next step now; do not ask the user for permission this review already covers. Record: ${recordPath}.`, REJECTED_CODE);
     }
+    // An allowed question simply reaches the user; only a block needs the notice.
+    if (subjectKind === 'question')
+        return undefined;
     deliverNotice(agent, `Block review ${reused ? '(cached) ' : ''}confirmed a user-only blocker. The closing message must name exactly this user action: ${verdict.userAction}. Record: ${recordPath}.`, 'goal-continuity: block review confirmed a blocker');
     return undefined;
 }
 /** Record one policy decision without pretending it is a review verdict. */
-async function recordPolicy(agent, workspace, goal, digest, verdict, policy, detail, target, reviewed, evidence) {
+async function recordPolicy(agent, workspace, goal, digest, subjectKind, verdict, policy, detail, target, reviewed, evidence) {
     await writeRecord(recordPathFor(workspace, goal.id, digest), {
         version: 1,
         goal: goal.id,
         revision: goal.revision,
         objective: bound(redact(goal.objective, workspace), 500),
         digest,
+        subject: subjectKind,
+        subjectText: evidence?.subject ?? '',
         verdict,
         verified: false,
         reviewed,
@@ -1173,9 +1202,12 @@ async function recordPolicy(agent, workspace, goal, digest, verdict, policy, det
     });
     return displayRecordPath(workspace, goal.id, digest);
 }
-/** Visible notice for a policy-allowed unverified block. */
-function notifyUnverified(agent, record, policy, detail) {
-    deliverNotice(agent, `Block review allowed this goal block UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The goal will block without a confirmed user-only action.`, `goal-continuity: unverified block allowed (${policy})`);
+/** Visible notice for a policy-allowed unverified proposal. */
+function notifyUnverified(agent, subjectKind, record, policy, detail) {
+    const text = subjectKind === 'question'
+        ? `Question review allowed this question UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The question will reach the user without a confirmed user-only answer.`
+        : `Block review allowed this goal block UNVERIFIED (${policy}: ${bound(detail, 300)}). Record: ${record}. The goal will block without a confirmed user-only action.`;
+    deliverNotice(agent, text, `goal-continuity: unverified ${subjectKind} allowed (${policy})`);
 }
 /** Install the shared reviewer child-scope allowlist used by both reviews. */
 function installReviewerScope(ctx, reviewerPreset) {
@@ -1218,31 +1250,49 @@ function installBlockReview(ctx, config) {
         const agent = exec.agent;
         if (agent === undefined || !isRootAgent(agent))
             return next();
-        if (exec.name !== 'update_goal')
-            return next();
-        const args = exec.arguments;
-        if (!isRecord(args) || args.action !== 'blocked')
+        const subjectKind = exec.name === 'update_goal'
+            ? 'block'
+            : exec.name === 'ask_user_question'
+                ? 'question'
+                : undefined;
+        if (subjectKind === undefined)
             return next();
         const goal = readCurrentGoal(ctx, agent);
         if (goal === undefined || goal.phase !== 'active')
             return next();
-        if (args.goal_id !== goal.id || args.revision !== goal.revision)
-            return next();
-        const blockReason = typeof args.blocked_reason === 'string' ? args.blocked_reason : '';
-        if (blockReason.trim() === '')
-            return next();
         const turn = openTurn(agent, goal);
-        if (explicitBlockRequest(turn.directMessages))
-            return next();
-        if (turn.goalRound && goal.roundsStarted < config.blockedAfterConsecutiveRounds)
-            return next();
         const workspace = workspaceFor(ctx, agent);
-        const evidence = buildEvidence(agent, goal, blockReason, workspace);
-        const digest = evidenceDigest(goal.objective, blockReason, evidence);
+        let subject;
+        if (subjectKind === 'question') {
+            // Only a goal round is supervised; a direct-human turn is not a pause.
+            if (!config.reviewQuestions || !turn.goalRound)
+                return next();
+            subject = questionSubject(exec.arguments, workspace);
+        }
+        else {
+            const args = exec.arguments;
+            if (!isRecord(args) || args.action !== 'blocked')
+                return next();
+            if (args.goal_id !== goal.id || args.revision !== goal.revision)
+                return next();
+            const blockReason = typeof args.blocked_reason === 'string' ? args.blocked_reason : '';
+            if (blockReason.trim() === '')
+                return next();
+            if (explicitBlockRequest(turn.directMessages))
+                return next();
+            if (turn.goalRound && goal.roundsStarted < config.blockedAfterConsecutiveRounds)
+                return next();
+            subject = blockReason;
+        }
+        const label = subjectKind === 'question' ? 'Question review' : 'Block review';
+        const denialName = subjectKind === 'question' ? 'goal-question-review' : 'goal-block-review';
+        const evidence = buildEvidence(agent, goal, subject, workspace);
+        const digest = evidenceDigest(goal.objective, subjectKind, subject, evidence);
         const record = displayRecordPath(workspace, goal.id, digest);
         const cached = cachedVerdict(workspace, goal.id, digest);
-        if (cached !== undefined)
-            return verdictDecision(agent, cached, true, record) ?? next();
+        if (cached !== undefined) {
+            return verdictDecision(agent, cached, true, record, subjectKind) ?? next();
+        }
         const target = {
             provider: config.provider,
             model: config.model,
@@ -1252,25 +1302,25 @@ function installBlockReview(ctx, config) {
         const reviewed = await countReviewAttempts(workspace, goal.id);
         if (reviewed >= config.maxReviewsPerGoal) {
             const detail = `the per-goal review budget (${config.maxReviewsPerGoal}) is exhausted`;
-            const written = await recordPolicy(agent, workspace, goal, digest, 'exhausted', 'onExhausted', detail, target, false, evidence);
+            const written = await recordPolicy(agent, workspace, goal, digest, subjectKind, 'exhausted', 'onExhausted', detail, target, false, evidence);
             if (config.onExhausted === 'allow') {
-                notifyUnverified(agent, written, 'onExhausted', detail);
+                notifyUnverified(agent, subjectKind, written, 'onExhausted', detail);
                 return next();
             }
-            return denyWith(`Block review rejected this proposal: ${detail}. The goal stays active. Continue the objective with another authorized route, or record why only the user can proceed; raising maxReviewsPerGoal allows another review. Record: ${record}.`, EXHAUSTED_CODE);
+            return denyWith(`${label} rejected this proposal: ${detail}. The goal stays active. Continue the objective with another authorized route, or record why only the user can proceed; raising maxReviewsPerGoal allows another review. Record: ${record}.`, EXHAUSTED_CODE, denialName);
         }
         let prompt;
         try {
-            prompt = composeReviewPrompt(evidence, workspace, goal);
+            prompt = composeReviewPrompt(evidence, workspace, goal, subjectKind);
         }
         catch (error) {
             const detail = `the reviewer prompt could not be built: ${errorMessage(error)}`;
-            const written = await recordPolicy(agent, workspace, goal, digest, 'review-error', 'onReviewError', detail, target, false, evidence);
+            const written = await recordPolicy(agent, workspace, goal, digest, subjectKind, 'review-error', 'onReviewError', detail, target, false, evidence);
             if (config.onReviewError === 'allow') {
-                notifyUnverified(agent, written, 'onReviewError', detail);
+                notifyUnverified(agent, subjectKind, written, 'onReviewError', detail);
                 return next();
             }
-            return denyWith(`Block review could not run (${detail}) and onReviewError is "deny". The goal stays active. Fix the review target or set blockReview.onReviewError to "allow". Record: ${record}.`, REVIEW_ERROR_CODE);
+            return denyWith(`${label} could not run (${detail}) and onReviewError is "deny". The goal stays active. Fix the review target or set blockReview.onReviewError to "allow". Record: ${record}.`, REVIEW_ERROR_CODE, denialName);
         }
         const outcome = await runReview(ctx, agent, workspace, prompt, config, exec.signal);
         // Charge a review that actually started; an unavailable target spends no model call.
@@ -1279,21 +1329,21 @@ function installBlockReview(ctx, config) {
         }
         if (outcome.kind === 'unavailable') {
             const detail = redact(outcome.detail, workspace);
-            const written = await recordPolicy(agent, workspace, goal, digest, 'unavailable', 'onUnavailable', detail, target, false, evidence);
+            const written = await recordPolicy(agent, workspace, goal, digest, subjectKind, 'unavailable', 'onUnavailable', detail, target, false, evidence);
             if (config.onUnavailable === 'allow') {
-                notifyUnverified(agent, written, 'onUnavailable', detail);
+                notifyUnverified(agent, subjectKind, written, 'onUnavailable', detail);
                 return next();
             }
-            return denyWith(`Block review is unavailable (${detail}) and onUnavailable is "deny". The goal stays active. Fix the reviewer provider or preset, or set blockReview.onUnavailable to "allow". Record: ${record}.`, UNAVAILABLE_CODE);
+            return denyWith(`${label} is unavailable (${detail}) and onUnavailable is "deny". The goal stays active. Fix the reviewer provider or preset, or set blockReview.onUnavailable to "allow". Record: ${record}.`, UNAVAILABLE_CODE, denialName);
         }
         if (outcome.kind === 'error') {
             const detail = redact(outcome.detail, workspace);
-            const written = await recordPolicy(agent, workspace, goal, digest, 'review-error', 'onReviewError', detail, target, outcome.started, evidence);
+            const written = await recordPolicy(agent, workspace, goal, digest, subjectKind, 'review-error', 'onReviewError', detail, target, outcome.started, evidence);
             if (config.onReviewError === 'allow') {
-                notifyUnverified(agent, written, 'onReviewError', detail);
+                notifyUnverified(agent, subjectKind, written, 'onReviewError', detail);
                 return next();
             }
-            return denyWith(`Block review failed (${detail}) and onReviewError is "deny". The goal stays active. Fix the reviewer target or set blockReview.onReviewError to "allow". Record: ${record}.`, REVIEW_ERROR_CODE);
+            return denyWith(`${label} failed (${detail}) and onReviewError is "deny". The goal stays active. Fix the reviewer target or set blockReview.onReviewError to "allow". Record: ${record}.`, REVIEW_ERROR_CODE, denialName);
         }
         const calls = evidence.rounds.reduce((total, round) => total + round.calls.length, 0);
         await writeRecord(recordPathFor(workspace, goal.id, digest), {
@@ -1302,6 +1352,8 @@ function installBlockReview(ctx, config) {
             revision: goal.revision,
             objective: bound(redact(goal.objective, workspace), 500),
             digest,
+            subject: subjectKind,
+            subjectText: evidence.subject,
             verdict: outcome.verdict.verdict,
             verified: true,
             reviewed: true,
@@ -1322,7 +1374,7 @@ function installBlockReview(ctx, config) {
             time: new Date().toISOString(),
             session: agent.session.id,
         });
-        const decision = verdictDecision(agent, outcome.verdict, false, record);
+        const decision = verdictDecision(agent, outcome.verdict, false, record, subjectKind);
         return decision ?? next();
     }
 }
@@ -1388,6 +1440,7 @@ const MAX_CHECKPOINT_ITEMS = 8;
 const MAX_CHECKPOINT_ITEM_CHARS = 240;
 const MAX_CHECKPOINT_NEXT_CHARS = 400;
 const MAX_CHECKPOINT_SERIAL_CHARS = 400;
+const MAX_CHECKPOINT_BOTTLENECK_CHARS = 400;
 const MAX_CHECKPOINT_SPEEDUP_CHARS = 240;
 const MAX_CHECKPOINT_PATHS = 5;
 const MAX_CHECKPOINT_PATH_CHARS = 120;
@@ -1584,10 +1637,8 @@ function taggedWorkerStarted(evidence, id) {
 function workerToolVisible(ctx, agent) {
     return WORKER_START_TOOLS.some((name) => toolVisible(ctx, agent, name));
 }
-/** Whether the close needs a checkpoint for this turn. */
+/** Whether the close needs a checkpoint for this turn; freshness is checked first. */
 function checkpointRequired(evidence, config) {
-    if (evidence.checkpoint !== undefined)
-        return false;
     if (evidence.toolCalls < config.minToolCalls)
         return false;
     if (evidence.lastTool === 'ask_user_question')
@@ -1598,7 +1649,7 @@ function checkpointRequired(evidence, config) {
     return true;
 }
 /** The bounded checkpoint request naming the evidence and the decision questions. */
-function composeCheckpointRequest(evidence, workspace, max) {
+function composeCheckpointRequest(evidence, workspace, max, step) {
     const paths = evidence.written
         .slice(0, MAX_CHECKPOINT_PATHS)
         .map((path) => bound(redact(path, workspace), MAX_CHECKPOINT_PATH_CHARS));
@@ -1620,8 +1671,9 @@ function composeCheckpointRequest(evidence, workspace, max) {
     // The questions and the event locator survive any maxMessageChars: only the
     // evidence body is bounded, never the tail.
     const head = 'Work checkpoint required (goal-continuity).';
-    const tail = 'work_checkpoint: done|continue, verified, remaining, parallel or serialReason, next. Done? verified? remaining? parallel lanes? next?';
+    const tail = 'work_checkpoint: done|continue, verified, remaining, parallel or serialReason, bottleneck, next. Done? verified? remaining? lanes? bottleneck? next action?';
     const evidenceLines = [
+        ...(step === undefined ? [] : [`- Steps: ${step.step} of ${step.interval}`]),
         `- Tool calls: ${evidence.toolCalls}`,
         `- Written paths: ${pathText}`,
         `- Last shell: ${shellText}`,
@@ -1673,6 +1725,7 @@ function parseCheckpointInput(raw, workspace) {
         'remaining',
         'parallel',
         'serialReason',
+        'bottleneck',
         'next',
         'speedup',
     ]);
@@ -1694,6 +1747,10 @@ function parseCheckpointInput(raw, workspace) {
     if (raw.outcome === 'continue' && !parallel && serialReason === undefined) {
         throw new Error('work_checkpoint.serialReason is required when outcome is "continue" and parallel is false');
     }
+    const bottleneck = checkpointText(raw.bottleneck, 'bottleneck', MAX_CHECKPOINT_BOTTLENECK_CHARS, workspace);
+    if (raw.outcome === 'continue' && bottleneck === undefined) {
+        throw new Error('work_checkpoint.bottleneck is required when outcome is "continue"');
+    }
     const speedup = checkpointText(raw.speedup, 'speedup', MAX_CHECKPOINT_SPEEDUP_CHARS, workspace);
     return {
         outcome: raw.outcome,
@@ -1701,6 +1758,7 @@ function parseCheckpointInput(raw, workspace) {
         remaining: checkpointList(raw.remaining, 'remaining', workspace),
         parallel,
         ...(serialReason === undefined ? {} : { serialReason }),
+        ...(bottleneck === undefined ? {} : { bottleneck }),
         next,
         ...(speedup === undefined ? {} : { speedup }),
     };
@@ -1713,13 +1771,13 @@ const CHECKPOINT_OUTPUT_SCHEMA = {
     additionalProperties: false,
 };
 /** Register the checkpoint tool; a host without a tool registry keeps running. */
-function installCheckpointTool(ctx) {
+function installCheckpointTool(ctx, stateFor) {
     const tools = optionalService(ctx, 'tools');
     if (tools === undefined || typeof tools.register !== 'function')
         return;
     tools.register({
         name: CHECKPOINT_TOOL,
-        description: 'Record the work checkpoint decision at a substantial pause: outcome done or continue, verified facts, remaining items, parallel lanes or a serial reason, the next action, and an optional speedup. The turn-close gate requires one successful call per substantial turn.',
+        description: 'Record the work checkpoint decision at a substantial pause: outcome done or continue, verified facts, remaining items, parallel lanes or a serial reason, the current bottleneck (required for continue), the next action, and an optional speedup. The turn-close gate requires one successful call per substantial turn.',
         parameters: {
             type: 'object',
             properties: {
@@ -1746,6 +1804,10 @@ function installCheckpointTool(ctx) {
                     type: 'string',
                     description: 'Why the remaining work must stay serial; required for continue with parallel false.',
                 },
+                bottleneck: {
+                    type: 'string',
+                    description: 'The current bottleneck and the next action that removes it; required for continue.',
+                },
                 next: { type: 'string', description: 'The immediate next action.' },
                 speedup: { type: 'string', description: 'Optional speedup for the next turn.' },
             },
@@ -1768,6 +1830,9 @@ function installCheckpointTool(ctx) {
             const turn = openTurnNumber(agent);
             if (turn === undefined)
                 throw new Error('work_checkpoint: no open turn to record');
+            const state = stateFor(agent);
+            beginStepTurn(state, turn);
+            state.checkpointStep = state.steps;
             const id = checkpointIdFor(agent.session.id, turn);
             const path = checkpointPathFor(workspace, agent.session.id, turn);
             const display = displayCheckpointPath(workspace, path);
@@ -1781,6 +1846,7 @@ function installCheckpointTool(ctx) {
                 remaining: input.remaining,
                 parallel: input.parallel,
                 ...(input.serialReason === undefined ? {} : { serialReason: input.serialReason }),
+                ...(input.bottleneck === undefined ? {} : { bottleneck: input.bottleneck }),
                 next: input.next,
                 ...(input.speedup === undefined ? {} : { speedup: input.speedup }),
                 time: new Date().toISOString(),
@@ -1788,7 +1854,7 @@ function installCheckpointTool(ctx) {
                 // the record path already hashed the original id.
                 session: bound(redact(agent.session.id, workspace), MAX_CHECKPOINT_ITEM_CHARS),
             });
-            const decision = `${input.outcome}; ${input.parallel ? 'parallel' : 'serial'}; ${input.verified.length} verified, ${input.remaining.length} remaining; next: ${input.next}`;
+            const decision = `${input.outcome}; ${input.parallel ? 'parallel' : 'serial'}; ${input.verified.length} verified, ${input.remaining.length} remaining; bottleneck: ${input.bottleneck ?? 'none'}; next: ${input.next}`;
             const text = written
                 ? `Work checkpoint ${id} recorded at ${display}. ${decision}`
                 : `Work checkpoint ${id} could not write its local record at ${display}; the close gate still counts this checkpoint. ${decision}`;
@@ -1797,8 +1863,18 @@ function installCheckpointTool(ctx) {
         },
     });
 }
-/** Install the turn-close checkpoint and parallel-action gates. */
+/** Install the periodic mid-turn checkpoint trigger and the turn-close gates. */
 function installCheckpointGate(ctx, config, stateFor) {
+    // A running root turn gets one request at each step interval, never a wake.
+    ctx.on('agent/pre-step', (payload, next) => {
+        try {
+            evaluateStep(payload.agent, payload.turn);
+        }
+        catch {
+            // An observer never fails a step.
+        }
+        return next();
+    });
     // The committed log does not carry a shell result's structured exit state, so
     // observe it live and let the turn-close evidence read it back by call id.
     ctx.on('tools/result', (exec, result) => {
@@ -1825,6 +1901,48 @@ function installCheckpointGate(ctx, config, stateFor) {
             // Fail open: an internal state error must never fail a turn.
         }
     });
+    /** Steer one non-waking message; a disposed agent cannot be steered. */
+    function steer(agent, text, summary) {
+        try {
+            agent.steer(createNotice(text, summary, config.maxMessageChars));
+        }
+        catch {
+            // A disposed agent cannot be steered; the turn is already over.
+        }
+    }
+    /** Whether the latest checkpoint is younger than one step interval. */
+    function freshCheckpoint(evidence, state) {
+        // A checkpoint this process never observed at a known step cannot be proven
+        // fresh; the close asks for one it can verify instead of trusting an age.
+        if (evidence.checkpoint === undefined || state.checkpointStep === undefined)
+            return false;
+        return state.steps - state.checkpointStep < config.stepInterval;
+    }
+    /** One pre-step boundary: count it and steer at the interval, never at a wake. */
+    function evaluateStep(agent, turn) {
+        if (!isRootAgent(agent))
+            return;
+        const state = stateFor(agent);
+        beginStepTurn(state, turn);
+        state.steps += 1;
+        // Anchored to the turn start, the latest checkpoint, or the last steer, so
+        // an ignored request repeats only once per interval.
+        const since = Math.max(state.checkpointStep ?? 0, state.steerStep);
+        if (state.steps - since < config.stepInterval)
+            return;
+        const workspace = workspaceFor(ctx, agent);
+        const evidence = checkpointEvidence(agent, turn, workspace, state.shellOutcomes);
+        if (evidence.lastTool === 'ask_user_question')
+            return;
+        if (config.requireWrite && evidence.written.length === 0 && evidence.workers.length === 0) {
+            return;
+        }
+        state.steerStep = state.steps;
+        steer(agent, composeCheckpointRequest(evidence, workspace, config.maxMessageChars, {
+            step: state.steps,
+            interval: config.stepInterval,
+        }), 'goal-continuity: periodic work checkpoint');
+    }
     /** One close decision: steer one more step, or allow the close. */
     function evaluate(agent, turn) {
         if (!isRootAgent(agent))
@@ -1835,8 +1953,12 @@ function installCheckpointGate(ctx, config, stateFor) {
             return;
         const workspace = workspaceFor(ctx, agent);
         const evidence = checkpointEvidence(agent, turn, workspace, state.shellOutcomes);
-        const decision = checkpointDecision(evidence);
-        if (decision !== undefined) {
+        if (freshCheckpoint(evidence, state)) {
+            const decision = checkpointDecision(evidence);
+            // A logged successful call is a checkpoint even if its arguments are
+            // unreadable; only a readable parallel decision still gates the close.
+            if (decision === undefined)
+                return;
             if (!config.enforceParallel || decision.outcome === 'done' || !decision.parallel)
                 return;
             const id = checkpointIdFor(agent.session.id, turn);
@@ -1862,12 +1984,7 @@ function installCheckpointGate(ctx, config, stateFor) {
             return;
         }
         budget.refusals += 1;
-        try {
-            agent.steer(createNotice(text, summary, config.maxMessageChars));
-        }
-        catch {
-            // A disposed agent cannot be steered; the turn is already over.
-        }
+        steer(agent, text, summary);
     }
 }
 /**
@@ -1914,7 +2031,7 @@ export function apply(ctx, config) {
     const mountedAt = Date.now();
     const states = new WeakMap();
     if (resolved.checkpoint.enabled) {
-        installCheckpointTool(ctx);
+        installCheckpointTool(ctx, stateFor);
         installCheckpointGate(ctx, resolved.checkpoint, stateFor);
     }
     function stateFor(agent) {
@@ -1932,6 +2049,10 @@ export function apply(ctx, config) {
                 cause: null,
                 refusal: null,
                 checkpointTurn: undefined,
+                stepTurn: undefined,
+                steps: 0,
+                checkpointStep: undefined,
+                steerStep: 0,
                 shellOutcomes: new Map(),
             };
             states.set(agent, state);
@@ -2351,6 +2472,7 @@ export function apply(ctx, config) {
                 state.turn = event.data.turn;
                 state.goalRound = false;
                 state.checkpointTurn = { turn: event.data.turn, refusals: 0, unchecked: false };
+                beginStepTurn(state, event.data.turn);
                 return;
             case 'user/message':
                 if (event.data.source.kind === 'goal') {

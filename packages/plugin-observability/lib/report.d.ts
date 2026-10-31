@@ -4,6 +4,7 @@ import type { EpisodeCheckpoints, EpisodeGoals, EpisodeInterval, EpisodeOutcome 
 import type { Finding } from './findings.js';
 import type { Hypothesis, HypothesisResult, MetricValues } from './hypotheses.js';
 import type { AutonomySummary, CostSummary, DataQuality, QualitySummary, SpeedSummary, SubagentSummary, Window } from './metrics.js';
+import type { ProcessSummary, ProcessTimelineData } from './process.js';
 import type { SessionMeta, TokenUsage, TraceRecord } from './records.js';
 import type { Row } from './rows.js';
 import { type Scorecard } from './scorecards.js';
@@ -11,6 +12,7 @@ import { type Readiness, type ReadinessSources, type RowStatus } from './status.
 /** The client renders these beside the report; re-exported so one module is enough. */
 export type { Finding } from './findings.js';
 export type { HypothesisResult } from './hypotheses.js';
+export type { ConcurrencyPoint, DecompositionMarker, ProcessComparison, ProcessSide, ProcessSummary, ProcessTimelineData, ReflectionMarker, StepBucket, WorkerSpan, } from './process.js';
 export type { Scorecard } from './scorecards.js';
 /** Metadata for one drill-down entry; never message text or tool arguments. */
 export interface DetailRow {
@@ -185,6 +187,8 @@ export interface BaselineComparison {
     readonly subagents: SubagentSummary;
     /** The metric values a hypothesis compares against. */
     readonly metrics: MetricValues;
+    /** The baseline window's process summary, for the before-and-after comparison. */
+    readonly process: ProcessSummary;
 }
 /** What the view must state it cannot observe, not hide. */
 export declare const BLIND_SPOTS: readonly string[];
@@ -239,6 +243,8 @@ export interface Report {
     /** Uncapped active time of the window, attributed by event time. */
     readonly windowActiveMs: number;
     readonly baseline?: BaselineComparison;
+    /** Workers, concurrency, decomposition and reflection markers, and the process summary. */
+    readonly process: ProcessTimelineData;
     /** Only the session range, whose buckets are time rather than turns. */
     readonly timeline?: SessionTimelineData;
     readonly blindSpots: readonly string[];
@@ -259,11 +265,13 @@ export declare function buildReport(options: {
     readonly readiness?: ReadinessSources;
     /** Session header metadata from the reader, used to join child sessions. */
     readonly sessions?: readonly SessionMeta[];
-    /** Episode boundaries, comparison minimum, and hypotheses. */
+    /** Episode boundaries, comparison minimum, hypotheses, and intervention date. */
     readonly config?: {
         readonly idleGapMinutes: number;
         readonly minEpisodes: number;
         readonly hypotheses: readonly Hypothesis[];
+        /** Epoch milliseconds of the configured process intervention date. */
+        readonly interventionAt?: number;
     };
     /** The previous window or session, when the reader resolved one. */
     readonly baseline?: {
