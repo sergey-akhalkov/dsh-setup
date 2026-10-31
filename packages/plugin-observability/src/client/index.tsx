@@ -381,6 +381,7 @@ export const EN: Record<string, string> = {
   'outcome.open': 'open',
   'hypothesis.title': 'Hypotheses',
   'hypothesis.empty': 'No hypotheses are configured.',
+  'hypothesis.loading': 'Reading the comparison windows…',
   'hypothesis.copy': 'Copy summary',
   'hypothesis.baseline': 'Baseline',
   'hypothesis.current': 'Current',
@@ -420,10 +421,11 @@ export const EN: Record<string, string> = {
 }
 
 /** URL of one report request. */
-export function reportUrl(range: Range, sessionId?: string): string {
+export function reportUrl(range: Range, sessionId?: string, includeHypotheses = false): string {
   const session =
     sessionId === undefined || sessionId === '' ? '' : `&session=${encodeURIComponent(sessionId)}`
-  return `${REPORT_PATH}?range=${range}${session}`
+  const hypotheses = includeHypotheses ? '&hypotheses=1' : ''
+  return `${REPORT_PATH}?range=${range}${session}${hypotheses}`
 }
 
 function formatTime(time: number): string {
@@ -2723,6 +2725,8 @@ export function ObservabilityPanel({
   workspace,
   inspectCall,
   openView,
+  onSubView,
+  hypothesesLoading = false,
 }: {
   range: Range
   report: Report | null
@@ -2734,8 +2738,15 @@ export function ObservabilityPanel({
   workspace?: WorkspaceFacade
   inspectCall?: (callId: string) => void
   openView?: (view: string, focus: string) => void
+  /** Tells the view that the Hypotheses tab was opened; the report is refetched. */
+  onSubView?: (view: SubView) => void
+  hypothesesLoading?: boolean
 }): ReactNode {
-  const [view, setView] = useState<SubView>('overview')
+  const [view, setViewState] = useState<SubView>('overview')
+  const setView = (next: SubView): void => {
+    setViewState(next)
+    onSubView?.(next)
+  }
   const [failuresOpen, setFailuresOpen] = useState(false)
   const [failureFilter, setFailureFilter] = useState<string | undefined>(undefined)
   const [rowFocus, setRowFocus] = useState<string | undefined>(undefined)
@@ -2864,7 +2875,13 @@ export function ObservabilityPanel({
                 onSelect={setTasksSelected}
               />
             ) : null}
-            {view === 'hypotheses' ? <HypothesesView report={report} t={t} /> : null}
+            {view === 'hypotheses' ? (
+              hypothesesLoading ? (
+                <p className="dsh-obs-loading">{t('hypothesis.loading')}</p>
+              ) : (
+                <HypothesesView report={report} t={t} />
+              )
+            ) : null}
           </div>
           <BlindSpots report={report} t={t} />
         </>
@@ -2891,16 +2908,21 @@ export function ObservabilityView({
   const [report, setReport] = useState<Report | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  // The Hypotheses tab needs the declared comparison windows; everything else
+  // must not pay for that corpus read.
+  const [needsHypotheses, setNeedsHypotheses] = useState(false)
+  const [hypothesesLoading, setHypothesesLoading] = useState(false)
   useEffect(() => {
     let active = true
-    const key = `${range}|${sessionId ?? ''}`
+    const key = `${range}|${sessionId ?? ''}|${needsHypotheses ? 'h' : 'v'}`
     const cached = reportCache.get(key)
     // Show the last report for this range at once while the fresh one loads.
     if (cached !== undefined && Date.now() - cached.at < REPORT_CACHE_MS) setReport(cached.report)
     else setReport(null)
     setError(null)
     setNow(Date.now())
-    fetch(reportUrl(range, sessionId), {
+    if (needsHypotheses) setHypothesesLoading(true)
+    fetch(reportUrl(range, sessionId, needsHypotheses), {
       headers: { accept: 'application/json' },
       credentials: 'same-origin',
     })
@@ -2919,15 +2941,21 @@ export function ObservabilityView({
       })
       .then((value) => {
         reportCache.set(key, { at: Date.now(), report: value })
-        if (active) setReport(value)
+        if (active) {
+          setReport(value)
+          setHypothesesLoading(false)
+        }
       })
       .catch((cause: unknown) => {
-        if (active) setError(cause instanceof Error ? cause.message : String(cause))
+        if (active) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+          setHypothesesLoading(false)
+        }
       })
     return () => {
       active = false
     }
-  }, [range, sessionId])
+  }, [range, sessionId, needsHypotheses])
   return (
     <ObservabilityPanel
       range={range}
@@ -2940,6 +2968,10 @@ export function ObservabilityView({
       {...(workspace === undefined ? {} : { workspace })}
       {...(inspectCall === undefined ? {} : { inspectCall })}
       {...(openView === undefined ? {} : { openView })}
+      hypothesesLoading={hypothesesLoading}
+      onSubView={(view) => {
+        if (view === 'hypotheses') setNeedsHypotheses(true)
+      }}
     />
   )
 }

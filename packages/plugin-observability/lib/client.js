@@ -369,6 +369,7 @@ window.__ModuleLoader__.load({
       "outcome.open": "open",
       "hypothesis.title": "Hypotheses",
       "hypothesis.empty": "No hypotheses are configured.",
+      "hypothesis.loading": "Reading the comparison windows\u2026",
       "hypothesis.copy": "Copy summary",
       "hypothesis.baseline": "Baseline",
       "hypothesis.current": "Current",
@@ -406,9 +407,10 @@ window.__ModuleLoader__.load({
       "time.day": "d ago",
       "time.now": "just now"
     };
-    function reportUrl(range, sessionId) {
+    function reportUrl(range, sessionId, includeHypotheses = false) {
       const session = sessionId === void 0 || sessionId === "" ? "" : `&session=${encodeURIComponent(sessionId)}`;
-      return `${REPORT_PATH}?range=${range}${session}`;
+      const hypotheses = includeHypotheses ? "&hypotheses=1" : "";
+      return `${REPORT_PATH}?range=${range}${session}${hypotheses}`;
     }
     function formatTime(time) {
       return new Date(time).toLocaleString();
@@ -2063,9 +2065,15 @@ window.__ModuleLoader__.load({
       sessionId,
       workspace,
       inspectCall,
-      openView
+      openView,
+      onSubView,
+      hypothesesLoading = false
     }) {
-      const [view, setView] = (0, import_react.useState)("overview");
+      const [view, setViewState] = (0, import_react.useState)("overview");
+      const setView = (next) => {
+        setViewState(next);
+        onSubView?.(next);
+      };
       const [failuresOpen, setFailuresOpen] = (0, import_react.useState)(false);
       const [failureFilter, setFailureFilter] = (0, import_react.useState)(void 0);
       const [rowFocus, setRowFocus] = (0, import_react.useState)(void 0);
@@ -2172,7 +2180,7 @@ window.__ModuleLoader__.load({
                     onSelect: setTasksSelected
                   }
                 ) : null,
-                view === "hypotheses" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HypothesesView, { report, t }) : null
+                view === "hypotheses" ? hypothesesLoading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-loading", children: t("hypothesis.loading") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HypothesesView, { report, t }) : null
               ]
             }
           ),
@@ -2191,15 +2199,18 @@ window.__ModuleLoader__.load({
       const [report, setReport] = (0, import_react.useState)(null);
       const [error, setError] = (0, import_react.useState)(null);
       const [now, setNow] = (0, import_react.useState)(() => Date.now());
+      const [needsHypotheses, setNeedsHypotheses] = (0, import_react.useState)(false);
+      const [hypothesesLoading, setHypothesesLoading] = (0, import_react.useState)(false);
       (0, import_react.useEffect)(() => {
         let active = true;
-        const key = `${range}|${sessionId ?? ""}`;
+        const key = `${range}|${sessionId ?? ""}|${needsHypotheses ? "h" : "v"}`;
         const cached = reportCache.get(key);
         if (cached !== void 0 && Date.now() - cached.at < REPORT_CACHE_MS) setReport(cached.report);
         else setReport(null);
         setError(null);
         setNow(Date.now());
-        fetch(reportUrl(range, sessionId), {
+        if (needsHypotheses) setHypothesesLoading(true);
+        fetch(reportUrl(range, sessionId, needsHypotheses), {
           headers: { accept: "application/json" },
           credentials: "same-origin"
         }).then(async (response) => {
@@ -2212,14 +2223,20 @@ window.__ModuleLoader__.load({
           return await response.json();
         }).then((value) => {
           reportCache.set(key, { at: Date.now(), report: value });
-          if (active) setReport(value);
+          if (active) {
+            setReport(value);
+            setHypothesesLoading(false);
+          }
         }).catch((cause) => {
-          if (active) setError(cause instanceof Error ? cause.message : String(cause));
+          if (active) {
+            setError(cause instanceof Error ? cause.message : String(cause));
+            setHypothesesLoading(false);
+          }
         });
         return () => {
           active = false;
         };
-      }, [range, sessionId]);
+      }, [range, sessionId, needsHypotheses]);
       return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
         ObservabilityPanel,
         {
@@ -2232,7 +2249,11 @@ window.__ModuleLoader__.load({
           ...sessionId === void 0 ? {} : { sessionId },
           ...workspace === void 0 ? {} : { workspace },
           ...inspectCall === void 0 ? {} : { inspectCall },
-          ...openView === void 0 ? {} : { openView }
+          ...openView === void 0 ? {} : { openView },
+          hypothesesLoading,
+          onSubView: (view) => {
+            if (view === "hypotheses") setNeedsHypotheses(true);
+          }
         }
       );
     }

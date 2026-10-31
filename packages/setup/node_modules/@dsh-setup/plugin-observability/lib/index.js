@@ -63,7 +63,9 @@ function requestUrl(req) {
     return new URL(req.url ?? REPORT_PATH, 'http://localhost');
 }
 /** Compute one report for a validated range, with its baseline comparison. */
-export async function computeReport(ctx, range, sessionId, now, cache, config) {
+export async function computeReport(ctx, range, sessionId, now, cache, config, 
+/** Evaluate hypotheses here; a plain view request skips their extra windows. */
+includeHypotheses = true) {
     const argumentFields = configuredArgumentFields(config.rows);
     const { records, sessions } = await readSessions({
         query: ctx.sessionQuery,
@@ -76,9 +78,9 @@ export async function computeReport(ctx, range, sessionId, now, cache, config) {
     const currentWindow = rangeWindow(range, now, 0);
     // The baseline and the hypothesis windows are independent corpora: read them
     // together, so a week hypothesis does not add its latency to the first paint.
-    const windowRanges = [
-        ...new Set(config.hypotheses.map((hypothesis) => hypothesis.window)),
-    ].filter((window) => window !== range);
+    const windowRanges = includeHypotheses
+        ? [...new Set(config.hypotheses.map((hypothesis) => hypothesis.window))].filter((window) => window !== range)
+        : [];
     const [baseline, readiness, ...windowCorpora] = await Promise.all([
         readBaseline({
             query: ctx.sessionQuery,
@@ -238,9 +240,10 @@ export function apply(ctx, rawConfig) {
                 return;
             }
             const session = url.searchParams.get('session');
+            const includeHypotheses = url.searchParams.get('hypotheses') === '1';
             const now = Date.now();
             try {
-                const report = await cachedReport(`${range}|${session ?? ''}`, now, () => computeReport(ctx, range, session === null || session === '' ? undefined : session, now, cache, config));
+                const report = await cachedReport(`${range}|${session ?? ''}|${includeHypotheses ? 'hypotheses' : 'view'}`, now, () => computeReport(ctx, range, session === null || session === '' ? undefined : session, now, cache, config, includeHypotheses));
                 writeJson(res, 200, report);
             }
             catch (error) {

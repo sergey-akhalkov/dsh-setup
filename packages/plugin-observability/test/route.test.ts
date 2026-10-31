@@ -644,7 +644,7 @@ describe('report route', () => {
     })
     const response = new FakeResponse()
     await test.route.handler(
-      request(`${REPORT_PATH}?range=day&session=session-1`),
+      request(`${REPORT_PATH}?range=day&session=session-1&hypotheses=1`),
       response as unknown as ServerResponse,
     )
     expect(response.status).toBe(200)
@@ -657,6 +657,30 @@ describe('report route', () => {
     expect(body.hypotheses[0]?.window).toBe('week')
     expect(body.hypotheses[0]?.samples).toBe(1)
     expect(body.hypotheses[0]?.status).toBe('inconclusive')
+  })
+
+  it('skips the declared hypothesis windows unless the hypothesis view asks', async () => {
+    const test = harness({
+      hypotheses: [
+        {
+          description: 'fewer steps over a week',
+          metric: 'steps-per-human-message',
+          direction: 'decrease',
+          threshold: 1,
+          window: 'week',
+          minSamples: 1,
+        },
+      ],
+    })
+    const view = new FakeResponse()
+    await test.route.handler(
+      request(`${REPORT_PATH}?range=day&session=session-1`),
+      view as unknown as ServerResponse,
+    )
+    expect(view.status).toBe(200)
+    const body = view.json() as { hypotheses: Array<{ status: string }> }
+    // Without the parameter the extra week corpus is not read; the result waits.
+    expect(body.hypotheses[0]?.status).toBe('collecting')
   })
 
   it('rejects an invalid range and does not read sessions', async () => {

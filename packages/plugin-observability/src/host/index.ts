@@ -122,6 +122,8 @@ export async function computeReport(
   now: number,
   cache: SessionCache,
   config: PluginConfig,
+  /** Evaluate hypotheses here; a plain view request skips their extra windows. */
+  includeHypotheses = true,
 ): Promise<Report> {
   const argumentFields = configuredArgumentFields(config.rows)
   const { records, sessions } = await readSessions({
@@ -135,9 +137,11 @@ export async function computeReport(
   const currentWindow = rangeWindow(range, now, 0)
   // The baseline and the hypothesis windows are independent corpora: read them
   // together, so a week hypothesis does not add its latency to the first paint.
-  const windowRanges = [
-    ...new Set(config.hypotheses.map((hypothesis) => hypothesis.window)),
-  ].filter((window) => window !== range)
+  const windowRanges = includeHypotheses
+    ? [...new Set(config.hypotheses.map((hypothesis) => hypothesis.window))].filter(
+        (window) => window !== range,
+      )
+    : []
   const [baseline, readiness, ...windowCorpora] = await Promise.all([
     readBaseline({
       query: ctx.sessionQuery,
@@ -305,17 +309,22 @@ export function apply(ctx: HostContext, rawConfig?: Config): void {
           return
         }
         const session = url.searchParams.get('session')
+        const includeHypotheses = url.searchParams.get('hypotheses') === '1'
         const now = Date.now()
         try {
-          const report = await cachedReport(`${range}|${session ?? ''}`, now, () =>
-            computeReport(
-              ctx,
-              range,
-              session === null || session === '' ? undefined : (session as unknown as SessionId),
-              now,
-              cache,
-              config,
-            ),
+          const report = await cachedReport(
+            `${range}|${session ?? ''}|${includeHypotheses ? 'hypotheses' : 'view'}`,
+            now,
+            () =>
+              computeReport(
+                ctx,
+                range,
+                session === null || session === '' ? undefined : (session as unknown as SessionId),
+                now,
+                cache,
+                config,
+                includeHypotheses,
+              ),
           )
           writeJson(res, 200, report)
         } catch (error) {

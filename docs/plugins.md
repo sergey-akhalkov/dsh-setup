@@ -208,7 +208,9 @@ in-memory cache keyed by session id plus event count and newest event time makes
 cheap, including the baseline read; a 10-second report cache per range answers a repeated view switch
 without recomputing, and the Client keeps the last report for 30 seconds to paint before the fresh one
 arrives. The baseline and hypothesis windows are read in parallel, and sessions are opened eight at a
-time. Nothing survives a Host restart.
+time. A plain view request skips the hypothesis windows (they may span the whole week); the Hypotheses
+tab asks for them with `&hypotheses=1` and states that it is reading the comparison windows while the
+rest of the view is already usable. Nothing survives a Host restart.
 
 **Ranges.** `session` is the open session and its descendant sessions, drawn as a time-based timeline;
 `day`, `week`, and `month` are 24 hourly, 7 daily, and 30 daily buckets. Wider ranges cover every

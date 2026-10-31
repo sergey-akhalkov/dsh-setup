@@ -514,7 +514,7 @@ interface LoadedModule {
   inject?: string[]
   EN?: Record<string, string>
   apply?: (ctx: unknown) => void
-  reportUrl?: (range: string, sessionId?: string) => string
+  reportUrl?: (range: string, sessionId?: string, includeHypotheses?: boolean) => string
   counted?: (count: number, one: string, many?: string) => string
   chartWidth?: (entryWidth: number | undefined, fallback: number) => number
   useChartWidth?: (fallback?: number) => { ref: unknown; width: number }
@@ -748,6 +748,9 @@ describe('Observability Client half', () => {
       '/plugins/dsh-setup-observability/report?range=week&session=session-1',
     )
     expect(module.reportUrl?.('day')).toBe('/plugins/dsh-setup-observability/report?range=day')
+    expect(module.reportUrl?.('week', 'session-1', true)).toBe(
+      '/plugins/dsh-setup-observability/report?range=week&session=session-1&hypotheses=1',
+    )
   })
 
   it('renders the KPI strip from the whole-window totals and makes the failure count a control', () => {
@@ -2770,6 +2773,23 @@ describe('sub-views, outcome tiles, tasks, and hypotheses', () => {
     press('ArrowRight')
     tree = render(base)
     expect(selected(tree)).toEqual(['tab.overview'])
+  })
+
+  it('asks the view for the hypothesis windows when that tab opens', () => {
+    const opened: string[] = []
+    const render = statefulPanel()
+    const base = { ...panelProps(fixtureReport()), onSubView: (view: string) => opened.push(view) }
+    const tree = render(base)
+    const hypothesesTab = nodesOf(
+      tree,
+      'button',
+      (element) => element.props.role === 'tab' && childText(element) === 'tab.hypotheses',
+    )[0]
+    ;(hypothesesTab?.props.onClick as (() => void) | undefined)?.()
+    expect(opened).toEqual(['hypotheses'])
+    // While the declared windows load, the tab says so instead of showing stale cards.
+    const loading = render({ ...base, hypothesesLoading: true })
+    expect(childText(loading)).toContain('hypothesis.loading')
   })
 
   it('moves keyboard focus to the selected tab', () => {

@@ -41,7 +41,9 @@ export declare function computeReport(ctx: {
     readonly reflect?: {
         get(name: string): unknown;
     };
-}, range: Range, sessionId: SessionId | undefined, now: number, cache: SessionCache, config: PluginConfig): Promise<Report>;
+}, range: Range, sessionId: SessionId | undefined, now: number, cache: SessionCache, config: PluginConfig, 
+/** Evaluate hypotheses here; a plain view request skips their extra windows. */
+includeHypotheses?: boolean): Promise<Report>;
 /** Register the read-only report route. */
 export declare function apply(ctx: HostContext, rawConfig?: Config): void;
 export {};
