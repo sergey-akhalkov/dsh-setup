@@ -125,7 +125,13 @@ describe('per-session cache', () => {
     const cache = new SessionCache()
     await readSessions({ query, range: 'session', now: NOW, sessionId: id, cache })
     query.append('session-1', event('step/start', NOW - 30 * 60_000))
-    const records = await readSessions({ query, range: 'session', now: NOW, sessionId: id, cache })
+    const { records } = await readSessions({
+      query,
+      range: 'session',
+      now: NOW,
+      sessionId: id,
+      cache,
+    })
     expect(query.reads).toBe(2)
     expect(records.some((value) => value.eventType === 'step/start')).toBe(true)
   })
@@ -153,12 +159,12 @@ describe('per-session cache', () => {
     const cache = new SessionCache(2)
     cache.set('a', '1', [])
     cache.set('b', '1', [])
-    expect(cache.get('a', '1')).toEqual([])
+    expect(cache.get('a', '1')?.records).toEqual([])
     cache.set('c', '1', [])
     expect(cache.size).toBe(2)
-    expect(cache.get('a', '1')).toEqual([])
+    expect(cache.get('a', '1')?.records).toEqual([])
     expect(cache.get('b', '1')).toBeUndefined()
-    expect(cache.get('c', '1')).toEqual([])
+    expect(cache.get('c', '1')?.records).toEqual([])
     expect(cache.get('a', '2')).toBeUndefined()
   })
 
@@ -177,6 +183,41 @@ describe('per-session cache', () => {
       process.chdir(before)
       rmSync(temp, { recursive: true, force: true })
     }
+  })
+
+  it('keeps header metadata across a cached repeat when the session is not listed', async () => {
+    const id = 'child' as unknown as SessionId
+    const childHeader = {
+      version: 4,
+      id,
+      createdAt: NOW - 2 * HOUR,
+      cwd: '/workspace',
+      parentSession: 'root',
+      isSeeded: true,
+      origin: 'subagent',
+      delegationDepth: 1,
+    } as SessionLogSnapshot['session']
+    const snapshots = new Map<string, SessionLogSnapshot>([
+      [
+        'child',
+        {
+          session: childHeader,
+          inheritedEventCount: 0 as SessionLogSnapshot['inheritedEventCount'],
+          events: [event('turn/start', NOW - HOUR)] as unknown as SessionLogSnapshot['events'],
+        },
+      ],
+    ])
+    const query = new FakeQuery([], snapshots)
+    const cache = new SessionCache()
+    const first = await readSessions({ query, range: 'session', now: NOW, sessionId: id, cache })
+    const second = await readSessions({ query, range: 'session', now: NOW, sessionId: id, cache })
+    const expected = [
+      { id: 'child', parentSession: 'root', origin: 'subagent', delegationDepth: 1 },
+    ]
+    expect(first.sessions).toEqual(expected)
+    expect(second.sessions).toEqual(expected)
+    expect(second.records).toEqual(first.records)
+    expect(query.reads).toBe(1)
   })
 
   it('rejects an invalid capacity instead of silently caching nothing', () => {

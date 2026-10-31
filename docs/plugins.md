@@ -199,90 +199,167 @@ a `tool: work_checkpoint` match.
 ## Observability view
 
 [`packages/plugin-observability`](../packages/plugin-observability) adds an **Observability** tab
-beside Chat and Trajectory. It answers "did a rule actually fire, and is a plugin still working?"
-from the session event logs DSH already writes; it adds no telemetry pipeline, no second log, and no
-file of its own. The Host reads through `ctx.sessionQuery`, aggregates in memory, and serves
+beside Chat and Trajectory. It answers two kinds of question from the session event logs DSH already
+writes: whether a rule fired and a plugin still works, and whether the **work itself** improved quality,
+token cost, speed, or autonomy. It adds no telemetry pipeline, no second log, and no file of its own.
+The Host reads through `ctx.sessionQuery`, aggregates in memory, and serves
 `GET /plugins/dsh-setup-observability/report?range=<range>&session=<id>` to the Client. A bounded
 in-memory cache keyed by session id plus event count and newest event time makes a repeated request
-cheap; nothing survives a Host restart.
+cheap, including the baseline read; nothing survives a Host restart.
 
-**Ranges and buckets.** `session` is the open session's turns plus one explicit `Outside turn`
-bucket (commands are appended with no turn around them); `day` is 24 local-hour buckets; `week` is 7
-local-day buckets; `month` is 30 local-day buckets. Wider ranges cover every session in the open
-session's workspace whose events fall in the window, subagent children included, and a seed's copied
-prefix is skipped at `inheritedEventCount`, so an event counts once.
+**Ranges.** `session` is the open session and its descendant sessions, drawn as a time-based timeline;
+`day`, `week`, and `month` are 24 hourly, 7 daily, and 30 daily buckets. Wider ranges cover every
+session in the open session's workspace whose events fall in the window, subagent children included,
+and a seed's copied prefix is skipped at `inheritedEventCount`, so an event counts once. When a child
+overlaps a window without its parent, the parent chain is read too, so the human message that started
+the episode is available.
 
-**Dashboard, not a log browser.** The view opens on a health verdict and four KPIs (turns, steps,
-tool calls, failures), then one activity chart for the range with the error share in red, the
-collapsed failure list, plugin health cards grouped as Needs attention / Active / Silent, the
-guidance list, the tool-call distribution, and a collapsed statement of blind spots. The failure
-count is a control: it reveals the failure list and moves focus to it. Configured silent rows are
-compact rows carrying their trigger and the window denominators, with the absence note once in the
-section header. An error card names its newest failure's tool and error identity and links to the
-filtered failure list. A card expands to at most five recent traces — time, row, turn, tool, error
-flag — and message text and tool arguments never appear. Built-in aggregates feed the KPIs, chart,
-and tools list while configured rows become cards, so the same event is never counted twice in the
-dashboard totals.
+**Task episodes are the unit.** An episode starts at a `user/message` whose source kind is `user` and
+keeps machine messages and tool activity inside it. It ends before the next human message, at session
+end, or after the configured idle gap (default 30 minutes); activity after the gap stays outside every
+episode until the next human message. Events before the first human message are preamble. A session may
+hold several episodes (`sessionId#index`, index by start time) and a session without a human message
+contributes none. A child session never becomes a top-level episode: it is joined to the parent episode
+its time overlaps most, its tokens and tools are counted there once, and a child whose parent chain
+leaves the corpus or whose time overlaps no episode is reported as unlinked rather than dropped.
 
-**Failures are a list, not a number.** Every failed or cut record in the window is listed newest
-first, independent of the configured rows and of the per-row trace cap: its time, session (title, or a
-short id when the title is unavailable), turn, step, tool, and the error identity the log records
-(`name`/`code`). Severity comes from the log's own reasons: `turn failure` (`turn/end` with `error`),
-`turn cut` (`max-tokens` or `interrupted`), and `tool failure` (`tool/result` with an error). A tool
-failure is `recovered` when its turn ended `completed`; recovery is resolved by turn over the
-session's full record set, so a closer outside the window still counts. `aborted`, `blocked`, and
-`forked` closers are not failures. The rendered list is bounded to the newest 200 entries while the
-counts cover the whole window, and the list states the bound. Raw failure reasons, message text, and
-tool arguments are never listed: the view shows metadata only, and one click opens the inspector that
-holds the rest. An entry from the open session focuses the Trajectory inspector on the recorded call;
-an entry from another session opens that session (focus is not carried across a session boundary);
-"Fix in a new session" opens a blank with a bounded draft naming the listed failures and instructions
-to read their events and fix the root causes. The draft is never submitted automatically and never
-replaces existing draft text (`whenDraftExists: 'append'`). If the client cannot open a session, the
-control is absent and the list stays copyable.
+**Window accounting.** Episodes are reconstructed from complete session records before filtering. An
+episode joins the cohort of the window that contains its start, exactly once; its tokens, steps, and
+active intervals are attributed by event time, so a spanning episode is split at the boundary and
+adjacent windows reconcile. Cohort outcomes are observed at the window end, and a baseline never sees a
+completion after its cutoff. Per-episode cost is measured through the cutoff by default and labelled
+(`through cutoff`; the session range has no cutoff and reads `full episode`). The Tasks detail also
+shows the full-episode cost, labelled.
 
-**Needs attention is earned.** The verdict is the union of a turn failure, a turn cut, a tool
-failure its turn did not recover from, a configured tool that is not loaded, and a declared prompt
-contribution that is not mounted. Silence and recovered failures never raise it, and an unknown
-readiness check never counts as a fault.
+**Token metrics.** Every assistant message's recorded usage contributes input, output, cache read,
+cache write, and total tokens. Context load is input plus cache read; context per step is the mean of
+context load across the window's assistant messages; the cache hit ratio is cache read over input plus
+cache read and is absent when both are zero. A message without usage contributes zero and lowers the
+stated coverage instead of being estimated: the view reports step coverage and message coverage
+separately and never calls them complete when either is partial. Cache reads dominate token totals, so
+the view shows context per step and the cache mix beside the totals and prefers p50/p90 over a mean.
 
-**Rows are data.** A configured row has an `id`, a `label`, a `kind`, and a `match`: one predicate or
-an any-of list of predicates over `eventType`, `tool`, `sourceKind` (an injected message's declared
-kind), `abortPrefix` (a hook abort reason's prefix), `command` (a slash command's name), and at most
-one `argument` field/value on a tool call. A `guidance` row has no match; it names a prompt-only
-plugin honestly instead of letting it disappear. Two optional descriptors keep the map honest: any
-row may carry a `trigger` sentence, shown while the row is silent, and a `guidance` row may carry
-`mounted` with a `section` and/or `skill` name. Readiness checks the declared names against the live
-registries — the assembled system prompt's section names and a completed skill catalog — and reports
-`mounted`, `not mounted`, or `readiness unknown`. A missing service, a throwing assembly, or partial
-skill discovery reports unknown, never `not mounted`; only a confirmed `not mounted` needs attention.
-Descriptor and predicate fields are validated at startup, and unknown fields are rejected naming the
-field. The configuration is never executed.
+**Quality, speed, and autonomy.** The outcome map is `completed` for a completed final turn end,
+`failed` for a turn failure or a tool failure no completed turn recovered (an unrecovered failure
+outranks the closer), `cut` for `aborted`/`max-tokens`/`interrupted`, `blocked` for `blocked`, `other`
+for an unmapped terminal kind, and `open` when no final turn end was recorded — including a later turn
+that started without an end. A completed checkpoint with a non-empty verified list marks the episode
+verified; `continue` is not a close, and the lists' text never reaches the report. Active time is the
+union of step and tool intervals clipped to the episode, so a tool inside a step counts once, idle gaps
+are excluded, and commands are not intervals; wall-clock span is never used. Autonomy reports steps per
+human message, machine injections per human message, episodes per session, goals, completed goals,
+rounds, and human messages per completed goal, following each goal by its opaque id from create to
+complete; a human-message-per-episode count is not reported because the episode definition makes it
+constant.
 
-With no configuration the built-in sets still show turns, steps, tool calls, one row per observed
-tool name, one row per observed injected-message source kind, one row per observed abort prefix, and
-errors. The shipped signal map lives in `packages/setup/defaults.yml` and maps each shipped plugin's
-tools, message kinds, aborts, and commands to its own row; its test fails when a tool is renamed, a
-plugin is removed, or a declared section or skill is no longer registered.
+**Subagent work.** A child session's tokens, tools, and active intervals belong to the parent episode
+and are observed at the window cutoff: a child that starts after the cutoff is not counted, and a child
+whose failure lies after the cutoff still reads open. The report carries delegate calls, episodes with a
+child, parallel width, parent wait between a delegate call and its result, child tokens, child
+outcomes, and the unlinked count.
+
+**Scorecards.** Every signal row may declare a business `goal` and an `eligible` predicate list (signal
+rows only). The scorecard shows eligible episodes, the share of them where the row fired (activation),
+the error rate, and an outcome comparison between the treated cohort (fired and eligible) and the
+control (eligible and not fired), matched by tool-call size bin and week; a size bin that cannot be
+matched within one week is compared across weeks and the report says the week was relaxed. A fired
+episode outside the eligibility predicate is shown separately and never enters activation. Below the
+configured minimum episodes per side the comparison reads insufficient data, and every comparison is
+labelled association, not proof, with its sample size.
+
+**Comparisons and hypotheses.** Day, week, and month compare against the previous equal window; the
+session range compares against the previous completed session in the same workspace, or reports no
+baseline. Hypotheses are inert configuration: a metric id from a fixed catalog
+(`verified-completion-rate`, `tokens-per-episode`, `context-tokens-per-step`,
+`active-minutes-per-episode`, `steps-per-human-message`, `human-messages-per-completed-goal`,
+`delegate-rate`, `checkpoint-coverage`, `failure-rate`), a direction, a non-negative threshold, a
+window, an optional minimum sample count (default 20), and an optional guardrail metric. A hypothesis is
+`collecting` below its minimum, `supported` when the movement reaches the threshold and the guardrail
+does not worsen, `refuted` when the metric moves opposite beyond the threshold, and `inconclusive`
+otherwise; unknown metric ids and fields are rejected by name, descriptions are rendered as data, and
+no result claims causation.
+
+**Attention findings.** The view derives findings from the metadata rather than waiting to be read.
+The first rule is the serial long run: an episode with at least 40 steps or 20 active minutes whose
+joined children never overlapped (parallel width at most one) becomes one finding naming the episode,
+its steps, active minutes, and width, with a next action to name two to four independent streams and
+their files or record why the work must stay serial. A long run with overlapping children is not
+flagged and an empty window produces no finding. Findings are heuristics over counts and times, never
+proof, and carry no message text. Further process rules (blocking waits, human corrections, untested
+edits) are deliberately out of scope until this one is exercised.
+
+**Views.** `Overview` shows the data-sufficiency verdict, the attention findings, four outcome tiles
+(quality, cost, speed, autonomy) with their sample size and p50/p90, the token mix, the activity
+timeline or range series, plugin scorecards, a compact silent group with triggers, the data-quality
+strip, and failure access. `Plugins` keeps the row board and the failure list; `Tasks` lists episodes
+newest first (capped at 200 while the counts stay uncapped) with sortable, outcome- and
+plugin-filterable columns and a detail view carrying the episode timeline, full-episode cost, tokens per
+step, subagents, goals, and checkpoints; `Hypotheses` shows one card per configured hypothesis with its
+metric, baseline, current value, threshold, sample size, window, guardrail, and status. Charts render at
+the container's measured width with no stretched aspect ratio, bars are bounded, the session range is a
+time timeline rather than one bucket per turn, and the layout is two columns above 900 px and one column
+below. Status is always written in words beside colour, and the charts use the published theme tokens
+without adding a dependency.
+
+**Failures are a list, not a number.** Every failed or cut record in the window is listed newest first,
+independent of the configured rows: its time, session (title, or a short id when unavailable), turn,
+step, tool, and the error identity the log records (`name`/`code`). Severity comes from the log's own
+reasons: `turn failure` (`turn/end` with `error`), `turn cut` (`max-tokens` or `interrupted`), and
+`tool failure` (`tool/result` with an error). A tool failure is `recovered` when its turn ended
+`completed`; recovery is resolved by turn over the session's full record set, so a closer outside the
+window still counts. The rendered list is bounded to the newest 200 entries while the counts cover the
+whole window, and raw failure reasons, message text, and tool arguments never appear. An entry from the
+open session focuses the Trajectory inspector on the recorded call; an entry from another session opens
+that session; "Fix in a new session" opens a blank with a bounded draft naming the listed failures and
+instructions to read their events and fix the root causes. The draft is never submitted automatically
+and never replaces existing draft text.
 
 **Status words.** `active` means traces in the period, `error` means at least one failed trace,
 `not loaded` means a tool the row names is absent from the live tool registry, and `silent` means
-configured but no traces — labelled explicitly as the absence of traces, not proof of a fault. A
-silent row is compact and states what it waits for (its `trigger`, when configured) and the window's
-activity denominators (turns and tool calls) beside its zero; the absence note appears once per
-section. A guidance row has no activity status: it is `guidance only`, or its readiness word when it
-declares a contribution. Every state is written in words as well as colour. The tool distribution
-draws each tool's failing share over the calls made inside the window, joined by call identity, so
-the share never exceeds the call count.
+configured but no traces — labelled explicitly as the absence of traces, not proof of a fault. A silent
+row is compact and states what it waits for (its `trigger`, when configured) and its eligible-episode
+count beside its zero. A guidance row has no activity status: it is `guidance only`, or its readiness
+word when it declares a contribution. Every state is written in words as well as colour, and the tool
+distribution draws each tool's failing share over the calls made inside the window, joined by call
+identity, so the share never exceeds the call count.
+
+**Nothing is persisted.** Aggregates are computed on demand. Any caching is in memory, keyed by session
+identity and modification time, and no report or baseline writes a file. A Host restart recomputes the
+same numbers from the sessions.
+
+**Absence is explicit, never health.** A configured signal with no matches is shown as a row with no
+traces, stating its trigger and its eligible-episode count beside its zero, or that eligibility is not
+declared; absence alone never places a row in needs attention, and a window with no eligible episodes is
+never reported as healthy. The verdict is the union of a turn failure, an unrecovered tool failure, a
+configured tool that is not loaded, and a declared prompt contribution that is not mounted; thin data
+reads insufficient data, not healthy. Rows are data: an `id`, a `label`, a `kind`, an any-of `match`
+over event type, tool, injected-message source kind, turn-abort reason prefix, command name, and one
+argument field/value, plus the optional `trigger`, `goal`, and signal-only `eligible` list. A guidance
+row declares `mounted` section and/or skill names and must not declare eligibility. Readiness checks
+those names against the live registries and reports `mounted`, `not mounted`, or `readiness unknown`;
+only a confirmed absence needs attention. Unknown fields are rejected by name and configuration is never
+executed.
 
 **What it cannot see.** The view names these blind spots rather than implying full coverage: a plugin
-that fails while loading and leaves no registered tool, prompt section, or skill; UI rendering
-effects; and whether the model complied with a prompted rule. Delivery of a declared contribution is
-checked; compliance with its text is not.
+that fails while loading and leaves no registered tool, prompt section, or skill; UI rendering effects;
+and whether the model complied with a prompted rule. Delivery of a declared contribution is checked;
+compliance with its text is not. It also states that whether a human accepted a completed result is not
+recorded, that the configuration and version active in a past session are not recorded, and that every
+plugin comparison is an association, not causal proof.
+
+The shipped signal map lives in `packages/setup/defaults.yml` and maps each shipped plugin's tools,
+message kinds, aborts, and commands to its own row; its test fails when a tool is renamed, a plugin is
+removed, a row loses its goal, eligibility appears on a guidance row, or a declared section or skill is
+no longer registered. The shipped configuration also carries two hypotheses (goal continuity on steps
+per human message and delegation on active minutes per episode) over the fixed metric catalog.
+
+The following remain out of scope (P2): diff churn and rework measured from git, price tables and
+currency, per-session configuration or version snapshots, review verdicts, and CSV export.
 
 To add a custom signal, override the row in the profile's `cordis.patch.yml`. A configuration patch
-replaces the whole `config` object, so restate every row the profile needs (start from the shipped
-map in `packages/setup/defaults.yml`):
+replaces the whole `config` object, so restate every row the profile needs **and** the plugin's other
+fields (`idleGapMinutes`, `minEpisodes`, `hypotheses`) from the shipped map in
+`packages/setup/defaults.yml`:
 
 ```yaml
 - id: dsh-setup-observability
@@ -292,23 +369,32 @@ map in `packages/setup/defaults.yml`):
         label: My tool
         kind: signal
         trigger: a my_tool call runs
+        goal: my tool shortens the task it serves
         match:
           - tool: my_tool
       - id: my-notes-writes
         label: My notes writes
         kind: signal
         trigger: a write targets notes.md
+        goal: notes are updated with small writes
         match:
           - tool: write
             argument:
               field: path
               value: notes.md
+        eligible:
+          - tool: edit
+          - tool: write
       - id: my-skill
         label: My plugin
         kind: guidance
         trigger: the my-plugin skill is loaded
+        goal: my plugin's guidance is delivered
         mounted:
           skill: my-plugin
+    idleGapMinutes: 30
+    minEpisodes: 10
+    hypotheses: []
 ```
 
 ## Adding a package

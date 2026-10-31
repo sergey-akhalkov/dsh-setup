@@ -42,6 +42,10 @@ export interface Row {
   readonly match?: readonly Predicate[]
   /** What the row waits for, shown while it has no traces. */
   readonly trigger?: string
+  /** The business goal its scorecard renders; a non-empty sentence, never executed. */
+  readonly goal?: string
+  /** The eligible population of the row's signal; signal rows only. */
+  readonly eligible?: readonly Predicate[]
   readonly mounted?: MountedNames
 }
 
@@ -53,7 +57,16 @@ export class RowConfigError extends Error {
   }
 }
 
-const ROW_FIELDS = new Set(['id', 'label', 'kind', 'match', 'trigger', 'mounted'])
+const ROW_FIELDS = new Set([
+  'id',
+  'label',
+  'kind',
+  'match',
+  'trigger',
+  'goal',
+  'eligible',
+  'mounted',
+])
 const MOUNTED_FIELDS = new Set(['section', 'skill'])
 const PREDICATE_FIELDS = new Set([
   'eventType',
@@ -134,6 +147,12 @@ function readMounted(value: unknown, at: string): MountedNames {
   return mounted
 }
 
+function readPredicateList(value: unknown, at: string): Predicate[] {
+  if (!Array.isArray(value)) throw new RowConfigError(`${at} must be an array`)
+  if (value.length === 0) throw new RowConfigError(`${at} must not be empty`)
+  return value.map((predicate, index) => readPredicate(predicate, `${at}[${index}]`))
+}
+
 function readRow(value: unknown, at: string): Row {
   if (!isRecord(value)) throw new RowConfigError(`${at} must be a mapping`)
   rejectUnknownFields(value, ROW_FIELDS, at)
@@ -143,20 +162,24 @@ function readRow(value: unknown, at: string): Row {
   if (kind !== 'signal' && kind !== 'guidance') {
     throw new RowConfigError(`${at}.kind must be "signal" or "guidance"`)
   }
-  const descriptors: { trigger?: string; mounted?: MountedNames } = {
+  const descriptors: { trigger?: string; goal?: string; mounted?: MountedNames } = {
     ...(value.trigger === undefined ? {} : { trigger: readText(value.trigger, `${at}.trigger`) }),
-  }
-  if (value.mounted !== undefined) {
-    if (kind === 'signal') {
-      throw new RowConfigError(`${at}.mounted is not allowed on a signal row`)
-    }
-    descriptors.mounted = readMounted(value.mounted, `${at}.mounted`)
+    ...(value.goal === undefined ? {} : { goal: readText(value.goal, `${at}.goal`) }),
   }
   if (kind === 'guidance') {
     if (value.match !== undefined) {
       throw new RowConfigError(`${at}.match is not allowed on a guidance row`)
     }
+    if (value.eligible !== undefined) {
+      throw new RowConfigError(`${at}.eligible is not allowed on a guidance row`)
+    }
+    if (value.mounted !== undefined) {
+      descriptors.mounted = readMounted(value.mounted, `${at}.mounted`)
+    }
     return { id, label, kind, ...descriptors }
+  }
+  if (value.mounted !== undefined) {
+    throw new RowConfigError(`${at}.mounted is not allowed on a signal row`)
   }
   if (value.match === undefined) {
     throw new RowConfigError(`${at}.match is required on a signal row`)
@@ -164,22 +187,20 @@ function readRow(value: unknown, at: string): Row {
   const raw = Array.isArray(value.match) ? value.match : [value.match]
   if (raw.length === 0) throw new RowConfigError(`${at}.match must not be empty`)
   const match = raw.map((predicate, index) => readPredicate(predicate, `${at}.match[${index}]`))
-  return { id, label, kind, match, ...descriptors }
+  const eligible =
+    value.eligible === undefined ? undefined : readPredicateList(value.eligible, `${at}.eligible`)
+  return {
+    id,
+    label,
+    kind,
+    match,
+    ...descriptors,
+    ...(eligible === undefined ? {} : { eligible }),
+  }
 }
 
-/**
- * Validate the configured row list. An absent list is valid: the built-in
- * signal sets still work on a profile with no configuration.
- */
-export function parseRows(raw: unknown): Row[] {
-  let rows: unknown = []
-  if (raw !== undefined && raw !== null) {
-    if (!isRecord(raw)) throw new RowConfigError('config must be a mapping')
-    for (const key of Object.keys(raw)) {
-      if (key !== 'rows') throw new RowConfigError(`config: unknown field "${key}"`)
-    }
-    rows = raw.rows ?? []
-  }
+/** Validate a bare row list. */
+export function readRows(rows: unknown): Row[] {
   if (!Array.isArray(rows)) throw new RowConfigError('config.rows must be an array')
   const parsed: Row[] = []
   const seen = new Set<string>()
@@ -193,13 +214,26 @@ export function parseRows(raw: unknown): Row[] {
 }
 
 /**
+ * Validate the configured row list. An absent list is valid: the built-in
+ * signal sets still work on a profile with no configuration.
+ */
+export function parseRows(raw: unknown): Row[] {
+  if (raw === undefined || raw === null) return []
+  if (!isRecord(raw)) throw new RowConfigError('config must be a mapping')
+  for (const key of Object.keys(raw)) {
+    if (key !== 'rows') throw new RowConfigError(`config: unknown field "${key}"`)
+  }
+  return readRows(raw.rows ?? [])
+}
+
+/**
  * The argument fields configured predicates read, per tool. Extraction keeps
  * only these values, so raw tool arguments never enter a neutral record.
  */
 export function configuredArgumentFields(rows: readonly Row[]): Map<string, Set<string>> {
   const fields = new Map<string, Set<string>>()
   for (const row of rows) {
-    for (const predicate of row.match ?? []) {
+    for (const predicate of [...(row.match ?? []), ...(row.eligible ?? [])]) {
       if (predicate.tool === undefined || predicate.argument === undefined) continue
       let names = fields.get(predicate.tool)
       if (names === undefined) {

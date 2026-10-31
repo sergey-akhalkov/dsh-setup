@@ -37,12 +37,18 @@ export interface Row {
     readonly match?: readonly Predicate[];
     /** What the row waits for, shown while it has no traces. */
     readonly trigger?: string;
+    /** The business goal its scorecard renders; a non-empty sentence, never executed. */
+    readonly goal?: string;
+    /** The eligible population of the row's signal; signal rows only. */
+    readonly eligible?: readonly Predicate[];
     readonly mounted?: MountedNames;
 }
 /** A configuration error that names the offending field or row. */
 export declare class RowConfigError extends Error {
     constructor(message: string);
 }
+/** Validate a bare row list. */
+export declare function readRows(rows: unknown): Row[];
 /**
  * Validate the configured row list. An absent list is valid: the built-in
  * signal sets still work on a profile with no configuration.

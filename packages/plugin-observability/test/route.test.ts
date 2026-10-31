@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it } from 'vitest'
+import { rangeWindow } from '../src/host/aggregate.ts'
 import { apply, REPORT_PATH } from '../src/host/index.ts'
 import type { SessionQueryService, TitleObservation } from '../src/host/reader.ts'
 
@@ -46,8 +47,28 @@ const ARGUMENTS = '{"path":"secret-notes.md"}'
 /** One session holding a failed edit whose turn never closed. */
 function failureQuery(
   titles?: (ids: readonly string[]) => Promise<readonly TitleObservation[]>,
+  withBaseline = false,
 ): SessionQueryService {
   const now = Date.now()
+  const baselineAt = now - 24 * 3_600_000
+  const baselineEvents = [
+    {
+      type: 'user/message',
+      seq: 1,
+      time: baselineAt,
+      data: {
+        role: 'user',
+        content: [{ type: 'text', text: SECRET }],
+        source: { kind: 'user' },
+      },
+    },
+    {
+      type: 'turn/end',
+      seq: 2,
+      time: baselineAt + 60_000,
+      data: { turn: 1, reason: { kind: 'completed' } },
+    },
+  ]
   const events = [
     {
       type: 'turn/start',
@@ -93,23 +114,33 @@ function failureQuery(
   ]
   return {
     async listSessions() {
-      return [
+      const listed = [
         {
-          header: { id: 'session-1' },
+          header: { id: 'session-1', cwd: '/workspace' },
           live: true,
           persisted: true,
         },
-      ] as unknown as Awaited<ReturnType<SessionQueryService['listSessions']>>
+      ]
+      if (withBaseline) {
+        listed.push({
+          header: { id: 'previous', cwd: '/workspace' },
+          live: false,
+          persisted: true,
+        } as never)
+      }
+      return listed as unknown as Awaited<ReturnType<SessionQueryService['listSessions']>>
     },
-    async readSession() {
+    async readSession(id: string) {
       return {
-        header: { id: 'session-1' },
-        events,
+        header: { id },
+        events: id === 'previous' ? baselineEvents : events,
         inheritedEventCount: 0,
       } as unknown as Awaited<ReturnType<SessionQueryService['readSession']>>
     },
-    async listEvents() {
-      return events as unknown as Awaited<ReturnType<SessionQueryService['listEvents']>>
+    async listEvents(id: string) {
+      return (id === 'previous' ? baselineEvents : events) as unknown as Awaited<
+        ReturnType<SessionQueryService['listEvents']>
+      >
     },
     ...(titles === undefined ? {} : { readTitleSnapshots: titles }),
   }
@@ -130,6 +161,7 @@ interface HarnessOptions {
   readonly query?: SessionQueryService
   readonly reflect?: { get(name: string): unknown }
   readonly rows?: unknown[]
+  readonly hypotheses?: unknown[]
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -167,6 +199,7 @@ function harness(options: HarnessOptions = {}): Harness {
       ([
         { id: 'delegation', label: 'Delegation', kind: 'signal', match: [{ tool: 'delegate' }] },
       ] as never),
+    ...(options.hypotheses === undefined ? {} : { hypotheses: options.hypotheses }),
   })
   if (route === undefined) throw new Error('route not registered')
   return {
@@ -217,6 +250,16 @@ describe('report route', () => {
         details: unknown[]
       }>
       blindSpots: string[]
+      episodes: unknown[]
+      episodeCount: number
+      cohortCount: number
+      scorecards: unknown[]
+      hypotheses: unknown[]
+      findings: unknown[]
+      quality: { episodes: number }
+      cost: { cutoffLabel: string; tokensPerEpisode: { n: number } }
+      dataQuality: { usageCoverage: number; comparisonSample: number }
+      timeline?: unknown
     }
     expect(body.range).toBe('week')
     expect(body.bucketLabels).toHaveLength(7)
@@ -237,6 +280,353 @@ describe('report route', () => {
     expect(body.blindSpots.length).toBeGreaterThan(0)
     expect(body.rows.find((row) => row.id === 'delegation')?.note).toContain('No traces')
     expect(body.rows.every((row) => row.counts.length === 7)).toBe(true)
+    // The episode, scorecard, hypothesis, finding, and data-quality sections ride
+    // on the same route payload.
+    expect(body.episodes).toEqual([])
+    expect(body.episodeCount).toBe(0)
+    expect(body.cohortCount).toBe(0)
+    expect(body.scorecards).toHaveLength(1)
+    expect(body.hypotheses).toEqual([])
+    expect(body.findings).toEqual([])
+    expect(body.quality.episodes).toBe(0)
+    expect(body.cost.cutoffLabel).toBe('through cutoff')
+    expect(body.cost.tokensPerEpisode.n).toBe(0)
+    expect(body.dataQuality.usageCoverage).toBe(0)
+    expect(body.dataQuality.comparisonSample).toBe(0)
+    expect(body.timeline).toBeUndefined()
+  })
+
+  it('writes nothing under the Harness home while reading a baseline', async () => {
+    const { mkdtempSync, readdirSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const home = mkdtempSync(join(tmpdir(), 'dsh-obs-home-'))
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      // A populated baseline: the previous window holds a completed episode.
+      const test = harness({ query: failureQuery(undefined, true) })
+      const response = new FakeResponse()
+      await test.route.handler(
+        request(`${REPORT_PATH}?range=day&session=session-1`),
+        response as unknown as ServerResponse,
+      )
+      expect(response.status).toBe(200)
+      const body = response.json() as { baseline?: { kind: string } }
+      expect(body.baseline?.kind).toBe('previous equal window')
+      expect(readdirSync(home)).toEqual([])
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('serializes a populated report with the cap, uncapped counts, child work, and no text', async () => {
+    const now = Date.now()
+    interface Fixture {
+      id: string
+      events: Array<{ type: string; seq: number; time: number; data: Record<string, unknown> }>
+      parentSession?: string
+    }
+    const secret = 'SECRET-ROUTE-TOKEN'
+    const human = (at: number): Fixture['events'] => [
+      {
+        type: 'user/message',
+        seq: 1,
+        time: at,
+        data: { role: 'user', content: [{ type: 'text', text: secret }], source: { kind: 'user' } },
+      },
+    ]
+    const fixtures: Fixture[] = []
+    for (let index = 0; index < 205; index += 1) {
+      const at = now - (index + 1) * 60_000
+      fixtures.push({
+        id: `bulk-${String(index)}`,
+        events: [
+          ...human(at),
+          {
+            type: 'tool/call',
+            seq: 2,
+            time: at + 1_000,
+            data: {
+              turn: 1,
+              step: 1,
+              callId: `bulk-${String(index)}-c`,
+              name: 'edit',
+              arguments: `{"path":"${secret}"}`,
+            },
+          },
+          {
+            type: 'turn/end',
+            seq: 3,
+            time: at + 2_000,
+            data: { turn: 1, reason: { kind: 'completed' } },
+          },
+        ],
+      })
+    }
+    fixtures.push({
+      id: 'parent',
+      events: [
+        ...human(now - 10 * 60_000),
+        {
+          type: 'goal/change',
+          seq: 2,
+          time: now - 9 * 60_000,
+          data: {
+            kind: 'goal/change',
+            operation: 'create',
+            goal: { id: 'g1', revision: 1, objective: secret, phase: 'active' },
+            roundsStarted: 1,
+          },
+        },
+        {
+          type: 'tool/call',
+          seq: 3,
+          time: now - 8 * 60_000,
+          data: {
+            turn: 1,
+            step: 1,
+            callId: 'cp1',
+            name: 'work_checkpoint',
+            arguments: JSON.stringify({
+              outcome: 'done',
+              verified: [secret],
+              remaining: [secret],
+              next: secret,
+            }),
+          },
+        },
+        {
+          type: 'turn/end',
+          seq: 4,
+          time: now - 7 * 60_000,
+          data: { turn: 1, reason: { kind: 'completed' } },
+        },
+      ],
+    })
+    // A child joined to the parent, an orphan child, and an episode that started
+    // before the day window with work inside it.
+    const dayFrom = rangeWindow('day', now, 0).from
+    fixtures.push({
+      id: 'child',
+      parentSession: 'parent',
+      events: [
+        {
+          type: 'assistant/message',
+          seq: 1,
+          time: now - 8 * 60_000,
+          data: {
+            turn: 1,
+            step: 1,
+            usage: {
+              inputTokens: 100,
+              outputTokens: 10,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              totalTokens: 110,
+            },
+          },
+        },
+        {
+          type: 'turn/end',
+          seq: 2,
+          time: now - 7 * 60_000,
+          data: { turn: 1, reason: { kind: 'completed' } },
+        },
+      ],
+    })
+    fixtures.push({
+      id: 'orphan',
+      parentSession: 'missing',
+      events: [
+        {
+          type: 'assistant/message',
+          seq: 1,
+          time: now - 9 * 60_000,
+          data: {
+            turn: 1,
+            step: 1,
+            usage: {
+              inputTokens: 70,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              totalTokens: 70,
+            },
+          },
+        },
+      ],
+    })
+    fixtures.push({
+      id: 'spanning',
+      events: [
+        ...human(dayFrom - 10 * 60_000),
+        {
+          type: 'assistant/message',
+          seq: 2,
+          time: dayFrom + 5 * 60_000,
+          data: {
+            turn: 1,
+            step: 1,
+            usage: {
+              inputTokens: 50,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              totalTokens: 50,
+            },
+          },
+        },
+        {
+          type: 'turn/end',
+          seq: 3,
+          time: dayFrom + 6 * 60_000,
+          data: { turn: 1, reason: { kind: 'completed' } },
+        },
+      ],
+    })
+    const headers = new Map(
+      fixtures.map((fixture) => [
+        fixture.id,
+        {
+          version: 4,
+          id: fixture.id,
+          createdAt: fixture.events[0]?.time ?? now,
+          cwd: '/w',
+          isSeeded: fixture.parentSession !== undefined,
+          ...(fixture.parentSession === undefined ? {} : { parentSession: fixture.parentSession }),
+        },
+      ]),
+    )
+    const query: SessionQueryService = {
+      async listSessions() {
+        return fixtures.map((fixture) => ({
+          header: headers.get(fixture.id),
+          live: false,
+          persisted: true,
+        })) as unknown as Awaited<ReturnType<SessionQueryService['listSessions']>>
+      },
+      async readSession(sessionId) {
+        const fixture = fixtures.find((entry) => entry.id === String(sessionId))
+        return {
+          session: headers.get(String(sessionId)),
+          inheritedEventCount: 0,
+          events: fixture?.events ?? [],
+        } as unknown as Awaited<ReturnType<SessionQueryService['readSession']>>
+      },
+      async listEvents(sessionId) {
+        const fixture = fixtures.find((entry) => entry.id === String(sessionId))
+        return (fixture?.events ?? []) as unknown as Awaited<
+          ReturnType<SessionQueryService['listEvents']>
+        >
+      },
+    }
+    const test = harness({
+      query,
+      rows: [
+        {
+          id: 'edits',
+          label: 'Edits',
+          kind: 'signal',
+          goal: 'small edits',
+          match: [{ tool: 'edit' }],
+        },
+      ],
+    })
+    const response = new FakeResponse()
+    await test.route.handler(
+      request(`${REPORT_PATH}?range=day&session=parent`),
+      response as unknown as ServerResponse,
+    )
+    expect(response.status).toBe(200)
+    const body = response.json() as {
+      episodes: Array<{ sessionId: string; start: number; children: unknown[] }>
+      episodeCount: number
+      cohortCount: number
+      windowCost: { total: number }
+      cost: { contextPerStep: number; messages: number }
+      scorecards: Array<{ eligible: number; fired: number }>
+    }
+    expect(body.episodes).toHaveLength(200)
+    // 205 bulk episodes, the parent session, and the episode that started before
+    // the window; the orphan child is not a top-level episode.
+    expect(body.episodeCount).toBe(207)
+    // The spanning episode starts before the window, so it joins no cohort here.
+    expect(body.cohortCount).toBe(206)
+    // The joined child's 110 tokens and the spanning episode's in-window 50 are
+    // attributed once; the orphan child's 70 tokens are not added anywhere.
+    expect(body.windowCost.total).toBe(160)
+    // The cost denominator is the same attributed work: two assistant messages.
+    expect(body.cost.messages).toBe(2)
+    expect(body.cost.contextPerStep).toBe(75)
+    expect(body.episodes.some((episode) => episode.children.length === 1)).toBe(true)
+    expect(body.scorecards[0]?.fired).toBe(205)
+    expect(JSON.stringify(body)).not.toContain(secret)
+  })
+
+  it('evaluates a hypothesis over its declared window, not the requested range', async () => {
+    const now = Date.now()
+    const old = now - 3 * 24 * 3_600_000
+    const events = [
+      {
+        type: 'user/message',
+        seq: 1,
+        time: old,
+        data: { role: 'user', content: [], source: { kind: 'user' } },
+      },
+      {
+        type: 'turn/end',
+        seq: 2,
+        time: old + 1_000,
+        data: { turn: 1, reason: { kind: 'completed' } },
+      },
+    ]
+    const header = { version: 4, id: 'session-1', createdAt: old, cwd: '/w', isSeeded: false }
+    const query: SessionQueryService = {
+      async listSessions() {
+        return [{ header, live: false, persisted: true }] as unknown as Awaited<
+          ReturnType<SessionQueryService['listSessions']>
+        >
+      },
+      async readSession() {
+        return { session: header, inheritedEventCount: 0, events } as unknown as Awaited<
+          ReturnType<SessionQueryService['readSession']>
+        >
+      },
+      async listEvents() {
+        return events as unknown as Awaited<ReturnType<SessionQueryService['listEvents']>>
+      },
+    }
+    const test = harness({
+      query,
+      hypotheses: [
+        {
+          description: 'fewer steps per human message over a week',
+          metric: 'steps-per-human-message',
+          direction: 'decrease',
+          threshold: 1,
+          window: 'week',
+          minSamples: 1,
+        },
+      ],
+    })
+    const response = new FakeResponse()
+    await test.route.handler(
+      request(`${REPORT_PATH}?range=day&session=session-1`),
+      response as unknown as ServerResponse,
+    )
+    expect(response.status).toBe(200)
+    const body = response.json() as {
+      cohortCount: number
+      hypotheses: Array<{ window: string; samples: number; status: string }>
+    }
+    // The day window holds no episode, but the weekly hypothesis sees three days ago.
+    expect(body.cohortCount).toBe(0)
+    expect(body.hypotheses[0]?.window).toBe('week')
+    expect(body.hypotheses[0]?.samples).toBe(1)
+    expect(body.hypotheses[0]?.status).toBe('inconclusive')
   })
 
   it('rejects an invalid range and does not read sessions', async () => {

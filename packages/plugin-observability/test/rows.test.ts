@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseRows, RowConfigError } from '../src/host/rows.ts'
+import { DEFAULT_IDLE_GAP_MINUTES, DEFAULT_MIN_EPISODES, parseConfig } from '../src/host/config.ts'
+import { configuredArgumentFields, parseRows, RowConfigError } from '../src/host/rows.ts'
 
 /** Read the message of the config error a call must throw. */
 function rejection(run: () => unknown): string {
@@ -354,5 +355,178 @@ describe('row descriptors', () => {
         parseRows({ rows: [{ id: 'a', label: 'A', kind: 'guidance', trigger: '' }] }),
       ),
     ).toBe('observability config: rows[0].trigger must be a non-empty string')
+  })
+})
+
+describe('row goals and eligibility', () => {
+  it('accepts a goal on a signal row and on a guidance row', () => {
+    expect(
+      parseRows({
+        rows: [
+          {
+            id: 'signal',
+            label: 'Signal',
+            kind: 'signal',
+            match: [{ tool: 'delegate' }],
+            goal: 'delegate work that shortens the task',
+          },
+          { id: 'guide', label: 'Guide', kind: 'guidance', goal: 'keep the rules short' },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: 'signal',
+        label: 'Signal',
+        kind: 'signal',
+        match: [{ tool: 'delegate' }],
+        goal: 'delegate work that shortens the task',
+      },
+      { id: 'guide', label: 'Guide', kind: 'guidance', goal: 'keep the rules short' },
+    ])
+  })
+
+  it('accepts an eligibility predicate list on a signal row', () => {
+    const rows = parseRows({
+      rows: [
+        {
+          id: 'goal-continuity',
+          label: 'Goal continuity',
+          kind: 'signal',
+          match: [{ tool: 'update_goal' }],
+          eligible: [
+            { tool: 'write' },
+            { tool: 'edit', argument: { field: 'path', value: 'a.md' } },
+          ],
+        },
+      ],
+    })
+    expect(rows[0]?.eligible).toEqual([
+      { tool: 'write' },
+      { tool: 'edit', argument: { field: 'path', value: 'a.md' } },
+    ])
+    // An eligible predicate's argument field is extracted, exactly like a match's.
+    expect(configuredArgumentFields(rows)).toEqual(new Map([['edit', new Set(['path'])]]))
+  })
+
+  it('rejects eligibility on a guidance row', () => {
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [
+            {
+              id: 'a',
+              label: 'A',
+              kind: 'guidance',
+              eligible: [{ tool: 'write' }],
+            },
+          ],
+        }),
+      ),
+    ).toBe('observability config: rows[0].eligible is not allowed on a guidance row')
+  })
+
+  it('rejects an empty goal', () => {
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }], goal: '  ' }],
+        }),
+      ),
+    ).toBe('observability config: rows[0].goal must be a non-empty string')
+  })
+
+  it('rejects a malformed eligibility predicate and names it', () => {
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }], eligible: [{}] }],
+        }),
+      ),
+    ).toBe('observability config: rows[0].eligible[0] names no predicate field')
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }], eligible: [42] }],
+        }),
+      ),
+    ).toBe('observability config: rows[0].eligible[0] must be a mapping')
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }], eligible: [] }],
+        }),
+      ),
+    ).toBe('observability config: rows[0].eligible must not be empty')
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }], eligible: 1 }],
+        }),
+      ),
+    ).toBe('observability config: rows[0].eligible must be an array')
+  })
+
+  it('rejects an unknown row field by name', () => {
+    expect(
+      rejection(() =>
+        parseRows({
+          rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }], goalz: 'x' }],
+        }),
+      ),
+    ).toBe('observability config: rows[0]: unknown field "goalz"')
+  })
+})
+
+describe('plugin configuration', () => {
+  it('defaults the episode gap, the comparison minimum, and the hypotheses', () => {
+    expect(parseConfig(undefined)).toEqual({
+      rows: [],
+      idleGapMinutes: DEFAULT_IDLE_GAP_MINUTES,
+      minEpisodes: DEFAULT_MIN_EPISODES,
+      hypotheses: [],
+    })
+    expect(parseConfig({})).toEqual({
+      rows: [],
+      idleGapMinutes: 30,
+      minEpisodes: 10,
+      hypotheses: [],
+    })
+  })
+
+  it('keeps explicit values and parses the rows', () => {
+    const config = parseConfig({
+      rows: [{ id: 'a', label: 'A', kind: 'signal', match: [{ tool: 'x' }] }],
+      idleGapMinutes: 5,
+      minEpisodes: 3,
+      hypotheses: [],
+    })
+    expect(config.idleGapMinutes).toBe(5)
+    expect(config.minEpisodes).toBe(3)
+    expect(config.rows).toHaveLength(1)
+    expect(config.hypotheses).toEqual([])
+  })
+
+  it('rejects a zero or negative episode gap and minimum', () => {
+    expect(rejection(() => parseConfig({ idleGapMinutes: 0 }))).toBe(
+      'observability config: config.idleGapMinutes must be a positive number',
+    )
+    expect(rejection(() => parseConfig({ idleGapMinutes: -5 }))).toBe(
+      'observability config: config.idleGapMinutes must be a positive number',
+    )
+    expect(rejection(() => parseConfig({ minEpisodes: 0 }))).toBe(
+      'observability config: config.minEpisodes must be a positive integer',
+    )
+    expect(rejection(() => parseConfig({ minEpisodes: -1 }))).toBe(
+      'observability config: config.minEpisodes must be a positive integer',
+    )
+    expect(rejection(() => parseConfig({ minEpisodes: 2.5 }))).toBe(
+      'observability config: config.minEpisodes must be a positive integer',
+    )
+  })
+
+  it('rejects an unknown top-level key by name', () => {
+    expect(rejection(() => parseConfig({ idleGap: 5 }))).toBe(
+      'observability config: config: unknown field "idleGap"',
+    )
   })
 })

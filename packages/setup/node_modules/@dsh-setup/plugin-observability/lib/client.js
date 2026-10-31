@@ -25,32 +25,58 @@ window.__ModuleLoader__.load({
     // packages/plugin-observability/src/client/index.tsx
     var index_exports = {};
     __export(index_exports, {
-      ActivityChart: () => ActivityChart,
+      ActivityPanel: () => ActivityPanel,
       BlindSpots: () => BlindSpots,
+      DataQualityStrip: () => DataQualityStrip,
+      DataSufficiency: () => DataSufficiency,
+      EN: () => EN,
+      EPISODE_TABLE_LIMIT: () => EPISODE_TABLE_LIMIT,
+      EpisodeDetail: () => EpisodeDetail,
       FAILURE_SECTION_ID: () => FAILURE_SECTION_ID,
       FailureList: () => FailureList,
+      FindingsStrip: () => FindingsStrip,
       HealthBanner: () => HealthBanner,
+      HypothesesView: () => HypothesesView,
       KpiStrip: () => KpiStrip,
       MAX_FIX_ENTRY_CHARS: () => MAX_FIX_ENTRY_CHARS,
       MAX_FIX_PROMPT_CHARS: () => MAX_FIX_PROMPT_CHARS,
       MAX_FIX_PROMPT_ENTRIES: () => MAX_FIX_PROMPT_ENTRIES,
+      MIN_EPISODES: () => MIN_EPISODES,
       ObservabilityPanel: () => ObservabilityPanel,
       ObservabilityView: () => ObservabilityView,
+      OutcomeTiles: () => OutcomeTiles,
+      OverviewView: () => OverviewView,
       PluginBoard: () => PluginBoard,
       PluginCard: () => PluginCard,
       REPORT_PATH: () => REPORT_PATH,
       RangeSelector: () => RangeSelector,
+      RangeSeries: () => RangeSeries,
+      SUB_VIEWS: () => SUB_VIEWS,
+      ScorecardCard: () => ScorecardCard,
+      ScorecardList: () => ScorecardList,
+      SessionTimeline: () => SessionTimeline,
       SignalsPanel: () => SignalsPanel,
       Sparkline: () => Sparkline,
       StatusPill: () => StatusPill,
+      SubViewTabs: () => SubViewTabs,
+      TasksView: () => TasksView,
+      TokenMix: () => TokenMix,
       ToolsPanel: () => ToolsPanel,
       apply: () => apply,
+      categoryBand: () => categoryBand,
+      chartWidth: () => chartWidth,
       counted: () => counted,
       failureCopyText: () => failureCopyText,
       failureFacts: () => failureFacts,
       failureFixPrompt: () => failureFixPrompt,
+      hypothesisCopyText: () => hypothesisCopyText,
       inject: () => inject,
-      reportUrl: () => reportUrl
+      reportUrl: () => reportUrl,
+      scorecardStatus: () => scorecardStatus,
+      sufficiency: () => sufficiency,
+      timeScale: () => timeScale,
+      useChartWidth: () => useChartWidth,
+      visibleEpisodes: () => visibleEpisodes
     });
     module.exports = __toCommonJS(index_exports);
     var import_react = require("react");
@@ -67,6 +93,47 @@ window.__ModuleLoader__.load({
       "turn failure": "severity.turnFailure",
       "turn cut": "severity.turnCut",
       "tool failure": "severity.toolFailure"
+    };
+    var SUB_VIEWS = ["overview", "plugins", "tasks", "hypotheses"];
+    var EPISODE_TABLE_LIMIT = 200;
+    var MIN_EPISODES = 10;
+    var SUB_VIEW_KEYS = {
+      overview: "tab.overview",
+      plugins: "tab.plugins",
+      tasks: "tab.tasks",
+      hypotheses: "tab.hypotheses"
+    };
+    var OUTCOME_KEYS = {
+      completed: "outcome.completed",
+      failed: "outcome.failed",
+      cut: "outcome.cut",
+      blocked: "outcome.blocked",
+      other: "outcome.other",
+      open: "outcome.open"
+    };
+    var SCORECARD_STATUS_KEYS = {
+      "not applicable": "scorecard.notApplicable",
+      insufficient: "scorecard.insufficient",
+      error: "scorecard.error",
+      silent: "scorecard.silent",
+      active: "scorecard.active"
+    };
+    var METRIC_KEYS = {
+      "verified-completion-rate": "hypothesis.metric.verifiedCompletionRate",
+      "tokens-per-episode": "hypothesis.metric.tokensPerEpisode",
+      "context-tokens-per-step": "hypothesis.metric.contextTokensPerStep",
+      "active-minutes-per-episode": "hypothesis.metric.activeMinutesPerEpisode",
+      "steps-per-human-message": "hypothesis.metric.stepsPerHumanMessage",
+      "human-messages-per-completed-goal": "hypothesis.metric.humanMessagesPerCompletedGoal",
+      "delegate-rate": "hypothesis.metric.delegateRate",
+      "checkpoint-coverage": "hypothesis.metric.checkpointCoverage",
+      "failure-rate": "hypothesis.metric.failureRate"
+    };
+    var HYPOTHESIS_STATUS_KEYS = {
+      collecting: "hypothesis.status.collecting",
+      supported: "hypothesis.status.supported",
+      refuted: "hypothesis.status.refuted",
+      inconclusive: "hypothesis.status.inconclusive"
     };
     var READINESS_KEYS = {
       mounted: "readiness.mounted",
@@ -99,12 +166,30 @@ window.__ModuleLoader__.load({
       "kpi.turn": "turn",
       "kpi.toolCall": "tool call",
       "kpi.session": "session",
-      "chart.title": "Activity over the range",
       "chart.events": "events",
       "chart.errors": "errors",
-      "chart.empty": "No activity in this range.",
       "legend.events": "Events",
       "legend.errors": "Errors",
+      "timeline.title": "Session timeline",
+      "timeline.empty": "No activity in this session.",
+      "timeline.laneSteps": "Steps",
+      "timeline.laneTools": "Tools",
+      "timeline.laneHuman": "Human",
+      "timeline.laneErrors": "Errors",
+      "timeline.turn": "Turn",
+      "timeline.step": "step",
+      "timeline.call": "call",
+      "timeline.error": "error",
+      "timeline.humanMessage": "human message",
+      "timeline.minute": "m",
+      "timeline.second": "s",
+      "series.title": "Activity in the range",
+      "series.empty": "No activity in this range.",
+      "tokens.title": "Token mix",
+      "tokens.cacheRead": "Cache read",
+      "tokens.input": "Input",
+      "tokens.output": "Output",
+      "tokens.empty": "No tokens recorded in this scope.",
       "section.attention": "Needs attention",
       "section.active": "Active",
       "section.silent": "Silent",
@@ -148,6 +233,148 @@ window.__ModuleLoader__.load({
       "status.error": "error",
       "status.silent": "silent",
       "status.not loaded": "not loaded",
+      "tab.label": "Sections",
+      "tab.overview": "Overview",
+      "tab.plugins": "Plugins",
+      "tab.tasks": "Tasks",
+      "tab.hypotheses": "Hypotheses",
+      "findings.title": "Attention findings",
+      "verdict.title": "Data sufficiency",
+      "verdict.insufficient": "Insufficient data",
+      "verdict.partial": "Partial coverage",
+      "verdict.sufficient": "Sufficient for the observed window",
+      "verdict.episodes": "episodes",
+      "verdict.of": "of",
+      "verdict.coverage": "usage coverage",
+      "tiles.title": "Outcomes",
+      "tile.quality": "Quality",
+      "tile.cost": "Cost",
+      "tile.speed": "Speed",
+      "tile.autonomy": "Autonomy",
+      "tile.n": "n",
+      "tile.p50": "p50",
+      "tile.p90": "p90",
+      "tile.verified": "verified",
+      "tile.failed": "failed",
+      "tile.cutoff": "cutoff",
+      "tile.humanMessages": "human messages",
+      "tile.completed": "completed",
+      "cutoff.through": "through cutoff",
+      "cutoff.full": "full episode",
+      "unit.minutes": "min",
+      "unit.tokens": "tokens",
+      "unit.steps": "steps",
+      "dq.title": "Data quality",
+      "dq.steps": "steps with usage",
+      "dq.messages": "messages with usage",
+      "dq.episodes": "episodes",
+      "dq.children": "linked children",
+      "dq.unlinked": "unlinked children",
+      "dq.goals": "goal events",
+      "dq.checkpoints": "checkpoints",
+      "dq.unmapped": "unmapped closers",
+      "dq.comparison": "comparison sample",
+      "dq.partial": "Partial coverage; the metrics above are lower bounds.",
+      "scorecards.title": "Plugin scorecards",
+      "scorecards.empty": "No signal rows are configured.",
+      "scorecard.notApplicable": "not applicable",
+      "scorecard.insufficient": "insufficient data",
+      "scorecard.error": "error",
+      "scorecard.silent": "silent",
+      "scorecard.active": "active",
+      "scorecard.goal": "Goal",
+      "scorecard.noGoal": "No goal declared",
+      "scorecard.activation": "Activation",
+      "scorecard.of": "of",
+      "scorecard.eligible": "eligible",
+      "scorecard.firedOutside": "fired outside eligibility; excluded from activation and cohorts",
+      "scorecard.primary": "Verified completion",
+      "scorecard.errorRate": "error rate",
+      "scorecard.primaryNone": "No completed episodes to compare",
+      "scorecard.delta": "delta",
+      "scorecard.unavailable": "No completed comparison sample",
+      "scorecard.matching": "Matched by tool-call bin and local week",
+      "scorecard.relaxed": "a size bin was compared across weeks",
+      "scorecard.points": "points",
+      "scorecard.n": "n",
+      "scorecard.insufficientNote": "Below the comparison minimum; no improvement or regression is claimed.",
+      "scorecard.noEligibility": "Eligibility is not declared; every episode is eligible.",
+      "scorecard.rowDetail": "View plugin row",
+      "bar.treated": "treated episodes",
+      "bar.control": "control episodes",
+      "tasks.title": "Tasks",
+      "tasks.outcome": "Outcome",
+      "tasks.allOutcomes": "All outcomes",
+      "tasks.plugin": "Plugin",
+      "tasks.allPlugins": "All plugins",
+      "tasks.episodeSpan": "Episode",
+      "tasks.empty": "No episodes in this range.",
+      "tasks.capped": "Showing the newest",
+      "tasks.columnDate": "Date and title",
+      "tasks.columnStepsPerHuman": "Steps per human message",
+      "tasks.columnSteps": "Steps",
+      "tasks.columnTokens": "Tokens (through cutoff)",
+      "tasks.columnActive": "Active time",
+      "tasks.columnOutcome": "Outcome",
+      "tasks.columnVerified": "Verified",
+      "tasks.columnSubagents": "Subagents",
+      "tasks.columnGoal": "Goal",
+      "tasks.columnFailures": "Failures",
+      "tasks.verifiedYes": "yes",
+      "tasks.verifiedNo": "no",
+      "tasks.detail": "Episode detail",
+      "tasks.close": "Close",
+      "tasks.span": "Span",
+      "tasks.tokenPerStep": "Tokens per step",
+      "tasks.throughCutoff": "Window cost",
+      "tasks.fullEpisode": "Full episode cost",
+      "tasks.subagents": "Subagents",
+      "tasks.delegateCalls": "Delegate calls",
+      "tasks.parallelWidth": "Parallel width",
+      "tasks.parentWait": "Parent wait",
+      "tasks.goalsRow": "Goals",
+      "tasks.checkpoints": "Checkpoints",
+      "tasks.checkpointTotal": "total",
+      "tasks.checkpointCloses": "closes",
+      "tasks.checkpointVerified": "verified",
+      "tasks.noChildren": "No child sessions.",
+      "tasks.created": "created",
+      "tasks.completed": "completed",
+      "tasks.rounds": "rounds",
+      "tasks.phase": "phase",
+      "outcome.completed": "completed",
+      "outcome.failed": "failed",
+      "outcome.cut": "cut",
+      "outcome.blocked": "blocked",
+      "outcome.other": "other",
+      "outcome.open": "open",
+      "hypothesis.title": "Hypotheses",
+      "hypothesis.empty": "No hypotheses are configured.",
+      "hypothesis.copy": "Copy summary",
+      "hypothesis.baseline": "Baseline",
+      "hypothesis.current": "Current",
+      "hypothesis.threshold": "Threshold",
+      "hypothesis.samples": "Samples",
+      "hypothesis.window": "Window",
+      "hypothesis.guardrail": "Guardrail",
+      "hypothesis.regressed": "guardrail regressed",
+      "hypothesis.regressedBlock": "Guardrail regressed; support is blocked.",
+      "hypothesis.collecting": "Collecting more samples",
+      "hypothesis.noBaseline": "no baseline",
+      "hypothesis.association": "association, not proof",
+      "hypothesis.status.collecting": "collecting",
+      "hypothesis.status.supported": "supported in the observed window",
+      "hypothesis.status.refuted": "refuted in the observed window",
+      "hypothesis.status.inconclusive": "inconclusive in the observed window",
+      "hypothesis.metric.verifiedCompletionRate": "Verified completion rate",
+      "hypothesis.metric.tokensPerEpisode": "Tokens per episode",
+      "hypothesis.metric.contextTokensPerStep": "Context tokens per step",
+      "hypothesis.metric.activeMinutesPerEpisode": "Active minutes per episode",
+      "hypothesis.metric.stepsPerHumanMessage": "Steps per human message",
+      "hypothesis.metric.humanMessagesPerCompletedGoal": "Human messages per completed goal",
+      "hypothesis.metric.delegateRate": "Delegate rate",
+      "hypothesis.metric.checkpointCoverage": "Checkpoint coverage",
+      "hypothesis.metric.failureRate": "Failure rate",
       "state.loading": "Reading session logs\u2026",
       "state.empty": "No sessions recorded activity in this range.",
       "state.error": "The report could not be loaded.",
@@ -176,6 +403,32 @@ window.__ModuleLoader__.load({
     }
     function counted(count, one, many = `${one}s`) {
       return `${String(count)} ${count === 1 ? one : many}`;
+    }
+    function chartWidth(entryWidth, fallback) {
+      return entryWidth !== void 0 && Number.isFinite(entryWidth) && entryWidth > 0 ? entryWidth : fallback;
+    }
+    function useChartWidth(fallback = 640) {
+      const [node, setNode] = (0, import_react.useState)(null);
+      const [width, setWidth] = (0, import_react.useState)(fallback);
+      (0, import_react.useEffect)(() => {
+        if (node === null || typeof ResizeObserver === "undefined") return void 0;
+        const observer = new ResizeObserver((entries) => {
+          setWidth(chartWidth(entries[0]?.contentRect.width, fallback));
+        });
+        observer.observe(node);
+        return () => observer.disconnect();
+      }, [node, fallback]);
+      return { ref: setNode, width };
+    }
+    function timeScale(from, to, width) {
+      if (from === to || width <= 0) return () => 0;
+      return (time) => Math.max(0, Math.min(width, (time - from) / (to - from) * width));
+    }
+    function categoryBand(count, width, maxBarWidth) {
+      if (count <= 0 || width <= 0) return { band: 0, bar: 0, offset: 0 };
+      const band = width / count;
+      const bar = Math.min(maxBarWidth, band * 0.62);
+      return { band, bar, offset: (band - bar) / 2 };
     }
     function sessionName(failure) {
       return failure.sessionTitle ?? failure.sessionId.slice(0, 8);
@@ -307,33 +560,189 @@ window.__ModuleLoader__.load({
         ] })
       ] });
     }
-    function ActivityChart({ report, t }) {
-      const width = 720;
-      const height = 190;
-      const pad = { left: 40, right: 14, top: 12, bottom: 30 };
-      const plotWidth = width - pad.left - pad.right;
+    function clock(time) {
+      return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    function formatDuration(ms, t) {
+      const total = Math.max(0, Math.round(ms / 1e3));
+      const minutes = Math.floor(total / 60);
+      const seconds = total % 60;
+      return minutes === 0 ? `${String(seconds)}${t("timeline.second")}` : `${String(minutes)}${t("timeline.minute")} ${String(seconds)}${t("timeline.second")}`;
+    }
+    function SessionTimeline({
+      from,
+      to,
+      turns,
+      width,
+      t
+    }) {
+      const measured = useChartWidth();
+      const chartWidthPx = width ?? measured.width;
+      const height = 96;
+      const pad = { left: 46, right: 8, top: 4, bottom: 18 };
+      const plotWidth = Math.max(0, chartWidthPx - pad.left - pad.right);
+      const laneHeight = (height - pad.top - pad.bottom) / 4;
+      const scale = timeScale(from, to, plotWidth);
+      const at = (time) => pad.left + scale(time);
+      const laneY = (index) => pad.top + laneHeight * (index + 0.5);
+      const visible = (span) => span.to >= from && span.from <= to;
+      const barLength = (span) => Math.max(1, at(span.to) - at(span.from));
+      const timeVisible = (time) => time >= from && time <= to;
+      const laneLabels = [
+        t("timeline.laneSteps"),
+        t("timeline.laneTools"),
+        t("timeline.laneHuman"),
+        t("timeline.laneErrors")
+      ];
+      const ticks = [.../* @__PURE__ */ new Set([from, from + (to - from) / 2, to])];
+      const activity = turns.some(
+        (turn) => turn.steps.length > 0 || turn.tools.length > 0 || turn.human.length > 0 || turn.errors.length > 0 || (turn.stepsCount ?? 0) > 0 || (turn.callsCount ?? 0) > 0
+      );
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("timeline.title") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "svg",
+          {
+            ref: width === void 0 ? measured.ref : void 0,
+            className: "dsh-obs-timeline-chart",
+            viewBox: `0 0 ${String(chartWidthPx)} ${String(height)}`,
+            role: "img",
+            "aria-label": t("timeline.title"),
+            children: [
+              laneLabels.map((label, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "text",
+                {
+                  className: "dsh-obs-tl-label",
+                  x: 2,
+                  y: laneY(index) + 4,
+                  children: label
+                },
+                `lane-${String(index)}`
+              )),
+              turns.flatMap((turn, turnIndex) => [
+                ...turn.steps.filter(visible).map((span, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "rect",
+                  {
+                    className: "dsh-obs-tl-bar",
+                    "data-tone": "steps",
+                    x: at(span.from),
+                    y: laneY(0) - 3,
+                    width: barLength(span),
+                    height: 6,
+                    children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${clock(span.from)}\u2013${clock(span.to)} \xB7 ${counted(1, t("timeline.step"))}` })
+                  },
+                  `${String(turnIndex)}:step:${String(index)}`
+                )),
+                ...turn.tools.filter(visible).map((span, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "rect",
+                  {
+                    className: "dsh-obs-tl-bar",
+                    "data-tone": "tools",
+                    x: at(span.from),
+                    y: laneY(1) - 3,
+                    width: barLength(span),
+                    height: 6,
+                    children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${clock(span.from)}\u2013${clock(span.to)} \xB7 ${counted(1, t("timeline.call"))}` })
+                  },
+                  `${String(turnIndex)}:tool:${String(index)}`
+                )),
+                ...turn.human.filter(timeVisible).map((time, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "line",
+                  {
+                    className: "dsh-obs-tl-tick",
+                    "data-tone": "human",
+                    x1: at(time),
+                    x2: at(time),
+                    y1: laneY(2) - 5,
+                    y2: laneY(2) + 5,
+                    children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${clock(time)} \xB7 ${counted(1, t("timeline.humanMessage"))}` })
+                  },
+                  `${String(turnIndex)}:human:${String(index)}`
+                )),
+                ...turn.errors.filter(timeVisible).map((time, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  "line",
+                  {
+                    className: "dsh-obs-tl-tick",
+                    "data-tone": "errors",
+                    x1: at(time),
+                    x2: at(time),
+                    y1: laneY(3) - 5,
+                    y2: laneY(3) + 5,
+                    children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${clock(time)} \xB7 ${counted(1, t("timeline.error"))}` })
+                  },
+                  `${String(turnIndex)}:error:${String(index)}`
+                ))
+              ]),
+              ticks.map((time, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "text",
+                {
+                  className: "dsh-obs-axis",
+                  x: at(time),
+                  y: height - 5,
+                  textAnchor: index === 0 ? "start" : index === ticks.length - 1 ? "end" : "middle",
+                  children: clock(time)
+                },
+                `axis-${String(time)}`
+              )),
+              activity ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "text",
+                {
+                  className: "dsh-obs-chart-empty",
+                  x: pad.left + plotWidth / 2,
+                  y: laneY(1.5),
+                  textAnchor: "middle",
+                  children: t("timeline.empty")
+                }
+              )
+            ]
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", { className: "dsh-obs-turn-rows", children: turns.map((turn, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "li",
+          {
+            className: "dsh-obs-turn-row",
+            "data-turn": turn.turn,
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: turn.rowLabel ?? `${t("timeline.turn")} ${String(turn.turn)}` }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: formatDuration(turn.end - turn.start, t) }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: counted(turn.stepsCount ?? turn.steps.length, t("timeline.step")) }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: counted(turn.callsCount ?? turn.tools.length, t("timeline.call")) }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { ...turn.errors.length > 0 ? { "data-tone": "error" } : {}, children: counted(turn.errors.length, t("timeline.error")) })
+            ]
+          },
+          `${String(turn.turn)}:${String(index)}`
+        )) })
+      ] });
+    }
+    function RangeSeries({
+      labels,
+      counts,
+      errors,
+      t
+    }) {
+      const { ref: measureRef, width } = useChartWidth();
+      const height = 140;
+      const pad = { left: 28, right: 10, top: 10, bottom: 22 };
+      const plotWidth = Math.max(0, width - pad.left - pad.right);
       const plotHeight = height - pad.top - pad.bottom;
-      const max = Math.max(1, ...report.activity);
-      const step = plotWidth / Math.max(1, report.activity.length);
-      const barWidth = Math.max(2, step * 0.62);
-      const ticks = [.../* @__PURE__ */ new Set([0, Math.round(max / 2), max])];
+      const baseline = pad.top + plotHeight;
+      const values = counts.map((count) => Math.max(0, count));
+      const max = Math.max(1, ...values);
+      const { band, bar, offset } = categoryBand(values.length, plotWidth, 24);
       const labelIndexes = [
-        .../* @__PURE__ */ new Set([
-          0,
-          Math.floor((report.bucketLabels.length - 1) / 2),
-          report.bucketLabels.length - 1
-        ])
-      ].filter((index) => index >= 0);
+        .../* @__PURE__ */ new Set([0, Math.floor((labels.length - 1) / 2), labels.length - 1])
+      ].filter((index) => index >= 0 && index < labels.length);
+      const empty = values.length === 0 || values.every((value) => value === 0);
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("chart.title") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("series.title") }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-legend", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-obs-legend-item", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "events" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "events", "aria-hidden": "true" }),
               t("legend.events")
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-obs-legend-item", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "errors" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": "errors", "aria-hidden": "true" }),
               t("legend.errors")
             ] })
           ] })
@@ -341,48 +750,29 @@ window.__ModuleLoader__.load({
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
           "svg",
           {
-            className: "dsh-obs-chart",
+            ref: measureRef,
+            className: "dsh-obs-series-chart",
             viewBox: `0 0 ${String(width)} ${String(height)}`,
-            preserveAspectRatio: "none",
             role: "img",
-            "aria-label": t("chart.title"),
+            "aria-label": t("series.title"),
             children: [
-              ticks.map((tick) => {
-                const y = pad.top + plotHeight - tick / max * plotHeight;
-                return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                    "line",
-                    {
-                      className: "dsh-obs-gridline",
-                      x1: pad.left,
-                      x2: width - pad.right,
-                      y1: y,
-                      y2: y
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", { className: "dsh-obs-axis", x: pad.left - 6, y: y + 4, textAnchor: "end", children: tick })
-                ] }, `tick-${String(tick)}`);
-              }),
-              report.activity.map((count, index) => {
-                const errors = report.errorSeries[index] ?? 0;
-                const normal = Math.max(0, count - errors);
+              values.map((count, index) => {
+                const failed = Math.min(count, Math.max(0, errors[index] ?? 0));
                 const totalHeight = count / max * plotHeight;
-                const normalHeight = normal / max * plotHeight;
-                const errorHeight = totalHeight - normalHeight;
-                const x = pad.left + index * step + (step - barWidth) / 2;
-                const baseline = pad.top + plotHeight;
-                const label = report.bucketLabels[index] ?? String(index + 1);
+                const errorHeight = failed / max * plotHeight;
+                const label = labels[index] ?? String(index + 1);
+                const x = pad.left + index * band + offset;
                 return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${label}: ${String(count)} ${t("chart.events")} \xB7 ${String(errors)} ${t("chart.errors")}` }),
-                  normalHeight > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${label}: ${String(count)} ${t("chart.events")} \xB7 ${String(failed)} ${t("chart.errors")}` }),
+                  count > failed ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                     "rect",
                     {
                       className: "dsh-obs-bar",
                       "data-tone": "events",
                       x,
-                      y: baseline - normalHeight,
-                      width: barWidth,
-                      height: normalHeight
+                      y: baseline - totalHeight + errorHeight,
+                      width: bar,
+                      height: totalHeight - errorHeight
                     }
                   ) : null,
                   errorHeight > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -392,37 +782,812 @@ window.__ModuleLoader__.load({
                       "data-tone": "errors",
                       x,
                       y: baseline - totalHeight,
-                      width: barWidth,
+                      width: bar,
                       height: errorHeight
                     }
                   ) : null
                 ] }, `${label}:${String(index)}`);
               }),
-              labelIndexes.map((index) => {
-                const label = report.bucketLabels[index] ?? "";
-                return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-                  "text",
-                  {
-                    className: "dsh-obs-axis",
-                    x: pad.left + index * step + step / 2,
-                    y: height - 8,
-                    textAnchor: index === 0 ? "start" : index === report.bucketLabels.length - 1 ? "end" : "middle",
-                    children: label
-                  },
-                  `label-${String(index)}`
-                );
-              }),
-              report.activity.every((count) => count === 0) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              labelIndexes.map((index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "text",
+                {
+                  className: "dsh-obs-axis",
+                  x: pad.left + index * band + band / 2,
+                  y: height - 6,
+                  textAnchor: index === 0 ? "start" : index === values.length - 1 ? "end" : "middle",
+                  children: labels[index] ?? ""
+                },
+                `label-${String(index)}`
+              )),
+              empty ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                 "text",
                 {
                   className: "dsh-obs-chart-empty",
-                  x: width / 2,
+                  x: pad.left + plotWidth / 2,
                   y: pad.top + plotHeight / 2,
                   textAnchor: "middle",
-                  children: t("chart.empty")
+                  children: t("series.empty")
                 }
               ) : null
             ]
+          }
+        )
+      ] });
+    }
+    function TokenMix({
+      cacheRead,
+      input,
+      output,
+      t
+    }) {
+      const parts = [
+        { key: "cacheRead", label: t("tokens.cacheRead"), value: Math.max(0, cacheRead) },
+        { key: "input", label: t("tokens.input"), value: Math.max(0, input) },
+        { key: "output", label: t("tokens.output"), value: Math.max(0, output) }
+      ];
+      const total = parts.reduce((sum, part) => sum + part.value, 0);
+      const share = (value) => total === 0 ? 0 : value * 100 / total;
+      let filled = 0;
+      const segments = parts.map((part) => {
+        const before = filled;
+        filled += share(part.value);
+        return { ...part, x: before, width: share(part.value) };
+      });
+      const caption = parts.map((part) => `${part.label} ${String(Math.round(share(part.value)))}%`).join(" \xB7 ");
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("tokens.title") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-token-track", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "svg",
+          {
+            className: "dsh-obs-token-bar",
+            height: 10,
+            role: "img",
+            "aria-label": `${t("tokens.title")}: ${caption}`,
+            children: segments.map(
+              (segment) => segment.width > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "rect",
+                {
+                  "data-tone": segment.key,
+                  x: `${String(segment.x)}%`,
+                  y: 0,
+                  width: `${String(segment.width)}%`,
+                  height: 10
+                },
+                segment.key
+              ) : null
+            )
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-token-caption", children: parts.map((part, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-obs-token-key", children: [
+          index > 0 ? " \xB7 " : "",
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "dsh-obs-swatch", "data-tone": part.key, "aria-hidden": "true" }),
+          `${part.label} ${String(Math.round(share(part.value)))}%`
+        ] }, part.key)) }),
+        total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("tokens.empty") }) : null
+      ] });
+    }
+    var EPISODE_OUTCOMES = [
+      "completed",
+      "failed",
+      "cut",
+      "blocked",
+      "other",
+      "open"
+    ];
+    function shortSessionId(sessionId) {
+      return sessionId.slice(0, 8);
+    }
+    function percent(value) {
+      return value === void 0 ? "\u2014" : `${String(Math.round(value * 100))}%`;
+    }
+    function minutesText(value, t) {
+      return `${value.toFixed(1)} ${t("unit.minutes")}`;
+    }
+    function SubViewTabs({
+      view,
+      t,
+      onView
+    }) {
+      const index = SUB_VIEWS.indexOf(view);
+      const select = (next) => {
+        const option = SUB_VIEWS[(next + SUB_VIEWS.length) % SUB_VIEWS.length];
+        if (option === void 0) return;
+        onView(option);
+        if (typeof document !== "undefined") document.getElementById(`dsh-obs-tab-${option}`)?.focus();
+      };
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-tabs", role: "tablist", "aria-label": t("tab.label"), children: SUB_VIEWS.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
+        {
+          type: "button",
+          role: "tab",
+          id: `dsh-obs-tab-${option}`,
+          className: "dsh-obs-tab",
+          "aria-selected": option === view,
+          "aria-controls": `dsh-obs-panel-${option}`,
+          tabIndex: option === view ? 0 : -1,
+          onClick: () => onView(option),
+          onKeyDown: (event) => {
+            if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+              event.preventDefault();
+              select(index + 1);
+            } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+              event.preventDefault();
+              select(index - 1);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              select(0);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              select(SUB_VIEWS.length - 1);
+            }
+          },
+          children: t(SUB_VIEW_KEYS[option])
+        },
+        option
+      )) });
+    }
+    function sufficiency(report) {
+      const data = report.dataQuality;
+      if (report.quality.episodes < report.minEpisodes) return "insufficient";
+      const silent = report.rows.filter((row) => row.group === "plugin" && row.status === "silent");
+      const emptyEligibility = silent.some((row) => {
+        const card = report.scorecards.find((entry) => entry.rowId === row.id);
+        return card !== void 0 && card.eligibilityDeclared && card.eligible === 0;
+      });
+      if (emptyEligibility) return "insufficient";
+      if (data.steps === 0 || data.messages === 0) return "partial";
+      if (data.stepsWithUsage < data.steps || data.messagesWithUsage < data.messages) return "partial";
+      if (data.unlinkedChildren > 0 || data.unmappedClosers > 0) return "partial";
+      return "sufficient";
+    }
+    function DataSufficiency({ report, t }) {
+      const status = sufficiency(report);
+      const data = report.dataQuality;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "section",
+        {
+          className: "dsh-obs-health",
+          "data-tone": status === "sufficient" ? "ok" : "attention",
+          "data-sufficiency": status,
+          "aria-label": t("verdict.title"),
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-health-dot", "aria-hidden": "true" }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-health-text", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: t(`verdict.${status}`) }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(report.quality.episodes)} ${t("verdict.episodes")} ${t("verdict.of")} ${String(report.minEpisodes)}` }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(Math.round(data.usageCoverage * 100))}% ${t("verdict.coverage")}` }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: counted(report.failureTotals.total, t("health.failure"), t("health.failures")) })
+            ] })
+          ]
+        }
+      );
+    }
+    function OutcomeTiles({ report, t }) {
+      const quality = report.quality;
+      const cost = report.cost;
+      const speed = report.speed;
+      const autonomy = report.autonomy;
+      const tiles = [
+        {
+          key: "quality",
+          label: t("tile.quality"),
+          n: quality.episodes,
+          values: [
+            { label: t("tile.verified"), value: percent(quality.verifiedShare) },
+            { label: t("tile.failed"), value: percent(quality.failureRate) },
+            { label: t("tile.completed"), value: String(quality.completed) },
+            {
+              label: t("tile.p50"),
+              value: quality.stepsToCompletion.n === 0 ? "\u2014" : `${String(Math.round(quality.stepsToCompletion.p50))} ${t("unit.steps")}`
+            },
+            {
+              label: t("tile.p90"),
+              value: quality.stepsToCompletion.n === 0 ? "\u2014" : `${String(Math.round(quality.stepsToCompletion.p90))} ${t("unit.steps")}`
+            }
+          ],
+          note: `${t("tile.n")} ${String(quality.stepsToCompletion.n)} ${t("tile.completed")}`
+        },
+        {
+          key: "cost",
+          label: t("tile.cost"),
+          n: cost.tokensPerEpisode.n,
+          values: [
+            { label: t("tile.p50"), value: String(Math.round(cost.tokensPerEpisode.p50)) },
+            { label: t("tile.p90"), value: String(Math.round(cost.tokensPerEpisode.p90)) }
+          ],
+          note: `${t("tile.cutoff")}: ${t(cost.cutoffLabel === "through cutoff" ? "cutoff.through" : "cutoff.full")}`
+        },
+        {
+          key: "speed",
+          label: t("tile.speed"),
+          n: speed.n,
+          values: [
+            { label: t("tile.p50"), value: minutesText(speed.activeMinutes.p50, t) },
+            { label: t("tile.p90"), value: minutesText(speed.activeMinutes.p90, t) }
+          ]
+        },
+        {
+          key: "autonomy",
+          label: t("tile.autonomy"),
+          n: autonomy.episodes,
+          values: [
+            {
+              label: t("tile.p50"),
+              value: `${autonomy.stepsPerHumanMessage.p50.toFixed(1)} ${t("unit.steps")}`
+            },
+            {
+              label: t("tile.p90"),
+              value: `${autonomy.stepsPerHumanMessage.p90.toFixed(1)} ${t("unit.steps")}`
+            }
+          ],
+          note: `${String(autonomy.humanMessages)} ${t("tile.humanMessages")}`
+        }
+      ];
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-section", "aria-label": t("tiles.title"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("tiles.title") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-tiles", children: tiles.map((tile) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "dsh-obs-tile", "data-tile": tile.key, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-tile-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: tile.label }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: `${t("tile.n")} ${String(tile.n)}` })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", { children: tile.values.map((value) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: value.label }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: value.value })
+          ] }, value.label)) }),
+          tile.note === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted dsh-obs-tile-note", children: tile.note })
+        ] }, tile.key)) })
+      ] });
+    }
+    function ActivityPanel({ report, t }) {
+      if (report.range === "session" && report.timeline !== void 0) {
+        const timeline = report.timeline;
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          SessionTimeline,
+          {
+            from: timeline.from,
+            to: timeline.to,
+            turns: timeline.turns.map((turn) => ({
+              turn: turn.turn,
+              start: turn.start,
+              end: turn.end,
+              steps: turn.steps,
+              tools: turn.tools,
+              human: turn.human,
+              errors: turn.errors,
+              stepsCount: turn.stepsCount,
+              callsCount: turn.callsCount
+            })),
+            t
+          }
+        );
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        RangeSeries,
+        {
+          labels: report.bucketLabels,
+          counts: report.activity,
+          errors: report.errorSeries,
+          t
+        }
+      );
+    }
+    function DataQualityStrip({ report, t }) {
+      const data = report.dataQuality;
+      const facts = [
+        { label: t("dq.steps"), value: `${String(data.stepsWithUsage)}/${String(data.steps)}` },
+        {
+          label: t("dq.messages"),
+          value: `${String(data.messagesWithUsage)}/${String(data.messages)}`
+        },
+        { label: t("dq.episodes"), value: String(data.episodes) },
+        { label: t("dq.children"), value: String(data.linkedChildren) },
+        { label: t("dq.unlinked"), value: String(data.unlinkedChildren) },
+        { label: t("dq.goals"), value: String(data.goalEvents) },
+        { label: t("dq.checkpoints"), value: String(data.checkpoints) },
+        { label: t("dq.unmapped"), value: String(data.unmappedClosers) },
+        { label: t("dq.comparison"), value: String(data.comparisonSample) }
+      ];
+      const partial = data.stepsWithUsage < data.steps || data.messagesWithUsage < data.messages || data.unlinkedChildren > 0 || data.unmappedClosers > 0;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("dq.title"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("dq.title") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { className: "dsh-obs-dq", children: facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: fact.label }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: fact.value })
+        ] }, fact.label)) }),
+        partial ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("dq.partial") }) : null
+      ] });
+    }
+    function scorecardStatus(card) {
+      if (card.eligible === 0) return "not applicable";
+      if (card.fired === 0) return "silent";
+      if ((card.errorRate ?? 0) > 0) return "error";
+      if (card.insufficient) return "insufficient";
+      return "active";
+    }
+    function ScoreBars({
+      treated,
+      control,
+      t
+    }) {
+      if (treated === void 0 || control === void 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("scorecard.unavailable") });
+      }
+      const values = [control, treated];
+      const labels = [t("bar.control"), t("bar.treated")];
+      const max = Math.max(1, ...values);
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "svg",
+        {
+          className: "dsh-obs-spark",
+          viewBox: "0 0 120 24",
+          role: "img",
+          "aria-label": t("scorecard.primary"),
+          children: values.map((value, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("title", { children: `${labels[index] ?? ""}: ${percent(value)}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "rect",
+              {
+                x: index * 60 + 8,
+                y: 24 - value / max * 22,
+                width: 44,
+                height: value / max * 22
+              }
+            )
+          ] }, labels[index] ?? String(index)))
+        }
+      );
+    }
+    function ScorecardCard({
+      card,
+      t,
+      onOpenRow
+    }) {
+      const status = scorecardStatus(card);
+      const treated = card.treated.verifiedShare;
+      const control = card.control.verifiedShare;
+      const delta = treated === void 0 || control === void 0 ? void 0 : treated - control;
+      const activation = card.activation === void 0 ? "\u2014" : percent(card.activation);
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "dsh-obs-card", "data-card": card.rowId, "data-status": status, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-card-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-card-name", children: card.label }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-pill", "data-status": status, children: t(SCORECARD_STATUS_KEYS[status]) })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-score-goal", children: `${t("scorecard.goal")}: ${card.goal ?? t("scorecard.noGoal")}` }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-card-metrics", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${t("scorecard.activation")} ${activation}` }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(card.fired)} ${t("scorecard.of")} ${String(card.eligible)} ${t("scorecard.eligible")}` }),
+          card.errorRate === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-err", children: `${t("scorecard.errorRate")} ${percent(card.errorRate)}` })
+        ] }),
+        card.firedOutside > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-err", children: `${String(card.firedOutside)} ${t("scorecard.firedOutside")}` }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-card-metrics", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t("scorecard.primary") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: treated === void 0 ? t("scorecard.primaryNone") : `${percent(treated)} ${t("scorecard.of")} ${percent(control)}` }),
+          delta === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${t("scorecard.delta")} ${delta >= 0 ? "+" : "\u2212"}${String(Math.round(Math.abs(delta) * 100))} ${t("scorecard.points")}` })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScoreBars, { treated, control, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: `${t("scorecard.n")} ${String(card.treated.n)} ${t("scorecard.treated")} \xB7 ${String(card.control.n)} ${t("scorecard.control")}` }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: `${t("scorecard.matching")}${card.weekRelaxed ? ` \xB7 ${t("scorecard.relaxed")}` : ""}` }),
+        card.insufficient ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("scorecard.insufficientNote") }) : null,
+        card.eligibilityDeclared ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("scorecard.noEligibility") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: card.association }),
+        onOpenRow === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-obs-link", onClick: () => onOpenRow(card.rowId), children: t("scorecard.rowDetail") })
+      ] });
+    }
+    function ScorecardList({
+      scorecards,
+      t,
+      onOpenRow
+    }) {
+      if (scorecards.length === 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-section", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("scorecards.title") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("scorecards.empty") })
+        ] });
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-section", "aria-label": t("scorecards.title"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("scorecards.title") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-grid", children: scorecards.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScorecardCard, { card, t, onOpenRow }, card.rowId)) })
+      ] });
+    }
+    var TASK_COLUMNS = [
+      { key: "start", label: "tasks.columnDate" },
+      { key: "stepsPerHuman", label: "tasks.columnStepsPerHuman" },
+      { key: "steps", label: "tasks.columnSteps" },
+      { key: "tokens", label: "tasks.columnTokens" },
+      { key: "active", label: "tasks.columnActive" },
+      { key: "outcome", label: "tasks.columnOutcome" },
+      { key: "verified", label: "tasks.columnVerified" },
+      { key: "subagents", label: "tasks.columnSubagents" },
+      { key: "goal", label: "tasks.columnGoal" },
+      { key: "failures", label: "tasks.columnFailures" }
+    ];
+    function stepsPerHuman(episode) {
+      return episode.humanMessages === 0 ? 0 : episode.steps / episode.humanMessages;
+    }
+    function taskSortValue(episode, key) {
+      switch (key) {
+        case "stepsPerHuman":
+          return stepsPerHuman(episode);
+        case "steps":
+          return episode.steps;
+        case "tokens":
+          return episode.usage.total;
+        case "active":
+          return episode.activeMs;
+        case "outcome":
+          return episode.outcome;
+        case "verified":
+          return episode.verified ? 1 : 0;
+        case "subagents":
+          return episode.children.length;
+        case "goal":
+          return episode.goals.created;
+        case "failures":
+          return episode.failures;
+        default:
+          return episode.start;
+      }
+    }
+    function visibleEpisodes(episodes, outcome, plugin, sort) {
+      const filtered = episodes.filter((episode) => outcome === "all" || episode.outcome === outcome).filter((episode) => plugin === "all" || episode.firedRows.includes(plugin));
+      filtered.sort((left, right) => {
+        const a = taskSortValue(left, sort.key);
+        const b = taskSortValue(right, sort.key);
+        const order = typeof a === "string" && typeof b === "string" ? a.localeCompare(b) : Number(a) - Number(b);
+        return order * sort.direction || left.start - right.start;
+      });
+      return filtered.slice(0, EPISODE_TABLE_LIMIT);
+    }
+    function EpisodeDetail({
+      episode,
+      t,
+      onClose
+    }) {
+      const lane = episode.timeline;
+      const turns = [
+        {
+          turn: 1,
+          start: lane.from,
+          end: lane.to,
+          steps: lane.steps,
+          tools: lane.tools,
+          human: lane.human,
+          errors: lane.errors,
+          stepsCount: lane.stepsCount,
+          callsCount: lane.callsCount,
+          rowLabel: t("tasks.episodeSpan")
+        }
+      ];
+      const perStep = episode.steps === 0 ? 0 : Math.round(episode.usage.total / Math.max(1, episode.steps));
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "section",
+        {
+          className: "dsh-obs-panel",
+          "aria-label": t("tasks.detail"),
+          "data-episode-detail": episode.id,
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: `${t("tasks.detail")} \xB7 ${episode.sessionTitle ?? shortSessionId(episode.sessionId)}` }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-obs-link", onClick: onClose, children: t("tasks.close") })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: `${formatTime(episode.start)} \u2013 ${formatTime(episode.end)} \xB7 ${formatDuration(episode.durationMs, t)}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", { className: "dsh-obs-facts", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.span") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: formatDuration(episode.durationMs, t) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.tokenPerStep") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(perStep) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: `${t("tasks.throughCutoff")} (${t("cutoff.through")})` }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(episode.usage.total) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: `${t("tasks.fullEpisode")} (${t("cutoff.full")})` }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(episode.fullUsage.total) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.delegateCalls") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(episode.delegateCalls) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.parallelWidth") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: String(episode.parallelWidth) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.parentWait") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: formatDuration(episode.parentWaitMs, t) })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.goalsRow") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${String(episode.goals.created)} ${t("tasks.created")} \xB7 ${String(episode.goals.completed)} ${t("tasks.completed")} \xB7 ${String(episode.goals.rounds)} ${t("tasks.rounds")}${episode.goals.phase === void 0 ? "" : ` \xB7 ${episode.goals.phase}`}` })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("tasks.checkpoints") }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${String(episode.checkpoints.total)} ${t("tasks.checkpointTotal")} \xB7 ${String(episode.checkpoints.closes)} ${t("tasks.checkpointCloses")} \xB7 ${String(episode.checkpoints.verified)} ${t("tasks.checkpointVerified")}` })
+              ] })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: t("tasks.subagents") }),
+            episode.children.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("tasks.noChildren") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { className: "dsh-obs-dq", children: episode.children.map((child) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${child.sessionTitle ?? shortSessionId(child.sessionId)} \xB7 ${t(OUTCOME_KEYS[child.outcome])}${child.verified ? ` \xB7 ${t("tasks.verifiedYes")}` : ""}` }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(child.toolCalls)} ${t("kpi.toolCall")} \xB7 ${String(child.usage.total)} ${t("unit.tokens")}` })
+            ] }, child.sessionId)) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionTimeline, { from: lane.from, to: lane.to, turns, t })
+          ]
+        }
+      );
+    }
+    function TasksView({
+      report,
+      t,
+      sort,
+      outcome,
+      plugin,
+      selectedId,
+      onSort,
+      onOutcome,
+      onPlugin,
+      onSelect
+    }) {
+      const rows = visibleEpisodes(report.episodes, outcome, plugin, sort);
+      const selected = selectedId === void 0 ? void 0 : report.episodes.find((episode) => episode.id === selectedId);
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("tasks.title"), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("tasks.title") }),
+            report.episodes.length > EPISODE_TABLE_LIMIT || report.episodeCount > EPISODE_TABLE_LIMIT ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: `${t("tasks.capped")} ${String(rows.length)} ${t("failure.of")} ${String(report.episodeCount)}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: `${String(rows.length)} ${t("failure.of")} ${String(report.episodeCount)}` })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-task-controls", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+              t("tasks.outcome"),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+                "select",
+                {
+                  value: outcome,
+                  onChange: (event) => onOutcome(event.currentTarget.value),
+                  children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "all", children: t("tasks.allOutcomes") }),
+                    EPISODE_OUTCOMES.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: option, children: t(OUTCOME_KEYS[option]) }, option))
+                  ]
+                }
+              )
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+              t("tasks.plugin"),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: plugin, onChange: (event) => onPlugin(event.currentTarget.value), children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "all", children: t("tasks.allPlugins") }),
+                report.scorecards.map((card) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: card.rowId, children: card.label }, card.rowId))
+              ] })
+            ] })
+          ] }),
+          rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("tasks.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-table-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "dsh-obs-table", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tr", { children: TASK_COLUMNS.map((column) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "th",
+              {
+                "aria-sort": sort.key === column.key ? sort.direction === 1 ? "ascending" : "descending" : "none",
+                children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", onClick: () => onSort(column.key), children: t(column.label) })
+              },
+              column.key
+            )) }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((episode) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+              "tr",
+              {
+                "data-episode": episode.id,
+                "data-outcome": episode.outcome,
+                "data-selected": selectedId === episode.id ? "true" : void 0,
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    "button",
+                    {
+                      type: "button",
+                      className: "dsh-obs-link",
+                      onClick: () => onSelect(episode.id),
+                      children: `${new Date(episode.start).toLocaleDateString()} \xB7 ${episode.sessionTitle ?? shortSessionId(episode.sessionId)}`
+                    }
+                  ) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: stepsPerHuman(episode).toFixed(1) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.steps) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.usage.total) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: minutesText(episode.activeMs / 6e4, t) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: t(OUTCOME_KEYS[episode.outcome]) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: episode.verified ? t("tasks.verifiedYes") : t("tasks.verifiedNo") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.children.length) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: episode.goals.created === 0 ? "\u2014" : `${String(episode.goals.created)} \xB7 ${episode.goals.phase ?? t("tasks.phase")}` }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: String(episode.failures) })
+                ]
+              },
+              episode.id
+            )) })
+          ] }) })
+        ] }),
+        selected === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpisodeDetail, { episode: selected, t, onClose: () => onSelect(void 0) })
+      ] });
+    }
+    function metricText(metric, value, t) {
+      if (value === void 0) return "\u2014";
+      switch (metric) {
+        case "verified-completion-rate":
+        case "delegate-rate":
+        case "checkpoint-coverage":
+        case "failure-rate":
+          return `${String(Math.round(value * 100))}%`;
+        case "active-minutes-per-episode":
+          return minutesText(value, t);
+        case "tokens-per-episode":
+        case "context-tokens-per-step":
+          return String(Math.round(value));
+        default:
+          return value.toFixed(1);
+      }
+    }
+    function hypothesisCopyText(results, t) {
+      return results.map((result) => {
+        const parts = [
+          t(METRIC_KEYS[result.metric]),
+          t(HYPOTHESIS_STATUS_KEYS[result.status]),
+          `${t("hypothesis.baseline")} ${metricText(result.metric, result.baseline, t)}`,
+          `${t("hypothesis.current")} ${metricText(result.metric, result.current, t)}`,
+          `${t("hypothesis.threshold")} ${metricText(result.metric, result.threshold, t)}`,
+          `${t("hypothesis.samples")} ${String(result.samples)}/${String(result.minSamples)}`,
+          `${t("hypothesis.window")} ${t(`range.${result.window}`)}`
+        ];
+        if (result.guardrail !== void 0) {
+          parts.push(
+            `${t("hypothesis.guardrail")} ${t(METRIC_KEYS[result.guardrail.metric])}${result.guardrail.regressed ? ` \xB7 ${t("hypothesis.regressed")}` : ""}`
+          );
+        }
+        parts.push(t("hypothesis.association"));
+        return parts.join(" \xB7 ");
+      }).join("\n");
+    }
+    function HypothesisCard({ result, t }) {
+      const guardrail = result.guardrail;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "dsh-obs-hypo", "data-status": result.status, "data-hypothesis": result.index, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-card-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-card-name", children: result.description ?? t(METRIC_KEYS[result.metric]) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-pill", "data-status": result.status, children: t(HYPOTHESIS_STATUS_KEYS[result.status]) })
+        ] }),
+        result.description === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t(METRIC_KEYS[result.metric]) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", { className: "dsh-obs-facts", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.baseline") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: result.baseline === void 0 ? t("hypothesis.noBaseline") : metricText(result.metric, result.baseline, t) })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.current") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: metricText(result.metric, result.current, t) })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.threshold") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: metricText(result.metric, result.threshold, t) })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.samples") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${String(result.samples)}/${String(result.minSamples)}` })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.window") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: t(`range.${result.window}`) })
+          ] }),
+          guardrail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t("hypothesis.guardrail") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: `${t(METRIC_KEYS[guardrail.metric])} ${metricText(guardrail.metric, guardrail.current, t)}${guardrail.regressed ? ` \xB7 ${t("hypothesis.regressed")}` : ""}` })
+          ] })
+        ] }),
+        result.status === "collecting" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: `${t("hypothesis.collecting")} \xB7 ${String(result.samples)} ${t("verdict.of")} ${String(result.minSamples)}` }) : null,
+        guardrail?.regressed === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-err", children: t("hypothesis.regressedBlock") }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("hypothesis.association") })
+      ] });
+    }
+    function HypothesesView({ report, t }) {
+      const results = report.hypotheses;
+      if (results.length === 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("hypothesis.title"), children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("hypothesis.title") }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("hypothesis.empty") })
+        ] });
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-section", "aria-label": t("hypothesis.title"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-panel-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("hypothesis.title") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "button",
+            {
+              type: "button",
+              className: "dsh-obs-link",
+              onClick: () => copyText(hypothesisCopyText(results, t)),
+              children: t("hypothesis.copy")
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-hypo-list", children: results.map((result) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HypothesisCard, { result, t }, result.index)) })
+      ] });
+    }
+    function FindingsStrip({
+      findings,
+      t
+    }) {
+      if (findings.length === 0) return null;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-findings", "aria-label": t("findings.title"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("findings.title") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: findings.map((finding) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { "data-finding": finding.id, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: finding.title }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: finding.evidence }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: finding.nextAction })
+        ] }, finding.id)) })
+      ] });
+    }
+    function OverviewView({
+      report,
+      t,
+      failuresOpen,
+      failureFilter,
+      onToggleFailures,
+      onRevealFailures,
+      onClearFilter,
+      onOpenFailure,
+      canOpenFailure,
+      onFix,
+      onOpenRow
+    }) {
+      const silent = report.rows.filter((row) => row.group === "plugin" && row.status === "silent");
+      const silentIds = new Set(silent.map((row) => row.id));
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DataSufficiency, { report, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FindingsStrip, { findings: report.findings, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          KpiStrip,
+          {
+            report,
+            t,
+            failuresOpen,
+            onRevealFailures: report.failureTotals.total === 0 ? void 0 : onRevealFailures
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-columns", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-col", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutcomeTiles, { report, t }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              TokenMix,
+              {
+                cacheRead: report.cost.cacheRead,
+                input: report.cost.input,
+                output: report.cost.output,
+                t
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityPanel, { report, t }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DataQualityStrip, { report, t })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-col", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              ScorecardList,
+              {
+                scorecards: report.scorecards.filter((card) => !silentIds.has(card.rowId)),
+                t,
+                onOpenRow
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SilentRows, { rows: silent, report, t }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ToolsPanel, { outcomes: report.toolOutcomes, t }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignalsPanel, { rows: report.rows, t })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          FailureList,
+          {
+            failures: report.failures,
+            totals: report.failureTotals,
+            t,
+            open: failuresOpen,
+            onToggle: onToggleFailures,
+            ...onOpenFailure === void 0 ? {} : { onOpen: onOpenFailure },
+            ...canOpenFailure === void 0 ? {} : { canOpen: canOpenFailure },
+            ...onFix === void 0 ? {} : { onFix },
+            ...failureFilter === void 0 ? {} : { filterTool: failureFilter },
+            onClearFilter
           }
         )
       ] });
@@ -483,41 +1648,50 @@ window.__ModuleLoader__.load({
       row,
       t,
       now,
-      onShowFailures
+      onShowFailures,
+      focused
     }) {
       const silent = row.status === "silent" || row.status === "not loaded";
       const lastFailure = row.lastFailure;
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "dsh-obs-card", "data-status": row.status, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-card-head", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-card-name", children: row.label }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusPill, { row, t })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-card-metrics", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: row.traces }),
-            " ",
-            t("chart.events")
-          ] }),
-          row.errors > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-err", children: `${String(row.errors)} ${t("card.errors")}` }) : null,
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: row.lastActivity === void 0 ? t("card.never") : formatAge(row.lastActivity, now, t) })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkline, { counts: row.counts, label: row.label }),
-        row.tools.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-chips", children: row.tools.map((tool) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-chip", children: tool }, tool)) }) : null,
-        lastFailure === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "dsh-obs-card-failure", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: [lastFailure.tool, lastFailure.errorName, lastFailure.errorCode].filter((value) => value !== void 0).join(" \xB7 ") }),
-          onShowFailures === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-            "button",
-            {
-              type: "button",
-              className: "dsh-obs-link",
-              onClick: () => onShowFailures(lastFailure.tool),
-              children: t("card.showFailures")
-            }
-          )
-        ] }),
-        silent ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: row.note }) : null,
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentTraces, { row, t })
-      ] });
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+        "article",
+        {
+          className: "dsh-obs-card",
+          "data-status": row.status,
+          "data-focus": focused === true ? "true" : void 0,
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-obs-card-head", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-card-name", children: row.label }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusPill, { row, t })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-obs-card-metrics", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: row.traces }),
+                " ",
+                t("chart.events")
+              ] }),
+              row.errors > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-err", children: `${String(row.errors)} ${t("card.errors")}` }) : null,
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: row.lastActivity === void 0 ? t("card.never") : formatAge(row.lastActivity, now, t) })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkline, { counts: row.counts, label: row.label }),
+            row.tools.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-obs-chips", children: row.tools.map((tool) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-chip", children: tool }, tool)) }) : null,
+            lastFailure === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "dsh-obs-card-failure", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: [lastFailure.tool, lastFailure.errorName, lastFailure.errorCode].filter((value) => value !== void 0).join(" \xB7 ") }),
+              onShowFailures === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-obs-link",
+                  onClick: () => onShowFailures(lastFailure.tool),
+                  children: t("card.showFailures")
+                }
+              )
+            ] }),
+            silent ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: row.note }) : null,
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentTraces, { row, t })
+          ]
+        }
+      );
     }
     function PluginSection({
       title,
@@ -525,7 +1699,8 @@ window.__ModuleLoader__.load({
       t,
       now,
       tone,
-      onShowFailures
+      onShowFailures,
+      focusRow
     }) {
       if (rows.length === 0) return null;
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-section", "data-tone": tone, children: [
@@ -536,7 +1711,8 @@ window.__ModuleLoader__.load({
             row,
             t,
             now,
-            ...onShowFailures === void 0 ? {} : { onShowFailures }
+            ...onShowFailures === void 0 ? {} : { onShowFailures },
+            ...focusRow === void 0 ? {} : { focused: focusRow === row.id }
           },
           row.id
         )) })
@@ -548,22 +1724,28 @@ window.__ModuleLoader__.load({
       t
     }) {
       if (rows.length === 0) return null;
+      const byRow = new Map(report.scorecards.map((card) => [card.rowId, card]));
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-section", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: `${t("section.silent")} (${String(rows.length)})` }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("section.absence") }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { className: "dsh-obs-silent", children: rows.map((row) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { "data-status": "silent", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-silent-name", children: row.label }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-pill", "data-status": "silent", children: t("status.silent") }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: row.trigger ?? t("card.never") }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: `0 ${t("failure.of")} ${counted(report.totals.turns, t("kpi.turn"))} \xB7 0 ${t("failure.of")} ${counted(report.totals.toolCalls, t("kpi.toolCall"))} \xB7 0 ${t("failure.of")} ${counted(report.totals.sessions, t("kpi.session"))}` })
-        ] }, row.id)) })
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { className: "dsh-obs-silent", children: rows.map((row) => {
+          const card = byRow.get(row.id);
+          return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { "data-status": "silent", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-silent-name", children: row.label }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-pill", "data-status": "silent", children: t("status.silent") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: row.trigger ?? t("card.never") }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: card === void 0 || !card.eligibilityDeclared ? t("scorecard.noEligibility") : `${String(card.fired)} ${t("scorecard.of")} ${String(card.eligible)} ${t("scorecard.eligible")}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-muted", children: `0 ${t("failure.of")} ${counted(report.totals.turns, t("kpi.turn"))} \xB7 0 ${t("failure.of")} ${counted(report.totals.toolCalls, t("kpi.toolCall"))} \xB7 0 ${t("failure.of")} ${counted(report.totals.sessions, t("kpi.session"))}` })
+          ] }, row.id);
+        }) })
       ] });
     }
     function PluginBoard({
       report,
       t,
       now,
-      onShowFailures
+      onShowFailures,
+      focusRow
     }) {
       const plugins = report.rows.filter((row) => row.group === "plugin").sort(byAttention);
       const needsAttention = (row) => row.status === "not loaded" || row.status === "error" && row.unrecoveredErrors > 0;
@@ -583,7 +1765,8 @@ window.__ModuleLoader__.load({
             t,
             now,
             tone: "attention",
-            ...onShowFailures === void 0 ? {} : { onShowFailures }
+            ...onShowFailures === void 0 ? {} : { onShowFailures },
+            ...focusRow === void 0 ? {} : { focusRow }
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -593,7 +1776,8 @@ window.__ModuleLoader__.load({
             rows: active,
             t,
             now,
-            ...onShowFailures === void 0 ? {} : { onShowFailures }
+            ...onShowFailures === void 0 ? {} : { onShowFailures },
+            ...focusRow === void 0 ? {} : { focusRow }
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SilentRows, { rows: silent, report, t }),
@@ -621,7 +1805,7 @@ window.__ModuleLoader__.load({
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("tools.title") }) }),
         outcomes.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("tools.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { className: "dsh-obs-bars", children: outcomes.map((outcome) => {
-          const percent = outcome.calls === 0 ? 0 : Math.round(outcome.failed / outcome.calls * 100);
+          const percent2 = outcome.calls === 0 ? 0 : Math.round(outcome.failed / outcome.calls * 100);
           return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-bars-label", children: outcome.tool }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-bars-track", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -633,13 +1817,13 @@ window.__ModuleLoader__.load({
                   "span",
                   {
                     className: "dsh-obs-bars-fail",
-                    style: { width: `${String(percent)}%` },
+                    style: { width: `${String(percent2)}%` },
                     title: `${String(outcome.failed)} ${t("tools.share")}`
                   }
                 ) : null
               }
             ) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-bars-value", children: `${String(outcome.failed)} ${t("failure.of")} ${String(outcome.calls)} \xB7 ${String(percent)}%` })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-bars-value", children: `${String(outcome.failed)} ${t("failure.of")} ${String(outcome.calls)} \xB7 ${String(percent2)}%` })
           ] }, outcome.tool);
         }) })
       ] });
@@ -771,13 +1955,33 @@ window.__ModuleLoader__.load({
       inspectCall,
       openView
     }) {
+      const [view, setView] = (0, import_react.useState)("overview");
       const [failuresOpen, setFailuresOpen] = (0, import_react.useState)(false);
       const [failureFilter, setFailureFilter] = (0, import_react.useState)(void 0);
+      const [rowFocus, setRowFocus] = (0, import_react.useState)(void 0);
+      const [tasksSort, setTasksSort] = (0, import_react.useState)({ key: "start", direction: -1 });
+      const [tasksOutcome, setTasksOutcome] = (0, import_react.useState)("all");
+      const [tasksPlugin, setTasksPlugin] = (0, import_react.useState)("all");
+      const [tasksSelected, setTasksSelected] = (0, import_react.useState)(void 0);
       const plugins = report?.rows.filter((row) => row.group === "plugin").length ?? 0;
       const revealFailures = (tool) => {
         setFailureFilter(tool);
         setFailuresOpen(true);
-        focusFailures();
+        if (view === "overview") {
+          focusFailures();
+          return;
+        }
+        setView("overview");
+        setTimeout(focusFailures, 0);
+      };
+      const sortTasks = (key) => {
+        setTasksSort(
+          (current) => current.key === key ? { key, direction: current.direction === 1 ? -1 : 1 } : { key, direction: key === "start" ? -1 : 1 }
+        );
+      };
+      const openRow = (rowId) => {
+        setRowFocus(rowId);
+        setView("plugins");
       };
       const canOpenLocal = sessionId !== void 0 && (inspectCall !== void 0 || openView !== void 0);
       const canOpenRemote = workspace !== void 0;
@@ -806,34 +2010,62 @@ window.__ModuleLoader__.load({
           report === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-obs-window", children: `${String(report.totals.records)} ${t("window.events")} \xB7 ${String(plugins)} ${t("window.plugins")}` })
         ] }),
         error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { role: "alert", className: "dsh-obs-error", children: `${t("state.error")} ${error}` }) : report === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-loading", children: t("state.loading") }) : report.rows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-empty", children: t("state.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HealthBanner, { report, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-            KpiStrip,
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SubViewTabs, { view, t, onView: setView }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+            "div",
             {
-              report,
-              t,
-              failuresOpen,
-              onRevealFailures: report.failureTotals.total === 0 ? void 0 : () => revealFailures()
+              className: "dsh-obs-tabpanel",
+              role: "tabpanel",
+              id: `dsh-obs-panel-${view}`,
+              "aria-labelledby": `dsh-obs-tab-${view}`,
+              children: [
+                view === "overview" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  OverviewView,
+                  {
+                    report,
+                    t,
+                    failuresOpen,
+                    ...failureFilter === void 0 ? {} : { failureFilter },
+                    onToggleFailures: setFailuresOpen,
+                    onRevealFailures: () => revealFailures(),
+                    onClearFilter: () => setFailureFilter(void 0),
+                    ...canOpenAny ? { onOpenFailure: openFailure, canOpenFailure } : {},
+                    ...fixSession === void 0 ? {} : { onFix: fixSession },
+                    onOpenRow: openRow
+                  }
+                ) : null,
+                view === "plugins" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HealthBanner, { report, t }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    PluginBoard,
+                    {
+                      report,
+                      t,
+                      now,
+                      onShowFailures: revealFailures,
+                      ...rowFocus === void 0 ? {} : { focusRow: rowFocus }
+                    }
+                  )
+                ] }) : null,
+                view === "tasks" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  TasksView,
+                  {
+                    report,
+                    t,
+                    sort: tasksSort,
+                    outcome: tasksOutcome,
+                    plugin: tasksPlugin,
+                    ...tasksSelected === void 0 ? {} : { selectedId: tasksSelected },
+                    onSort: sortTasks,
+                    onOutcome: setTasksOutcome,
+                    onPlugin: setTasksPlugin,
+                    onSelect: setTasksSelected
+                  }
+                ) : null,
+                view === "hypotheses" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HypothesesView, { report, t }) : null
+              ]
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityChart, { report, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-            FailureList,
-            {
-              failures: report.failures,
-              totals: report.failureTotals,
-              t,
-              open: failuresOpen,
-              onToggle: setFailuresOpen,
-              ...canOpenAny ? { onOpen: openFailure, canOpen: canOpenFailure } : {},
-              ...fixSession === void 0 ? {} : { onFix: fixSession },
-              ...failureFilter === void 0 ? {} : { filterTool: failureFilter },
-              onClearFilter: () => setFailureFilter(void 0)
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PluginBoard, { report, t, now, onShowFailures: revealFailures }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ToolsPanel, { outcomes: report.toolOutcomes, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SignalsPanel, { rows: report.rows, t }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlindSpots, { report, t })
         ] })
       ] });
@@ -963,6 +2195,28 @@ window.__ModuleLoader__.load({
       outline: none;
       box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
     }
+    .dsh-obs-findings {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 16px;
+      border: 1px solid var(--dsw-alias-border-l2);
+      border-left: 4px solid var(--dsw-alias-state-error-primary);
+      border-radius: var(--dsw-radius-sm);
+    }
+    .dsh-obs-findings h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .dsh-obs-findings ul {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 0;
+      padding-left: 18px;
+      color: var(--dsw-alias-label-secondary);
+    }
     .dsh-obs-health {
       display: flex;
       align-items: center;
@@ -1076,15 +2330,6 @@ window.__ModuleLoader__.load({
     }
     .dsh-obs-swatch[data-tone="errors"] {
       background: var(--dsw-alias-state-error-primary);
-    }
-    .dsh-obs-chart {
-      display: block;
-      width: 100%;
-      height: 190px;
-    }
-    .dsh-obs-gridline {
-      stroke: var(--dsw-alias-border-l2);
-      stroke-width: 1;
     }
     .dsh-obs-axis {
       fill: var(--dsw-alias-label-caption);
@@ -1391,6 +2636,309 @@ window.__ModuleLoader__.load({
     }
     .dsh-obs-error {
       color: var(--dsw-alias-state-error-primary);
+    }
+    .dsh-obs-timeline-chart {
+      display: block;
+      width: 100%;
+      height: 96px;
+    }
+    .dsh-obs-tl-label {
+      fill: var(--dsw-alias-label-secondary);
+      font-size: 11px;
+    }
+    .dsh-obs-tl-bar[data-tone="steps"] {
+      fill: var(--dsw-alias-state-business-primary);
+      opacity: 0.75;
+    }
+    .dsh-obs-tl-bar[data-tone="tools"] {
+      fill: var(--dsw-alias-brand-primary);
+      opacity: 0.75;
+    }
+    .dsh-obs-tl-tick {
+      stroke-width: 2;
+    }
+    .dsh-obs-tl-tick[data-tone="human"] {
+      stroke: var(--dsw-alias-state-success-primary);
+    }
+    .dsh-obs-tl-tick[data-tone="errors"] {
+      stroke: var(--dsw-alias-state-error-primary);
+    }
+    .dsh-obs-turn-rows {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 18px;
+      margin: 6px 0 0;
+      padding: 0;
+      list-style: none;
+      color: var(--dsw-alias-label-secondary);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .dsh-obs-turn-row {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .dsh-obs-turn-row > span + span::before {
+      content: "\xB7";
+      margin-right: 6px;
+      color: var(--dsw-alias-label-caption);
+    }
+    .dsh-obs-turn-row [data-tone="error"] {
+      color: var(--dsw-alias-state-error-primary);
+    }
+    .dsh-obs-series-chart {
+      display: block;
+      width: 100%;
+      height: 140px;
+    }
+    .dsh-obs-token-track {
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--dsw-alias-border-l2);
+    }
+    .dsh-obs-token-bar {
+      display: block;
+      width: 100%;
+    }
+    .dsh-obs-token-bar rect[data-tone="cacheRead"] {
+      fill: var(--dsw-alias-state-business-primary);
+    }
+    .dsh-obs-token-bar rect[data-tone="input"] {
+      fill: var(--dsw-alias-brand-primary);
+    }
+    .dsh-obs-token-bar rect[data-tone="output"] {
+      fill: var(--dsw-alias-state-success-primary);
+    }
+    .dsh-obs-swatch[data-tone="cacheRead"] {
+      background: var(--dsw-alias-state-business-primary);
+    }
+    .dsh-obs-swatch[data-tone="input"] {
+      background: var(--dsw-alias-brand-primary);
+    }
+    .dsh-obs-swatch[data-tone="output"] {
+      background: var(--dsw-alias-state-success-primary);
+    }
+    .dsh-obs-token-caption {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 8px 0 0;
+      color: var(--dsw-alias-label-secondary);
+      font-size: 12px;
+    }
+    .dsh-obs-token-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .dsh-obs-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      border-bottom: 1px solid var(--dsw-alias-border-l2);
+    }
+    .dsh-obs-tab {
+      padding: 6px 12px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--dsw-alias-label-secondary);
+      font: inherit;
+      cursor: pointer;
+    }
+    .dsh-obs-tab[aria-selected="true"] {
+      border-bottom-color: var(--dsw-alias-state-business-primary);
+      color: var(--dsw-alias-state-business-primary);
+    }
+    .dsh-obs-tab:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+    }
+    .dsh-obs-tabpanel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .dsh-obs-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
+    }
+    @media (min-width: 901px) {
+      .dsh-obs-columns {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    .dsh-obs-col {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+    }
+    .dsh-obs-tiles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .dsh-obs-tile {
+      padding: 10px 14px;
+      border: 1px solid var(--dsw-alias-border-l2);
+      border-radius: var(--dsw-radius-sm);
+      min-width: 0;
+    }
+    .dsh-obs-tile-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--dsw-alias-label-secondary);
+    }
+    .dsh-obs-tile dl {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 14px;
+      margin: 8px 0 0;
+    }
+    .dsh-obs-tile dl div {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+    }
+    .dsh-obs-tile dt {
+      color: var(--dsw-alias-label-caption);
+      font-size: 11px;
+    }
+    .dsh-obs-tile dd {
+      margin: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .dsh-obs-tile-note {
+      margin: 6px 0 0;
+    }
+    .dsh-obs-dq {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 4px 16px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      color: var(--dsw-alias-label-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+    .dsh-obs-dq li {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 0;
+      border-bottom: 1px solid var(--dsw-alias-border-l2);
+    }
+    .dsh-obs-task-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      color: var(--dsw-alias-label-secondary);
+    }
+    .dsh-obs-task-controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dsh-obs-task-controls select {
+      padding: 2px 6px;
+      border: 1px solid var(--dsw-alias-border-l2);
+      border-radius: var(--dsw-radius-sm);
+      background: transparent;
+      color: inherit;
+      font: inherit;
+    }
+    .dsh-obs-table-wrap {
+      overflow-x: auto;
+    }
+    .dsh-obs-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+    }
+    .dsh-obs-table th {
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--dsw-alias-border-l2);
+      color: var(--dsw-alias-label-secondary);
+      font-weight: 600;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .dsh-obs-table th button {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+    .dsh-obs-table th button:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+    }
+    .dsh-obs-table td {
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--dsw-alias-border-l2);
+      vertical-align: top;
+    }
+    .dsh-obs-table tr[data-selected="true"] td {
+      border-bottom-color: var(--dsw-alias-state-business-primary);
+    }
+    .dsh-obs-facts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px 16px;
+      margin: 8px 0 0;
+    }
+    .dsh-obs-facts div {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+    .dsh-obs-facts dt {
+      color: var(--dsw-alias-label-caption);
+      font-size: 11px;
+    }
+    .dsh-obs-facts dd {
+      margin: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .dsh-obs-panel h3 {
+      margin: 12px 0 4px;
+      color: var(--dsw-alias-label-secondary);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .dsh-obs-score-goal {
+      margin: 0;
+      color: var(--dsw-alias-label-secondary);
+    }
+    .dsh-obs-hypo-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .dsh-obs-hypo {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 14px;
+      border: 1px solid var(--dsw-alias-border-l2);
+      border-radius: var(--dsw-radius-sm);
+    }
+    .dsh-obs-hypo[data-status="supported"] {
+      border-color: var(--dsw-alias-state-success-primary);
+    }
+    .dsh-obs-hypo[data-status="refuted"] {
+      border-color: var(--dsw-alias-state-error-primary);
+    }
+    .dsh-obs-card[data-focus="true"] {
+      border-color: var(--dsw-alias-state-business-primary);
     }
     `;
     return module.exports;

@@ -13,19 +13,25 @@ export class SessionCache {
         }
         this.#capacity = capacity;
     }
-    /** Cached records for an unchanged session, or undefined when stale/absent. */
+    /** Cached records and metadata for an unchanged session, or undefined when stale/absent. */
     get(sessionId, stamp) {
         const entry = this.#entries.get(sessionId);
         if (entry === undefined || entry.stamp !== stamp)
             return undefined;
         this.#entries.delete(sessionId);
         this.#entries.set(sessionId, entry);
-        return entry.records;
+        return entry.meta === undefined
+            ? { records: entry.records }
+            : { records: entry.records, meta: entry.meta };
     }
-    /** Replace one session's records and evict the least recently used entry. */
-    set(sessionId, stamp, records) {
+    /** Replace one session's records and metadata; evict the least recently used entry. */
+    set(sessionId, stamp, records, meta) {
         this.#entries.delete(sessionId);
-        this.#entries.set(sessionId, { stamp, records });
+        this.#entries.set(sessionId, {
+            stamp,
+            records,
+            ...(meta === undefined ? {} : { meta }),
+        });
         while (this.#entries.size > this.#capacity) {
             const oldest = this.#entries.keys().next();
             if (oldest.done === true)

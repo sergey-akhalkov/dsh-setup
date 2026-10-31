@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { parseRows } from '../src/host/rows.ts'
+import { parseConfig } from '../src/host/config.ts'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const defaultsFile = join(root, 'packages', 'setup', 'defaults.yml')
@@ -13,14 +13,18 @@ interface DefaultsEntry {
   readonly config?: Record<string, unknown>
 }
 
-function shippedRows() {
+function shippedConfig() {
   const document: unknown = parse(readFileSync(defaultsFile, 'utf8'))
   if (!Array.isArray(document)) throw new Error('defaults.yml must be an array')
   const entry = (document as DefaultsEntry[]).find(
     (value) => value.id === 'dsh-setup-observability',
   )
   if (entry === undefined) throw new Error('defaults.yml has no dsh-setup-observability entry')
-  return parseRows(entry.config)
+  return parseConfig(entry.config)
+}
+
+function shippedRows() {
+  return shippedConfig().rows
 }
 
 function pluginDir(id: string): string {
@@ -247,6 +251,52 @@ describe('shipped observability signal map', () => {
     expect(predicate?.sourceKind).toBeUndefined()
   })
 
+  it('every row declares a non-empty business goal', () => {
+    for (const row of shippedRows()) {
+      expect(typeof row.goal, `${row.id} must carry a goal`).toBe('string')
+      expect(row.goal?.trim(), `${row.id} goal must not be empty`).not.toBe('')
+    }
+  })
+
+  it('declares eligibility only on signal rows and only where it is meaningful', () => {
+    for (const row of shippedRows()) {
+      if (row.kind === 'guidance') {
+        expect(row.eligible, `${row.id} guidance must not declare eligibility`).toBeUndefined()
+      }
+      for (const predicate of row.eligible ?? []) {
+        expect(
+          Object.keys(predicate).length,
+          `${row.id} eligible predicate must name a field`,
+        ).toBeGreaterThan(0)
+      }
+    }
+    const eligible = shippedRows().filter((row) => row.eligible !== undefined)
+    expect(eligible.map((row) => row.id).sort()).toEqual([
+      'delegation-rules',
+      'goal-continuity',
+      'verification-gate',
+    ])
+    for (const row of eligible) {
+      expect(row.kind).toBe('signal')
+      expect(row.eligible?.map((predicate) => predicate.tool).sort()).toEqual(['edit', 'write'])
+    }
+  })
+
+  it('ships the two default hypotheses over the fixed metric catalog', () => {
+    const { hypotheses } = shippedConfig()
+    expect(hypotheses.map((entry) => entry.metric)).toEqual([
+      'steps-per-human-message',
+      'active-minutes-per-episode',
+    ])
+    for (const hypothesis of hypotheses) {
+      expect(hypothesis.direction).toBe('decrease')
+      expect(hypothesis.threshold).toBeGreaterThan(0)
+      expect(hypothesis.guardrail).toBe('failure-rate')
+      expect(hypothesis.minSamples).toBe(20)
+      expect(hypothesis.window).toBe('week')
+    }
+  })
+
   it('every guidance row declares its contribution and the named plugin registers it', async () => {
     for (const row of shippedRows()) {
       if (row.kind !== 'guidance') continue
@@ -285,9 +335,15 @@ describe('shipped observability signal map', () => {
       (value) => value.id === 'dsh-setup-observability',
     )
     if (entry === undefined) throw new Error('the documented example has no observability entry')
-    const rows = parseRows(entry.config)
-    expect(rows.map((row) => row.id)).toEqual(['my-tool', 'my-notes-writes', 'my-skill'])
-    for (const row of rows)
+    const config = parseConfig(entry.config)
+    expect(config.rows.map((row) => row.id)).toEqual(['my-tool', 'my-notes-writes', 'my-skill'])
+    for (const row of config.rows) {
       expect(row.trigger, `${row.id} example must carry a trigger`).toBeDefined()
+      expect(row.goal, `${row.id} example must carry a goal`).toBeDefined()
+    }
+    // The example restates the configuration fields a profile patch replaces.
+    expect(config.idleGapMinutes).toBe(30)
+    expect(config.minEpisodes).toBe(10)
+    expect(config.hypotheses).toEqual([])
   })
 })

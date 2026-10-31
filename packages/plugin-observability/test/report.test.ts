@@ -1,7 +1,9 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
+import { rangeWindow } from '../src/host/aggregate.ts'
+import { windowUsage } from '../src/host/metrics.ts'
 import { extractRecords } from '../src/host/records.ts'
-import { buildReport, FAILURE_LIMIT } from '../src/host/report.ts'
+import { buildReport, EPISODE_LIMIT, FAILURE_LIMIT } from '../src/host/report.ts'
 import { parseRows } from '../src/host/rows.ts'
 
 const NOW = new Date(2026, 9, 31, 12, 30).getTime()
@@ -464,5 +466,515 @@ describe('tool call outcomes', () => {
     })
     const edit = built.toolOutcomes.find((entry) => entry.tool === 'edit')
     expect(edit).toEqual({ tool: 'edit', calls: 2, failed: 1 })
+  })
+})
+
+describe('window accounting', () => {
+  const HOUR = 60 * MINUTE
+
+  function humanEvent(at: number): SessionEvent {
+    return event('user/message', { role: 'user', content: [], source: { kind: 'user' } }, at)
+  }
+
+  function usageEvent(at: number, total: number): SessionEvent {
+    return event(
+      'assistant/message',
+      {
+        turn: 1,
+        step: 1,
+        usage: {
+          inputTokens: total,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: total,
+        },
+      },
+      at,
+    )
+  }
+
+  function closerEvent(at: number): SessionEvent {
+    return event('turn/end', { turn: 1, reason: { kind: 'completed' } }, at)
+  }
+
+  function reportAt(now: number, records: ReturnType<typeof extractRecords>) {
+    return buildReport({ range: 'day', now, records, configured: [], registry: new Set() })
+  }
+
+  it('attributes work by event time and splits a spanning episode at the boundary', () => {
+    const w2 = rangeWindow('day', NOW, 0)
+    const w1 = rangeWindow('day', w2.from - 1, 0)
+    const records = extractRecords('s', [
+      humanEvent(w2.from - 20 * MINUTE),
+      event('step/start', { turn: 1, step: 1 }, w2.from - 19 * MINUTE),
+      event('step/end', { turn: 1, step: 1 }, w2.from - 18 * MINUTE),
+      usageEvent(w2.from - 17 * MINUTE, 100),
+      event('step/start', { turn: 1, step: 2 }, w2.from + MINUTE),
+      event('step/end', { turn: 1, step: 2 }, w2.from + 3 * MINUTE),
+      usageEvent(w2.from + 2 * MINUTE, 300),
+      closerEvent(w2.from + 4 * MINUTE),
+    ])
+    const first = reportAt(w2.from - 1, records)
+    const second = reportAt(NOW, records)
+    // The episode starts in the previous window, so only that window cohorts it.
+    expect(first.cohortCount).toBe(1)
+    expect(second.cohortCount).toBe(0)
+    // Its in-window work still counts here, by event time.
+    expect(second.episodes[0]?.usage.total).toBe(300)
+    expect(second.episodes[0]?.fullUsage.total).toBe(400)
+    expect(second.episodes[0]?.activeMs).toBe(2 * MINUTE)
+    expect(second.episodes[0]?.activeMsFull).toBe(3 * MINUTE)
+    expect(second.episodes[0]?.costBasis).toBe('through cutoff')
+    expect(first.episodes[0]?.usage.total).toBe(100)
+    expect(first.episodes[0]?.activeMs).toBe(MINUTE)
+    // Adjacent windows together hold every token exactly once.
+    const combined = windowUsage(records, { from: w1.from, to: w2.to })
+    expect(first.windowCost.total + second.windowCost.total).toBe(combined.total)
+    expect(first.windowCost.total).toBe(100)
+    expect(second.windowCost.total).toBe(300)
+  })
+
+  it('excludes work recorded after the window end', () => {
+    const window = rangeWindow('day', NOW, 0)
+    const records = extractRecords('s', [
+      humanEvent(window.to - 5 * MINUTE),
+      usageEvent(window.to - 4 * MINUTE, 100),
+      usageEvent(window.to + 10 * MINUTE, 500),
+      closerEvent(window.to + 11 * MINUTE),
+    ])
+    const report = reportAt(NOW, records)
+    expect(report.windowCost.total).toBe(100)
+    expect(report.cost.total).toBe(100)
+    // The episode's full usage keeps the later work, labelled for the detail view.
+    const episode = report.episodes.find((entry) => entry.sessionId === 's')
+    expect(episode?.usage.total).toBe(100)
+    expect(episode?.fullUsage.total).toBe(600)
+  })
+
+  it('keeps an episode active across a window whose events bracket it', () => {
+    const window = rangeWindow('day', NOW, 0)
+    const records = extractRecords('s', [
+      humanEvent(window.from - MINUTE),
+      event('step/start', { turn: 1, step: 1 }, window.from - 30_000),
+      event('step/end', { turn: 1, step: 1 }, window.to + 30_000),
+      closerEvent(window.to + MINUTE),
+    ])
+    const report = buildReport({
+      range: 'day',
+      now: NOW,
+      records,
+      configured: [],
+      registry: new Set(),
+      // A two-day idle gap keeps the bracketing events in one episode.
+      config: { idleGapMinutes: 2880, minEpisodes: 10, hypotheses: [] },
+    })
+    // No event falls inside the window, but the episode's active interval does.
+    expect(report.windowActiveMs).toBe(window.to - window.from)
+  })
+
+  it('keeps a baseline episode open when it completed after the baseline cutoff', () => {
+    const w2 = rangeWindow('day', NOW, 0)
+    const w1 = rangeWindow('day', w2.from - 1, 0)
+    const baselineRecords = extractRecords('base', [
+      // The completion is 20 minutes after the human message, inside the idle
+      // gap, so the episode exists; it must still be classified at the cutoff.
+      humanEvent(w1.to - 10 * MINUTE),
+      closerEvent(w1.to + 10 * MINUTE),
+    ])
+    const report = buildReport({
+      range: 'day',
+      now: NOW,
+      records: [],
+      configured: [],
+      registry: new Set(),
+      baseline: {
+        kind: 'previous equal window',
+        records: baselineRecords,
+        from: w1.from,
+        to: w1.to,
+      },
+    })
+    expect(report.baseline?.quality.completed).toBe(0)
+    expect(report.baseline?.quality.open).toBe(1)
+  })
+
+  it('splits one active interval at the boundary and reconciles the totals', () => {
+    const w2 = rangeWindow('day', NOW, 0)
+    const records = extractRecords('s', [
+      humanEvent(w2.from - 10 * MINUTE),
+      event('step/start', { turn: 1, step: 1 }, w2.from - 2 * MINUTE),
+      event('step/end', { turn: 1, step: 1 }, w2.from + 2 * MINUTE),
+      closerEvent(w2.from + 3 * MINUTE),
+    ])
+    const first = reportAt(w2.from - 1, records)
+    const second = reportAt(NOW, records)
+    expect(first.windowActiveMs).toBe(2 * MINUTE)
+    expect(second.windowActiveMs).toBe(2 * MINUTE)
+    expect(first.windowActiveMs + second.windowActiveMs).toBe(4 * MINUTE)
+    // The step starts before the boundary, so its start event belongs to the
+    // earlier window and the step itself is not counted again in the later one.
+    expect(first.episodes[0]?.steps).toBe(1)
+    expect(second.episodes[0]?.steps).toBe(0)
+  })
+
+  it('reconstructs an episode whose human message precedes the window', () => {
+    const window = rangeWindow('day', NOW, 0)
+    const records = extractRecords('s', [
+      humanEvent(window.from - 10 * MINUTE),
+      usageEvent(window.from + MINUTE, 100),
+      closerEvent(window.from + 2 * MINUTE),
+    ])
+    const report = reportAt(NOW, records)
+    expect(report.episodes).toHaveLength(1)
+    expect(report.episodes[0]?.start).toBe(window.from - 10 * MINUTE)
+    expect(report.episodes[0]?.usage.total).toBe(100)
+    // Cohorts select by start, so this episode belongs to the earlier window.
+    expect(report.cohortCount).toBe(0)
+    expect(report.cutoffLabel).toBe('through cutoff')
+  })
+
+  it('counts only start-selected episodes in autonomy while active time is uncapped', () => {
+    const window = rangeWindow('day', NOW, 0)
+    const old = (offset: number): SessionEvent[] => [
+      humanEvent(window.from - offset * MINUTE),
+      event(
+        'turn/end',
+        { turn: 1, reason: { kind: 'completed' } },
+        window.from - offset * MINUTE + MINUTE,
+      ),
+    ]
+    const records = extractRecords('s', [
+      ...old(300),
+      ...old(200),
+      ...old(100),
+      humanEvent(window.from + MINUTE),
+      event('step/start', { turn: 1, step: 1 }, window.from + 2 * MINUTE),
+      event('step/end', { turn: 1, step: 1 }, window.from + 3 * MINUTE),
+      closerEvent(window.from + 4 * MINUTE),
+    ])
+    const report = reportAt(NOW, records)
+    // Three older episodes exist in the same session; autonomy counts only the
+    // start-selected one, while the window's active time is still reported.
+    expect(report.autonomy.episodes).toBe(1)
+    expect(report.autonomy.sessions).toBe(1)
+    expect(report.autonomy.humanMessages).toBe(1)
+    expect(report.windowActiveMs).toBe(MINUTE)
+  })
+
+  it('counts only start-selected episodes in a scorecard', () => {
+    const window = rangeWindow('day', NOW, 0)
+    const write = (at: number): SessionEvent => {
+      const callId = `write-${String(at)}`
+      return event('tool/call', { turn: 1, step: 1, callId, name: 'write', arguments: '{}' }, at)
+    }
+    const records = extractRecords('s', [
+      // A spanning episode starts before the window and writes inside it.
+      humanEvent(window.from - 10 * MINUTE),
+      write(window.from + MINUTE),
+      closerEvent(window.from + 2 * MINUTE),
+      // An in-window episode also writes.
+      humanEvent(window.from + 2 * HOUR),
+      write(window.from + 2 * HOUR + MINUTE),
+      closerEvent(window.from + 2 * HOUR + 2 * MINUTE),
+    ])
+    const report = buildReport({
+      range: 'day',
+      now: NOW,
+      records,
+      configured: parseRows({
+        rows: [{ id: 'writes', label: 'Writes', kind: 'signal', match: [{ tool: 'write' }] }],
+      }),
+      registry: new Set(['write']),
+    })
+    // Both episodes overlap the window, but only the in-window start is a cohort.
+    expect(report.episodeCount).toBe(2)
+    expect(report.cohortCount).toBe(1)
+    expect(report.scorecards[0]?.eligible).toBe(1)
+    expect(report.scorecards[0]?.fired).toBe(1)
+  })
+})
+
+describe('episode report shape', () => {
+  function episodeEvents(
+    sessionId: string,
+    start: number,
+    options: { usage?: number; text?: string; complete?: boolean } = {},
+  ): SessionEvent[] {
+    const secret = options.text ?? 'SECRET-TEXT'
+    return [
+      event('turn/start', { turn: 1 }, start - 1_000),
+      event(
+        'user/message',
+        { role: 'user', content: [{ type: 'text', text: secret }], source: { kind: 'user' } },
+        start,
+      ),
+      event(
+        'assistant/message',
+        {
+          turn: 1,
+          step: 1,
+          usage: {
+            inputTokens: options.usage ?? 10,
+            outputTokens: 1,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: (options.usage ?? 10) + 1,
+          },
+        },
+        start + 1_000,
+      ),
+      event(
+        'tool/call',
+        {
+          turn: 1,
+          step: 1,
+          callId: `${sessionId}-c1`,
+          name: 'write',
+          arguments: `{"path":"${secret}"}`,
+        },
+        start + 2_000,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: `${sessionId}-c1` },
+            isError: false,
+          },
+        },
+        start + 3_000,
+      ),
+      ...(options.complete === false
+        ? []
+        : [event('turn/end', { turn: 1, reason: { kind: 'completed' } }, start + 4_000)]),
+    ]
+  }
+
+  it('carries the episode, summary, scorecard, and data-quality sections', () => {
+    const records = extractRecords('s1', episodeEvents('s1', NOW - 10 * MINUTE))
+    const configured = parseRows({
+      rows: [
+        {
+          id: 'writes',
+          label: 'Writes',
+          kind: 'signal',
+          match: [{ tool: 'write' }],
+          goal: 'keep edits small',
+          eligible: [{ tool: 'write' }],
+        },
+      ],
+    })
+    const report = buildReport({
+      range: 'session',
+      now: NOW,
+      records,
+      configured,
+      registry: new Set(['write']),
+      config: {
+        idleGapMinutes: 30,
+        minEpisodes: 1,
+        hypotheses: [
+          {
+            metric: 'tokens-per-episode',
+            direction: 'decrease',
+            threshold: 1,
+            window: 'session',
+            minSamples: 1,
+          },
+        ],
+      },
+    })
+    expect(report.episodes).toHaveLength(1)
+    expect(report.episodeCount).toBe(1)
+    expect(report.cohortCount).toBe(1)
+    expect(report.episodes[0]).toMatchObject({
+      sessionId: 's1',
+      outcome: 'completed',
+      verified: false,
+      costBasis: 'through cutoff',
+    })
+    expect(report.quality.completed).toBe(1)
+    expect(report.cost.tokensPerEpisode.n).toBe(1)
+    expect(report.speed.activeMinutes.n).toBe(1)
+    expect(report.autonomy.humanMessages).toBe(1)
+    expect(report.subagents.delegateCalls).toBe(0)
+    expect(report.dataQuality.episodes).toBe(1)
+    expect(report.scorecards).toHaveLength(1)
+    expect(report.scorecards[0]).toMatchObject({
+      rowId: 'writes',
+      goal: 'keep edits small',
+      eligibilityDeclared: true,
+      eligible: 1,
+      fired: 1,
+      activation: 1,
+      association: 'association, not proof',
+    })
+    expect(report.hypotheses).toHaveLength(1)
+    expect(report.hypotheses[0]?.status).toBe('inconclusive')
+    expect(report.cutoffLabel).toBe('full episode')
+    expect(report.minEpisodes).toBe(1)
+    expect(report.quality.stepsToCompletion.n).toBe(1)
+    expect(report.timeline?.turns).toHaveLength(1)
+    expect(report.timeline?.turns[0]?.turn).toBe(1)
+  })
+
+  it('carries a serial-run finding for a long single-stream episode', () => {
+    const events: SessionEvent[] = [
+      event(
+        'user/message',
+        { role: 'user', content: [], source: { kind: 'user' } },
+        NOW - 60 * MINUTE,
+      ),
+    ]
+    for (let index = 0; index < 45; index += 1) {
+      events.push(
+        event('step/start', { turn: 1, step: index + 1 }, NOW - 59 * MINUTE + index * 30_000),
+        event(
+          'step/end',
+          { turn: 1, step: index + 1 },
+          NOW - 59 * MINUTE + index * 30_000 + 20_000,
+        ),
+      )
+    }
+    events.push(event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW - 30 * MINUTE))
+    const report = buildReport({
+      range: 'session',
+      now: NOW,
+      records: extractRecords('s1', events),
+      configured: [],
+      registry: new Set(),
+    })
+    expect(report.findings.map((finding) => finding.id)).toEqual(['serial-long-run'])
+    expect(report.findings[0]?.episodeIds).toEqual(['s1#1'])
+  })
+
+  it('caps the episode list at 200 newest while the counts stay uncapped', () => {
+    const records = Array.from({ length: EPISODE_LIMIT + 5 }, (_unused, index) =>
+      extractRecords(
+        `s${String(index)}`,
+        episodeEvents(`s${String(index)}`, NOW - (index + 1) * MINUTE),
+      ),
+    ).flat()
+    const report = buildReport({
+      range: 'day',
+      now: NOW,
+      records,
+      configured: [],
+      registry: new Set(),
+    })
+    expect(report.episodes).toHaveLength(EPISODE_LIMIT)
+    expect(report.episodeCount).toBe(EPISODE_LIMIT + 5)
+    expect(report.cohortCount).toBe(EPISODE_LIMIT + 5)
+    expect(report.episodes[0]?.start).toBeGreaterThan(report.episodes[1]?.start ?? 0)
+  })
+
+  it('never carries message text, arguments, goal objectives, or checkpoint list text', () => {
+    const secret = 'SECRET-TOKEN-123'
+    const events = [
+      ...episodeEvents('s1', NOW - 10 * MINUTE, { text: secret }),
+      event(
+        'goal/change',
+        {
+          kind: 'goal/change',
+          operation: 'create',
+          goal: { id: 'g1', revision: 1, objective: secret, phase: 'active' },
+          roundsStarted: 0,
+        },
+        NOW - 9 * MINUTE,
+      ),
+      event(
+        'tool/call',
+        {
+          turn: 1,
+          step: 1,
+          callId: 'cp1',
+          name: 'work_checkpoint',
+          arguments: JSON.stringify({
+            outcome: 'done',
+            verified: [secret],
+            remaining: [secret],
+            next: secret,
+          }),
+        },
+        NOW - 8 * MINUTE,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: 'cp1' },
+            isError: false,
+          },
+        },
+        NOW - 7 * MINUTE,
+      ),
+    ]
+    const report = buildReport({
+      range: 'session',
+      now: NOW,
+      records: extractRecords('s1', events),
+      configured: [],
+      registry: new Set(),
+    })
+    const wire = JSON.stringify(report)
+    expect(wire).not.toContain(secret)
+    expect(wire).not.toContain('SECRET-TOKEN-123')
+  })
+
+  it('keeps completed goals from several sessions in the autonomy totals', () => {
+    const human = (at: number): SessionEvent =>
+      event('user/message', { role: 'user', content: [], source: { kind: 'user' } }, at)
+    const goal = (id: string, operation: string, at: number, rounds: number): SessionEvent =>
+      event(
+        'goal/change',
+        {
+          kind: 'goal/change',
+          operation,
+          goal: {
+            id,
+            revision: 1,
+            objective: 'secret',
+            phase: operation === 'complete' ? 'completed' : 'active',
+          },
+          roundsStarted: rounds,
+        },
+        at,
+      )
+    const done = (at: number): SessionEvent =>
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, at)
+    const records = [
+      ...extractRecords('a', [
+        human(NOW - 60 * MINUTE),
+        goal('g1', 'create', NOW - 59 * MINUTE, 2),
+        goal('g1', 'complete', NOW - 58 * MINUTE, 3),
+        done(NOW - 57 * MINUTE),
+      ]),
+      ...extractRecords('b', [
+        human(NOW - 40 * MINUTE),
+        goal('g2', 'create', NOW - 39 * MINUTE, 1),
+        goal('g2', 'complete', NOW - 38 * MINUTE, 2),
+        done(NOW - 37 * MINUTE),
+      ]),
+      ...extractRecords('c', [human(NOW - 20 * MINUTE), done(NOW - 19 * MINUTE)]),
+    ]
+    const report = buildReport({
+      range: 'session',
+      now: NOW,
+      records,
+      configured: [],
+      registry: new Set(),
+    })
+    expect(report.autonomy.goals).toBe(2)
+    expect(report.autonomy.completedGoals).toBe(2)
+    expect(report.autonomy.rounds).toBe(5)
   })
 })

@@ -1,6 +1,29 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 /**
+ * Token usage recorded on one assistant message. A record without it carries
+ * no usage at all, which lowers the reported coverage instead of guessing.
+ */
+export interface TokenUsage {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly total: number
+}
+
+/** The session-level header facts the report needs; no message text is read. */
+export interface SessionMeta {
+  readonly id: string
+  /** The session this one was started from, when recorded. */
+  readonly parentSession?: string
+  /** Coarse product classification of a child session. */
+  readonly origin?: string
+  /** Delegation depth; absent means top level. */
+  readonly delegationDepth?: number
+}
+
+/**
  * One neutral fact extracted from a session event. Aggregation works on these,
  * never on raw events, so assistant streams and message text never enter a
  * bucket or a report.
@@ -27,6 +50,123 @@ export interface TraceRecord {
   readonly errorCode?: string
   /** `turn/end` reason kind, so a cut is distinguishable from a failure. */
   readonly turnEnd?: string
+  /** Assistant message usage; absent when the event recorded none. */
+  readonly usage?: TokenUsage
+  /** `goal/change` operation; the objective text is never kept. */
+  readonly goalOperation?: string
+  /** The goal's opaque id, so its lifecycle can be followed without its objective. */
+  readonly goalId?: string
+  /** The goal's phase after the change. */
+  readonly goalPhase?: string
+  /** Rounds the goal supervisor started. */
+  readonly goalRounds?: number
+  /** `work_checkpoint` outcome word; the lists and reason strings are dropped. */
+  readonly checkpointOutcome?: string
+  /** Length of the checkpoint's verified list, never its text. */
+  readonly checkpointVerifiedCount?: number
+  /** Length of the checkpoint's remaining list, never its text. */
+  readonly checkpointRemainingCount?: number
+  /** Whether the checkpoint declared parallel remaining work. */
+  readonly checkpointParallel?: boolean
+}
+
+/** The tool that records a work checkpoint. */
+const CHECKPOINT_TOOL = 'work_checkpoint'
+
+/** Every field the checkpoint producer accepts; anything else makes the call malformed. */
+const CHECKPOINT_FIELDS: ReadonlySet<string> = new Set([
+  'outcome',
+  'verified',
+  'remaining',
+  'parallel',
+  'serialReason',
+  'next',
+  'speedup',
+])
+
+/** The producer's list bound; a longer list is malformed. */
+const MAX_CHECKPOINT_ITEMS = 8
+
+/** Only a checkpoint's counts and flags survive extraction. */
+interface CheckpointFacts {
+  readonly outcome: 'done' | 'continue'
+  readonly verified: number
+  readonly remaining: number
+  readonly parallel: boolean
+}
+
+/** A list's length when the producer would accept it, or undefined when malformed. */
+function checkpointListLength(value: unknown): number | undefined {
+  if (value === undefined) return 0
+  if (!Array.isArray(value) || value.length > MAX_CHECKPOINT_ITEMS) return undefined
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') return undefined
+  }
+  return value.length
+}
+
+/** One optional text field: present-but-empty is malformed, absent is fine. */
+function checkpointTextIsValid(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() !== '')
+}
+
+/**
+ * Read a checkpoint's counts and flags. A call is valid only as the producer
+ * validated it; any malformed field makes the whole call contribute zero, so
+ * no partial or unvalidated text ever reaches a record.
+ */
+function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
+  if (raw === undefined) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  const source = asRecord(parsed)
+  if (source === undefined) return undefined
+  if (!Object.keys(source).every((key) => CHECKPOINT_FIELDS.has(key))) return undefined
+  const outcome = source.outcome
+  if (outcome !== 'done' && outcome !== 'continue') return undefined
+  if (source.parallel !== undefined && typeof source.parallel !== 'boolean') return undefined
+  if (typeof source.next !== 'string' || source.next.trim() === '') return undefined
+  if (!checkpointTextIsValid(source.serialReason) || !checkpointTextIsValid(source.speedup)) {
+    return undefined
+  }
+  const parallel = source.parallel === true
+  if (outcome === 'continue' && !parallel && source.serialReason == null) return undefined
+  const verified = checkpointListLength(source.verified)
+  const remaining = checkpointListLength(source.remaining)
+  if (verified === undefined || remaining === undefined) return undefined
+  return { outcome, verified, remaining, parallel }
+}
+
+/**
+ * The configured argument fields of a checkpoint, read from validated facts.
+ * Raw checkpoint arguments are never copied, so malformed text cannot leak.
+ */
+function checkpointArgumentValues(
+  facts: CheckpointFacts | undefined,
+  fields: ReadonlySet<string> | undefined,
+): Record<string, string> | undefined {
+  if (facts === undefined || fields === undefined) return undefined
+  const values: Record<string, string> = {}
+  if (fields.has('outcome')) values.outcome = facts.outcome
+  if (fields.has('parallel')) values.parallel = String(facts.parallel)
+  return Object.keys(values).length === 0 ? undefined : values
+}
+
+/** The five usage fields, with a missing field counting as zero, never an estimate. */
+function tokenUsage(value: unknown): TokenUsage | undefined {
+  const usage = asRecord(value)
+  if (usage === undefined) return undefined
+  return {
+    input: number(usage.inputTokens) ?? 0,
+    output: number(usage.outputTokens) ?? 0,
+    cacheRead: number(usage.cacheReadTokens) ?? 0,
+    cacheWrite: number(usage.cacheWriteTokens) ?? 0,
+    total: number(usage.totalTokens) ?? 0,
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -102,14 +242,32 @@ export function extractRecords(
     let errorName: string | undefined
     let errorCode: string | undefined
     let turnEnd: string | undefined
+    let usage: TokenUsage | undefined
+    let goalOperation: string | undefined
+    let goalId: string | undefined
+    let goalPhase: string | undefined
+    let goalRounds: number | undefined
+    let checkpointOutcome: string | undefined
+    let checkpointVerifiedCount: number | undefined
+    let checkpointRemainingCount: number | undefined
+    let checkpointParallel: boolean | undefined
     switch (type) {
       case 'tool/call': {
         tool = text(data.name)
         callId = text(data.callId)
-        values = argumentValues(
-          text(data.arguments),
-          tool === undefined ? undefined : fields?.get(tool),
-        )
+        if (tool === CHECKPOINT_TOOL) {
+          const facts = checkpointFacts(text(data.arguments))
+          checkpointOutcome = facts?.outcome
+          checkpointVerifiedCount = facts?.verified ?? 0
+          checkpointRemainingCount = facts?.remaining ?? 0
+          checkpointParallel = facts?.parallel
+          values = checkpointArgumentValues(facts, fields?.get(tool))
+        } else {
+          values = argumentValues(
+            text(data.arguments),
+            tool === undefined ? undefined : fields?.get(tool),
+          )
+        }
         if (tool !== undefined && callId !== undefined) {
           callById.set(callId, values === undefined ? { tool } : { tool, values })
         }
@@ -138,6 +296,17 @@ export function extractRecords(
       }
       case 'command/run': {
         command = text(data.name)
+        break
+      }
+      case 'assistant/message': {
+        usage = tokenUsage(data.usage)
+        break
+      }
+      case 'goal/change': {
+        goalOperation = text(data.operation)
+        goalId = text(asRecord(data.goal)?.id)
+        goalPhase = text(asRecord(data.goal)?.phase)
+        goalRounds = number(data.roundsStarted)
         break
       }
       case 'turn/end': {
@@ -173,6 +342,15 @@ export function extractRecords(
       ...(errorName === undefined ? {} : { errorName }),
       ...(errorCode === undefined ? {} : { errorCode }),
       ...(turnEnd === undefined ? {} : { turnEnd }),
+      ...(usage === undefined ? {} : { usage }),
+      ...(goalOperation === undefined ? {} : { goalOperation }),
+      ...(goalId === undefined ? {} : { goalId }),
+      ...(goalPhase === undefined ? {} : { goalPhase }),
+      ...(goalRounds === undefined ? {} : { goalRounds }),
+      ...(checkpointOutcome === undefined ? {} : { checkpointOutcome }),
+      ...(checkpointVerifiedCount === undefined ? {} : { checkpointVerifiedCount }),
+      ...(checkpointRemainingCount === undefined ? {} : { checkpointRemainingCount }),
+      ...(checkpointParallel === undefined ? {} : { checkpointParallel }),
     })
     if (type === 'turn/end') currentTurn = undefined
   }

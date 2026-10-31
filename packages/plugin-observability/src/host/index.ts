@@ -3,11 +3,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { isRange, RANGES, type Range } from './aggregate.js'
+import { isRange, RANGES, type Range, rangeWindow } from './aggregate.js'
 import { SessionCache } from './cache.js'
-import { readSessions, readSessionTitles, type SessionQueryService } from './reader.js'
-import { attachSessionTitles, buildReport, type Report } from './report.js'
-import { configuredArgumentFields, parseRows } from './rows.js'
+import { type PluginConfig, parseConfig } from './config.js'
+import type { MetricValues } from './hypotheses.js'
+import { FULL_WINDOW } from './metrics.js'
+import {
+  readBaseline,
+  readSessions,
+  readSessionTitles,
+  type SessionQueryService,
+} from './reader.js'
+import { attachSessionTitles, buildReport, metricValuesFor, type Report } from './report.js'
+import { configuredArgumentFields } from './rows.js'
 import type { ReadinessSources } from './status.js'
 
 /** Observability: signal counts derived from the session event logs. */
@@ -22,6 +30,9 @@ export const REPORT_PATH = '/plugins/dsh-setup-observability/report'
 /** Row configuration: declarative signal and guidance rows only. */
 export interface Config {
   readonly rows?: unknown
+  readonly idleGapMinutes?: unknown
+  readonly minEpisodes?: unknown
+  readonly hypotheses?: unknown
 }
 
 interface ConnectionService {
@@ -99,7 +110,7 @@ function requestUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? REPORT_PATH, 'http://localhost')
 }
 
-/** Compute one report for a validated range. */
+/** Compute one report for a validated range, with its baseline comparison. */
 export async function computeReport(
   ctx: {
     readonly sessionQuery: SessionQueryService
@@ -110,30 +121,120 @@ export async function computeReport(
   sessionId: SessionId | undefined,
   now: number,
   cache: SessionCache,
-  configured: ReturnType<typeof parseRows>,
+  config: PluginConfig,
 ): Promise<Report> {
-  const records = await readSessions({
+  const argumentFields = configuredArgumentFields(config.rows)
+  const { records, sessions } = await readSessions({
     query: ctx.sessionQuery,
     range,
     now,
     sessionId,
     cache,
-    argumentFields: configuredArgumentFields(configured),
+    argumentFields,
+  })
+  const currentWindow = rangeWindow(range, now, 0)
+  const baseline = await readBaseline({
+    query: ctx.sessionQuery,
+    range,
+    now,
+    sessionId,
+    cache,
+    argumentFields,
+    windowFrom: currentWindow.from,
+    windowTo: currentWindow.to,
   })
   const registry = new Set(ctx.tools.schemas().map((schema) => schema.name))
   const readiness = await readReadiness(ctx as unknown as Context)
-  const report = buildReport({ range, now, records, configured, registry, readiness })
-  const failureSessions = [...new Set(report.failures.map((failure) => failure.sessionId))]
-  const titles = await readSessionTitles(
-    ctx.sessionQuery,
-    failureSessions as unknown as SessionId[],
-  )
+  // A hypothesis is evaluated over the window it declares, even when another
+  // range is requested; distinct windows are read once each and cached.
+  const hypothesisValues = new Map<Range, { current: MetricValues; baseline?: MetricValues }>()
+  for (const hypothesis of config.hypotheses) {
+    if (hypothesisValues.has(hypothesis.window)) continue
+    const windowRange = hypothesis.window
+    const window = rangeWindow(windowRange, now, 0)
+    const observed = windowRange === 'session' ? FULL_WINDOW : { from: window.from, to: window.to }
+    const corpus =
+      windowRange === range
+        ? { records, sessions }
+        : await readSessions({
+            query: ctx.sessionQuery,
+            range: windowRange,
+            now,
+            sessionId,
+            cache,
+            argumentFields,
+          })
+    const forBaseline =
+      windowRange === range
+        ? baseline
+        : await readBaseline({
+            query: ctx.sessionQuery,
+            range: windowRange,
+            now,
+            sessionId,
+            cache,
+            argumentFields,
+            windowFrom: window.from,
+            windowTo: window.to,
+          })
+    const currentValues = metricValuesFor({
+      records: corpus.records,
+      sessions: corpus.sessions,
+      idleGapMinutes: config.idleGapMinutes,
+      window: observed,
+    })
+    const baselineValues =
+      forBaseline === undefined
+        ? undefined
+        : metricValuesFor({
+            records: forBaseline.records,
+            sessions: forBaseline.sessions,
+            idleGapMinutes: config.idleGapMinutes,
+            window: { from: forBaseline.from, to: forBaseline.to },
+          })
+    hypothesisValues.set(windowRange, {
+      current: currentValues,
+      ...(baselineValues === undefined ? {} : { baseline: baselineValues }),
+    })
+  }
+  const report = buildReport({
+    range,
+    now,
+    records,
+    configured: config.rows,
+    registry,
+    readiness,
+    sessions,
+    config: {
+      idleGapMinutes: config.idleGapMinutes,
+      minEpisodes: config.minEpisodes,
+      hypotheses: config.hypotheses,
+    },
+    hypothesisValues,
+    ...(baseline === undefined
+      ? {}
+      : {
+          baseline: {
+            kind: baseline.kind,
+            records: baseline.records,
+            sessions: baseline.sessions,
+            from: baseline.from,
+            to: baseline.to,
+          },
+        }),
+  })
+  const named = new Set<string>([
+    ...report.failures.map((failure) => failure.sessionId),
+    ...report.episodes.map((episode) => episode.sessionId),
+    ...report.episodes.flatMap((episode) => episode.children.map((child) => child.sessionId)),
+  ])
+  const titles = await readSessionTitles(ctx.sessionQuery, [...named] as unknown as SessionId[])
   return attachSessionTitles(report, titles)
 }
 
 /** Register the read-only report route. */
 export function apply(ctx: HostContext, rawConfig?: Config): void {
-  const configured = parseRows(rawConfig)
+  const config = parseConfig(rawConfig)
   const cache = new SessionCache()
   ctx.effect(() =>
     ctx.webServer.register({
@@ -167,7 +268,7 @@ export function apply(ctx: HostContext, rawConfig?: Config): void {
             session === null || session === '' ? undefined : (session as unknown as SessionId),
             now,
             cache,
-            configured,
+            config,
           )
           writeJson(res, 200, report)
         } catch (error) {
