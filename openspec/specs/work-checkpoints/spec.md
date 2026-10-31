@@ -7,7 +7,11 @@ Defines a substantial-pause work checkpoint that requires a verified, parallel-o
 
 ### Requirement: Substantial-pause trigger
 
-The plugin SHALL require one work checkpoint when a root agent's turn closes after at least `minToolCalls` tool calls (default 4) and, when `requireWrite` is true (the default), at least one successful `edit`/`write` or worker start. It MUST NOT trigger for a subagent turn, an aborted turn, a turn whose last tool call is `ask_user_question`, or a turn that already contains a successful checkpoint. A turn MUST trigger at most one checkpoint.
+The plugin SHALL require one work checkpoint when a root agent's turn closes after at least
+`minToolCalls` tool calls (default 4) and, when `requireWrite` is true (the default), at least one
+successful `edit`/`write` or worker start. It MUST NOT trigger for a subagent turn, an aborted turn,
+a turn whose last tool call is `ask_user_question`, or a turn whose latest checkpoint is younger
+than `stepInterval` steps. A turn MUST trigger at most one checkpoint per `stepInterval`.
 
 #### Scenario: Working turn
 
@@ -46,12 +50,22 @@ The plugin SHALL require one work checkpoint when a root agent's turn closes aft
 
 #### Scenario: One checkpoint per turn
 
-- **WHEN** a turn already contains a successful checkpoint
+- **WHEN** a turn already contains a checkpoint younger than `stepInterval` steps
 - **THEN** no further checkpoint is required for that turn
+
+#### Scenario: Stale checkpoint
+
+- **WHEN** the latest checkpoint in the turn is `stepInterval` or more steps old and the turn closes
+- **THEN** one new checkpoint is required
 
 ### Requirement: Checkpoint request
 
-The plugin SHALL inject one bounded checkpoint request before the close. The request SHALL name the tool-call count, up to a bounded number of written paths, the last shell command and its exit state, the last failed tool result, and worker starts, when observed. It SHALL ask whether the work is done, what is verified, what remains, whether the remainder has independent parallel lanes, and the next action. It MUST be attributed to `goal-continuity` and stay within `maxMessageChars`.
+The plugin SHALL inject one bounded checkpoint request before the close and when the step interval
+is reached. The request SHALL name the tool-call count, the step count and interval, up to a
+bounded number of written paths, the last shell command and its exit state, the last failed tool
+result, and worker starts, when observed. It SHALL ask whether the work is done, what is verified,
+what remains, whether the remainder has independent parallel lanes, what the current bottleneck is,
+and the next action. It MUST be attributed to `goal-continuity` and stay within `maxMessageChars`.
 
 #### Scenario: Evidence is named
 
@@ -67,6 +81,16 @@ The plugin SHALL inject one bounded checkpoint request before the close. The req
 
 - **WHEN** a tool result failed during the turn
 - **THEN** the request names the failed tool without its full output
+
+#### Scenario: Interval request names the step count
+
+- **WHEN** the request is steered at the step interval
+- **THEN** it names the step count and the interval
+
+#### Scenario: Bottleneck is asked
+
+- **WHEN** the request is injected
+- **THEN** it asks for the current bottleneck and the next action that removes it
 
 #### Scenario: Redaction
 
@@ -85,11 +109,18 @@ The plugin SHALL inject one bounded checkpoint request before the close. The req
 
 ### Requirement: Checkpoint tool and record
 
-The plugin SHALL register a `work_checkpoint` tool that accepts the outcome `done` or `continue`, verified facts, remaining items, a parallel flag, a serial reason required when the outcome is `continue` and parallel is false, the next action, and an optional speedup. A successful call SHALL write one atomic, bounded, redacted local record under `.dsh/work-checkpoints/<session>/<turn>.json`, return a short summary, and be reused for the same turn. The record MUST NOT be tracked.
+The plugin SHALL register a `work_checkpoint` tool that accepts the outcome `done` or `continue`,
+verified facts, remaining items, a parallel flag, a serial reason required when the outcome is
+`continue` and parallel is false, a bottleneck required when the outcome is `continue`, the next
+action, and an optional speedup. A successful call SHALL write one atomic, bounded, redacted local
+record under `.dsh/work-checkpoints/<session>/<turn>.json`, return a short summary, and be reused for
+the same turn; a later call in the same turn replaces the record with the latest decision. The
+record MUST NOT be tracked.
 
 #### Scenario: Continue with a serial reason
 
-- **WHEN** the outcome is `continue`, parallel is false, and the serial reason is non-empty
+- **WHEN** the outcome is `continue`, parallel is false, the serial reason is non-empty, and the
+  bottleneck is non-empty
 - **THEN** the call succeeds and the record is written
 
 #### Scenario: Missing serial reason
@@ -97,9 +128,14 @@ The plugin SHALL register a `work_checkpoint` tool that accepts the outcome `don
 - **WHEN** the outcome is `continue`, parallel is false, and the serial reason is empty or absent
 - **THEN** the call is rejected with a field diagnostic
 
+#### Scenario: Missing bottleneck
+
+- **WHEN** the outcome is `continue` and the bottleneck is empty or absent
+- **THEN** the call is rejected with a field diagnostic
+
 #### Scenario: Parallel declaration
 
-- **WHEN** the outcome is `continue` and parallel is true
+- **WHEN** the outcome is `continue`, parallel is true, and the bottleneck is non-empty
 - **THEN** the call succeeds without a serial reason
 
 #### Scenario: Invalid field
@@ -115,7 +151,12 @@ The plugin SHALL register a `work_checkpoint` tool that accepts the outcome `don
 #### Scenario: Record reuse
 
 - **WHEN** the same turn calls `work_checkpoint` more than once
-- **THEN** the existing record is replaced and no duplicate record is created
+- **THEN** the latest call replaces the record and no duplicate record is created
+
+#### Scenario: Latest decision wins
+
+- **WHEN** the turn closes after more than one checkpoint
+- **THEN** the close gate reads the latest decision
 
 #### Scenario: Summary returned
 
@@ -133,7 +174,11 @@ A checkpoint call SHALL count as a successful checkpoint for the close gate when
 
 ### Requirement: Close gate
 
-After a substantial pause the plugin SHALL refuse the turn close until a successful checkpoint exists for the turn, steering the request on each refusal. It SHALL allow at most `maxBlocks` refusals per turn and then allow the close with a visible UNCHECKED notice that is not a pass. It MUST fail open on an internal state error and MUST NOT evaluate a subagent turn.
+After a substantial pause the plugin SHALL refuse the turn close until a successful checkpoint
+younger than `stepInterval` steps exists for the turn, steering the request on each refusal. It
+SHALL allow at most `maxBlocks` refusals per turn and then allow the close with a visible UNCHECKED
+notice that is not a pass. It MUST fail open on an internal state error and MUST NOT evaluate a
+subagent turn.
 
 #### Scenario: Missing checkpoint
 
@@ -142,8 +187,18 @@ After a substantial pause the plugin SHALL refuse the turn close until a success
 
 #### Scenario: Checkpoint satisfies
 
-- **WHEN** a successful checkpoint exists for the turn
+- **WHEN** a successful checkpoint younger than `stepInterval` steps exists for the turn
 - **THEN** the close is allowed
+
+#### Scenario: Stale checkpoint
+
+- **WHEN** the latest checkpoint is `stepInterval` or more steps old at the close
+- **THEN** the close is refused and a new checkpoint request is steered
+
+#### Scenario: Two-step checkpoint
+
+- **WHEN** a checkpoint was recorded 2 steps before the close and `stepInterval` is 40
+- **THEN** the close is allowed without another request
 
 #### Scenario: Cap reached
 
@@ -239,12 +294,26 @@ The trigger SHALL apply to a goal round's turn close through the same path. The 
 
 ### Requirement: Configuration and off switch
 
-The checkpoint SHALL be enabled by default with `minToolCalls`, `requireWrite`, `maxBlocks`, `enforceParallel`, and `maxMessageChars`, validated fail-loud; unknown or out-of-range fields SHALL fail plugin load with a field diagnostic. `checkpoint.enabled: false` SHALL disable only the checkpoint; disabling the plugin row or `enabled: false` SHALL disable it with the rest of the bundle.
+The checkpoint SHALL be enabled by default with `minToolCalls`, `requireWrite`, `maxBlocks`,
+`enforceParallel`, `maxMessageChars`, and `stepInterval` (default 40), validated fail-loud; unknown
+or out-of-range fields SHALL fail plugin load with a field diagnostic. `checkpoint.enabled: false`
+SHALL disable only the checkpoint; disabling the plugin row or `enabled: false` SHALL disable it
+with the rest of the bundle.
 
 #### Scenario: Default configuration
 
 - **WHEN** a profile mounts the row with default configuration
-- **THEN** the checkpoint is enabled with the documented defaults
+- **THEN** the checkpoint is enabled with the documented defaults, including `stepInterval: 40`
+
+#### Scenario: Configurable interval
+
+- **WHEN** the profile sets `stepInterval` to 25
+- **THEN** the mid-turn trigger uses 25 steps
+
+#### Scenario: Invalid step interval
+
+- **WHEN** `stepInterval` is zero, negative, or not an integer
+- **THEN** plugin load fails with a field diagnostic
 
 #### Scenario: Section disabled
 
@@ -279,3 +348,47 @@ The checkpoint request, the checkpoint tool call, and the close notice SHALL be 
 
 - **WHEN** the checkpoint is recorded
 - **THEN** only the local record and the session log are written, with no new log or storage surface
+
+### Requirement: Periodic mid-turn checkpoint
+
+The plugin SHALL steer one bounded checkpoint request when a root turn reaches `stepInterval` steps
+(default 40) since the turn start or the latest checkpoint, provided the turn has at least one
+successful write or worker start (or `requireWrite` is false) and the last tool call is not
+`ask_user_question`. It MUST NOT steer within `stepInterval` steps of a successful checkpoint and
+MUST NOT start an idle agent.
+
+#### Scenario: Interval reached
+
+- **WHEN** a root turn with a successful write reaches `stepInterval` steps since the turn start or
+  the latest checkpoint
+- **THEN** the plugin steers one bounded checkpoint request
+
+#### Scenario: Recent checkpoint
+
+- **WHEN** the latest checkpoint was recorded 2 steps before the next interval boundary
+- **THEN** no new request is steered
+
+#### Scenario: No write
+
+- **WHEN** the turn has no successful write or worker start and `requireWrite` is true
+- **THEN** no request is steered
+
+#### Scenario: Awaiting user answer
+
+- **WHEN** the last tool call of the turn is `ask_user_question`
+- **THEN** no request is steered
+
+#### Scenario: Subagent turn
+
+- **WHEN** the turn belongs to a subagent
+- **THEN** no request is steered
+
+#### Scenario: Goal round
+
+- **WHEN** a goal round's turn reaches the interval
+- **THEN** the request is steered and the goal is unchanged
+
+#### Scenario: No idle start
+
+- **WHEN** no agent is running
+- **THEN** the request is not injected

@@ -367,3 +367,22 @@ installer fix that selects the setup bundle last when the CLI adds only the depe
 desktop profile runs the code through the linked setup bundle; installing the published 0.20.0 from the
 market (or re-running the installer from an external PowerShell with the app closed) is what makes the
 tagged build the installed one.
+
+The `2026-10-31-add-goal-question-review`, `2026-10-31-add-process-timeline` and
+`2026-10-31-decompose-before-apply` changes were implemented in one session by five parallel lane
+workers and committed as `40c0ca8`; the archived tasks record 11/11, 7/7 and 16/16, every checked task
+carries a portable task-review PASS (11, 7 and 16 of them), and `openspec archive` synced the deltas
+into `goal-continuity` (+3 requirements, 3 modified), `observability` (+2), `delegation-rules` (+2),
+`openspec-skills` (1 modified), `session-guidance` (+2) and `work-checkpoints` (+1, 5 modified). The
+goal-continuity review now has a second subject: an `ask_user_question` in an active goal round is
+denied when an authorized route lets the agent decide (new `blockReview.reviewQuestions`, default
+true), records keep the `block` or `question` subject, and the mid-turn checkpoint counts steps per
+turn, asks once per `stepInterval` (default 40), requires a `bottleneck` for `continue`, and accepts
+only a fresh checkpoint at the close. The observability change adds a pure process timeline, the
+process summary, and the Overview panel with its concurrency axis, step-rate strip and summary table.
+The gate was green before archiving: `pnpm check` (1469 tests), `pnpm gen:check` (324 files),
+`validate:repo`, `validate:composition`, `validate:installer`, `pnpm dogfood`, and a repeat
+`pnpm build` plus `pnpm gen` left no diff. Four review rounds returned 12 P1 findings in total, all
+fixed with regression tests before their PASS. No release followed; installing the next release from
+the market (or re-running the installer from an external PowerShell with the app closed) is the owner
+step that activates the shipped defaults.
