@@ -1,0 +1,153 @@
+import { writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, it } from 'vitest'
+import { CheckpointHarness } from './checkpoint-harness.js'
+import { noticeText } from './harness.js'
+
+/**
+ * Bottleneck age: the same owner keeping the same lanes blocked is not progress.
+ * The plugin reads the previous checkpoint record of the same session and
+ * refuses the close at `bottleneckAge`, until the data changes or the user was
+ * asked. A legacy, foreign, or unreadable record is never a count.
+ */
+
+let cleanup: (() => Promise<void>) | undefined
+
+afterEach(async () => {
+  await cleanup?.()
+  cleanup = undefined
+})
+
+async function create(): Promise<CheckpointHarness> {
+  const created = await CheckpointHarness.create()
+  cleanup = created.cleanup
+  return created.harness
+}
+
+/** One serial plan with the given bottleneck overrides. */
+function plan(bottleneck: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    outcome: 'continue',
+    lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src/a.ts'], state: 'running' }],
+    bottleneck: {
+      id: 'guard-missing',
+      owner: 'lead',
+      action: 'lead_action',
+      blockingLanes: ['lane-a'],
+      targets: ['src/a.ts'],
+      ...bottleneck,
+    },
+    next: 'execute the remedy',
+  }
+}
+
+/** Execute the declared lead remedy so only the age gate can refuse. */
+function remedy(harness: CheckpointHarness): void {
+  const call = harness.toolCall('edit', { file_path: 'src/a.ts' })
+  harness.toolResult(call, 'ok')
+}
+
+describe('bottleneck age', () => {
+  it('refuses the close when the same owner and blocking lanes survive a second checkpoint', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(1)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('guard-missing')
+    expect(text).toContain('persisted for 2 checkpoints')
+    expect(text).toContain('Change the route')
+  })
+
+  it('resets the count when the owner changes', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan({ owner: 'lane-docs' }))
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('resets the count when the blocking lane set changes', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan({ blockingLanes: [] }))
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('lets a user_decision question escape an aged bottleneck', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan({ action: 'user_decision' }))
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+    const question = harness.toolCall('ask_user_question', { question: 'which route?' })
+    harness.toolResult(question, 'answered')
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('ignores a legacy record without a bottleneck object', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    await writeFile(
+      harness.recordPath(1),
+      `${JSON.stringify({
+        version: 1,
+        checkpoint: 'checkpoint-1-00000000',
+        turn: 1,
+        outcome: 'continue',
+        parallel: false,
+        serialReason: 'one ordered edit',
+        bottleneck: 'the guard must exist',
+        next: 'finish',
+        time: new Date().toISOString(),
+        session: harness.sessionId,
+      })}\n`,
+      'utf8',
+    )
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('ignores a record from another session', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.resetSessionId('other-session')
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+  })
+
+  it('ignores an unreadable previous record without failing the turn', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    await writeFile(harness.recordPath(1), 'not json', 'utf8')
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+})

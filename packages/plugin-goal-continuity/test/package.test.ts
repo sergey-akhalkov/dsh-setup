@@ -26,6 +26,8 @@ describe('goal continuity package', () => {
       enabled: true,
       minToolCalls: 4,
       maxBlocks: 3,
+      bottleneckAge: 2,
+      laneStaleCheckpoints: 2,
     })
   })
 
@@ -58,6 +60,12 @@ describe('goal continuity package', () => {
     )
     expect(() => apply(ctx, { checkpoint: { maxBlocks: -1 } } as never)).toThrow(
       /checkpoint\.maxBlocks/u,
+    )
+    expect(() => apply(ctx, { checkpoint: { bottleneckAge: 0 } } as never)).toThrow(
+      /checkpoint\.bottleneckAge/u,
+    )
+    expect(() => apply(ctx, { checkpoint: { laneStaleCheckpoints: 1.5 } } as never)).toThrow(
+      /checkpoint\.laneStaleCheckpoints/u,
     )
     expect(() => apply(ctx, { unknown: true } as never)).toThrow(/unknown/u)
   })

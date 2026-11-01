@@ -263,6 +263,19 @@ rounds, and human messages per completed goal, following each goal by its opaque
 complete; a human-message-per-episode count is not reported because the episode definition makes it
 constant.
 
+**Checkpoint plan metrics.** The checkpoint extraction keeps only the plan's metadata: the lane
+count, the blocked-lane count, the computed parallel flag (two runnable lanes with different owners
+and non-overlapping scopes; a `resource:` scope compares exactly), the bottleneck action and age,
+and whether the remedy was matched before the next checkpoint. The report derives four counters
+from it: parallel share (checkpoints whose plan computes parallel work over the window's
+checkpoints), blocked-lane rate (blocked lanes over all lanes), remedy resolution (resolved
+`continue` checkpoints over `continue` checkpoints), and dispatch per checkpoint (successful worker
+starts between the previous checkpoint and that one, or the turn start for the first). A zero
+denominator leaves its share absent, and a window with no checkpoint reports no plan instead of
+`0/0`. Only counts and shares reach the report; lane ids, owners, scopes, targets, and arguments
+never do, and no new log is written. The plugin gate matches a worker start tagged with the
+checkpoint id; this metric counts any successful worker start in the window.
+
 **Subagent work.** A child session's tokens, tools, and active intervals belong to the parent episode
 and are observed at the window cutoff: a child that starts after the cutoff is not counted, and a child
 whose failure lies after the cutoff still reads open. The report carries delegate calls, episodes with a
@@ -309,12 +322,21 @@ session range compares against the previous completed session in the same worksp
 baseline. Hypotheses are inert configuration: a metric id from a fixed catalog
 (`verified-completion-rate`, `tokens-per-episode`, `context-tokens-per-step`,
 `active-minutes-per-episode`, `steps-per-human-message`, `human-messages-per-completed-goal`,
-`delegate-rate`, `checkpoint-coverage`, `failure-rate`), a direction, a non-negative threshold, a
-window, an optional minimum sample count (default 20), and an optional guardrail metric. A hypothesis is
-`collecting` below its minimum, `supported` when the movement reaches the threshold and the guardrail
-does not worsen, `refuted` when the metric moves opposite beyond the threshold, and `inconclusive`
-otherwise; unknown metric ids and fields are rejected by name, descriptions are rendered as data, and
-no result claims causation.
+`delegate-rate`, `checkpoint-coverage`, `failure-rate`, `parallel-share`, `remedy-resolution`), a
+direction, a non-negative threshold, a window, an optional minimum sample count (default 20), and an
+optional guardrail metric. A hypothesis is `collecting` below its minimum, `supported` when the
+movement reaches the threshold and the guardrail does not worsen, `refuted` when the metric moves
+opposite beyond the threshold, and `inconclusive` otherwise; unknown metric ids and fields are
+rejected by name, descriptions are rendered as data, and no result claims causation. An example
+over the plan metrics:
+
+```yaml
+- metric: parallel-share
+  direction: increase
+  threshold: 0.1
+  window: week
+  guardrail: failure-rate
+```
 
 **Attention findings.** The view derives findings from the metadata rather than waiting to be read.
 The first rule is the serial long run: an episode with at least 40 steps or 20 active minutes whose

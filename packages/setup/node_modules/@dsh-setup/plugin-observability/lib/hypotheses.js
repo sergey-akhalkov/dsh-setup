@@ -10,6 +10,8 @@ export const HYPOTHESIS_METRICS = [
     'delegate-rate',
     'checkpoint-coverage',
     'failure-rate',
+    'parallel-share',
+    'remedy-resolution',
 ];
 /** The preferred direction of every catalog metric, used by guardrails. */
 export const METRIC_DIRECTION = {
@@ -22,6 +24,8 @@ export const METRIC_DIRECTION = {
     'delegate-rate': 'increase',
     'checkpoint-coverage': 'increase',
     'failure-rate': 'decrease',
+    'parallel-share': 'increase',
+    'remedy-resolution': 'increase',
 };
 /** Samples a hypothesis needs before it can support or refute anything. */
 export const DEFAULT_MIN_SAMPLES = 20;
@@ -132,6 +136,10 @@ export function metricValue(values, metric) {
             return values.checkpointCoverage;
         case 'failure-rate':
             return values.failureRate;
+        case 'parallel-share':
+            return values.parallelShare;
+        case 'remedy-resolution':
+            return values.remedyResolution;
     }
 }
 const LABELS = {

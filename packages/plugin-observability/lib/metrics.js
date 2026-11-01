@@ -1,4 +1,5 @@
 import { checkpointEvidence, EPISODE_OUTCOMES, finalTerminalOf, goalsOf, isHumanMessage, KNOWN_TERMINALS, NO_USAGE, outcomeOf, } from './episodes.js';
+import { WORKER_START_TOOLS } from './records.js';
 /** The whole corpus, used by the session range which has no cutoff. */
 export const FULL_WINDOW = { from: Number.NEGATIVE_INFINITY, to: Number.POSITIVE_INFINITY };
 /** The cutoff the session range reports. */
@@ -42,6 +43,99 @@ function sumUsage(records) {
 /** Sum the usage of the records inside a window. */
 export function windowUsage(records, window) {
     return sumUsage(records.filter((record) => inWindow(record, window)));
+}
+function callKeyOf(record) {
+    return record.callId === undefined ? undefined : `${record.sessionId}\u0000${record.callId}`;
+}
+/** A worker call joined to a result that did not fail; a pending call is not a start. */
+function successfulWorkerStarts(records) {
+    const results = new Set();
+    const failed = new Set();
+    for (const record of records) {
+        if (record.eventType !== 'tool/result')
+            continue;
+        const key = callKeyOf(record);
+        if (key === undefined)
+            continue;
+        results.add(key);
+        if (record.failed === true)
+            failed.add(key);
+    }
+    return records.filter((record) => {
+        if (record.eventType !== 'tool/call' || record.tool === undefined)
+            return false;
+        if (!WORKER_START_TOOLS.has(record.tool))
+            return false;
+        const key = callKeyOf(record);
+        return key !== undefined && results.has(key) && !failed.has(key);
+    });
+}
+/** The seq the checkpoint's turn started at, or negative infinity when unrecorded. */
+function turnStartSeq(records, checkpoint) {
+    let boundary = Number.NEGATIVE_INFINITY;
+    for (const record of records) {
+        if (record.eventType !== 'turn/start')
+            continue;
+        if (record.sessionId !== checkpoint.sessionId || record.turn !== checkpoint.turn)
+            continue;
+        if (record.seq <= checkpoint.seq && record.seq > boundary)
+            boundary = record.seq;
+    }
+    return boundary;
+}
+/** Starts after the previous same-session checkpoint, or after the turn start for the first. */
+function dispatchCount(records, checkpoint, checkpoints, starts) {
+    let boundary = Number.NEGATIVE_INFINITY;
+    for (const candidate of checkpoints) {
+        if (candidate.sessionId !== checkpoint.sessionId)
+            continue;
+        if (candidate.seq < checkpoint.seq && candidate.seq > boundary)
+            boundary = candidate.seq;
+    }
+    if (boundary === Number.NEGATIVE_INFINITY)
+        boundary = turnStartSeq(records, checkpoint);
+    return starts.filter((start) => start.sessionId === checkpoint.sessionId &&
+        start.seq > boundary &&
+        start.seq < checkpoint.seq).length;
+}
+/** Aggregate the extracted checkpoint metadata over one window. */
+export function planSummary(records, window) {
+    const checkpoints = records
+        .filter((record) => record.checkpointOutcome !== undefined && inWindow(record, window))
+        .sort((left, right) => left.time - right.time || left.seq - right.seq);
+    if (checkpoints.length === 0)
+        return undefined;
+    let lanes = 0;
+    let blockedLanes = 0;
+    let parallelCheckpoints = 0;
+    let continueCheckpoints = 0;
+    let resolvedContinue = 0;
+    for (const record of checkpoints) {
+        lanes += record.checkpointLaneCount ?? 0;
+        blockedLanes += record.checkpointBlockedLaneCount ?? 0;
+        if (record.checkpointParallelComputed === true)
+            parallelCheckpoints += 1;
+        if (record.checkpointOutcome !== 'continue')
+            continue;
+        continueCheckpoints += 1;
+        if (record.checkpointRemedyResolved === true)
+            resolvedContinue += 1;
+    }
+    const starts = successfulWorkerStarts(records);
+    return {
+        checkpoints: checkpoints.length,
+        parallelCheckpoints,
+        parallelShare: parallelCheckpoints / checkpoints.length,
+        lanes,
+        blockedLanes,
+        ...(lanes === 0 ? {} : { blockedLaneRate: blockedLanes / lanes }),
+        continueCheckpoints,
+        resolvedContinue,
+        ...(continueCheckpoints === 0
+            ? {}
+            : { remedyResolution: resolvedContinue / continueCheckpoints }),
+        dispatches: checkpoints.map((checkpoint) => dispatchCount(records, checkpoint, checkpoints, starts)),
+    };
 }
 /** Count the steps and messages that recorded usage. */
 export function usageCoverage(records, window) {

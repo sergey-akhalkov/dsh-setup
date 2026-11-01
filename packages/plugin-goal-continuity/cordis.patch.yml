@@ -32,6 +32,8 @@
           enforceParallel: true
           maxMessageChars: 1200
           stepInterval: 40
+          bottleneckAge: 2
+          laneStaleCheckpoints: 2
     - id: preset-goal-reviewer
       name: "@deepseek-ai/dsh-agent-preset"
       config:

@@ -2394,7 +2394,6 @@ function richRecords(): {
         arguments: JSON.stringify({
           outcome: 'done',
           verified: [SECRET],
-          remaining: [],
           next: SECRET,
         }),
       },

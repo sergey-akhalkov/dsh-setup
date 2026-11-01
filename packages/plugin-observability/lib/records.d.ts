@@ -57,15 +57,28 @@ export interface TraceRecord {
     readonly goalPhase?: string;
     /** Rounds the goal supervisor started. */
     readonly goalRounds?: number;
-    /** `work_checkpoint` outcome word; the lists and reason strings are dropped. */
+    /** `work_checkpoint` outcome word; the lists and plan text are dropped. */
     readonly checkpointOutcome?: string;
     /** Length of the checkpoint's verified list, never its text. */
     readonly checkpointVerifiedCount?: number;
-    /** Length of the checkpoint's remaining list, never its text. */
-    readonly checkpointRemainingCount?: number;
-    /** Whether the checkpoint declared parallel remaining work. */
-    readonly checkpointParallel?: boolean;
+    /** Lanes the checkpoint plan declared; the lane text is dropped. */
+    readonly checkpointLaneCount?: number;
+    /** Lanes the plan left `blocked`; the lane text is dropped. */
+    readonly checkpointBlockedLaneCount?: number;
+    /** Whether the plan computes parallel work; the declaration flag is gone. */
+    readonly checkpointParallelComputed?: boolean;
+    /** The bottleneck remedy the checkpoint declared, never its owner or targets. */
+    readonly checkpointBottleneckAction?: string;
+    /** Consecutive same-session checkpoints with this bottleneck owner and blocking set. */
+    readonly checkpointBottleneckAge?: number;
+    /** Whether the declared remedy was matched before the next checkpoint or turn end. */
+    readonly checkpointRemedyResolved?: boolean;
 }
+/**
+ * The tools that start a worker. The plugin gate additionally requires the
+ * checkpoint id in the arguments; this metric does not, so it stays metadata.
+ */
+export declare const WORKER_START_TOOLS: ReadonlySet<string>;
 /** The argument fields the configured predicates read, per tool. */
 export type ArgumentFieldMap = ReadonlyMap<string, ReadonlySet<string>>;
 /**

@@ -16,7 +16,7 @@ import {
   NO_USAGE,
   outcomeOf,
 } from './episodes.js'
-import type { TokenUsage, TraceRecord } from './records.js'
+import { type TokenUsage, type TraceRecord, WORKER_START_TOOLS } from './records.js'
 
 /**
  * Episode metrics: usage, outcomes, active time, goals and autonomy, subagent
@@ -85,6 +85,124 @@ function sumUsage(records: readonly TraceRecord[]): TokenUsage {
 /** Sum the usage of the records inside a window. */
 export function windowUsage(records: readonly TraceRecord[], window: Window): TokenUsage {
   return sumUsage(records.filter((record) => inWindow(record, window)))
+}
+
+/**
+ * The checkpoint plan metrics: how often the plan computes parallel work, the
+ * blocked-lane rate, how often a `continue` remedy was resolved, and the
+ * successful worker starts per checkpoint. Absent when no checkpoint was seen.
+ */
+export interface PlanSummary {
+  readonly checkpoints: number
+  readonly parallelCheckpoints: number
+  /** `parallelCheckpoints / checkpoints`. */
+  readonly parallelShare: number
+  readonly lanes: number
+  readonly blockedLanes: number
+  /** `blockedLanes / lanes`; absent when no lane was recorded. */
+  readonly blockedLaneRate?: number
+  readonly continueCheckpoints: number
+  readonly resolvedContinue: number
+  /** `resolvedContinue / continueCheckpoints`; absent when none was seen. */
+  readonly remedyResolution?: number
+  /** Successful worker starts between the previous checkpoint and each checkpoint. */
+  readonly dispatches: readonly number[]
+}
+
+function callKeyOf(record: TraceRecord): string | undefined {
+  return record.callId === undefined ? undefined : `${record.sessionId}\u0000${record.callId}`
+}
+
+/** A worker call joined to a result that did not fail; a pending call is not a start. */
+function successfulWorkerStarts(records: readonly TraceRecord[]): TraceRecord[] {
+  const results = new Set<string>()
+  const failed = new Set<string>()
+  for (const record of records) {
+    if (record.eventType !== 'tool/result') continue
+    const key = callKeyOf(record)
+    if (key === undefined) continue
+    results.add(key)
+    if (record.failed === true) failed.add(key)
+  }
+  return records.filter((record) => {
+    if (record.eventType !== 'tool/call' || record.tool === undefined) return false
+    if (!WORKER_START_TOOLS.has(record.tool)) return false
+    const key = callKeyOf(record)
+    return key !== undefined && results.has(key) && !failed.has(key)
+  })
+}
+
+/** The seq the checkpoint's turn started at, or negative infinity when unrecorded. */
+function turnStartSeq(records: readonly TraceRecord[], checkpoint: TraceRecord): number {
+  let boundary = Number.NEGATIVE_INFINITY
+  for (const record of records) {
+    if (record.eventType !== 'turn/start') continue
+    if (record.sessionId !== checkpoint.sessionId || record.turn !== checkpoint.turn) continue
+    if (record.seq <= checkpoint.seq && record.seq > boundary) boundary = record.seq
+  }
+  return boundary
+}
+
+/** Starts after the previous same-session checkpoint, or after the turn start for the first. */
+function dispatchCount(
+  records: readonly TraceRecord[],
+  checkpoint: TraceRecord,
+  checkpoints: readonly TraceRecord[],
+  starts: readonly TraceRecord[],
+): number {
+  let boundary = Number.NEGATIVE_INFINITY
+  for (const candidate of checkpoints) {
+    if (candidate.sessionId !== checkpoint.sessionId) continue
+    if (candidate.seq < checkpoint.seq && candidate.seq > boundary) boundary = candidate.seq
+  }
+  if (boundary === Number.NEGATIVE_INFINITY) boundary = turnStartSeq(records, checkpoint)
+  return starts.filter(
+    (start) =>
+      start.sessionId === checkpoint.sessionId &&
+      start.seq > boundary &&
+      start.seq < checkpoint.seq,
+  ).length
+}
+
+/** Aggregate the extracted checkpoint metadata over one window. */
+export function planSummary(
+  records: readonly TraceRecord[],
+  window: Window,
+): PlanSummary | undefined {
+  const checkpoints = records
+    .filter((record) => record.checkpointOutcome !== undefined && inWindow(record, window))
+    .sort((left, right) => left.time - right.time || left.seq - right.seq)
+  if (checkpoints.length === 0) return undefined
+  let lanes = 0
+  let blockedLanes = 0
+  let parallelCheckpoints = 0
+  let continueCheckpoints = 0
+  let resolvedContinue = 0
+  for (const record of checkpoints) {
+    lanes += record.checkpointLaneCount ?? 0
+    blockedLanes += record.checkpointBlockedLaneCount ?? 0
+    if (record.checkpointParallelComputed === true) parallelCheckpoints += 1
+    if (record.checkpointOutcome !== 'continue') continue
+    continueCheckpoints += 1
+    if (record.checkpointRemedyResolved === true) resolvedContinue += 1
+  }
+  const starts = successfulWorkerStarts(records)
+  return {
+    checkpoints: checkpoints.length,
+    parallelCheckpoints,
+    parallelShare: parallelCheckpoints / checkpoints.length,
+    lanes,
+    blockedLanes,
+    ...(lanes === 0 ? {} : { blockedLaneRate: blockedLanes / lanes }),
+    continueCheckpoints,
+    resolvedContinue,
+    ...(continueCheckpoints === 0
+      ? {}
+      : { remedyResolution: resolvedContinue / continueCheckpoints }),
+    dispatches: checkpoints.map((checkpoint) =>
+      dispatchCount(records, checkpoint, checkpoints, starts),
+    ),
+  }
 }
 
 /** How much of a window's usage the log actually recorded. */

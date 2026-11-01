@@ -3,7 +3,7 @@ import { builtinRows, matchesOwnedTool, testableRow } from './builtins.js';
 import { addUsage, buildEpisodes, clipIntervals, intervalLength, laneIntervals, NO_USAGE, } from './episodes.js';
 import { serialRunFindings } from './findings.js';
 import { evaluateHypotheses } from './hypotheses.js';
-import { autonomySummary, costSummary, cutoffOf, dataQuality, episodeWork, FULL_WINDOW, overlapsWindow, qualitySummary, speedSummary, startsIn, subagentSummary, usageCoverage, } from './metrics.js';
+import { autonomySummary, costSummary, cutoffOf, dataQuality, episodeWork, FULL_WINDOW, overlapsWindow, planSummary, qualitySummary, speedSummary, startsIn, subagentSummary, usageCoverage, } from './metrics.js';
 import { buildProcessTimeline, processSummary } from './process.js';
 import { scorecards as buildScorecards } from './scorecards.js';
 import { GUIDANCE_NOTE, guidanceReadiness, rowState, } from './status.js';
@@ -400,7 +400,7 @@ function attributedRecords(work) {
     return work.flatMap((entry) => [...entry.ownRecords, ...entry.childRecords]);
 }
 /** The metric values a hypothesis is evaluated against. */
-function metricValues(work, quality, cost, autonomy, subagents) {
+function metricValues(work, quality, cost, autonomy, subagents, plan) {
     const tokensPerEpisode = work.length === 0
         ? undefined
         : work.reduce((sum, entry) => sum + entry.usage.total, 0) / work.length;
@@ -427,6 +427,14 @@ function metricValues(work, quality, cost, autonomy, subagents) {
             ? {}
             : { checkpointCoverage: quality.checkpointCoverage }),
         ...(quality.failureRate === undefined ? {} : { failureRate: quality.failureRate }),
+        ...(plan === undefined
+            ? {}
+            : {
+                parallelShare: plan.parallelShare,
+                ...(plan.remedyResolution === undefined
+                    ? {}
+                    : { remedyResolution: plan.remedyResolution }),
+            }),
     };
 }
 /** The summaries a baseline comparison carries. */
@@ -444,6 +452,7 @@ function baselineComparison(options) {
     const speed = speedSummary(cohort);
     const autonomy = autonomySummary(work, cohort, goalStreams(options.records), window);
     const subagents = subagentSummary(cohort, index.unlinked.length);
+    const plan = planSummary(options.records, window);
     return {
         kind: options.kind,
         from: options.from,
@@ -454,7 +463,8 @@ function baselineComparison(options) {
         speed,
         autonomy,
         subagents,
-        metrics: metricValues(cohort, quality, cost, autonomy, subagents),
+        ...(plan === undefined ? {} : { plan }),
+        metrics: metricValues(cohort, quality, cost, autonomy, subagents, plan),
         process: processSummary(work.filter((entry) => overlapsWindow(entry.episode, window)), window),
     };
 }
@@ -558,7 +568,8 @@ export function metricValuesFor(options) {
     const cost = costSummary(cohort, usage, coverage, options.window.to);
     const autonomy = autonomySummary(work, cohort, goalStreams(options.records), options.window);
     const subagents = subagentSummary(cohort, index.unlinked.length);
-    return metricValues(cohort, quality, cost, autonomy, subagents);
+    const plan = planSummary(options.records, options.window);
+    return metricValues(cohort, quality, cost, autonomy, subagents, plan);
 }
 /**
  * Assemble the report for one range from the sessions' neutral records.
@@ -586,11 +597,12 @@ export function buildReport(options) {
     const speed = speedSummary(cohort);
     const autonomy = autonomySummary(work, cohort, goalStreams(options.records), observed);
     const subagents = subagentSummary(cohort, index.unlinked.length);
+    const plan = planSummary(options.records, observed);
     // Scorecards evaluate window records and count the start-selected cohort.
     const cards = buildScorecards(configuredRows, cohort, minEpisodes);
     const compared = cards.reduce((sum, card) => sum + card.treated.n + card.control.n, 0);
     const data = dataQuality(cohort, coverage, index.unlinked.length, compared);
-    const current = metricValues(cohort, quality, cost, autonomy, subagents);
+    const current = metricValues(cohort, quality, cost, autonomy, subagents, plan);
     const comparison = options.baseline === undefined
         ? undefined
         : baselineComparison({
@@ -729,6 +741,7 @@ export function buildReport(options) {
         speed,
         autonomy,
         subagents,
+        ...(plan === undefined ? {} : { plan }),
         dataQuality: data,
         scorecards: cards,
         hypotheses,

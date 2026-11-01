@@ -147,11 +147,13 @@ question can take effect.
 ## Work checkpoints
 
 A work checkpoint is one structured, machine-checkable decision recorded at a substantial pause and
-at each configured step interval. It names whether the work is done, what is verified, what remains,
-whether the remainder has independent parallel lanes, the current bottleneck, and the next action.
-The close gate requires a fresh checkpoint before the turn closes, so a pause cannot silently drop
-the decision; the checkpoint is self-review, not an independent review, and the review gate remains
-the independent check for blockers and user-only questions.
+at each configured step interval. It names whether the work is done, what is verified, the current
+lane plan, the bottleneck and the remedy that removes it, and the next action. The remaining work is
+derived from lanes that are not `done`, so a stale list cannot survive a closed task. The close gate
+requires a fresh checkpoint before the turn closes, and it also refuses a close whose bottleneck
+remedy was not executed or whose bottleneck survived `bottleneckAge` checkpoints; the checkpoint is
+self-review, not an independent review, and the review gate remains the independent check for
+blockers and user-only questions.
 
 ### Trigger
 
@@ -184,11 +186,12 @@ repeated at the next interval, not at every step.
 The plugin steers one bounded checkpoint request at the turn-close boundary and when the step
 interval is reached. It names the observed evidence: the tool-call count, up to five written paths,
 the last shell command and its exit state, the last failed tool, and the worker starts; an interval
-request also names the step count and the interval. It asks whether the work is done, what is
-verified, what remains, whether the remaining lanes are independent (parallel), what the current
-bottleneck is, and the next action. The request is attributed to the `goal-continuity` source, is
-redacted (machine paths and obvious credentials), is capped at `maxMessageChars` (default 1200), and
-is delivered with `agent.steer`: it never starts an idle agent and never wakes one.
+request also names the step count and the interval. It names each lane whose state did not change for
+`laneStaleCheckpoints` checkpoints, with that count, and the age of the current bottleneck. It asks
+for the lane plan with owners, scopes, and states, the bottleneck with its action and blocking lanes,
+the remedy that removes it, and the next action. The request is attributed to the `goal-continuity`
+source, is redacted (machine paths and obvious credentials), is capped at `maxMessageChars` (default
+1200), and is delivered with `agent.steer`: it never starts an idle agent and never wakes one.
 
 ### The `work_checkpoint` tool and record
 
@@ -196,13 +199,13 @@ The Host registers one `work_checkpoint` tool with these fields:
 
 - `outcome`: `done` or `continue`;
 - `verified`: a list of verified facts (optional);
-- `remaining`: a list of remaining items (optional);
-- `parallel`: whether the remainder has independent lanes (default false);
-- `serialReason`: required when `outcome` is `continue` and `parallel` is false;
-- `bottleneck`: the current bottleneck and the next action that removes it; required when `outcome`
-  is `continue`;
-- `next`: the next action (required);
-- `speedup`: an optional speedup for the next turn.
+- `lanes`: the lane plan, required for `continue`: each lane has a unique `id`, an `owner`, at least
+  one `scope` entry (a path, or a `resource:` entry for one shared resource), a `state` of `running`,
+  `blocked`, or `done`, and optional `blockedBy` lane ids. At most 8 lanes;
+- `bottleneck`: the current bottleneck, required for `continue`: `id`, `owner`, `action` of
+  `worker_start`, `lead_action`, or `user_decision`, the `blockingLanes` ids, and, for `lead_action`,
+  the `targets` it edits;
+- `next`: the next action (required).
 
 A call and its record look like this (the record is written by the tool; the model only sends the
 arguments):
@@ -211,34 +214,66 @@ arguments):
 {
   "outcome": "continue",
   "verified": ["the parser test fails on the empty input"],
-  "remaining": ["guard the empty input", "add a regression test"],
-  "parallel": false,
-  "serialReason": "the test must be written after the guard exists",
-  "bottleneck": "the guard does not exist yet, so the test cannot pass",
-  "next": "add the guard, then the test"
+  "lanes": [
+    { "id": "guard", "owner": "lead", "scope": ["src/parser.ts"], "state": "done" },
+    {
+      "id": "test",
+      "owner": "lead",
+      "scope": ["test/parser.test.ts"],
+      "state": "running",
+      "blockedBy": ["guard"]
+    }
+  ],
+  "bottleneck": {
+    "id": "test-missing",
+    "owner": "lead",
+    "action": "lead_action",
+    "blockingLanes": ["test"],
+    "targets": ["test/parser.test.ts"]
+  },
+  "next": "write the regression test"
 }
 ```
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "checkpoint": "checkpoint-3-1a2b3c4d",
   "turn": 3,
   "outcome": "continue",
   "verified": ["the parser test fails on the empty input"],
-  "remaining": ["guard the empty input", "add a regression test"],
-  "parallel": false,
-  "serialReason": "the test must be written after the guard exists",
-  "bottleneck": "the guard does not exist yet, so the test cannot pass",
-  "next": "add the guard, then the test",
+  "lanes": [
+    { "id": "guard", "owner": "lead", "scope": ["src/parser.ts"], "state": "done" },
+    {
+      "id": "test",
+      "owner": "lead",
+      "scope": ["test/parser.test.ts"],
+      "state": "running",
+      "blockedBy": ["guard"]
+    }
+  ],
+  "bottleneck": {
+    "id": "test-missing",
+    "owner": "lead",
+    "action": "lead_action",
+    "blockingLanes": ["test"],
+    "targets": ["test/parser.test.ts"]
+  },
+  "derivedRemaining": ["test"],
+  "parallelComputed": false,
+  "bottleneckAge": 1,
+  "next": "write the regression test",
   "time": "2026-10-31T12:00:00.000Z",
   "session": "session-83a9285d-c895-4235-a36b-5e302e02e035"
 }
 ```
 
-An unknown field, an unknown outcome, a missing next action, a continuation without a serial reason,
-and a continuation without a bottleneck are rejected with a field diagnostic. Every successful call
-writes one atomic local record:
+An unknown field, an unknown outcome, a missing next action, a continuation without a lane plan, a
+duplicate lane id, an unknown `blockedBy`, an empty scope, more than 8 lanes, an unknown state, a
+continuation without a bottleneck, and a `lead_action` without a target are rejected with a field
+diagnostic. The removed fields `parallel`, `serialReason`, `remaining`, and `speedup` are rejected
+too, and each diagnostic names the field that replaces it (`lanes` for the first three, `next` for
+`speedup`). Every successful call writes one atomic local record:
 
 ```
 .dsh/work-checkpoints/<hashed-session>/<turn>.json
@@ -246,10 +281,14 @@ writes one atomic local record:
 
 The session key is the SHA-256 prefix of the session id, matching the delegation session ledger; the
 record carries the decision, a stable checkpoint id (`checkpoint-<turn>-<hash>`), the turn, the time,
-and the session. Each field is bounded and redacted, and the record is replaced rather than
-duplicated when the same turn calls the tool again. The record is machine-local scratch under
-`.dsh/` and is never a tracked file. The tool result is a short summary with the checkpoint id, the
-workspace-relative record path, and the decision including the bottleneck.
+and the session. It also carries the lane plan, the bottleneck, the `derivedRemaining` lane ids, the
+computed `parallelComputed` flag, and the `bottleneckAge` of a `continue` checkpoint (record version
+2). A version 1 record from an earlier release stays readable and is never treated as a satisfied
+plan: its lanes and bottleneck are absent, so the age count starts again. Each field is bounded and
+redacted, and the record is replaced rather than duplicated when the same turn calls the tool again.
+The record is machine-local scratch under `.dsh/` and is never a tracked file. The tool result is a
+short summary with the checkpoint id, the workspace-relative record path, the lane count, the derived
+remainder, the computed parallel flag, and the bottleneck.
 
 A write failure still counts as a successful checkpoint for the close gate: the tool returns the
 decision with a bounded warning naming the record failure, and never claims that a record exists.
@@ -258,28 +297,66 @@ decision with a bounded warning naming the record failure, and never claims that
 
 After a substantial pause the `agent/turn-stopping` listener refuses the close by steering the
 checkpoint request; a successful checkpoint younger than `stepInterval` steps allows the close and an
-older one is stale and refused with a fresh request. The gate allows at most `maxBlocks` refusals
-(default 3) per turn and then allows the close with a visible `UNCHECKED` notice that states it is
-not a pass. The refusal budget is shared with the parallel-action gate. An internal state error fails
-open: the close is allowed and no verification or checkpoint is claimed. A subagent turn is never
-evaluated.
+older one is stale and refused with a fresh request. A fresh checkpoint is still not a pass: the gate
+also refuses a close whose declared bottleneck remedy was not executed, and a close whose bottleneck
+survived `bottleneckAge` checkpoints without a route change. The gate allows at most `maxBlocks`
+refusals (default 3) per turn and then allows the close with a visible `UNCHECKED` notice that states
+it is not a pass. The refusal budget is shared by the checkpoint, parallel, remedy, and age gates. An
+internal state error fails open: the close is allowed and no verification or checkpoint is claimed. A
+subagent turn is never evaluated.
 
-### Parallel-action gate and the serial escape
+### Parallel-action gate and the serial form
 
-When a `continue` checkpoint declares `parallel: true` and `enforceParallel` is true (the default),
+When the checkpoint's lane plan computes parallel work and `enforceParallel` is true (the default),
 the turn may close only after one of these:
 
 - a successful worker start after the checkpoint whose serialized arguments contain the checkpoint
   id (one of `subagent`, `subagent_fork`, `spawn_teammate`, `workflow`, `delegate`; a cached
   `delegate` reuse does not count);
-- an amendment that replaces the checkpoint with `parallel: false` and a non-empty serial reason.
+- an amendment that replaces the checkpoint with a plan whose remaining work is serial.
+
+Two lanes are parallel when both are runnable, they have different owners, and their scopes do not
+overlap. A lane is runnable when its state is `running` and every lane in `blockedBy` is `done`. Scope
+overlap is compared by path component, case-insensitively and with `\` and `/` unified, so `src` and
+`src2` are disjoint; a `resource:` entry matches exactly, so two lanes sharing `resource:live-stand`
+are serial by construction. A shared scope or a single owner is the serial form; it is data, not a
+sentence.
 
 A failed worker start, an untagged worker start, and a worker start before the checkpoint do not
 satisfy the gate. Each unsatisfied close steers with the checkpoint id, shares the `maxBlocks` budget,
 and reaches the same `UNCHECKED` notice at the cap. The gate reports nothing when no worker-start tool
-is registered or when the checkpoint outcome is `done`. The serial reason is the explicit escape for
-a genuinely sequential remainder; if almost every checkpoint is serial, the measurement shows the
-gate is not changing behavior.
+is registered, when `enforceParallel` is false, or when the checkpoint outcome is `done`. The
+measurement (parallel share, blocked-lane rate) shows whether the plan is being used or restated.
+
+### Bottleneck remedy
+
+A `continue` checkpoint names one bottleneck and the action that removes it. The close gate verifies
+the action with a later tool call, never with prose:
+
+- `worker_start`: a successful worker start after the checkpoint that the same classifier accepts
+  and whose serialized arguments contain the checkpoint id; a cached `delegate` reuse and
+  `send_message` are not starts;
+- `lead_action`: a successful `edit` or `write` whose `file_path` equals a declared target or lies
+  beneath a declared directory target by path component; `src2/file.ts` does not match `src`, a failed
+  or pending call is not evidence, and a target mentioned only in written content or a shell command
+  does not match;
+- `user_decision`: an `ask_user_question` call; the independent question review still applies.
+
+No match refuses the close with a steer naming the checkpoint id, the bottleneck id and owner, its
+action, its blocking lanes, and the missing evidence. A command-only remedy is not verifiable: the
+checkpoint must dispatch the work, edit the target, or ask the user. A `done` checkpoint has no
+remedy obligation.
+
+### Bottleneck age
+
+The plugin reads the previous checkpoint record of the same session and counts consecutive
+checkpoints whose bottleneck names the same owner and the same blocking lane ids. At
+`bottleneckAge` (default 2) the close is refused with a steer that requires a route change: a new
+owner, a changed blocking lane set (a lane that moved on), or a `user_decision` question to the user.
+Renaming the bottleneck id does not reset the count; changing the owner or the blocking lanes does. A
+record from another session, a record without a bottleneck object (a legacy v1 record), and an
+unreadable record do not count.
+
 
 ### Goal rounds
 
@@ -320,6 +397,8 @@ separate log or storage surface is written.
       enforceParallel: true
       maxMessageChars: 1200
       stepInterval: 40
+      bottleneckAge: 2
+      laneStaleCheckpoints: 2
 ```
 
 - `checkpoint.enabled: false` disables only the checkpoint tool, the trigger, and the close and
@@ -329,8 +408,13 @@ separate log or storage surface is written.
 - `checkpoint.stepInterval` (default 40, integer 1–1000) sets the mid-turn request interval and the
   freshness window a checkpoint must fall within at the close.
 - `checkpoint.maxBlocks: 0` closes immediately with the `UNCHECKED` notice; `maxBlocks` is the shared
-  refusal budget for both gates.
-- `checkpoint.enforceParallel: false` keeps the checkpoint but drops the tagged-worker requirement.
+  refusal budget for the checkpoint, parallel, remedy, and age gates.
+- `checkpoint.enforceParallel: false` keeps the checkpoint but drops the computed parallel-worker
+  requirement; the remedy and age gates still apply.
+- `checkpoint.bottleneckAge` (default 2, integer 1–1000) is the number of consecutive checkpoints a
+  bottleneck may name the same owner and blocking lanes before the close requires a route change.
+- `checkpoint.laneStaleCheckpoints` (default 2, integer 1–1000) is the number of checkpoints a lane
+  state may stay unchanged before the request names that lane.
 - `speedReview` is deprecated: a profile may still carry the object, the plugin loads, reports one
   warning, and runs no speed review. Remove the section.
 - `blockReview.enabled: false` disables both review subjects; continuity supervision and the work

@@ -133,6 +133,8 @@ window.__ModuleLoader__.load({
       "human-messages-per-completed-goal": "hypothesis.metric.humanMessagesPerCompletedGoal",
       "delegate-rate": "hypothesis.metric.delegateRate",
       "checkpoint-coverage": "hypothesis.metric.checkpointCoverage",
+      "parallel-share": "hypothesis.metric.parallelShare",
+      "remedy-resolution": "hypothesis.metric.remedyResolution",
       "failure-rate": "hypothesis.metric.failureRate"
     };
     var HYPOTHESIS_STATUS_KEYS = {
@@ -425,6 +427,8 @@ window.__ModuleLoader__.load({
       "hypothesis.metric.humanMessagesPerCompletedGoal": "Human messages per completed goal",
       "hypothesis.metric.delegateRate": "Delegate rate",
       "hypothesis.metric.checkpointCoverage": "Checkpoint coverage",
+      "hypothesis.metric.parallelShare": "Parallel share",
+      "hypothesis.metric.remedyResolution": "Remedy resolution",
       "hypothesis.metric.failureRate": "Failure rate",
       "state.loading": "Reading session logs\u2026",
       "state.empty": "No sessions recorded activity in this range.",
@@ -1807,6 +1811,8 @@ window.__ModuleLoader__.load({
         case "verified-completion-rate":
         case "delegate-rate":
         case "checkpoint-coverage":
+        case "parallel-share":
+        case "remedy-resolution":
         case "failure-rate":
           return `${String(Math.round(value * 100))}%`;
         case "active-minutes-per-episode":

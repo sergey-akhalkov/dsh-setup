@@ -28,6 +28,8 @@ const READY: MetricValues = {
   delegateRate: 0.2,
   checkpointCoverage: 0.3,
   failureRate: 0.1,
+  parallelShare: 0.5,
+  remedyResolution: 0.25,
 }
 
 describe('hypothesis configuration', () => {
@@ -117,6 +119,21 @@ describe('hypothesis configuration', () => {
         ]),
       ),
     ).toContain('hypotheses[0].guardrail must be one of')
+  })
+
+  it('accepts the plan metrics and still rejects an unknown one', () => {
+    const parsed = parseHypotheses([
+      { metric: 'parallel-share', direction: 'increase', threshold: 0.1 },
+      { metric: 'remedy-resolution', direction: 'increase', threshold: 0.1 },
+    ])
+    expect(parsed.map((hypothesis) => hypothesis.metric)).toEqual([
+      'parallel-share',
+      'remedy-resolution',
+    ])
+    expect(parsed[0]?.direction).toBe('increase')
+    expect(
+      rejection(() => parseHypotheses([{ metric: 'parallel-completion', threshold: 1 }])),
+    ).toContain('received "parallel-completion"')
   })
 
   it('keeps a description inert data and never executes it', () => {
@@ -215,6 +232,28 @@ describe('hypothesis evaluation', () => {
     const baseline = { ...READY, failureRate: 0.05 }
     const [result] = evaluateHypotheses([zeroThreshold], READY, baseline)
     expect(result?.status).toBe('inconclusive')
+  })
+
+  it('evaluates both plan metrics with the increase direction', () => {
+    const hypotheses = parseHypotheses([
+      { metric: 'parallel-share', direction: 'increase', threshold: 0.1, minSamples: 10 },
+      { metric: 'remedy-resolution', direction: 'increase', threshold: 0.1, minSamples: 10 },
+    ])
+    const [parallel, remedy] = evaluateHypotheses(hypotheses, READY, {
+      ...READY,
+      parallelShare: 0.2,
+      remedyResolution: 0.05,
+    })
+    expect(parallel?.status).toBe('supported')
+    expect(parallel?.current).toBe(0.5)
+    expect(remedy?.status).toBe('supported')
+    expect(remedy?.current).toBe(0.25)
+    const [missing] = evaluateHypotheses(
+      hypotheses.slice(0, 1),
+      { ...READY, parallelShare: undefined },
+      READY,
+    )
+    expect(missing?.status).toBe('collecting')
   })
 
   it('reports the observed window and the sample size', () => {

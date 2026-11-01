@@ -165,6 +165,7 @@ describe('dashboard report data', () => {
     expect(report.activity).toHaveLength(24)
     expect(report.errorSeries).toHaveLength(24)
     expect(report.activity.every((count) => count === 0)).toBe(true)
+    expect(report.plan).toBeUndefined()
   })
 })
 
@@ -1032,5 +1033,141 @@ describe('episode report shape', () => {
     expect(report.autonomy.goals).toBe(2)
     expect(report.autonomy.completedGoals).toBe(2)
     expect(report.autonomy.rounds).toBe(5)
+  })
+})
+
+describe('checkpoint plan metrics', () => {
+  function checkpointEvent(
+    callId: string,
+    at: number,
+    plan: Record<string, unknown>,
+  ): SessionEvent {
+    return event(
+      'tool/call',
+      { turn: 1, step: 1, callId, name: 'work_checkpoint', arguments: JSON.stringify(plan) },
+      at,
+    )
+  }
+
+  it('carries exact plan counts and shares from a known checkpoint and worker sequence', () => {
+    const records = extractRecords('plan-session', [
+      event(
+        'user/message',
+        { role: 'user', content: [], source: { kind: 'user' } },
+        NOW - 10 * MINUTE,
+      ),
+      event('turn/start', { turn: 1 }, NOW - 10 * MINUTE),
+      checkpointEvent('cp1', NOW - 9 * MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [
+          { id: 'a', owner: 'lead', scope: ['src'], state: 'running' },
+          { id: 'b', owner: 'worker', scope: ['docs'], state: 'running' },
+        ],
+        bottleneck: { id: 'n', owner: 'lead', action: 'worker_start', blockingLanes: ['b'] },
+        next: 'keep going',
+      }),
+      event(
+        'tool/call',
+        { turn: 1, step: 1, callId: 'w1', name: 'subagent', arguments: '{}' },
+        NOW - 8 * MINUTE,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: 'w1' },
+            isError: false,
+          },
+        },
+        NOW - 7 * MINUTE,
+      ),
+      checkpointEvent('cp2', NOW - 6 * MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [
+          { id: 'a', owner: 'lead', scope: ['src'], state: 'running' },
+          { id: 'b', owner: 'worker', scope: ['docs'], state: 'blocked' },
+        ],
+        bottleneck: {
+          id: 'n',
+          owner: 'worker',
+          action: 'lead_action',
+          blockingLanes: ['b'],
+          targets: ['src/a.ts'],
+        },
+        next: 'edit the target',
+      }),
+      checkpointEvent('cp3', NOW - 4 * MINUTE, {
+        outcome: 'done',
+        verified: ['checked'],
+        lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'done' }],
+        next: 'done',
+      }),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW - 3 * MINUTE),
+    ])
+    const report = buildReport({
+      range: 'day',
+      now: NOW,
+      records,
+      configured: [],
+      registry: new Set(),
+    })
+    expect(report.plan).toMatchObject({
+      checkpoints: 3,
+      parallelCheckpoints: 1,
+      parallelShare: 1 / 3,
+      lanes: 5,
+      blockedLanes: 1,
+      blockedLaneRate: 0.2,
+      continueCheckpoints: 2,
+      resolvedContinue: 1,
+      remedyResolution: 0.5,
+      dispatches: [0, 1, 0],
+    })
+  })
+
+  it('carries no lane, owner, or target text on the report', () => {
+    const secret = 'REPORT-PLAN-SECRET'
+    const records = extractRecords('plan-session', [
+      event(
+        'user/message',
+        { role: 'user', content: [], source: { kind: 'user' } },
+        NOW - 5 * MINUTE,
+      ),
+      checkpointEvent('cp1', NOW - 4 * MINUTE, {
+        outcome: 'continue',
+        verified: [`verified ${secret}`],
+        lanes: [
+          {
+            id: `id-${secret}`,
+            owner: `owner-${secret}`,
+            scope: [`scope-${secret}`],
+            state: 'blocked',
+          },
+        ],
+        bottleneck: {
+          id: `b-${secret}`,
+          owner: `owner-${secret}`,
+          action: 'lead_action',
+          blockingLanes: [`id-${secret}`],
+          targets: [`target-${secret}`],
+        },
+        next: `next ${secret}`,
+      }),
+    ])
+    const report = buildReport({
+      range: 'session',
+      now: NOW,
+      records,
+      configured: [],
+      registry: new Set(),
+    })
+    expect(report.plan?.checkpoints).toBe(1)
+    expect(JSON.stringify(report)).not.toContain(secret)
   })
 })

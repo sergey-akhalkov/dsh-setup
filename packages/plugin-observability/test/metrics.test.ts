@@ -10,6 +10,7 @@ import {
   FULL_WINDOW,
   NO_CUTOFF,
   parallelWidth,
+  planSummary,
   qualitySummary,
   speedSummary,
   subagentSummary,
@@ -108,11 +109,31 @@ function checkpoint(outcome: string, verified: string[], at: number): SessionEve
       arguments: JSON.stringify({
         outcome,
         verified,
-        remaining: [],
+        ...(outcome === 'continue'
+          ? {
+              lanes: [
+                { id: 'a', owner: 'lead', scope: ['src'], state: 'running' },
+                { id: 'b', owner: 'worker', scope: ['docs'], state: 'running' },
+              ],
+              bottleneck: {
+                id: 'n',
+                owner: 'lead',
+                action: 'worker_start',
+                blockingLanes: ['b'],
+              },
+            }
+          : {}),
         next: 'go on',
-        ...(outcome === 'continue' ? { serialReason: 'one ordered step' } : {}),
       }),
     },
+    at,
+  )
+}
+
+function checkpointCall(callId: string, at: number, plan: Record<string, unknown>): SessionEvent {
+  return event(
+    'tool/call',
+    { turn: 1, step: 1, callId, name: 'work_checkpoint', arguments: JSON.stringify(plan) },
     at,
   )
 }
@@ -1253,5 +1274,122 @@ describe('parallel width helper', () => {
       ]),
     ).toBe(1)
     expect(parallelWidth([])).toBe(0)
+  })
+})
+
+describe('checkpoint plan metrics', () => {
+  it('derives exact plan counts and shares from a known checkpoint and worker sequence', () => {
+    const records = extractRecords('s', [
+      event('turn/start', { turn: 1 }, BASE),
+      checkpointCall('cp1', BASE + MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [
+          { id: 'a', owner: 'lead', scope: ['src'], state: 'running' },
+          { id: 'b', owner: 'worker', scope: ['docs'], state: 'running' },
+        ],
+        bottleneck: { id: 'n', owner: 'lead', action: 'worker_start', blockingLanes: ['b'] },
+        next: 'keep going',
+      }),
+      call('w1', 'subagent', BASE + 2 * MINUTE),
+      result('w1', BASE + 3 * MINUTE),
+      checkpointCall('cp2', BASE + 4 * MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [
+          { id: 'a', owner: 'lead', scope: ['src'], state: 'running' },
+          { id: 'b', owner: 'worker', scope: ['docs'], state: 'blocked' },
+        ],
+        bottleneck: {
+          id: 'n',
+          owner: 'worker',
+          action: 'lead_action',
+          blockingLanes: ['b'],
+          targets: ['src/a.ts'],
+        },
+        next: 'edit the target',
+      }),
+      checkpointCall('cp3', BASE + 6 * MINUTE, {
+        outcome: 'done',
+        verified: ['checked'],
+        lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'done' }],
+        next: 'done',
+      }),
+      closer('completed', BASE + 7 * MINUTE),
+    ])
+    const plan = planSummary(records, FULL_WINDOW)
+    expect(plan).toMatchObject({
+      checkpoints: 3,
+      parallelCheckpoints: 1,
+      parallelShare: 1 / 3,
+      lanes: 5,
+      blockedLanes: 1,
+      blockedLaneRate: 0.2,
+      continueCheckpoints: 2,
+      resolvedContinue: 1,
+      remedyResolution: 0.5,
+      dispatches: [0, 1, 0],
+    })
+  })
+
+  it('reads not applicable when the window holds no checkpoint', () => {
+    const records = extractRecords('s', [
+      human(BASE),
+      ...step(BASE + MINUTE),
+      closer('completed', BASE + 3 * MINUTE),
+    ])
+    expect(planSummary(records, FULL_WINDOW)).toBeUndefined()
+    expect(planSummary(records, { from: BASE, to: BASE + MINUTE })).toBeUndefined()
+  })
+
+  it('leaves a zero-denominator share absent instead of dividing by zero', () => {
+    const records = extractRecords('s', [
+      checkpointCall('cp1', BASE + MINUTE, {
+        outcome: 'done',
+        verified: [],
+        next: 'nothing left',
+      }),
+    ])
+    const plan = planSummary(records, FULL_WINDOW)
+    expect(plan).toMatchObject({
+      checkpoints: 1,
+      parallelCheckpoints: 0,
+      parallelShare: 0,
+      lanes: 0,
+      blockedLanes: 0,
+      continueCheckpoints: 0,
+      resolvedContinue: 0,
+      dispatches: [0],
+    })
+    expect(plan?.blockedLaneRate).toBeUndefined()
+    expect(plan?.remedyResolution).toBeUndefined()
+  })
+
+  it('keeps lane, owner, and target text out of the records and the summary', () => {
+    const secret = 'PLAN-METRIC-SECRET'
+    const records = extractRecords('s', [
+      checkpointCall('cp1', BASE, {
+        outcome: 'continue',
+        verified: [`verified ${secret}`],
+        lanes: [
+          {
+            id: `id-${secret}`,
+            owner: `owner-${secret}`,
+            scope: [`scope-${secret}`],
+            state: 'blocked',
+          },
+        ],
+        bottleneck: {
+          id: `b-${secret}`,
+          owner: `owner-${secret}`,
+          action: 'lead_action',
+          blockingLanes: [`id-${secret}`],
+          targets: [`target-${secret}`],
+        },
+        next: `next ${secret}`,
+      }),
+    ])
+    expect(JSON.stringify(records)).not.toContain(secret)
+    expect(JSON.stringify(planSummary(records, FULL_WINDOW))).not.toContain(secret)
   })
 })

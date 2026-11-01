@@ -3,7 +3,7 @@ import type { RowGroup } from './builtins.js';
 import type { EpisodeCheckpoints, EpisodeGoals, EpisodeInterval, EpisodeOutcome } from './episodes.js';
 import type { Finding } from './findings.js';
 import type { Hypothesis, HypothesisResult, MetricValues } from './hypotheses.js';
-import type { AutonomySummary, CostSummary, DataQuality, QualitySummary, SpeedSummary, SubagentSummary, Window } from './metrics.js';
+import type { AutonomySummary, CostSummary, DataQuality, PlanSummary, QualitySummary, SpeedSummary, SubagentSummary, Window } from './metrics.js';
 import type { ProcessSummary, ProcessTimelineData } from './process.js';
 import type { SessionMeta, TokenUsage, TraceRecord } from './records.js';
 import type { Row } from './rows.js';
@@ -185,6 +185,8 @@ export interface BaselineComparison {
     readonly speed: SpeedSummary;
     readonly autonomy: AutonomySummary;
     readonly subagents: SubagentSummary;
+    /** The checkpoint plan metrics, absent when the window holds no checkpoint. */
+    readonly plan?: PlanSummary;
     /** The metric values a hypothesis compares against. */
     readonly metrics: MetricValues;
     /** The baseline window's process summary, for the before-and-after comparison. */
@@ -235,6 +237,8 @@ export interface Report {
     readonly speed: SpeedSummary;
     readonly autonomy: AutonomySummary;
     readonly subagents: SubagentSummary;
+    /** The checkpoint plan metrics, absent when the window holds no checkpoint. */
+    readonly plan?: PlanSummary;
     readonly dataQuality: DataQuality;
     readonly scorecards: readonly Scorecard[];
     readonly hypotheses: readonly HypothesisResult[];

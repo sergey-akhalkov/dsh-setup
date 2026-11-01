@@ -60,39 +60,74 @@ export interface TraceRecord {
   readonly goalPhase?: string
   /** Rounds the goal supervisor started. */
   readonly goalRounds?: number
-  /** `work_checkpoint` outcome word; the lists and reason strings are dropped. */
+  /** `work_checkpoint` outcome word; the lists and plan text are dropped. */
   readonly checkpointOutcome?: string
   /** Length of the checkpoint's verified list, never its text. */
   readonly checkpointVerifiedCount?: number
-  /** Length of the checkpoint's remaining list, never its text. */
-  readonly checkpointRemainingCount?: number
-  /** Whether the checkpoint declared parallel remaining work. */
-  readonly checkpointParallel?: boolean
+  /** Lanes the checkpoint plan declared; the lane text is dropped. */
+  readonly checkpointLaneCount?: number
+  /** Lanes the plan left `blocked`; the lane text is dropped. */
+  readonly checkpointBlockedLaneCount?: number
+  /** Whether the plan computes parallel work; the declaration flag is gone. */
+  readonly checkpointParallelComputed?: boolean
+  /** The bottleneck remedy the checkpoint declared, never its owner or targets. */
+  readonly checkpointBottleneckAction?: string
+  /** Consecutive same-session checkpoints with this bottleneck owner and blocking set. */
+  readonly checkpointBottleneckAge?: number
+  /** Whether the declared remedy was matched before the next checkpoint or turn end. */
+  readonly checkpointRemedyResolved?: boolean
 }
 
 /** The tool that records a work checkpoint. */
 const CHECKPOINT_TOOL = 'work_checkpoint'
 
-/** Every field the checkpoint producer accepts; anything else makes the call malformed. */
+/**
+ * The tools that start a worker. The plugin gate additionally requires the
+ * checkpoint id in the arguments; this metric does not, so it stays metadata.
+ */
+export const WORKER_START_TOOLS: ReadonlySet<string> = new Set([
+  'subagent',
+  'subagent_fork',
+  'spawn_teammate',
+  'workflow',
+  'delegate',
+])
+
+/** Every field the checkpoint producer accepts; a removed or unknown field is malformed. */
 const CHECKPOINT_FIELDS: ReadonlySet<string> = new Set([
   'outcome',
   'verified',
-  'remaining',
-  'parallel',
-  'serialReason',
+  'lanes',
+  'bottleneck',
   'next',
-  'speedup',
 ])
 
 /** The producer's list bound; a longer list is malformed. */
 const MAX_CHECKPOINT_ITEMS = 8
 
-/** Only a checkpoint's counts and flags survive extraction. */
+/** One lane of the checkpoint plan; kept in memory only, never in a record. */
+interface CheckpointLane {
+  readonly id: string
+  readonly owner: string
+  readonly scope: readonly string[]
+  readonly state: 'running' | 'blocked' | 'done'
+  readonly blockedBy: readonly string[]
+}
+
+/** One bottleneck remedy; the owner, lanes, and targets never reach a record. */
+interface CheckpointBottleneck {
+  readonly owner: string
+  readonly action: 'worker_start' | 'lead_action' | 'user_decision'
+  readonly blockingLaneIds: readonly string[]
+  readonly targets: readonly string[]
+}
+
+/** Only a checkpoint's validated metadata survives extraction. */
 interface CheckpointFacts {
   readonly outcome: 'done' | 'continue'
   readonly verified: number
-  readonly remaining: number
-  readonly parallel: boolean
+  readonly lanes: readonly CheckpointLane[]
+  readonly bottleneck?: CheckpointBottleneck
 }
 
 /** A list's length when the producer would accept it, or undefined when malformed. */
@@ -105,13 +140,70 @@ function checkpointListLength(value: unknown): number | undefined {
   return value.length
 }
 
-/** One optional text field: present-but-empty is malformed, absent is fine. */
-function checkpointTextIsValid(value: unknown): boolean {
-  return value === undefined || value === null || (typeof value === 'string' && value.trim() !== '')
+/** A present string list, or undefined when it holds a non-string or empty entry. */
+function checkpointStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') return undefined
+    items.push(item)
+  }
+  return items
+}
+
+/** Validate the lane plan; a duplicate id or an unknown `blockedBy` is malformed. */
+function checkpointLanes(value: unknown): readonly CheckpointLane[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > MAX_CHECKPOINT_ITEMS) return undefined
+  const lanes: CheckpointLane[] = []
+  const ids = new Set<string>()
+  for (const item of value) {
+    const lane = asRecord(item)
+    if (lane === undefined) return undefined
+    const id = text(lane.id)
+    const owner = text(lane.owner)
+    const state = lane.state
+    if (id === undefined || id.trim() === '') return undefined
+    if (owner === undefined || owner.trim() === '') return undefined
+    if (state !== 'running' && state !== 'blocked' && state !== 'done') return undefined
+    const scope = checkpointStringList(lane.scope)
+    if (scope === undefined || scope.length === 0) return undefined
+    const blockedBy = lane.blockedBy === undefined ? [] : checkpointStringList(lane.blockedBy)
+    if (blockedBy === undefined || ids.has(id)) return undefined
+    ids.add(id)
+    lanes.push({ id, owner, scope, state, blockedBy })
+  }
+  for (const lane of lanes) {
+    for (const id of lane.blockedBy) {
+      if (!ids.has(id)) return undefined
+    }
+  }
+  return lanes
+}
+
+/** Validate the bottleneck; absent is undefined and malformed is null. */
+function checkpointBottleneck(value: unknown): CheckpointBottleneck | null | undefined {
+  if (value === undefined) return undefined
+  const source = asRecord(value)
+  if (source === undefined) return null
+  const id = text(source.id)
+  const owner = text(source.owner)
+  const action = source.action
+  if (id === undefined || id.trim() === '') return null
+  if (owner === undefined || owner.trim() === '') return null
+  if (action !== 'worker_start' && action !== 'lead_action' && action !== 'user_decision') {
+    return null
+  }
+  const blockingLaneIds =
+    source.blockingLanes === undefined ? [] : checkpointStringList(source.blockingLanes)
+  const targets = source.targets === undefined ? [] : checkpointStringList(source.targets)
+  if (blockingLaneIds === undefined || targets === undefined) return null
+  if (action === 'lead_action' && targets.length === 0) return null
+  return { owner, action, blockingLaneIds, targets }
 }
 
 /**
- * Read a checkpoint's counts and flags. A call is valid only as the producer
+ * Read a checkpoint's validated plan. A call is valid only as the producer
  * validated it; any malformed field makes the whole call contribute zero, so
  * no partial or unvalidated text ever reaches a record.
  */
@@ -128,17 +220,65 @@ function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
   if (!Object.keys(source).every((key) => CHECKPOINT_FIELDS.has(key))) return undefined
   const outcome = source.outcome
   if (outcome !== 'done' && outcome !== 'continue') return undefined
-  if (source.parallel !== undefined && typeof source.parallel !== 'boolean') return undefined
   if (typeof source.next !== 'string' || source.next.trim() === '') return undefined
-  if (!checkpointTextIsValid(source.serialReason) || !checkpointTextIsValid(source.speedup)) {
+  const verified = checkpointListLength(source.verified)
+  if (verified === undefined) return undefined
+  const lanes = checkpointLanes(source.lanes)
+  if (lanes === undefined) return undefined
+  const bottleneck = checkpointBottleneck(source.bottleneck)
+  if (bottleneck === null) return undefined
+  // A `continue` checkpoint carries the plan; a `done` close may omit it.
+  if (outcome === 'continue' && (source.lanes === undefined || bottleneck === undefined)) {
     return undefined
   }
-  const parallel = source.parallel === true
-  if (outcome === 'continue' && !parallel && source.serialReason == null) return undefined
-  const verified = checkpointListLength(source.verified)
-  const remaining = checkpointListLength(source.remaining)
-  if (verified === undefined || remaining === undefined) return undefined
-  return { outcome, verified, remaining, parallel }
+  if (lanes.length > 0 && bottleneck !== undefined) {
+    const ids = new Set(lanes.map((lane) => lane.id))
+    if (!bottleneck.blockingLaneIds.every((id) => ids.has(id))) return undefined
+  }
+  return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) }
+}
+
+/** Normalize a path-like scope for component-wise comparison. */
+function normalizedPath(path: string): string {
+  return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/** Whether two scopes overlap; a `resource:` scope is compared exactly. */
+function scopesOverlap(left: string, right: string): boolean {
+  const a = left.trim()
+  const b = right.trim()
+  if (a.startsWith('resource:') || b.startsWith('resource:')) return a === b
+  const normalizedLeft = normalizedPath(a)
+  const normalizedRight = normalizedPath(b)
+  return (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft.startsWith(`${normalizedRight}/`) ||
+    normalizedRight.startsWith(`${normalizedLeft}/`)
+  )
+}
+
+function laneScopesOverlap(left: CheckpointLane, right: CheckpointLane): boolean {
+  return left.scope.some((a) => right.scope.some((b) => scopesOverlap(a, b)))
+}
+
+/** A lane is runnable when it runs and every lane it waits on is done. */
+function laneIsRunnable(lane: CheckpointLane, byId: ReadonlyMap<string, CheckpointLane>): boolean {
+  return lane.state === 'running' && lane.blockedBy.every((id) => byId.get(id)?.state === 'done')
+}
+
+/** Two runnable lanes with different owners and disjoint scopes compute parallel work. */
+function planComputesParallel(lanes: readonly CheckpointLane[]): boolean {
+  const byId = new Map(lanes.map((lane) => [lane.id, lane]))
+  const runnable = lanes.filter((lane) => laneIsRunnable(lane, byId))
+  for (let left = 0; left < runnable.length; left += 1) {
+    for (let right = left + 1; right < runnable.length; right += 1) {
+      const a = runnable[left]
+      const b = runnable[right]
+      if (a === undefined || b === undefined) continue
+      if (a.owner !== b.owner && !laneScopesOverlap(a, b)) return true
+    }
+  }
+  return false
 }
 
 /**
@@ -152,8 +292,80 @@ function checkpointArgumentValues(
   if (facts === undefined || fields === undefined) return undefined
   const values: Record<string, string> = {}
   if (fields.has('outcome')) values.outcome = facts.outcome
-  if (fields.has('parallel')) values.parallel = String(facts.parallel)
   return Object.keys(values).length === 0 ? undefined : values
+}
+
+/** One call's identity across a session, so a call and its result join. */
+function callKey(sessionId: string, callId: string): string {
+  return `${sessionId}\u0000${callId}`
+}
+
+/** A write destination, read only to match a bottleneck target and never kept. */
+function filePathOf(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  return text(asRecord(parsed)?.file_path)
+}
+
+/** Whether a write destination equals a declared target or lies beneath it by component. */
+function matchesTargets(filePath: string, targets: readonly string[]): boolean {
+  const normalized = normalizedPath(filePath)
+  return targets.some((target) => {
+    const normalizedTarget = normalizedPath(target)
+    return normalized === normalizedTarget || normalized.startsWith(`${normalizedTarget}/`)
+  })
+}
+
+/**
+ * Whether the bottleneck's remedy was matched in the window between the
+ * checkpoint and the next one. Only a recorded successful result is evidence;
+ * the plugin gate's exact tagged-id rule is not part of this metric.
+ */
+function remedyMatches(
+  records: readonly TraceRecord[],
+  start: number,
+  end: number,
+  bottleneck: CheckpointBottleneck,
+  filePaths: ReadonlyMap<string, string>,
+): boolean {
+  const results = new Set<string>()
+  const failed = new Set<string>()
+  for (let index = start + 1; index < end; index += 1) {
+    const record = records[index]
+    if (record === undefined || record.eventType !== 'tool/result') continue
+    if (record.callId === undefined) continue
+    const key = callKey(record.sessionId, record.callId)
+    results.add(key)
+    if (record.failed === true) failed.add(key)
+  }
+  for (let index = start + 1; index < end; index += 1) {
+    const record = records[index]
+    if (record === undefined || record.eventType !== 'tool/call' || record.tool === undefined) {
+      continue
+    }
+    // A user decision is the question itself; it needs no completed result.
+    if (record.tool === 'ask_user_question') {
+      if (bottleneck.action === 'user_decision') return true
+      continue
+    }
+    if (record.callId === undefined) continue
+    const key = callKey(record.sessionId, record.callId)
+    if (!results.has(key) || failed.has(key)) continue
+    if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool)) return true
+    if (
+      bottleneck.action === 'lead_action' &&
+      (record.tool === 'edit' || record.tool === 'write')
+    ) {
+      const filePath = filePaths.get(key)
+      if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets)) return true
+    }
+  }
+  return false
 }
 
 /** The five usage fields, with a missing field counting as zero, never an estimate. */
@@ -225,6 +437,10 @@ export function extractRecords(
 ): TraceRecord[] {
   const records: TraceRecord[] = []
   const callById = new Map<string, { tool: string; values?: Record<string, string> }>()
+  const checkpointFactsByIndex = new Map<number, CheckpointFacts>()
+  const lastBottleneck = new Map<string, { owner: string; blocking: string; age: number }>()
+  // The write destination is read for remedy matching only; it never reaches a record.
+  const filePaths = new Map<string, string>()
   let currentTurn: number | undefined
   for (const event of events.slice(start)) {
     const data = asRecord(event.data) ?? {}
@@ -249,8 +465,11 @@ export function extractRecords(
     let goalRounds: number | undefined
     let checkpointOutcome: string | undefined
     let checkpointVerifiedCount: number | undefined
-    let checkpointRemainingCount: number | undefined
-    let checkpointParallel: boolean | undefined
+    let checkpointLaneCount: number | undefined
+    let checkpointBlockedLaneCount: number | undefined
+    let checkpointParallelComputed: boolean | undefined
+    let checkpointBottleneckAction: string | undefined
+    let checkpointBottleneckAge: number | undefined
     switch (type) {
       case 'tool/call': {
         tool = text(data.name)
@@ -259,14 +478,39 @@ export function extractRecords(
           const facts = checkpointFacts(text(data.arguments))
           checkpointOutcome = facts?.outcome
           checkpointVerifiedCount = facts?.verified ?? 0
-          checkpointRemainingCount = facts?.remaining ?? 0
-          checkpointParallel = facts?.parallel
+          if (facts !== undefined) {
+            checkpointFactsByIndex.set(records.length, facts)
+            checkpointLaneCount = facts.lanes.length
+            checkpointBlockedLaneCount = facts.lanes.filter(
+              (lane) => lane.state === 'blocked',
+            ).length
+            checkpointParallelComputed = planComputesParallel(facts.lanes)
+            checkpointBottleneckAction = facts.bottleneck?.action
+            if (facts.bottleneck === undefined) {
+              lastBottleneck.delete(sessionId)
+            } else {
+              const blocking = [...new Set(facts.bottleneck.blockingLaneIds)].sort().join('\u0000')
+              const previous = lastBottleneck.get(sessionId)
+              const age =
+                previous !== undefined &&
+                previous.owner === facts.bottleneck.owner &&
+                previous.blocking === blocking
+                  ? previous.age + 1
+                  : 1
+              checkpointBottleneckAge = age
+              lastBottleneck.set(sessionId, { owner: facts.bottleneck.owner, blocking, age })
+            }
+          }
           values = checkpointArgumentValues(facts, fields?.get(tool))
         } else {
           values = argumentValues(
             text(data.arguments),
             tool === undefined ? undefined : fields?.get(tool),
           )
+          if ((tool === 'edit' || tool === 'write') && callId !== undefined) {
+            const filePath = filePathOf(text(data.arguments))
+            if (filePath !== undefined) filePaths.set(callKey(sessionId, callId), filePath)
+          }
         }
         if (tool !== undefined && callId !== undefined) {
           callById.set(callId, values === undefined ? { tool } : { tool, values })
@@ -349,10 +593,39 @@ export function extractRecords(
       ...(goalRounds === undefined ? {} : { goalRounds }),
       ...(checkpointOutcome === undefined ? {} : { checkpointOutcome }),
       ...(checkpointVerifiedCount === undefined ? {} : { checkpointVerifiedCount }),
-      ...(checkpointRemainingCount === undefined ? {} : { checkpointRemainingCount }),
-      ...(checkpointParallel === undefined ? {} : { checkpointParallel }),
+      ...(checkpointLaneCount === undefined ? {} : { checkpointLaneCount }),
+      ...(checkpointBlockedLaneCount === undefined ? {} : { checkpointBlockedLaneCount }),
+      ...(checkpointParallelComputed === undefined ? {} : { checkpointParallelComputed }),
+      ...(checkpointBottleneckAction === undefined ? {} : { checkpointBottleneckAction }),
+      ...(checkpointBottleneckAge === undefined ? {} : { checkpointBottleneckAge }),
     })
     if (type === 'turn/end') currentTurn = undefined
+  }
+  // The remedy window ends at the next checkpoint, or at the turn end when this
+  // is the last one; an absent bottleneck needs no remedy.
+  const indices = [...checkpointFactsByIndex.keys()].sort((left, right) => left - right)
+  for (let position = 0; position < indices.length; position += 1) {
+    const index = indices[position]
+    if (index === undefined) continue
+    const facts = checkpointFactsByIndex.get(index)
+    const checkpoint = records[index]
+    if (facts?.outcome !== 'continue' || facts.bottleneck === undefined) continue
+    if (checkpoint === undefined) continue
+    const next = indices[position + 1]
+    let end = next ?? records.length
+    if (next === undefined) {
+      for (let cursor = index + 1; cursor < records.length; cursor += 1) {
+        const record = records[cursor]
+        if (record === undefined || record.eventType !== 'turn/end') continue
+        if (checkpoint.turn !== undefined && record.turn !== checkpoint.turn) continue
+        end = cursor
+        break
+      }
+    }
+    records[index] = {
+      ...checkpoint,
+      checkpointRemedyResolved: remedyMatches(records, index, end, facts.bottleneck, filePaths),
+    }
   }
   return records
 }

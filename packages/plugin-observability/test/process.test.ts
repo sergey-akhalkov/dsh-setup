@@ -35,9 +35,13 @@ function checkpoint(time: number, outcome: string | undefined): SessionEvent {
       : JSON.stringify({
           outcome,
           verified: [],
-          remaining: [],
+          ...(outcome === 'continue'
+            ? {
+                lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'running' }],
+                bottleneck: { id: 'n', owner: 'lead', action: 'worker_start' },
+              }
+            : {}),
           next: 'NEXT',
-          ...(outcome === 'continue' ? { parallel: true } : {}),
         })
   return event(
     'tool/call',
@@ -562,7 +566,6 @@ describe('process metadata only', () => {
               arguments: JSON.stringify({
                 outcome: 'done',
                 verified: [secret],
-                remaining: [secret],
                 next: secret,
               }),
             },

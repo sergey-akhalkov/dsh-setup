@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
@@ -10,13 +11,48 @@ import { noticeText } from './harness.js'
  * log, the tool registry, and the clock are fakes.
  */
 
-const ID_PATTERN = /^checkpoint-\d+-[a-f0-9]{8}$/u
+const ID_PATTERN = /checkpoint-\d+-[a-f0-9]{8}/u
+
+/** One serial plan whose declared remedy is one lead edit. */
 const SERIAL = {
   outcome: 'continue',
-  parallel: false,
-  serialReason: 'the remaining work is one ordered edit',
-  bottleneck: 'the guard must exist before the test can pass',
+  lanes: [{ id: 'edit', owner: 'lead', scope: ['src/a.ts'], state: 'running' }],
+  bottleneck: {
+    id: 'guard-missing',
+    owner: 'lead',
+    action: 'lead_action',
+    blockingLanes: ['edit'],
+    targets: ['src/a.ts'],
+  },
   next: 'finish the edit',
+}
+
+/** Two runnable lanes with different owners and disjoint scopes. */
+const PARALLEL = {
+  outcome: 'continue',
+  lanes: [
+    { id: 'host', owner: 'lead', scope: ['packages/host'], state: 'running' },
+    { id: 'docs', owner: 'lane-docs', scope: ['docs'], state: 'running' },
+  ],
+  bottleneck: {
+    id: 'split',
+    owner: 'lead',
+    action: 'lead_action',
+    blockingLanes: ['host'],
+    targets: ['src/a.ts'],
+  },
+  next: 'dispatch the docs lane',
+}
+
+/** The same parallel plan, with the worker start as its declared remedy. */
+const PARALLEL_WORKER = {
+  ...PARALLEL,
+  bottleneck: {
+    id: 'split',
+    owner: 'lead',
+    action: 'worker_start',
+    blockingLanes: ['host'],
+  },
 }
 
 let cleanup: (() => Promise<void>) | undefined
@@ -51,6 +87,12 @@ function workingTurn(harness: CheckpointHarness): void {
   addWorkingCalls(harness)
 }
 
+/** Execute the declared `lead_action` remedy of SERIAL. */
+function remedy(harness: CheckpointHarness): void {
+  const call = harness.toolCall('edit', { file_path: 'src/a.ts' })
+  harness.toolResult(call, 'ok')
+}
+
 describe('work_checkpoint tool', () => {
   it('records a done decision and returns the id and the record path', async () => {
     const harness = await create()
@@ -58,95 +100,194 @@ describe('work_checkpoint tool', () => {
     const result = await harness.checkpoint({
       outcome: 'done',
       verified: ['the focused tests pass'],
-      remaining: [],
       next: 'report the result',
     })
-    expect(result.text).toMatch(/checkpoint-\d+-[a-f0-9]{8}/u)
+    expect(result.text).toMatch(ID_PATTERN)
     expect(result.text).toContain('.dsh/work-checkpoints/')
     const record = await harness.readRecord()
     expect(record).toMatchObject({
-      version: 1,
+      version: 2,
       turn: 1,
       outcome: 'done',
-      parallel: false,
       verified: ['the focused tests pass'],
+      lanes: [],
+      derivedRemaining: [],
+      parallelComputed: false,
       next: 'report the result',
     })
     expect(record.session).toBe(harness.sessionId)
     expect(typeof record.time).toBe('string')
     expect(record.checkpoint).toMatch(ID_PATTERN)
+    expect(record.bottleneck).toBeUndefined()
   })
 
-  it('accepts continue with a serial reason and stores it', async () => {
+  it('records a lane plan, the bottleneck, and the derived remainder', async () => {
     const harness = await create()
     harness.turnStart()
-    const result = await harness.checkpoint(SERIAL)
-    expect(result.text).toContain('continue; serial')
-    expect(result.text).toContain(SERIAL.bottleneck)
+    const result = await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        { id: 'guard', owner: 'lead', scope: ['src/parser.ts'], state: 'done' },
+        {
+          id: 'test',
+          owner: 'lead',
+          scope: ['test/parser.test.ts'],
+          state: 'running',
+          blockedBy: ['guard'],
+        },
+      ],
+      bottleneck: {
+        id: 'test-missing',
+        owner: 'lead',
+        action: 'lead_action',
+        blockingLanes: ['test'],
+        targets: ['test/parser.test.ts'],
+      },
+      next: 'write the regression test',
+    })
+    expect(result.text).toContain('2 lanes, 1 remaining')
+    expect(result.text).toContain('test-missing')
     const record = await harness.readRecord()
-    expect(record).toMatchObject({
-      outcome: 'continue',
-      parallel: false,
-      serialReason: SERIAL.serialReason,
-      bottleneck: SERIAL.bottleneck,
-    })
+    expect(record.derivedRemaining).toEqual(['test'])
+    expect(record.parallelComputed).toBe(false)
+    expect(record.bottleneckAge).toBe(1)
+    expect(record.lanes).toHaveLength(2)
   })
 
-  it('accepts a parallel continuation without a serial reason', async () => {
-    const harness = await create()
-    harness.turnStart()
-    await harness.checkpoint({
-      outcome: 'continue',
-      parallel: true,
-      bottleneck: 'the host report shape is unknown',
-      next: 'start the lanes',
-    })
-    expect(await harness.readRecord()).toMatchObject({ outcome: 'continue', parallel: true })
-  })
-
-  it('rejects an unknown field with a field diagnostic', async () => {
-    const harness = await create()
-    harness.turnStart()
-    await expect(
-      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', extra: true }),
-    ).rejects.toThrow(/unknown field "extra"/u)
-  })
-
-  it('rejects an unknown outcome with a field diagnostic', async () => {
-    const harness = await create()
-    harness.turnStart()
-    await expect(
-      harness.execute('work_checkpoint', { outcome: 'stop', next: 'x' }),
-    ).rejects.toThrow(/work_checkpoint\.outcome/u)
-  })
-
-  it('rejects a missing next action with a field diagnostic', async () => {
-    const harness = await create()
-    harness.turnStart()
-    await expect(harness.execute('work_checkpoint', { outcome: 'done' })).rejects.toThrow(
-      /work_checkpoint\.next/u,
-    )
-  })
-
-  it('rejects continue + parallel false without a serial reason', async () => {
+  it('rejects continue without a lane plan', async () => {
     const harness = await create()
     harness.turnStart()
     await expect(
       harness.execute('work_checkpoint', {
         outcome: 'continue',
-        parallel: false,
-        bottleneck: 'the guard is missing',
+        bottleneck: { id: 'b', owner: 'lead', action: 'user_decision' },
         next: 'x',
       }),
-    ).rejects.toThrow(/serialReason/u)
+    ).rejects.toThrow(/work_checkpoint\.lanes is required/u)
   })
 
   it('rejects continue without a bottleneck', async () => {
     const harness = await create()
     harness.turnStart()
     await expect(
-      harness.execute('work_checkpoint', { outcome: 'continue', parallel: true, next: 'x' }),
-    ).rejects.toThrow(/work_checkpoint\.bottleneck/u)
+      harness.execute('work_checkpoint', {
+        outcome: 'continue',
+        lanes: [{ id: 'one', owner: 'lead', scope: ['src'], state: 'running' }],
+        next: 'x',
+      }),
+    ).rejects.toThrow(/work_checkpoint\.bottleneck is required/u)
+  })
+
+  it('rejects a duplicate lane id', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        lanes: [
+          { id: 'same', owner: 'lead', scope: ['src'], state: 'running' },
+          { id: 'same', owner: 'lead', scope: ['docs'], state: 'running' },
+        ],
+        next: 'x',
+      }),
+    ).rejects.toThrow(/duplicate id "same"/u)
+  })
+
+  it('rejects an unknown blockedBy lane id', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        lanes: [
+          { id: 'one', owner: 'lead', scope: ['src'], state: 'blocked', blockedBy: ['gone'] },
+        ],
+        next: 'x',
+      }),
+    ).rejects.toThrow(/blockedBy names unknown lane "gone"/u)
+  })
+
+  it('rejects an empty scope', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        lanes: [{ id: 'one', owner: 'lead', scope: [], state: 'running' }],
+        next: 'x',
+      }),
+    ).rejects.toThrow(/scope must list at least one owned path or resource/u)
+  })
+
+  it('rejects a plan over the lane bound', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        lanes: Array.from({ length: 9 }, (_, index) => ({
+          id: `lane-${index}`,
+          owner: 'lead',
+          scope: [`src/${index}`],
+          state: 'running',
+        })),
+        next: 'x',
+      }),
+    ).rejects.toThrow(/at most 8 lanes/u)
+  })
+
+  it('rejects an unknown lane state', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        lanes: [{ id: 'one', owner: 'lead', scope: ['src'], state: 'paused' }],
+        next: 'x',
+      }),
+    ).rejects.toThrow(/lane/u)
+  })
+
+  it('rejects an unknown field, an unknown outcome, and a missing next action', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', extra: true }),
+    ).rejects.toThrow(/unknown field "extra"/u)
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'stop', next: 'x' }),
+    ).rejects.toThrow(/work_checkpoint\.outcome/u)
+    await expect(harness.execute('work_checkpoint', { outcome: 'done' })).rejects.toThrow(
+      /work_checkpoint\.next/u,
+    )
+  })
+
+  it('rejects each removed field and names its replacement', async () => {
+    const harness = await create()
+    harness.turnStart()
+    const removed = ['parallel', 'serialReason', 'remaining', 'speedup'] as const
+    for (const field of removed) {
+      await expect(
+        harness.execute('work_checkpoint', { outcome: 'done', next: 'x', [field]: 'old' }),
+      ).rejects.toThrow(new RegExp(`work_checkpoint\\.${field} was removed`, 'u'))
+    }
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', parallel: false }),
+    ).rejects.toThrow(/work_checkpoint\.lanes/u)
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', serialReason: 'why' }),
+    ).rejects.toThrow(/work_checkpoint\.lanes/u)
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', remaining: ['one'] }),
+    ).rejects.toThrow(/work_checkpoint\.lanes/u)
+    await expect(
+      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', speedup: 'faster' }),
+    ).rejects.toThrow(/work_checkpoint\.next/u)
+  })
+
+  it('rejects a continuation that carries a serial reason and no plan', async () => {
+    const harness = await create()
+    harness.turnStart()
     await expect(
       harness.execute('work_checkpoint', {
         outcome: 'continue',
@@ -154,36 +295,7 @@ describe('work_checkpoint tool', () => {
         serialReason: 'one ordered edit',
         next: 'x',
       }),
-    ).rejects.toThrow(/work_checkpoint\.bottleneck/u)
-  })
-
-  it('rejects an empty bottleneck', async () => {
-    const harness = await create()
-    harness.turnStart()
-    await expect(
-      harness.execute('work_checkpoint', {
-        outcome: 'continue',
-        parallel: true,
-        bottleneck: '   ',
-        next: 'x',
-      }),
-    ).rejects.toThrow(/work_checkpoint\.bottleneck/u)
-  })
-
-  it('rejects an empty serial reason and a mistyped parallel flag', async () => {
-    const harness = await create()
-    harness.turnStart()
-    await expect(
-      harness.execute('work_checkpoint', {
-        outcome: 'continue',
-        parallel: false,
-        serialReason: '   ',
-        next: 'x',
-      }),
-    ).rejects.toThrow(/work_checkpoint\.serialReason/u)
-    await expect(
-      harness.execute('work_checkpoint', { outcome: 'done', parallel: 'yes', next: 'x' }),
-    ).rejects.toThrow(/work_checkpoint\.parallel/u)
+    ).rejects.toThrow(/work_checkpoint\.parallel was removed;.*work_checkpoint\.lanes/u)
   })
 
   it('rejects a malformed verified list', async () => {
@@ -211,14 +323,31 @@ describe('work_checkpoint tool', () => {
       harness.execute('work_checkpoint', { outcome: 'done', next: 'x', verified: ['ok', 7] }),
     ).rejects.toThrow(/work_checkpoint\.verified/u)
     await expect(
-      harness.execute('work_checkpoint', { outcome: 'done', next: 'x', remaining: ['   '] }),
-    ).rejects.toThrow(/work_checkpoint\.remaining/u)
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        next: 'x',
+        lanes: [{ id: 'one', owner: '   ', scope: ['src'], state: 'running' }],
+      }),
+    ).rejects.toThrow(/lanes\[0\]\.owner/u)
+  })
+
+  it('rejects a lead_action bottleneck without a target', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'continue',
+        lanes: [{ id: 'one', owner: 'lead', scope: ['src'], state: 'running' }],
+        bottleneck: { id: 'b', owner: 'lead', action: 'lead_action' },
+        next: 'x',
+      }),
+    ).rejects.toThrow(/bottleneck\.targets/u)
   })
 
   it('a failed validation call does not satisfy the close gate', async () => {
     const harness = await create()
     workingTurn(harness)
-    await harness.failedCheckpoint({ outcome: 'continue', parallel: false, next: 'x' })
+    await harness.failedCheckpoint({ outcome: 'continue', next: 'x' })
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
   })
@@ -240,17 +369,35 @@ describe('work checkpoint record', () => {
     const harness = await create()
     harness.turnStart()
     await harness.checkpoint({
-      outcome: 'done',
+      outcome: 'continue',
       next: 'x'.repeat(2000),
       verified: ['y'.repeat(2000)],
-      bottleneck: 'w'.repeat(2000),
-      speedup: 'z'.repeat(2000),
+      lanes: [
+        {
+          id: 'i'.repeat(2000),
+          owner: 'o'.repeat(2000),
+          scope: ['s'.repeat(2000)],
+          state: 'running',
+        },
+      ],
+      bottleneck: {
+        id: 'b'.repeat(2000),
+        owner: 'n'.repeat(2000),
+        action: 'lead_action',
+        targets: ['t'.repeat(2000)],
+      },
     })
     const record = await harness.readRecord()
     expect(String(record.next).length).toBeLessThanOrEqual(400)
     expect((record.verified as string[])[0]?.length).toBeLessThanOrEqual(240)
-    expect(String(record.bottleneck).length).toBeLessThanOrEqual(400)
-    expect(String(record.speedup).length).toBeLessThanOrEqual(240)
+    const lanes = record.lanes as { id: string; owner: string; scope: string[] }[]
+    expect(lanes[0]?.id.length).toBeLessThanOrEqual(120)
+    expect(lanes[0]?.owner.length).toBeLessThanOrEqual(120)
+    expect(lanes[0]?.scope[0]?.length).toBeLessThanOrEqual(120)
+    const bottleneck = record.bottleneck as { id: string; owner: string; targets: string[] }
+    expect(bottleneck.id.length).toBeLessThanOrEqual(120)
+    expect(bottleneck.owner.length).toBeLessThanOrEqual(120)
+    expect(bottleneck.targets[0]?.length).toBeLessThanOrEqual(120)
   })
 
   it('redacts machine paths and obvious credentials', async () => {
@@ -259,10 +406,18 @@ describe('work checkpoint record', () => {
     const machinePath = join(harness.workspace, 'private', 'notes.txt')
     await harness.checkpoint({
       outcome: 'continue',
-      parallel: true,
       next: `finish with sk-abcdefgh12345678 at ${machinePath}`,
       verified: [`read ${machinePath}`],
-      bottleneck: `the credential sk-abcdefgh12345678 is at ${machinePath}`,
+      lanes: [
+        { id: 'lane-a', owner: 'lead', scope: [machinePath], state: 'running' },
+        { id: 'lane-b', owner: 'sk-abcdefgh12345678', scope: ['docs'], state: 'running' },
+      ],
+      bottleneck: {
+        id: 'sk-abcdefgh12345678',
+        owner: 'lead',
+        action: 'lead_action',
+        targets: [machinePath],
+      },
     })
     const text = JSON.stringify(await harness.readRecord())
     expect(text).not.toContain('sk-abcdefgh12345678')
@@ -290,26 +445,46 @@ describe('work checkpoint record', () => {
   it('reuses the same record for a repeated call in the turn', async () => {
     const harness = await create()
     harness.turnStart()
-    await harness.checkpoint({
-      outcome: 'continue',
-      parallel: true,
-      bottleneck: 'the host report shape is unknown',
-      next: 'fan out',
-    })
+    await harness.checkpoint(PARALLEL)
     const id = (await harness.readRecord()).checkpoint
-    const second = await harness.checkpoint({
-      outcome: 'continue',
-      parallel: false,
-      serialReason: 'the lanes are ordered',
-      bottleneck: 'the review gate must settle first',
-      next: 'finish serially',
-    })
+    expect((await harness.readRecord()).parallelComputed).toBe(true)
+    const second = await harness.checkpoint(SERIAL)
     expect(second.text).toContain(String(id))
     const record = await harness.readRecord()
-    expect(record.next).toBe('finish serially')
-    expect(record.parallel).toBe(false)
+    expect(record.next).toBe('finish the edit')
+    expect(record.parallelComputed).toBe(false)
+    expect(record.derivedRemaining).toEqual(['edit'])
     expect(record.checkpoint).toBe(id)
     expect(await harness.recordNames()).toEqual(['1.json'])
+  })
+
+  it('reads a legacy v1 record and writes v2 on the next checkpoint', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(SERIAL)
+    // Replace the record with a v1 shape a previous plugin version wrote.
+    const path = harness.recordPath(1)
+    const legacy = {
+      version: 1,
+      checkpoint: 'checkpoint-1-00000000',
+      turn: 1,
+      outcome: 'continue',
+      verified: [],
+      remaining: ['one'],
+      parallel: false,
+      serialReason: 'one ordered edit',
+      bottleneck: 'the guard must exist',
+      next: 'finish',
+      time: new Date().toISOString(),
+      session: harness.sessionId,
+    }
+    await writeFile(path, `${JSON.stringify(legacy)}\n`, 'utf8')
+    harness.turnStart(2)
+    await harness.checkpoint(SERIAL)
+    const record = await harness.readRecord(2)
+    expect(record.version).toBe(2)
+    // A legacy record without the object is not a plan and never ages the count.
+    expect(record.bottleneckAge).toBe(1)
   })
 
   it('returns the summary without claiming a record when the write fails', async () => {
@@ -319,7 +494,7 @@ describe('work checkpoint record', () => {
     const result = await harness.checkpoint({ outcome: 'done', next: 'finish' })
     expect(result.text).toContain('could not write')
     expect(result.text).not.toContain('recorded at')
-    expect(result.text).toMatch(/checkpoint-\d+-[a-f0-9]{8}/u)
+    expect(result.text).toMatch(ID_PATTERN)
     expect(await harness.tryReadRecord()).toBeUndefined()
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
@@ -339,11 +514,12 @@ describe('close gate', () => {
     expect(harness.injected).toHaveLength(0)
   })
 
-  it('allows the close once a successful checkpoint exists', async () => {
+  it('allows the close once a successful checkpoint and its remedy exist', async () => {
     const harness = await create()
     workingTurn(harness)
     await harness.turnStopping()
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
   })
@@ -354,6 +530,7 @@ describe('close gate', () => {
     await harness.preStep()
     await harness.preStep()
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     await harness.preStep()
     await harness.preStep()
     await harness.preStep()
@@ -367,6 +544,7 @@ describe('close gate', () => {
     await harness.preStep()
     await harness.preStep()
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     for (let step = 0; step < 10; step += 1) await harness.preStep()
     // The interval also steered once; the close still refuses the stale checkpoint.
     await harness.turnStopping()
@@ -463,16 +641,24 @@ describe('close gate', () => {
 })
 
 describe('parallel-action gate', () => {
-  async function parallelCheckpoint(harness: CheckpointHarness): Promise<string> {
+  async function parallelCheckpoint(
+    harness: CheckpointHarness,
+    plan: unknown = PARALLEL_WORKER,
+  ): Promise<string> {
     harness.turnStart()
-    await harness.checkpoint({
-      outcome: 'continue',
-      parallel: true,
-      bottleneck: 'the host report shape is unknown',
-      next: 'start the lanes',
-    })
+    await harness.checkpoint(plan)
     return String((await harness.readRecord()).checkpoint)
   }
+
+  it('computes parallel work and refuses the close without a tagged worker', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    const id = await parallelCheckpoint(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain(id)
+    expect(text).toContain('computes parallel lanes')
+  })
 
   it('passes after a successful worker start that contains the id', async () => {
     const harness = await create({ availableTools: ['subagent'] })
@@ -483,12 +669,119 @@ describe('parallel-action gate', () => {
     expect(harness.steers).toHaveLength(0)
   })
 
-  it('passes after a serial amendment', async () => {
+  for (const tool of ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate']) {
+    it(`passes the parallel gate after a tagged ${tool} start`, async () => {
+      const harness = await create({ availableTools: [tool] })
+      const id = await parallelCheckpoint(harness)
+      const call = harness.toolCall(tool, { prompt: `take lane one for ${id}` })
+      harness.toolResult(call, 'started')
+      await harness.turnStopping()
+      expect(harness.steers).toHaveLength(0)
+    })
+  }
+
+  it('passes after an amendment that leaves one runnable lane', async () => {
     const harness = await create({ availableTools: ['subagent'] })
     await parallelCheckpoint(harness)
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
+  })
+
+  it('treats a shared scope as serial', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        { id: 'one', owner: 'lead', scope: ['src/shared.ts'], state: 'running' },
+        { id: 'two', owner: 'lane-two', scope: ['src/shared.ts'], state: 'running' },
+      ],
+      bottleneck: {
+        id: 'shared',
+        owner: 'lead',
+        action: 'lead_action',
+        targets: ['src/a.ts'],
+      },
+      next: 'edit the shared file',
+    })
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('treats one owner as serial', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        { id: 'one', owner: 'lead', scope: ['src/one.ts'], state: 'running' },
+        { id: 'two', owner: 'lead', scope: ['src/two.ts'], state: 'running' },
+      ],
+      bottleneck: { id: 'same-owner', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'edit one file',
+    })
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('treats a textual sibling scope as disjoint', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        { id: 'one', owner: 'lead', scope: ['src'], state: 'running' },
+        { id: 'two', owner: 'lane-two', scope: ['src2'], state: 'running' },
+      ],
+      bottleneck: { id: 'sibling', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'fan out',
+    })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+  })
+
+  it('does not count a blocked lane as runnable', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        { id: 'one', owner: 'lead', scope: ['src/one.ts'], state: 'blocked' },
+        { id: 'two', owner: 'lane-two', scope: ['docs'], state: 'running' },
+      ],
+      bottleneck: { id: 'blocked', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'unblock the lane',
+    })
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('counts a lane whose blocking dependency is done as runnable', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        { id: 'first', owner: 'lead', scope: ['src/first.ts'], state: 'done' },
+        {
+          id: 'second',
+          owner: 'lead',
+          scope: ['src/second.ts'],
+          state: 'running',
+          blockedBy: ['first'],
+        },
+        { id: 'third', owner: 'lane-three', scope: ['docs'], state: 'running' },
+      ],
+      bottleneck: { id: 'pair', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'dispatch',
+    })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
   })
 
   it('does not accept a failed worker start', async () => {
@@ -520,12 +813,7 @@ describe('parallel-action gate', () => {
       .slice(0, 8)}`
     const early = harness.toolCall('subagent', { prompt: `take lane one for ${id}` })
     harness.toolResult(early, 'started')
-    await harness.checkpoint({
-      outcome: 'continue',
-      parallel: true,
-      bottleneck: 'the lanes cannot start yet',
-      next: 'start the lanes',
-    })
+    await harness.checkpoint(PARALLEL_WORKER)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
     expect(noticeText(harness.steers[0] as never)).toContain(id)
@@ -561,14 +849,7 @@ describe('parallel-action gate', () => {
     // The model records a parallel checkpoint; the parallel gate now refuses
     // from the same per-turn budget.
     const id = String(
-      (
-        await harness.checkpoint({
-          outcome: 'continue',
-          parallel: true,
-          bottleneck: 'the lanes cannot start yet',
-          next: 'start the lanes',
-        })
-      ).text.match(/checkpoint-\d+-[0-9a-f]{8}/u)?.[0],
+      (await harness.checkpoint(PARALLEL_WORKER)).text.match(/checkpoint-\d+-[0-9a-f]{8}/u)?.[0],
     )
     await harness.turnStopping()
     await harness.turnStopping()
@@ -583,7 +864,9 @@ describe('parallel-action gate', () => {
 
   it('reports nothing when no worker-start tool is registered', async () => {
     const harness = await create()
-    await parallelCheckpoint(harness)
+    await parallelCheckpoint(harness, PARALLEL)
+    // The parallel gate reports nothing; the declared lead remedy is executed.
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
     expect(harness.injected).toHaveLength(0)
@@ -592,17 +875,18 @@ describe('parallel-action gate', () => {
   it('reports nothing for a done outcome', async () => {
     const harness = await create({ availableTools: ['subagent'] })
     harness.turnStart()
-    await harness.checkpoint({ outcome: 'done', parallel: true, next: 'report' })
+    await harness.checkpoint({ outcome: 'done', next: 'report' })
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
   })
 
-  it('reports nothing when enforceParallel is false', async () => {
+  it('does not compute parallel work when enforceParallel is false', async () => {
     const harness = await create({
       availableTools: ['subagent'],
       config: { checkpoint: { enforceParallel: false } },
     })
-    await parallelCheckpoint(harness)
+    await parallelCheckpoint(harness, PARALLEL)
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
   })

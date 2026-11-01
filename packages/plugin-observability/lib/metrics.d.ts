@@ -1,6 +1,6 @@
 import type { Range } from './aggregate.js';
 import type { Episode, EpisodeCheckpoints, EpisodeGoals, EpisodeOutcome } from './episodes.js';
-import type { TokenUsage, TraceRecord } from './records.js';
+import { type TokenUsage, type TraceRecord } from './records.js';
 /**
  * Episode metrics: usage, outcomes, active time, goals and autonomy, subagent
  * work, and the coverage behind each number. Everything is computed over the
@@ -27,6 +27,29 @@ export declare function percentile(values: readonly number[], fraction: number):
 export declare function distribution(values: readonly number[]): Distribution;
 /** Sum the usage of the records inside a window. */
 export declare function windowUsage(records: readonly TraceRecord[], window: Window): TokenUsage;
+/**
+ * The checkpoint plan metrics: how often the plan computes parallel work, the
+ * blocked-lane rate, how often a `continue` remedy was resolved, and the
+ * successful worker starts per checkpoint. Absent when no checkpoint was seen.
+ */
+export interface PlanSummary {
+    readonly checkpoints: number;
+    readonly parallelCheckpoints: number;
+    /** `parallelCheckpoints / checkpoints`. */
+    readonly parallelShare: number;
+    readonly lanes: number;
+    readonly blockedLanes: number;
+    /** `blockedLanes / lanes`; absent when no lane was recorded. */
+    readonly blockedLaneRate?: number;
+    readonly continueCheckpoints: number;
+    readonly resolvedContinue: number;
+    /** `resolvedContinue / continueCheckpoints`; absent when none was seen. */
+    readonly remedyResolution?: number;
+    /** Successful worker starts between the previous checkpoint and each checkpoint. */
+    readonly dispatches: readonly number[];
+}
+/** Aggregate the extracted checkpoint metadata over one window. */
+export declare function planSummary(records: readonly TraceRecord[], window: Window): PlanSummary | undefined;
 /** How much of a window's usage the log actually recorded. */
 export interface UsageCoverage {
     /** Distinct steps that started inside the window. */

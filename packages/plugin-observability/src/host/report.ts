@@ -27,6 +27,7 @@ import type {
   CostSummary,
   DataQuality,
   EpisodeWork,
+  PlanSummary,
   QualitySummary,
   SpeedSummary,
   SubagentSummary,
@@ -40,6 +41,7 @@ import {
   episodeWork,
   FULL_WINDOW,
   overlapsWindow,
+  planSummary,
   qualitySummary,
   speedSummary,
   startsIn,
@@ -258,6 +260,8 @@ export interface BaselineComparison {
   readonly speed: SpeedSummary
   readonly autonomy: AutonomySummary
   readonly subagents: SubagentSummary
+  /** The checkpoint plan metrics, absent when the window holds no checkpoint. */
+  readonly plan?: PlanSummary
   /** The metric values a hypothesis compares against. */
   readonly metrics: MetricValues
   /** The baseline window's process summary, for the before-and-after comparison. */
@@ -705,6 +709,7 @@ function metricValues(
   cost: CostSummary,
   autonomy: AutonomySummary,
   subagents: SubagentSummary,
+  plan: PlanSummary | undefined,
 ): MetricValues {
   const tokensPerEpisode =
     work.length === 0
@@ -735,6 +740,14 @@ function metricValues(
       ? {}
       : { checkpointCoverage: quality.checkpointCoverage }),
     ...(quality.failureRate === undefined ? {} : { failureRate: quality.failureRate }),
+    ...(plan === undefined
+      ? {}
+      : {
+          parallelShare: plan.parallelShare,
+          ...(plan.remedyResolution === undefined
+            ? {}
+            : { remedyResolution: plan.remedyResolution }),
+        }),
   }
 }
 
@@ -760,6 +773,7 @@ function baselineComparison(options: {
   const speed = speedSummary(cohort)
   const autonomy = autonomySummary(work, cohort, goalStreams(options.records), window)
   const subagents = subagentSummary(cohort, index.unlinked.length)
+  const plan = planSummary(options.records, window)
   return {
     kind: options.kind,
     from: options.from,
@@ -770,7 +784,8 @@ function baselineComparison(options: {
     speed,
     autonomy,
     subagents,
-    metrics: metricValues(cohort, quality, cost, autonomy, subagents),
+    ...(plan === undefined ? {} : { plan }),
+    metrics: metricValues(cohort, quality, cost, autonomy, subagents, plan),
     process: processSummary(
       work.filter((entry) => overlapsWindow(entry.episode, window)),
       window,
@@ -888,7 +903,8 @@ export function metricValuesFor(options: {
   const cost = costSummary(cohort, usage, coverage, options.window.to)
   const autonomy = autonomySummary(work, cohort, goalStreams(options.records), options.window)
   const subagents = subagentSummary(cohort, index.unlinked.length)
-  return metricValues(cohort, quality, cost, autonomy, subagents)
+  const plan = planSummary(options.records, options.window)
+  return metricValues(cohort, quality, cost, autonomy, subagents, plan)
 }
 
 /** Everything the view renders for one range. */
@@ -921,6 +937,8 @@ export interface Report {
   readonly speed: SpeedSummary
   readonly autonomy: AutonomySummary
   readonly subagents: SubagentSummary
+  /** The checkpoint plan metrics, absent when the window holds no checkpoint. */
+  readonly plan?: PlanSummary
   readonly dataQuality: DataQuality
   readonly scorecards: readonly Scorecard[]
   readonly hypotheses: readonly HypothesisResult[]
@@ -998,11 +1016,12 @@ export function buildReport(options: {
   const speed = speedSummary(cohort)
   const autonomy = autonomySummary(work, cohort, goalStreams(options.records), observed)
   const subagents = subagentSummary(cohort, index.unlinked.length)
+  const plan = planSummary(options.records, observed)
   // Scorecards evaluate window records and count the start-selected cohort.
   const cards = buildScorecards(configuredRows, cohort, minEpisodes)
   const compared = cards.reduce((sum, card) => sum + card.treated.n + card.control.n, 0)
   const data = dataQuality(cohort, coverage, index.unlinked.length, compared)
-  const current = metricValues(cohort, quality, cost, autonomy, subagents)
+  const current = metricValues(cohort, quality, cost, autonomy, subagents, plan)
   const comparison =
     options.baseline === undefined
       ? undefined
@@ -1148,6 +1167,7 @@ export function buildReport(options: {
     speed,
     autonomy,
     subagents,
+    ...(plan === undefined ? {} : { plan }),
     dataQuality: data,
     scorecards: cards,
     hypotheses,

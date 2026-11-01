@@ -9,12 +9,24 @@ import { noticeText } from './harness.js'
  * review is untouched.
  */
 
+/** One serial plan whose declared remedy is one lead edit. */
 const SERIAL = {
   outcome: 'continue',
-  parallel: false,
-  serialReason: 'the remaining work is one ordered edit',
-  bottleneck: 'the guard must exist before the test can pass',
+  lanes: [{ id: 'edit', owner: 'lead', scope: ['src/a.ts'], state: 'running' }],
+  bottleneck: {
+    id: 'guard-missing',
+    owner: 'lead',
+    action: 'lead_action',
+    blockingLanes: ['edit'],
+    targets: ['src/a.ts'],
+  },
   next: 'finish the edit',
+}
+
+/** Execute the declared `lead_action` remedy of SERIAL. */
+function remedy(harness: CheckpointHarness): void {
+  const call = harness.toolCall('edit', { file_path: 'src/a.ts' })
+  harness.toolResult(call, 'ok')
 }
 
 const GOAL = {
@@ -68,6 +80,7 @@ describe('goal rounds', () => {
     expect(harness.goalCalls).toEqual([])
 
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     await harness.turnStopping()
     // One checkpoint for the round: the close is allowed and no second request fires.
     expect(harness.steers).toHaveLength(1)
@@ -82,6 +95,7 @@ describe('goal rounds', () => {
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     await harness.turnStopping()
     // The close is allowed; the round then ends through the normal turn/end path.
     expect(harness.steers).toHaveLength(1)

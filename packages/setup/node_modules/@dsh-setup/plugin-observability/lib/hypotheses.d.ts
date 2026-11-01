@@ -5,7 +5,7 @@ import type { Range } from './aggregate.js';
  * executed, and no result ever claims causation.
  */
 /** The fixed metric catalog a hypothesis may name. */
-export type HypothesisMetric = 'verified-completion-rate' | 'tokens-per-episode' | 'context-tokens-per-step' | 'active-minutes-per-episode' | 'steps-per-human-message' | 'human-messages-per-completed-goal' | 'delegate-rate' | 'checkpoint-coverage' | 'failure-rate';
+export type HypothesisMetric = 'verified-completion-rate' | 'tokens-per-episode' | 'context-tokens-per-step' | 'active-minutes-per-episode' | 'steps-per-human-message' | 'human-messages-per-completed-goal' | 'delegate-rate' | 'checkpoint-coverage' | 'failure-rate' | 'parallel-share' | 'remedy-resolution';
 /** Every accepted metric id, in catalog order. */
 export declare const HYPOTHESIS_METRICS: readonly HypothesisMetric[];
 /** The direction in which a metric is expected to improve. */
@@ -46,6 +46,8 @@ export interface MetricValues {
     readonly delegateRate?: number;
     readonly checkpointCoverage?: number;
     readonly failureRate?: number;
+    readonly parallelShare?: number;
+    readonly remedyResolution?: number;
 }
 /** One metric's value, or undefined when the window holds no data for it. */
 export declare function metricValue(values: MetricValues, metric: HypothesisMetric): number | undefined;

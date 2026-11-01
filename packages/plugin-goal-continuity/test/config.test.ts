@@ -37,6 +37,8 @@ const CHECKPOINT_DEFAULTS = {
   enforceParallel: true,
   maxMessageChars: 1200,
   stepInterval: 40,
+  bottleneckAge: 2,
+  laneStaleCheckpoints: 2,
 }
 
 describe('goal continuity configuration', () => {
@@ -96,6 +98,8 @@ describe('goal continuity configuration', () => {
           enforceParallel: false,
           maxMessageChars: 200,
           stepInterval: 25,
+          bottleneckAge: 3,
+          laneStaleCheckpoints: 1,
         },
       }),
     ).toEqual({
@@ -128,6 +132,8 @@ describe('goal continuity configuration', () => {
         enforceParallel: false,
         maxMessageChars: 200,
         stepInterval: 25,
+        bottleneckAge: 3,
+        laneStaleCheckpoints: 1,
       },
     })
   })
@@ -270,12 +276,21 @@ describe('goal continuity configuration', () => {
     ).toBe(20_000)
     expect(resolveConfig({ checkpoint: { stepInterval: 1 } }).checkpoint.stepInterval).toBe(1)
     expect(resolveConfig({ checkpoint: { stepInterval: 1000 } }).checkpoint.stepInterval).toBe(1000)
+    expect(resolveConfig({ checkpoint: { bottleneckAge: 1 } }).checkpoint.bottleneckAge).toBe(1)
+    expect(resolveConfig({ checkpoint: { bottleneckAge: 1000 } }).checkpoint.bottleneckAge).toBe(
+      1000,
+    )
+    expect(
+      resolveConfig({ checkpoint: { laneStaleCheckpoints: 1 } }).checkpoint.laneStaleCheckpoints,
+    ).toBe(1)
 
     const invalid: Record<string, unknown[]> = {
       minToolCalls: [0, 1001, 1.5, '4', Number.NaN],
       maxBlocks: [-1, 101, 1.5, '3'],
       maxMessageChars: [199, 20_001, 1.5, '1200', Number.POSITIVE_INFINITY],
       stepInterval: [0, -1, 1001, 1.5, '40', Number.NaN],
+      bottleneckAge: [0, -1, 1001, 1.5, '2', Number.NaN],
+      laneStaleCheckpoints: [0, -1, 1001, 1.5, '2', Number.POSITIVE_INFINITY],
     }
     for (const [field, values] of Object.entries(invalid)) {
       for (const value of values) {

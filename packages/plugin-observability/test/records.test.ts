@@ -34,6 +34,51 @@ function result(
   })
 }
 
+function lane(
+  id: string,
+  owner: string,
+  scope: string[],
+  state: 'running' | 'blocked' | 'done' = 'running',
+  blockedBy?: string[],
+): Record<string, unknown> {
+  return { id, owner, scope, state, ...(blockedBy === undefined ? {} : { blockedBy }) }
+}
+
+function checkpoint(value: Record<string, unknown>): string {
+  return JSON.stringify(value)
+}
+
+/** A valid `continue` plan; a `done` plan omits lanes and the bottleneck. */
+function continuePlan(
+  options: {
+    readonly lanes?: readonly Record<string, unknown>[]
+    readonly action?: 'worker_start' | 'lead_action' | 'user_decision'
+    readonly owner?: string
+    readonly blockingLanes?: readonly string[]
+    readonly targets?: readonly string[]
+  } = {},
+): string {
+  const action = options.action ?? 'worker_start'
+  return checkpoint({
+    outcome: 'continue',
+    verified: [],
+    lanes: options.lanes ?? [lane('a', 'lead', ['src']), lane('b', 'worker', ['docs'])],
+    bottleneck: {
+      id: 'n',
+      owner: options.owner ?? 'lead',
+      action,
+      ...(options.blockingLanes === undefined ? {} : { blockingLanes: [...options.blockingLanes] }),
+      ...(options.targets === undefined ? {} : { targets: [...options.targets] }),
+    },
+    next: 'go on',
+  })
+}
+
+function planParallel(lanes: readonly Record<string, unknown>[]): boolean | undefined {
+  const records = extractRecords('s1', [call('c1', 'work_checkpoint', continuePlan({ lanes }))])
+  return records[0]?.checkpointParallelComputed
+}
+
 describe('neutral record extraction', () => {
   it('keeps the call identity on a call and on its result', () => {
     const records = extractRecords('s1', [call('c1', 'edit'), result('c1')])
@@ -186,85 +231,286 @@ describe('neutral record extraction', () => {
     expect(JSON.stringify(records)).not.toContain(secret)
   })
 
-  it('keeps a checkpoint outcome, its list lengths, and the parallel flag', () => {
-    const arguments_ = JSON.stringify({
+  it('keeps the plan counts, the computed parallel flag, the action, and the first age', () => {
+    const arguments_ = checkpoint({
       outcome: 'continue',
       verified: ['one', 'two'],
-      remaining: ['three'],
-      parallel: true,
+      lanes: [
+        lane('a', 'lead', ['src']),
+        lane('b', 'worker', ['src2']),
+        lane('c', 'worker', ['docs'], 'blocked'),
+      ],
+      bottleneck: { id: 'n', owner: 'lead', action: 'worker_start', blockingLanes: ['c'] },
       next: 'keep going',
-      serialReason: 'one ordered step',
     })
     const records = extractRecords('s1', [call('c1', 'work_checkpoint', arguments_)])
     expect(records[0]).toMatchObject({
       checkpointOutcome: 'continue',
       checkpointVerifiedCount: 2,
-      checkpointRemainingCount: 1,
-      checkpointParallel: true,
+      checkpointLaneCount: 3,
+      checkpointBlockedLaneCount: 1,
+      checkpointParallelComputed: true,
+      checkpointBottleneckAction: 'worker_start',
+      checkpointBottleneckAge: 1,
     })
   })
 
-  it('counts an empty checkpoint list as zero', () => {
-    const arguments_ = JSON.stringify({
-      outcome: 'done',
-      verified: [],
-      remaining: [],
-      next: 'nothing left',
-    })
+  it('computes parallel work from runnable lanes, owners, and disjoint scopes', () => {
+    // Different owners over a textual sibling scope are disjoint: src and src2.
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['src2'])])).toBe(true)
+    // One owner is the serial form.
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'lead', ['docs'])])).toBe(false)
+    // Containment by path component is overlap.
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['src/api'])])).toBe(false)
+    // A shared resource scope is serial by construction.
+    expect(
+      planParallel([
+        lane('a', 'lead', ['resource:live-stand']),
+        lane('b', 'worker', ['resource:live-stand']),
+      ]),
+    ).toBe(false)
+    expect(
+      planParallel([
+        lane('a', 'lead', ['resource:live-stand']),
+        lane('b', 'worker', ['resource:other']),
+      ]),
+    ).toBe(true)
+    // Separators and case are normalized before comparison.
+    expect(
+      planParallel([lane('a', 'lead', ['SRC\\Data']), lane('b', 'worker', ['src/data/file.ts'])]),
+    ).toBe(false)
+    // A running lane waiting on a done lane is runnable; a waiting lane is not.
+    expect(
+      planParallel([
+        lane('a', 'lead', ['src'], 'done'),
+        lane('b', 'worker', ['docs'], 'running', ['a']),
+        lane('c', 'other', ['assets']),
+      ]),
+    ).toBe(true)
+    expect(
+      planParallel([
+        lane('a', 'lead', ['src'], 'running'),
+        lane('b', 'worker', ['docs'], 'running', ['a']),
+      ]),
+    ).toBe(false)
+  })
+
+  it('counts bottleneck age across consecutive checkpoints by owner and blocking lanes', () => {
+    const plan = (owner: string, blockingLanes: readonly string[]): string =>
+      continuePlan({
+        owner,
+        blockingLanes,
+        lanes: [lane('a', 'lead', ['src']), lane('b', 'worker', ['docs'], 'blocked')],
+      })
+    const records = extractRecords('s1', [
+      call('c1', 'work_checkpoint', plan('lead', ['b'])),
+      call('c2', 'work_checkpoint', plan('lead', ['b'])),
+      call('c3', 'work_checkpoint', plan('other', ['b'])),
+      call('c4', 'work_checkpoint', plan('other', ['a', 'b'])),
+      call('c5', 'work_checkpoint', plan('other', ['a', 'b'])),
+    ])
+    expect(records.map((record) => record.checkpointBottleneckAge)).toEqual([1, 2, 1, 1, 2])
+  })
+
+  it('resets the bottleneck age at a checkpoint without a bottleneck', () => {
+    const records = extractRecords('s1', [
+      call('c1', 'work_checkpoint', continuePlan()),
+      call(
+        'c2',
+        'work_checkpoint',
+        checkpoint({ outcome: 'done', verified: ['ok'], next: 'done' }),
+      ),
+      call('c3', 'work_checkpoint', continuePlan()),
+    ])
+    expect(records.map((record) => record.checkpointBottleneckAge)).toEqual([1, undefined, 1])
+  })
+
+  it('resolves a worker-start remedy only by a successful worker call in the window', () => {
+    const records = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan()),
+      call('w1', 'subagent'),
+      result('w1'),
+      call('cp2', 'work_checkpoint', continuePlan()),
+      call('w2', 'delegate'),
+      result('w2', { isError: true }),
+      call('cp3', 'work_checkpoint', continuePlan()),
+      call('w3', 'workflow'),
+      call('cp4', 'work_checkpoint', continuePlan()),
+    ])
+    expect(
+      records.flatMap((record) =>
+        record.checkpointOutcome === undefined ? [] : [record.checkpointRemedyResolved],
+      ),
+    ).toEqual([true, false, false, false])
+  })
+
+  it('matches a lead-action remedy by normalized target or directory descendant', () => {
+    const remedy = (filePath: string, targets: readonly string[], failed = false): boolean => {
+      const records = extractRecords('s1', [
+        call('cp1', 'work_checkpoint', continuePlan({ action: 'lead_action', targets })),
+        call('e1', 'edit', JSON.stringify({ file_path: filePath })),
+        result('e1', { isError: failed }),
+        call('cp2', 'work_checkpoint', continuePlan()),
+      ])
+      return records[0]?.checkpointRemedyResolved === true
+    }
+    expect(remedy('src\\a.ts', ['src'])).toBe(true)
+    expect(remedy('SRC/A.TS', ['src/a.ts'])).toBe(true)
+    // A textual sibling is not beneath the target by path component.
+    expect(remedy('src2/a.ts', ['src'])).toBe(false)
+    expect(remedy('src/a.ts', ['src'], true)).toBe(false)
+    // The written content is not evidence; only the destination is.
+    const contentOnly = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan({ action: 'lead_action', targets: ['src'] })),
+      call('e1', 'write', JSON.stringify({ file_path: 'notes.md', content: 'src' })),
+      result('e1'),
+      call('cp2', 'work_checkpoint', continuePlan()),
+    ])
+    expect(contentOnly[0]?.checkpointRemedyResolved).toBe(false)
+  })
+
+  it('resolves a user-decision remedy by the question call, not a worker start', () => {
+    const resolved = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan({ action: 'user_decision' })),
+      call('q1', 'ask_user_question'),
+      call('cp2', 'work_checkpoint', continuePlan()),
+    ])
+    expect(resolved[0]?.checkpointRemedyResolved).toBe(true)
+    const notAQuestion = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan()),
+      call('q1', 'ask_user_question'),
+      call('cp2', 'work_checkpoint', continuePlan()),
+    ])
+    expect(notAQuestion[0]?.checkpointRemedyResolved).toBe(false)
+  })
+
+  it('ends the last checkpoint remedy window at the turn end', () => {
+    const before = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan()),
+      call('w1', 'subagent'),
+      result('w1'),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ])
+    expect(before[0]?.checkpointRemedyResolved).toBe(true)
+    const after = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan()),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }),
+      call('w1', 'subagent'),
+      result('w1'),
+    ])
+    expect(after[0]?.checkpointRemedyResolved).toBe(false)
+  })
+
+  it('counts an empty verified list and a plan-less done close as zeroes', () => {
+    const arguments_ = checkpoint({ outcome: 'done', verified: [], next: 'nothing left' })
     const records = extractRecords('s1', [call('c1', 'work_checkpoint', arguments_)])
     expect(records[0]).toMatchObject({
       checkpointOutcome: 'done',
       checkpointVerifiedCount: 0,
-      checkpointRemainingCount: 0,
-      checkpointParallel: false,
+      checkpointLaneCount: 0,
+      checkpointBlockedLaneCount: 0,
+      checkpointParallelComputed: false,
     })
+    expect(records[0]?.checkpointBottleneckAction).toBeUndefined()
+    expect(records[0]?.checkpointBottleneckAge).toBeUndefined()
+    expect(records[0]?.checkpointRemedyResolved).toBeUndefined()
   })
 
-  it('never keeps the checkpoint lists, next step, or serial reason text', () => {
+  it('never keeps the lane, owner, target, verified, or next text', () => {
     const secret = 'CHECKPOINT-TEXT-SECRET'
-    const arguments_ = JSON.stringify({
-      outcome: 'done',
+    const arguments_ = checkpoint({
+      outcome: 'continue',
       verified: [`verified ${secret}`],
-      remaining: [`remaining ${secret}`],
-      parallel: false,
+      lanes: [
+        lane(`id-${secret}`, `owner-${secret}`, [`scope ${secret}`], 'blocked', []),
+        lane('b', 'worker', ['docs']),
+      ],
+      bottleneck: {
+        id: `bottleneck-${secret}`,
+        owner: `owner-${secret}`,
+        action: 'lead_action',
+        blockingLanes: [`id-${secret}`],
+        targets: [`target ${secret}`],
+      },
       next: `next ${secret}`,
-      serialReason: `reason ${secret}`,
     })
     const records = extractRecords('s1', [call('c1', 'work_checkpoint', arguments_)])
-    expect(records[0]?.checkpointVerifiedCount).toBe(1)
-    expect(records[0]?.checkpointRemainingCount).toBe(1)
+    expect(records[0]).toMatchObject({
+      checkpointVerifiedCount: 1,
+      checkpointLaneCount: 2,
+      checkpointBlockedLaneCount: 1,
+      checkpointBottleneckAction: 'lead_action',
+      checkpointBottleneckAge: 1,
+    })
     expect(JSON.stringify(records)).not.toContain(secret)
   })
 
-  it('contributes zero for malformed checkpoint arguments and never throws', () => {
+  it('contributes nothing for malformed checkpoint arguments and never throws', () => {
     const records = extractRecords('s1', [
       call('c1', 'work_checkpoint', 'not json'),
       call('c2', 'work_checkpoint', '[]'),
-      call('c3', 'work_checkpoint', JSON.stringify({ outcome: 7, verified: 'text' })),
+      call('c3', 'work_checkpoint', checkpoint({ outcome: 7, verified: 'text' })),
     ])
     expect(records).toHaveLength(3)
-    expect(records[0]).toMatchObject({ checkpointVerifiedCount: 0, checkpointRemainingCount: 0 })
-    expect(records[0]?.checkpointOutcome).toBeUndefined()
-    expect(records[1]).toMatchObject({ checkpointVerifiedCount: 0, checkpointRemainingCount: 0 })
-    expect(records[2]).toMatchObject({ checkpointVerifiedCount: 0, checkpointRemainingCount: 0 })
-    expect(records[2]?.checkpointOutcome).toBeUndefined()
+    for (const record of records) {
+      expect(record.checkpointOutcome).toBeUndefined()
+      expect(record.checkpointVerifiedCount).toBe(0)
+      expect(record.checkpointLaneCount).toBeUndefined()
+      expect(record.checkpointBlockedLaneCount).toBeUndefined()
+      expect(record.checkpointParallelComputed).toBeUndefined()
+      expect(record.checkpointBottleneckAction).toBeUndefined()
+      expect(record.checkpointBottleneckAge).toBeUndefined()
+      expect(record.checkpointRemedyResolved).toBeUndefined()
+    }
   })
 
-  it('rejects the whole checkpoint when one field among valid ones is malformed', () => {
+  it('rejects the whole checkpoint when any field or plan part is malformed', () => {
+    const valid = continuePlan()
+    const removed = [
+      { outcome: 'done', verified: ['ok'], remaining: [], next: 'finish' },
+      { outcome: 'done', verified: ['ok'], parallel: false, next: 'finish' },
+      { outcome: 'done', verified: [], next: 'finish', serialReason: 'reason' },
+      { outcome: 'done', verified: [], next: 'finish', speedup: 'speedup' },
+    ].map((value) => checkpoint(value))
     const cases = [
-      JSON.stringify({
-        outcome: 'done',
-        verified: ['checked'],
-        remaining: [],
-        parallel: 'yes',
+      ...removed,
+      checkpoint({ outcome: 'SECRET-OUTCOME', next: 'finish' }),
+      checkpoint({ outcome: 'done', verified: [null], next: 'finish' }),
+      checkpoint({ outcome: 'done', verified: ['ok'], next: '' }),
+      checkpoint({ outcome: 'done', next: 'finish', unknown: 'SECRET-FIELD' }),
+      checkpoint({ outcome: 'continue', lanes: [lane('a', 'lead', ['src'])], next: 'finish' }),
+      checkpoint({
+        outcome: 'continue',
+        bottleneck: { id: 'n', owner: 'lead', action: 'worker_start' },
         next: 'finish',
       }),
-      JSON.stringify({ outcome: 'SECRET-OUTCOME', next: 'finish' }),
-      JSON.stringify({ outcome: 'done', verified: [null], next: 'finish' }),
-      JSON.stringify({ outcome: 'done', verified: ['ok'], remaining: [{}], next: 'finish' }),
-      JSON.stringify({ outcome: 'done', verified: ['ok'], next: '' }),
-      JSON.stringify({ outcome: 'done', next: 'finish', unknown: 'SECRET-FIELD' }),
-      JSON.stringify({ outcome: 'continue', next: 'finish', parallel: false }),
+      continuePlan({ lanes: [lane('a', 'lead', ['src']), lane('a', 'worker', ['docs'])] }),
+      continuePlan({ lanes: [lane('b', 'worker', ['docs'], 'running', ['missing'])] }),
+      continuePlan({ lanes: [lane('a', 'lead', [])] }),
+      continuePlan({
+        lanes: [
+          { id: 'a', owner: 'lead', scope: ['src'], state: 'paused' },
+          lane('b', 'worker', ['docs']),
+        ],
+      }),
+      continuePlan({
+        lanes: Array.from({ length: 9 }, (_unused, index) =>
+          lane(`l${String(index)}`, 'lead', [`scope-${String(index)}`]),
+        ),
+      }),
+      checkpoint({
+        outcome: 'continue',
+        lanes: [lane('a', 'lead', ['src'])],
+        bottleneck: { id: 'n', owner: 'lead', action: 'wait' },
+        next: 'finish',
+      }),
+      checkpoint({
+        outcome: 'continue',
+        lanes: [lane('a', 'lead', ['src'])],
+        bottleneck: { id: 'n', owner: 'lead', action: 'lead_action' },
+        next: 'finish',
+      }),
+      valid.replace('"continue"', '"SECRET-OUTCOME"'),
     ]
     const events = cases.map((arguments_, index) =>
       call(`c${String(index)}`, 'work_checkpoint', arguments_),
@@ -273,8 +519,11 @@ describe('neutral record extraction', () => {
     for (const record of records) {
       expect(record.checkpointOutcome).toBeUndefined()
       expect(record.checkpointVerifiedCount).toBe(0)
-      expect(record.checkpointRemainingCount).toBe(0)
-      expect(record.checkpointParallel).toBeUndefined()
+      expect(record.checkpointLaneCount).toBeUndefined()
+      expect(record.checkpointBlockedLaneCount).toBeUndefined()
+      expect(record.checkpointParallelComputed).toBeUndefined()
+      expect(record.checkpointBottleneckAction).toBeUndefined()
+      expect(record.checkpointBottleneckAge).toBeUndefined()
     }
     expect(JSON.stringify(records)).not.toContain('SECRET')
   })
@@ -282,18 +531,19 @@ describe('neutral record extraction', () => {
   it('keeps checkpoint text out of a configured argument field map', () => {
     const secret = 'CONFIGURED-CHECKPOINT-SECRET'
     const fields = new Map([
-      [
-        'work_checkpoint',
-        new Set(['outcome', 'verified', 'remaining', 'next', 'serialReason', 'speedup']),
-      ],
+      ['work_checkpoint', new Set(['outcome', 'verified', 'lanes', 'bottleneck', 'next'])],
     ])
-    const arguments_ = JSON.stringify({
+    const arguments_ = checkpoint({
       outcome: 'continue',
       verified: [`verified ${secret}`],
-      remaining: [`remaining ${secret}`],
+      lanes: [lane(`id-${secret}`, `owner-${secret}`, [`scope ${secret}`])],
+      bottleneck: {
+        id: `b-${secret}`,
+        owner: `owner-${secret}`,
+        action: 'worker_start',
+        blockingLanes: [`id-${secret}`],
+      },
       next: `next ${secret}`,
-      serialReason: `reason ${secret}`,
-      speedup: `speedup ${secret}`,
     })
     const records = extractRecords(
       's1',
@@ -308,15 +558,15 @@ describe('neutral record extraction', () => {
 
   it('copies only validated checkpoint values into configured argument fields', () => {
     const secret = 'INVALID-CHECKPOINT-SECRET'
-    const fields = new Map([['work_checkpoint', new Set(['outcome', 'parallel'])]])
-    const args = (outcome: unknown, parallel: unknown): string =>
-      JSON.stringify({ outcome, parallel, verified: ['ok'], next: 'finish' })
+    const fields = new Map([['work_checkpoint', new Set(['outcome'])]])
+    const args = (outcome: unknown): string =>
+      checkpoint({ outcome, verified: ['ok'], next: 'finish' })
     const records = extractRecords(
       's1',
       [
-        call('c1', 'work_checkpoint', args(secret, secret)),
+        call('c1', 'work_checkpoint', args(secret)),
         result('c1'),
-        call('c2', 'work_checkpoint', args('done', true)),
+        call('c2', 'work_checkpoint', args('done')),
         result('c2'),
       ],
       0,
@@ -324,8 +574,8 @@ describe('neutral record extraction', () => {
     )
     expect(records[0]?.argumentValues).toBeUndefined()
     expect(records[1]?.argumentValues).toBeUndefined()
-    expect(records[2]?.argumentValues).toEqual({ outcome: 'done', parallel: 'true' })
-    expect(records[3]?.argumentValues).toEqual({ outcome: 'done', parallel: 'true' })
+    expect(records[2]?.argumentValues).toEqual({ outcome: 'done' })
+    expect(records[3]?.argumentValues).toEqual({ outcome: 'done' })
     expect(JSON.stringify(records)).not.toContain(secret)
   })
 })

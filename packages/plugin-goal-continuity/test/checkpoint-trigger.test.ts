@@ -8,12 +8,24 @@ import { noticeText } from './harness.js'
  * attributed to goal-continuity.
  */
 
+/** One serial plan whose declared remedy is one lead edit. */
 const SERIAL = {
   outcome: 'continue',
-  parallel: false,
-  serialReason: 'the remaining work is one ordered edit',
-  bottleneck: 'the guard must exist before the test can pass',
+  lanes: [{ id: 'edit', owner: 'lead', scope: ['src/a.ts'], state: 'running' }],
+  bottleneck: {
+    id: 'guard-missing',
+    owner: 'lead',
+    action: 'lead_action',
+    blockingLanes: ['edit'],
+    targets: ['src/a.ts'],
+  },
   next: 'finish the edit',
+}
+
+/** Execute the declared `lead_action` remedy of SERIAL. */
+function remedy(harness: CheckpointHarness): void {
+  const call = harness.toolCall('edit', { file_path: 'src/a.ts' })
+  harness.toolResult(call, 'ok')
 }
 
 let cleanup: (() => Promise<void>) | undefined
@@ -154,6 +166,7 @@ describe('substantial-pause trigger', () => {
     workingTurn(harness)
     await harness.turnStopping()
     await harness.checkpoint(SERIAL)
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
     expect(await harness.recordNames()).toEqual(['1.json'])
@@ -459,7 +472,39 @@ describe('checkpoint request', () => {
     const text = noticeText(harness.steers[0] as never)
     expect(text.length).toBeLessThanOrEqual(200)
     expect(text).toContain('work_checkpoint:')
-    expect(text).toContain('Done? verified? remaining? lanes? bottleneck? next action?')
+    expect(text).toContain('Refresh the plan; execute the remedy.')
+  })
+
+  it('names a lane whose state did not change and the bottleneck age', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(SERIAL)
+    harness.turnStart(2)
+    await harness.checkpoint(SERIAL)
+    harness.turnStart(3)
+    addWorkingCalls(harness)
+    await harness.turnStopping(3)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Stale lanes: edit (running, 2 checkpoints)')
+    expect(text).toContain('Bottleneck age: 2')
+  })
+
+  it('names no stale lane after a state change and resets the age with a new owner', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(SERIAL)
+    harness.turnStart(2)
+    await harness.checkpoint({
+      ...SERIAL,
+      lanes: [{ id: 'edit', owner: 'lead', scope: ['src/a.ts'], state: 'done' }],
+      bottleneck: { ...SERIAL.bottleneck, owner: 'lane-docs' },
+    })
+    harness.turnStart(3)
+    addWorkingCalls(harness)
+    await harness.turnStopping(3)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).not.toContain('Stale lanes')
+    expect(text).toContain('Bottleneck age: 1')
   })
 
   it('is attributed to goal-continuity and is a non-waking steer', async () => {

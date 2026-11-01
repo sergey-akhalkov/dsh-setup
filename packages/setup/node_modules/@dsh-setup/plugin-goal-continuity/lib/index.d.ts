@@ -54,6 +54,10 @@ export interface CheckpointConfig {
     maxMessageChars?: number;
     /** Model steps between mid-turn checkpoint requests (default 40). */
     stepInterval?: number;
+    /** Consecutive checkpoints a bottleneck may persist before a route change (default 2). */
+    bottleneckAge?: number;
+    /** Checkpoints a lane's state may stay unchanged before the request names it (default 2). */
+    laneStaleCheckpoints?: number;
 }
 /** Row configuration. Every field is optional; omission selects the documented default. */
 export interface Config {
@@ -102,6 +106,8 @@ export interface ResolvedCheckpointConfig {
     readonly enforceParallel: boolean;
     readonly maxMessageChars: number;
     readonly stepInterval: number;
+    readonly bottleneckAge: number;
+    readonly laneStaleCheckpoints: number;
 }
 /** Fully resolved configuration; the plugin never runs on partial values. */
 export interface ResolvedConfig {

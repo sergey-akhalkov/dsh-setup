@@ -45,9 +45,10 @@ invoked.
 
 The working contract asks for a written plan and the user's nod before the first edit when a request
 touches more than one file or its cause is not yet known. For a multi-file or multi-step task the
-written plan names the independent work streams and their owned files before the first edit: each
-stream gets a worker, or the plan states one serial reason. The always-on default stays one agent;
-only an independent stream gets a worker, and a fresh context verifies rather than repeats the work.
+plan names its independent lanes, their owners, and scopes before the first edit and is refreshed at
+each checkpoint: each independent lane gets a worker, or the plan states the serial form as data, a
+shared scope or a single owner, not a serial-reason sentence. The always-on default stays one agent;
+only an independent lane gets a worker, and a fresh context verifies rather than repeats the work.
 The rationale is cost: a wrong assumption caught in a paragraph costs a sentence to fix, and caught
 after the edits it costs a refactor plus a re-review. A single localized fix is exempt because
 reading the file _is_ the plan; demanding approval there spends the user's attention without buying
@@ -61,11 +62,13 @@ bytes) because it joins the always-on section, whose size is checked by the plug
 
 The contract ends a substantial pause with a `work_checkpoint` call, and the
 [goal-continuity bundle](goal-continuity.md) requests the same check at each configured step interval
-(`stepInterval`, 40 steps by default). Every checkpoint carries the done, verified, remaining, and
-parallel-or-serial decision: a parallel decision starts a worker for at least one lane before the turn
-closes, and serial work states its reason in `serialReason`. It also names the current bottleneck and
-its remedy, the next action that removes it, so a long run keeps surfacing what stands between the
-agent and done instead of waiting for the turn to end.
+(`stepInterval`, 40 steps by default). Every checkpoint carries the lane plan, the current
+`bottleneck`, its remedy, and the `next` action: independent lanes start a worker before the turn
+closes, integrated in the main agent, and serial work is a shared scope or a single owner. The remedy
+is executed before the close and the plugin checks for it; a bottleneck that survives a second
+checkpoint needs a route change (a new owner, a changed blocking lane, or a user decision), not
+another wait. A long run thus keeps surfacing what stands between the agent and done instead of
+waiting for the turn to end.
 
 ## Install
 

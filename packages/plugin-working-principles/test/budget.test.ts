@@ -68,31 +68,61 @@ describe('always-on contract budget', () => {
     expect(contract).toContain('single-turn, one-line, or informational request is exempt')
   })
 
-  it('requires a pause checkpoint with a parallel worker or a serial reason', () => {
+  it('carries the lane plan, bottleneck, remedy, and next action in a checkpoint', () => {
+    const section = (contract.split('## Recover instead of repeating')[1] ?? '').replace(
+      /\s+/g,
+      ' ',
+    )
     expect(contract).toContain('`work_checkpoint`')
-    expect(contract).toContain('verified, remaining, parallel lanes')
-    expect(contract).toContain('starts a worker for at least one lane before the turn closes')
-    expect(contract).toContain('in the main agent')
-    expect(contract).toContain('`serialReason`')
+    expect(section).toContain('the lane plan, `verified`, `bottleneck`, its remedy, `next`')
+    expect(section).toContain('Execute the remedy before the turn closes; the plugin checks for it')
+    expect(section).toContain('Independent lanes start a worker before the turn closes')
+    expect(section).toContain('integrated in the main agent')
+    expect(contract).not.toContain('serialReason')
+    expect(contract).not.toContain('speedup')
   })
 
-  it('plans independent work streams with a worker or one serial reason', () => {
-    const delegation = contract.split('## Delegate only to parallelize')[1]?.split('## ')[0] ?? ''
+  it('requires a route change for a bottleneck surviving a second checkpoint', () => {
+    const section = (contract.split('## Recover instead of repeating')[1] ?? '').replace(
+      /\s+/g,
+      ' ',
+    )
+    expect(section).toContain('bottleneck surviving a second checkpoint needs a route change')
+    expect(section).toContain('new owner, changed blocking lane, or user decision')
+    expect(section).toContain('not another wait')
+  })
+
+  it('names independent lanes with owners and scopes and refreshes the plan', () => {
+    const delegation = (
+      contract.split('## Delegate only to parallelize')[1]?.split('## ')[0] ?? ''
+    ).replace(/\s+/g, ' ')
     expect(delegation).toContain('One agent is the default')
     expect(delegation).toContain('Multi-file or multi-step work')
-    expect(delegation).toContain('independent streams and owned files')
+    expect(delegation).toContain('independent lanes, owners, and scopes')
     expect(delegation).toContain('in the plan before the first edit')
-    expect(delegation).toContain('start a worker per stream or state one serial reason')
+    expect(delegation).toContain('refreshed at each checkpoint')
+    expect(delegation).toContain('Start a worker per independent lane')
   })
 
-  it('exempts a one-line fix from the plan and stream rule', () => {
-    expect(contract).toContain('one-line fix needs none')
+  it('expresses serial work as a shared scope or a single owner, never a serial reason', () => {
+    const delegation = (
+      contract.split('## Delegate only to parallelize')[1]?.split('## ')[0] ?? ''
+    ).replace(/\s+/g, ' ')
+    expect(delegation).toContain('serial form: shared scope or single owner')
+    expect(delegation).toContain('not a serial-reason sentence')
+  })
+
+  it('exempts a one-line fix from the plan and worker rule', () => {
+    expect(contract).toContain('one-line fix needs no plan or worker')
     expect(contract).toContain('single-turn, one-line, or informational request is exempt')
   })
 
   it('checks in at the configured step interval with a bottleneck and its remedy', () => {
-    const section = contract.split('## Recover instead of repeating')[1] ?? ''
-    expect(section).toContain('each configured step interval')
+    const section = (contract.split('## Recover instead of repeating')[1] ?? '').replace(
+      /\s+/g,
+      ' ',
+    )
+    expect(section).toContain('each step interval')
     expect(section).toContain('`bottleneck`')
     expect(section).toContain('its remedy')
   })
