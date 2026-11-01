@@ -532,6 +532,10 @@ describe('work checkpoint record', () => {
           blockedBy: ['guard'],
         },
       ],
+      laneAges: [
+        { id: 'guard', checkpoints: 1 },
+        { id: 'test', checkpoints: 1 },
+      ],
       bottleneck: {
         id: 'test-missing',
         owner: 'lead',
@@ -539,11 +543,28 @@ describe('work checkpoint record', () => {
         blockingLanes: ['test'],
         targets: ['test/parser.test.ts'],
       },
+      bottleneckKey: '0318b47da62567c5',
       derivedRemaining: ['test'],
       parallelComputed: false,
       bottleneckAge: 1,
       next: 'write the regression test',
     })
+  })
+
+  it('rejects two lane ids that collide after the record bounds them', async () => {
+    const harness = await create()
+    harness.turnStart()
+    const prefix = 'i'.repeat(200)
+    await expect(
+      harness.execute('work_checkpoint', {
+        outcome: 'done',
+        lanes: [
+          { id: `${prefix}-one`, owner: 'lead', scope: ['src'], state: 'running' },
+          { id: `${prefix}-two`, owner: 'lead', scope: ['src2'], state: 'running' },
+        ],
+        next: 'x',
+      }),
+    ).rejects.toThrow(/collide after redaction/u)
   })
 
   it('returns the summary without claiming a record when the write fails', async () => {
@@ -1006,5 +1027,19 @@ describe('scope comparison', () => {
     harness.turnStart(2)
     await harness.checkpoint(twoLanes('./src', 'src'))
     expect((await harness.readRecord(2)).parallelComputed).toBe(false)
+  })
+
+  it('keeps an unmatched leading parent distinct from its target', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('../a', 'a'))
+    expect((await harness.readRecord()).parallelComputed).toBe(true)
+  })
+
+  it('treats the absolute root as containing an absolute descendant', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('/', '/src'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
   })
 })

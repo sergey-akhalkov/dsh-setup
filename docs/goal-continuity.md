@@ -258,6 +258,7 @@ arguments):
       "blockedBy": ["guard"]
     }
   ],
+  "laneAges": [{ "id": "guard", "checkpoints": 1 }, { "id": "test", "checkpoints": 1 }],
   "bottleneck": {
     "id": "test-missing",
     "owner": "lead",
@@ -265,6 +266,7 @@ arguments):
     "blockingLanes": ["test"],
     "targets": ["test/parser.test.ts"]
   },
+  "bottleneckKey": "0318b47da62567c5",
   "derivedRemaining": ["test"],
   "parallelComputed": false,
   "bottleneckAge": 1,
@@ -287,14 +289,17 @@ too, and each diagnostic names the field that replaces it (`lanes` for the first
 
 The session key is the SHA-256 prefix of the session id, matching the delegation session ledger; the
 record carries the decision, a stable checkpoint id (`checkpoint-<turn>-<hash>`), the turn, the time,
-and the session. It also carries the lane plan, the bottleneck, the `derivedRemaining` lane ids, the
-computed `parallelComputed` flag, and the `bottleneckAge` of a `continue` checkpoint (record version
-2). A version 1 record from an earlier release stays readable and is never treated as a satisfied
-plan: its lanes and bottleneck are absent, so the age count starts again. Each field is bounded and
-redacted, and the record is replaced rather than duplicated when the same turn calls the tool again.
-The record is machine-local scratch under `.dsh/` and is never a tracked file. The tool result is a
-short summary with the checkpoint id, the workspace-relative record path, the lane count, the derived
-remainder, the computed parallel flag, and the bottleneck.
+and the session. It also carries the lane plan with each lane's consecutive unchanged-checkpoint
+count (`laneAges`, used to name a stalled lane), the bottleneck plus a `bottleneckKey` hashing its
+owner and blocking lane set (stable across the redaction that bounds the displayed values), the
+`derivedRemaining` lane ids, the computed `parallelComputed` flag, and the `bottleneckAge` of a
+`continue` checkpoint (record version 2). A version 1 record from an earlier release stays readable
+and is never treated as a satisfied plan: its lanes and bottleneck are absent, so the age count
+starts again. Each field is bounded and redacted, and the record is replaced rather than duplicated
+when the same turn calls the tool again. The record is machine-local scratch under `.dsh/` and is
+never a tracked file. The tool result is a short summary with the checkpoint id, the
+workspace-relative record path, the lane count, the derived remainder, the computed parallel flag,
+and the bottleneck.
 
 A write failure still counts as a successful checkpoint for the close gate: the tool returns the
 decision with a bounded warning naming the record failure, and never claims that a record exists.

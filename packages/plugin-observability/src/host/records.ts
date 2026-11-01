@@ -81,6 +81,8 @@ export interface TraceRecord {
   readonly checkpointBottleneckAge?: number
   /** Whether the declared remedy was matched before the next checkpoint or turn end. */
   readonly checkpointRemedyResolved?: boolean
+  /** Completion time of the matched remedy evidence; absent when nothing matched. */
+  readonly checkpointRemedyResolvedAt?: number
 }
 
 /** The tool that records a work checkpoint. */
@@ -163,13 +165,13 @@ function checkpointListLength(value: unknown): number | undefined {
   return value.length
 }
 
-/** A present, bounded string list, or undefined when it holds an invalid entry. */
+/** A present, bounded string list, trimmed as the producer trims it. */
 function checkpointStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.length > MAX_CHECKPOINT_ITEMS) return undefined
   const items: string[] = []
   for (const item of value) {
     if (typeof item !== 'string' || item.trim() === '') return undefined
-    items.push(item)
+    items.push(item.trim())
   }
   return items
 }
@@ -184,11 +186,11 @@ function checkpointLanes(value: unknown): readonly CheckpointLane[] | undefined 
     const lane = asRecord(item)
     if (lane === undefined) return undefined
     if (!Object.keys(lane).every((key) => CHECKPOINT_LANE_FIELDS.has(key))) return undefined
-    const id = text(lane.id)
-    const owner = text(lane.owner)
+    const id = text(lane.id)?.trim()
+    const owner = text(lane.owner)?.trim()
     const state = lane.state
-    if (id === undefined || id.trim() === '') return undefined
-    if (owner === undefined || owner.trim() === '') return undefined
+    if (id === undefined || id === '') return undefined
+    if (owner === undefined || owner === '') return undefined
     if (state !== 'running' && state !== 'blocked' && state !== 'done') return undefined
     const scope = checkpointStringList(lane.scope)
     if (scope === undefined || scope.length === 0) return undefined
@@ -211,11 +213,11 @@ function checkpointBottleneck(value: unknown): CheckpointBottleneck | null | und
   const source = asRecord(value)
   if (source === undefined) return null
   if (!Object.keys(source).every((key) => CHECKPOINT_BOTTLENECK_FIELDS.has(key))) return null
-  const id = text(source.id)
-  const owner = text(source.owner)
+  const id = text(source.id)?.trim()
+  const owner = text(source.owner)?.trim()
   const action = source.action
-  if (id === undefined || id.trim() === '') return null
-  if (owner === undefined || owner.trim() === '') return null
+  if (id === undefined || id === '') return null
+  if (owner === undefined || owner === '') return null
   if (action !== 'worker_start' && action !== 'lead_action' && action !== 'user_decision') {
     return null
   }
@@ -264,26 +266,54 @@ function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
   return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) }
 }
 
+/** A normalized path keeps its root: `/` or a drive `c:`; the relative root is empty. */
+function isRootedPath(path: string): boolean {
+  return path.startsWith('/') || /^[a-z]:/u.test(path)
+}
+
 /**
  * Normalize a path-like scope the way the checkpoint producer does: unify
- * separators, drop `.`/`..` segments, and fold case. A relative root is empty.
+ * separators, resolve `.`/`..` (unmatched leading `..` stays on a relative
+ * path), fold case, and keep a leading `/` or drive root.
  */
 function normalizedPath(path: string): string {
+  const unified = path.trim().replace(/\\/g, '/').toLowerCase()
+  const drive = /^([a-z]):(?:\/|$)/u.exec(unified)
+  const rooted = unified.startsWith('/') || drive !== null
+  let root = ''
+  let rest = unified
+  if (drive !== null) {
+    root = `${drive[1]}:`
+    rest = unified.slice(drive[0].length)
+  } else if (unified.startsWith('/')) {
+    root = '/'
+    rest = unified.slice(1)
+  }
   const segments: string[] = []
-  for (const segment of path.trim().replace(/\\/g, '/').toLowerCase().split('/')) {
+  for (const segment of rest.split('/')) {
     if (segment === '' || segment === '.') continue
     if (segment === '..') {
-      segments.pop()
+      const last = segments[segments.length - 1]
+      if (last !== undefined && last !== '..') segments.pop()
+      else if (!rooted) segments.push('..')
       continue
     }
     segments.push(segment)
   }
+  if (root === '/') return segments.length === 0 ? '/' : `/${segments.join('/')}`
+  if (root !== '') return segments.length === 0 ? root : `${root}/${segments.join('/')}`
   return segments.join('/')
 }
 
-/** Whether a normalized path equals a root or lies beneath it by path component. */
+/**
+ * Whether a normalized path equals a root or lies beneath it by path component.
+ * The relative root contains relative descendants only; rooted paths never
+ * match a relative root, and a drive root contains only its own drive.
+ */
 function pathIsWithin(path: string, root: string): boolean {
-  if (root === '') return true
+  if (root === '') return !isRootedPath(path)
+  if (root === '/') return path.startsWith('/')
+  if (isRootedPath(root) !== isRootedPath(path)) return false
   return path === root || path.startsWith(`${root}/`)
 }
 
@@ -390,9 +420,10 @@ function delegateStarted(resultText: string): boolean {
 }
 
 /**
- * Whether the bottleneck's remedy was matched in the window between the
- * checkpoint and the next one. Only a recorded successful result is evidence;
- * the plugin gate's exact tagged-id rule is not part of this metric.
+ * The completion time of the bottleneck's remedy in the window between the
+ * checkpoint and the next one, or undefined when nothing matched. Only a
+ * recorded successful result is evidence; the plugin gate's exact tagged-id
+ * rule is not part of this metric.
  */
 function remedyMatches(
   records: readonly TraceRecord[],
@@ -400,8 +431,8 @@ function remedyMatches(
   end: number,
   bottleneck: CheckpointBottleneck,
   filePaths: ReadonlyMap<string, string>,
-): boolean {
-  const results = new Set<string>()
+): number | undefined {
+  const results = new Map<string, number>()
   const failed = new Set<string>()
   const notStarted = new Set<string>()
   for (let index = start + 1; index < end; index += 1) {
@@ -409,7 +440,7 @@ function remedyMatches(
     if (record === undefined || record.eventType !== 'tool/result') continue
     if (record.callId === undefined) continue
     const key = callKey(record.sessionId, record.callId)
-    results.add(key)
+    results.set(key, record.time)
     if (record.failed === true) failed.add(key)
     if (record.delegateStarted === false) notStarted.add(key)
   }
@@ -420,21 +451,24 @@ function remedyMatches(
     }
     if (record.callId === undefined) continue
     const key = callKey(record.sessionId, record.callId)
-    if (!results.has(key) || failed.has(key)) continue
-    if (bottleneck.action === 'user_decision' && record.tool === 'ask_user_question') return true
+    const completedAt = results.get(key)
+    if (completedAt === undefined || failed.has(key)) continue
+    if (bottleneck.action === 'user_decision' && record.tool === 'ask_user_question') {
+      return completedAt
+    }
     if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool)) {
       if (record.tool === 'delegate' && notStarted.has(key)) continue
-      return true
+      return completedAt
     }
     if (
       bottleneck.action === 'lead_action' &&
       (record.tool === 'edit' || record.tool === 'write')
     ) {
       const filePath = filePaths.get(key)
-      if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets)) return true
+      if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets)) return completedAt
     }
   }
-  return false
+  return undefined
 }
 
 /** The five usage fields, with a missing field counting as zero, never an estimate. */
@@ -507,7 +541,10 @@ export function extractRecords(
   const records: TraceRecord[] = []
   const callById = new Map<string, { tool: string; values?: Record<string, string> }>()
   const checkpointFactsByIndex = new Map<number, CheckpointFacts>()
-  const lastBottleneck = new Map<string, { owner: string; blocking: string; age: number }>()
+  const lastBottleneck = new Map<
+    string,
+    { owner: string; blocking: string; states: ReadonlyMap<string, string>; age: number }
+  >()
   // The write destination is read for remedy matching only; it never reaches a record.
   const filePaths = new Map<string, string>()
   let currentTurn: number | undefined
@@ -559,16 +596,24 @@ export function extractRecords(
             if (facts.bottleneck === undefined) {
               lastBottleneck.delete(sessionId)
             } else {
-              const blocking = [...new Set(facts.bottleneck.blockingLaneIds)].sort().join('\u0000')
+              const blockingIds = [...new Set(facts.bottleneck.blockingLaneIds)].sort()
+              const blocking = blockingIds.join('\u0000')
+              // The producer resets the age when a blocking lane changes state.
+              const states = new Map(facts.lanes.map((lane) => [lane.id, lane.state]))
               const previous = lastBottleneck.get(sessionId)
-              const age =
+              const unchanged =
                 previous !== undefined &&
                 previous.owner === facts.bottleneck.owner &&
-                previous.blocking === blocking
-                  ? previous.age + 1
-                  : 1
+                previous.blocking === blocking &&
+                blockingIds.every((id) => previous.states.get(id) === states.get(id))
+              const age = previous !== undefined && unchanged ? previous.age + 1 : 1
               checkpointBottleneckAge = age
-              lastBottleneck.set(sessionId, { owner: facts.bottleneck.owner, blocking, age })
+              lastBottleneck.set(sessionId, {
+                owner: facts.bottleneck.owner,
+                blocking,
+                states,
+                age,
+              })
             }
           }
           values = checkpointArgumentValues(facts, fields?.get(tool))
@@ -694,9 +739,11 @@ export function extractRecords(
         break
       }
     }
+    const resolvedAt = remedyMatches(records, index, end, facts.bottleneck, filePaths)
     records[index] = {
       ...checkpoint,
-      checkpointRemedyResolved: remedyMatches(records, index, end, facts.bottleneck, filePaths),
+      checkpointRemedyResolved: resolvedAt !== undefined,
+      ...(resolvedAt === undefined ? {} : { checkpointRemedyResolvedAt: resolvedAt }),
     }
   }
   return records

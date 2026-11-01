@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-plan-bottleneck-checkpoints",
+  "scope": "task",
+  "taskId": "bfa66bb2c5f8cce3",
+  "digest": "ded9d041446fb273683572dcd23d77951f77ed16163351d5eec45b80f28ee472",
+  "worktreeDigest": "43ee3db1fa41cf8a30ac9e12fd3634cf851c0c2388c28369c32a041572beb0cb",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-01T22:39:11.265Z"
+}

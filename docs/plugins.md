@@ -269,7 +269,8 @@ and non-overlapping scopes; a `resource:` scope compares exactly), the bottlenec
 and whether the remedy was matched before the next checkpoint. The report derives four counters
 from it: parallel share (checkpoints whose plan computes parallel work over the window's
 checkpoints), blocked-lane rate (blocked lanes over all lanes), remedy resolution (resolved
-`continue` checkpoints over `continue` checkpoints), and dispatch per checkpoint (successful worker
+`continue` checkpoints over `continue` checkpoints; evidence completed after the window cutoff is
+not counted), and dispatch per checkpoint (successful worker
 starts between the previous checkpoint and that one, or the turn start for the first). A zero
 denominator leaves its share absent, and a window with no checkpoint reports no plan instead of
 `0/0`. Only counts and shares reach the report; lane ids, owners, scopes, targets, and arguments

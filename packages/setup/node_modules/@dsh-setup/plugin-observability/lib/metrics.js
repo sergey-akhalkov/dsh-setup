@@ -125,8 +125,12 @@ export function planSummary(records, window) {
         if (record.checkpointOutcome !== 'continue')
             continue;
         continueCheckpoints += 1;
-        if (record.checkpointRemedyResolved === true)
+        // Evidence completed at or after the cutoff is outside the observed range.
+        if (record.checkpointRemedyResolved === true &&
+            record.checkpointRemedyResolvedAt !== undefined &&
+            record.checkpointRemedyResolvedAt < window.to) {
             resolvedContinue += 1;
+        }
     }
     const starts = successfulWorkerStarts(records);
     return {

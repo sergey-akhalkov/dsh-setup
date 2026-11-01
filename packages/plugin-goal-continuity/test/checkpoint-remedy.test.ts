@@ -240,6 +240,22 @@ describe('executed bottleneck remedy', () => {
     expect(harness.steers).toHaveLength(0)
   })
 
+  it('accepts the repository root as a directory target', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['.'])
+    call(harness, 'edit', { file_path: 'src/a.ts' })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('does not follow parent traversal out of a declared target', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['src'])
+    call(harness, 'write', { file_path: 'src/../../src/a.ts', content: 'x' })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+  })
+
   it('exempts a done checkpoint that still carries a bottleneck', async () => {
     const harness = await create()
     harness.turnStart()

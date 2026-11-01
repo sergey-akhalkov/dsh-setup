@@ -78,6 +78,8 @@ export interface TraceRecord {
     readonly checkpointBottleneckAge?: number;
     /** Whether the declared remedy was matched before the next checkpoint or turn end. */
     readonly checkpointRemedyResolved?: boolean;
+    /** Completion time of the matched remedy evidence; absent when nothing matched. */
+    readonly checkpointRemedyResolvedAt?: number;
 }
 /**
  * The tools that start a worker. The plugin gate additionally requires the

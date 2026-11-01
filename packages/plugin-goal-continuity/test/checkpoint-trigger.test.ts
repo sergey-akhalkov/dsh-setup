@@ -489,6 +489,18 @@ describe('checkpoint request', () => {
     expect(text).toContain('Bottleneck age: 2')
   })
 
+  it('counts two checkpoints in one turn as two stalled checkpoints', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(SERIAL)
+    await harness.checkpoint(SERIAL)
+    harness.turnStart(2)
+    addWorkingCalls(harness)
+    await harness.turnStopping(2)
+    const text = noticeText(harness.steers[0] as never)
+    expect(text).toContain('Stale lanes: edit (running, 2 checkpoints)')
+  })
+
   it('names every stale lane when the message budget permits', async () => {
     const harness = await create()
     const plan = {

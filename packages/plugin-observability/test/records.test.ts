@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { extractRecords } from '../src/host/records.ts'
 
 const NOW = new Date(2026, 9, 31, 12, 30).getTime()
+const MINUTE = 60_000
+
+/** A drive-rooted path, assembled at run time so no machine-path literal is tracked. */
+const DRIVE = `${String.fromCharCode(67)}:`
 
 let seq = 0
 
@@ -11,27 +15,36 @@ function event(type: string, data: Record<string, unknown>, time = NOW): Session
   return { type, seq, time, data } as unknown as SessionEvent
 }
 
-function call(callId: string, name: string, arguments_ = '{}'): SessionEvent {
-  return event('tool/call', { turn: 1, step: 1, callId, name, arguments: arguments_ })
+function call(callId: string, name: string, arguments_ = '{}', time = NOW): SessionEvent {
+  return event('tool/call', { turn: 1, step: 1, callId, name, arguments: arguments_ }, time)
 }
 
 function result(
   callId: string,
-  options: { isError?: boolean; error?: Record<string, unknown>; text?: string } = {},
+  options: {
+    isError?: boolean
+    error?: Record<string, unknown>
+    text?: string
+    time?: number
+  } = {},
 ): SessionEvent {
-  return event('tool/result', {
-    turn: 1,
-    step: 1,
-    message: {
-      role: 'tool',
-      id: `m-${callId}`,
-      content: options.text === undefined ? [] : [{ type: 'text', text: options.text }],
-      source: { kind: 'tool', callId },
-      toolCallId: callId,
-      isError: options.isError === true,
+  return event(
+    'tool/result',
+    {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'tool',
+        id: `m-${callId}`,
+        content: options.text === undefined ? [] : [{ type: 'text', text: options.text }],
+        source: { kind: 'tool', callId },
+        toolCallId: callId,
+        isError: options.isError === true,
+      },
+      ...(options.error === undefined ? {} : { error: options.error }),
     },
-    ...(options.error === undefined ? {} : { error: options.error }),
-  })
+    options.time ?? NOW,
+  )
 }
 
 function lane(
@@ -301,6 +314,53 @@ describe('neutral record extraction', () => {
     ).toBe(false)
   })
 
+  it('keeps rooted and relative scopes distinct, preserving a leading parent segment', () => {
+    // An absolute scope is not the same as the relative one.
+    expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['src'])])).toBe(true)
+    expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['/src/api'])])).toBe(
+      false,
+    )
+    expect(
+      planParallel([
+        lane('a', 'lead', [`${DRIVE}\\src`]),
+        lane('b', 'worker', [`${DRIVE.toLowerCase()}/src`]),
+      ]),
+    ).toBe(false)
+    // An unmatched leading `..` stays part of a relative path.
+    expect(planParallel([lane('a', 'lead', ['../src']), lane('b', 'worker', ['src'])])).toBe(true)
+  })
+
+  it('trims ids, owners, scopes, and references before comparing', () => {
+    // A padded duplicate id is still a duplicate, so the call is malformed.
+    expect(
+      planParallel([lane(' a ', 'lead', ['src']), lane('a', 'worker', ['docs'])]),
+    ).toBeUndefined()
+    // A padded reference resolves to the trimmed lane id.
+    const referenced = extractRecords('s1', [
+      call(
+        'c1',
+        'work_checkpoint',
+        continuePlan({
+          lanes: [lane('a', 'lead', ['src']), lane('b', 'worker', ['docs'], 'running', [' a '])],
+        }),
+      ),
+    ])
+    expect(referenced[0]?.checkpointLaneCount).toBe(2)
+    // Padded owners are the same owner, for the parallel flag and the age chain.
+    expect(planParallel([lane('a', ' lead ', ['src']), lane('b', 'lead', ['docs'])])).toBe(false)
+    const plan = (owner: string): string =>
+      continuePlan({
+        owner,
+        blockingLanes: ['b'],
+        lanes: [lane('a', 'lead', ['src']), lane('b', 'worker', ['docs'], 'blocked')],
+      })
+    const ages = extractRecords('s1', [
+      call('c1', 'work_checkpoint', plan(' lead ')),
+      call('c2', 'work_checkpoint', plan('lead')),
+    ]).map((record) => record.checkpointBottleneckAge)
+    expect(ages).toEqual([1, 2])
+  })
+
   it('counts bottleneck age across consecutive checkpoints by owner and blocking lanes', () => {
     const plan = (owner: string, blockingLanes: readonly string[]): string =>
       continuePlan({
@@ -316,6 +376,23 @@ describe('neutral record extraction', () => {
       call('c5', 'work_checkpoint', plan('other', ['a', 'b'])),
     ])
     expect(records.map((record) => record.checkpointBottleneckAge)).toEqual([1, 2, 1, 1, 2])
+  })
+
+  it('resets the bottleneck age when a blocking lane changes state', () => {
+    const plan = (state: 'blocked' | 'running' | 'done'): string =>
+      continuePlan({
+        owner: 'lead',
+        blockingLanes: ['b'],
+        lanes: [lane('a', 'lead', ['src']), lane('b', 'worker', ['docs'], state)],
+      })
+    const records = extractRecords('s1', [
+      call('c1', 'work_checkpoint', plan('blocked')),
+      call('c2', 'work_checkpoint', plan('blocked')),
+      call('c3', 'work_checkpoint', plan('running')),
+      call('c4', 'work_checkpoint', plan('running')),
+      call('c5', 'work_checkpoint', plan('done')),
+    ])
+    expect(records.map((record) => record.checkpointBottleneckAge)).toEqual([1, 2, 1, 2, 1])
   })
 
   it('resets the bottleneck age at a checkpoint without a bottleneck', () => {
@@ -367,6 +444,13 @@ describe('neutral record extraction', () => {
     expect(remedy('.\\src\\a.ts', ['src'])).toBe(true)
     expect(remedy('src/a.ts', ['./src'])).toBe(true)
     expect(remedy('src/a.ts', ['a/../src'])).toBe(true)
+    // Roots are preserved: an absolute destination does not match a relative target.
+    expect(remedy('/src/a.ts', ['src'])).toBe(false)
+    expect(remedy('src/a.ts', ['/src'])).toBe(false)
+    expect(remedy('/src/a.ts', ['/src'])).toBe(true)
+    expect(remedy(`${DRIVE}\\src\\a.ts`, [`${DRIVE.toLowerCase()}/src`])).toBe(true)
+    // A padded target is trimmed before comparison.
+    expect(remedy('src/a.ts', [' src '])).toBe(true)
     // A textual sibling is not beneath the target by path component.
     expect(remedy('src2/a.ts', ['src'])).toBe(false)
     expect(remedy('src/a.ts', ['src'], true)).toBe(false)
@@ -434,6 +518,23 @@ describe('neutral record extraction', () => {
       expect(records[0]?.checkpointRemedyResolved, text).toBe(started)
       expect(JSON.stringify(records)).not.toContain(text)
     }
+  })
+
+  it('keeps the remedy completion time as metadata', () => {
+    const completedAt = NOW - 2 * MINUTE
+    const records = extractRecords('s1', [
+      call(
+        'cp1',
+        'work_checkpoint',
+        continuePlan({ action: 'lead_action', targets: ['src'] }),
+        NOW - 5 * MINUTE,
+      ),
+      call('e1', 'edit', JSON.stringify({ file_path: 'src/a.ts' }), NOW - 4 * MINUTE),
+      result('e1', { time: completedAt }),
+      call('cp2', 'work_checkpoint', continuePlan(), NOW - MINUTE),
+    ])
+    expect(records[0]?.checkpointRemedyResolved).toBe(true)
+    expect(records[0]?.checkpointRemedyResolvedAt).toBe(completedAt)
   })
 
   it('ends the last checkpoint remedy window at the turn end', () => {

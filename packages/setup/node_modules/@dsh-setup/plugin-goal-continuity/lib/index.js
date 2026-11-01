@@ -1512,7 +1512,11 @@ function normalizeScopePath(value) {
         if (part === '' || part === '.')
             continue;
         if (part === '..') {
-            parts.pop();
+            // An unmatched parent stays visible, so '../a' never collapses onto 'a'.
+            if (parts.length > 0 && parts.at(-1) !== '..')
+                parts.pop();
+            else if (!rooted)
+                parts.push('..');
             continue;
         }
         parts.push(part);
@@ -1527,6 +1531,9 @@ function pathContains(outer, inner) {
     // The relative root contains every relative descendant, never an absolute path.
     if (outer === '')
         return !inner.startsWith('/');
+    // The absolute root contains every absolute descendant.
+    if (outer === '/')
+        return inner.startsWith('/');
     return inner.startsWith(`${outer}/`);
 }
 /** Whether two lanes' scopes overlap; a `resource:` entry matches only itself exactly. */
@@ -1574,13 +1581,15 @@ function computesParallel(lanes) {
 function derivedRemaining(lanes) {
     return lanes.filter((lane) => lane.state !== 'done').map((lane) => lane.id);
 }
-/** Whether two string lists hold the same members, order aside. */
-function sameStringSet(left, right) {
-    if (left.length !== right.length)
-        return false;
-    const sortedLeft = [...left].sort();
-    const sortedRight = [...right].sort();
-    return sortedLeft.every((value, index) => value === sortedRight[index]);
+/** Reject two plan ids that only differ after the record's display normalization. */
+function assertStoredIdsUnique(lanes) {
+    const seen = new Set();
+    for (const lane of lanes) {
+        if (seen.has(lane.id)) {
+            throw new Error('work_checkpoint.lanes ids collide after redaction; use distinct short ids');
+        }
+        seen.add(lane.id);
+    }
 }
 /** The checkpoint records of this session up to one turn, newest first. */
 function checkpointRecords(workspace, sessionId, latestTurn, limit) {
@@ -1629,48 +1638,52 @@ function recordLaneStates(record) {
     }
     return states;
 }
-/** The bottleneck one stored record carries, when it is a readable object. */
-function recordBottleneck(record) {
-    const raw = record.bottleneck;
-    if (!isRecord(raw))
+/** The lane unchanged counts one stored record carries, when it is readable. */
+function recordLaneAges(record) {
+    if (!Array.isArray(record.laneAges))
         return undefined;
-    const { id, owner, action } = raw;
-    if (typeof id !== 'string' || id === '')
-        return undefined;
-    if (typeof owner !== 'string' || owner === '')
-        return undefined;
-    if (!BOTTLENECK_ACTIONS.includes(action))
-        return undefined;
-    const blockingLanes = Array.isArray(raw.blockingLanes)
-        ? raw.blockingLanes.filter((lane) => typeof lane === 'string')
-        : [];
-    const targets = Array.isArray(raw.targets)
-        ? raw.targets.filter((target) => typeof target === 'string')
-        : [];
-    return { id, owner, action: action, blockingLanes, targets };
+    const ages = new Map();
+    for (const raw of record.laneAges) {
+        if (!isRecord(raw))
+            return undefined;
+        const id = raw.id;
+        const count = raw.checkpoints;
+        if (typeof id !== 'string' || id === '')
+            return undefined;
+        if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 1)
+            return undefined;
+        ages.set(id, count);
+    }
+    return ages;
+}
+/** A stable, display-free identity for a bottleneck's owner and blocking lanes. */
+function bottleneckKeyOf(bottleneck) {
+    const blocking = [...new Set(bottleneck.blockingLanes)].sort();
+    return createHash('sha256')
+        .update(JSON.stringify({ owner: bottleneck.owner, blocking }))
+        .digest('hex')
+        .slice(0, 16);
 }
 /**
  * How many consecutive checkpoints named the same bottleneck owner and the
  * same blocking lane ids without any blocking lane moving on. A legacy record
- * without the object counts for nothing, so the first plan starts at one.
+ * without the key counts for nothing, so the first plan starts at one.
  */
 function bottleneckAgeOf(previous, bottleneck, lanes) {
     if (bottleneck === undefined)
         return 0;
-    const prior = previous === undefined ? undefined : recordBottleneck(previous);
+    const priorKey = previous?.bottleneckKey;
     const storedAge = previous?.bottleneckAge;
-    if (prior === undefined)
+    if (typeof priorKey !== 'string' || priorKey === '')
         return 1;
     if (typeof storedAge !== 'number' || !Number.isSafeInteger(storedAge) || storedAge < 1)
         return 1;
-    if (prior.owner !== bottleneck.owner)
-        return 1;
-    if (!sameStringSet(prior.blockingLanes, bottleneck.blockingLanes))
+    if (priorKey !== bottleneckKeyOf(bottleneck))
         return 1;
     // A blocking lane that moved on is a route change, not an aged bottleneck.
     const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
     const currentStates = new Map(lanes.map((lane) => [lane.id, lane.state]));
-    for (const id of bottleneck.blockingLanes) {
+    for (const id of new Set(bottleneck.blockingLanes)) {
         const before = previousStates?.get(id);
         if (before !== undefined && currentStates.get(id) !== before)
             return 1;
@@ -1682,18 +1695,18 @@ function recordedBottleneckAge(workspace, sessionId, turn) {
     const age = checkpointRecords(workspace, sessionId, turn, 1)[0]?.bottleneckAge;
     return typeof age === 'number' && Number.isSafeInteger(age) && age > 0 ? age : undefined;
 }
-/** Lanes whose state a plan carried unchanged for the configured checkpoints. */
-function staleLanes(history, threshold) {
-    if (threshold < 1 || history.length < threshold)
+/** Lanes whose stored unchanged-checkpoint count reached the threshold. */
+function staleLanes(record, threshold) {
+    if (record === undefined || threshold < 1)
         return [];
-    const window = history.slice(0, threshold);
-    const newest = window[0] === undefined ? undefined : recordLaneStates(window[0]);
-    if (newest === undefined)
+    const states = recordLaneStates(record);
+    const ages = recordLaneAges(record);
+    if (states === undefined || ages === undefined)
         return [];
     const stale = [];
-    for (const [id, state] of newest) {
-        const unchanged = window.every((record) => recordLaneStates(record)?.get(id) === state);
-        if (unchanged)
+    for (const [id, count] of ages) {
+        const state = states.get(id);
+        if (state !== undefined && count >= threshold)
             stale.push({ id, state });
     }
     return stale;
@@ -1851,10 +1864,7 @@ function targetMatched(targets, destination) {
     const path = normalizeScopePath(destination);
     if (path === '')
         return false;
-    return targets.some((target) => {
-        const normalized = normalizeScopePath(target);
-        return normalized !== '' && pathContains(normalized, path);
-    });
+    return targets.some((target) => pathContains(normalizeScopePath(target), path));
 }
 /** Whether the declared remedy was executed after the checkpoint. */
 function remedyMatched(evidence, bottleneck, id) {
@@ -1893,10 +1903,10 @@ function checkpointRequired(evidence, config) {
 }
 /** Read the plan history the request and the close gate share. */
 function checkpointHistory(workspace, sessionId, turn, config) {
-    const records = checkpointRecords(workspace, sessionId, turn, config.laneStaleCheckpoints);
-    const age = records[0]?.bottleneckAge;
+    const record = checkpointRecords(workspace, sessionId, turn, 1)[0];
+    const age = record?.bottleneckAge;
     return {
-        staleLanes: staleLanes(records, config.laneStaleCheckpoints),
+        staleLanes: staleLanes(record, config.laneStaleCheckpoints),
         staleThreshold: config.laneStaleCheckpoints,
         bottleneckAge: typeof age === 'number' && Number.isSafeInteger(age) && age > 0 ? age : undefined,
     };
@@ -2244,11 +2254,21 @@ function installCheckpointTool(ctx, stateFor) {
             const path = checkpointPathFor(workspace, agent.session.id, turn);
             const display = displayCheckpointPath(workspace, path);
             const storedPlan = storedLanes(input.lanes, workspace);
+            assertStoredIdsUnique(storedPlan);
             const remaining = derivedRemaining(storedPlan);
             const parallelComputed = computesParallel(input.lanes);
             // The record for this turn holds the previous checkpoint while it exists,
             // so a periodic checkpoint inside one turn counts toward the age too.
-            const age = bottleneckAgeOf(checkpointRecords(workspace, agent.session.id, turn, 1)[0], input.bottleneck, input.lanes);
+            const previous = checkpointRecords(workspace, agent.session.id, turn, 1)[0];
+            const age = bottleneckAgeOf(previous, input.bottleneck, input.lanes);
+            const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
+            const previousAges = previous === undefined ? undefined : recordLaneAges(previous);
+            // A lane's unchanged count persists in the record, so a periodic checkpoint
+            // inside one turn advances it instead of losing it to the turn file.
+            const laneAges = storedPlan.map((lane) => ({
+                id: lane.id,
+                checkpoints: previousStates?.get(lane.id) === lane.state ? (previousAges?.get(lane.id) ?? 0) + 1 : 1,
+            }));
             // Reuse the same record path for a repeated call in the turn; a legacy v1
             // record stays readable but is never a satisfied plan.
             const written = await writeRecord(path, {
@@ -2258,9 +2278,13 @@ function installCheckpointTool(ctx, stateFor) {
                 outcome: input.outcome,
                 verified: storedList(input.verified, workspace),
                 lanes: storedPlan,
+                laneAges,
                 ...(input.bottleneck === undefined
                     ? {}
-                    : { bottleneck: storedBottleneck(input.bottleneck, workspace) }),
+                    : {
+                        bottleneck: storedBottleneck(input.bottleneck, workspace),
+                        bottleneckKey: bottleneckKeyOf(input.bottleneck),
+                    }),
                 derivedRemaining: remaining,
                 parallelComputed,
                 ...(age === 0 ? {} : { bottleneckAge: age }),

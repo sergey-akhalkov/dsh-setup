@@ -112,6 +112,25 @@ describe('bottleneck age', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
   })
 
+  it('keeps the age across a truncated display owner', async () => {
+    const harness = await create()
+    const owner = 'o'.repeat(200)
+    harness.turnStart(1)
+    await harness.checkpoint(plan({ owner }))
+    harness.turnStart(2)
+    await harness.checkpoint(plan({ owner }))
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+  })
+
+  it('does not let a duplicate blocking entry reset the age', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan({ blockingLanes: ['lane-a'] }))
+    harness.turnStart(2)
+    await harness.checkpoint(plan({ blockingLanes: ['lane-a', 'lane-a'] }))
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+  })
+
   it('resets the count when a blocking lane moves from blocked to running', async () => {
     const harness = await create()
     harness.turnStart(1)
