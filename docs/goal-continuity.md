@@ -243,7 +243,13 @@ arguments):
   "outcome": "continue",
   "verified": ["the parser test fails on the empty input"],
   "lanes": [
-    { "id": "guard", "owner": "lead", "scope": ["src/parser.ts"], "state": "done" },
+    {
+      "id": "guard",
+      "owner": "lead",
+      "scope": ["src/parser.ts"],
+      "state": "done",
+      "blockedBy": []
+    },
     {
       "id": "test",
       "owner": "lead",

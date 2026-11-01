@@ -1365,6 +1365,80 @@ describe('checkpoint plan metrics', () => {
     expect(plan?.remedyResolution).toBeUndefined()
   })
 
+  it('keeps a predecessor checkpoint outside the window as the dispatch boundary', () => {
+    const records = extractRecords('s', [
+      event('turn/start', { turn: 1 }, BASE),
+      call('w0', 'subagent', BASE + 30_000),
+      result('w0', BASE + 40_000),
+      checkpointCall('cp0', BASE + MINUTE, {
+        outcome: 'done',
+        verified: [],
+        next: 'first',
+      }),
+      call('w1', 'subagent', BASE + 2 * MINUTE),
+      result('w1', BASE + 3 * MINUTE),
+      checkpointCall('cp1', BASE + 5 * MINUTE, {
+        outcome: 'done',
+        verified: [],
+        next: 'second',
+      }),
+      call('w2', 'subagent', BASE + 6 * MINUTE),
+      result('w2', BASE + 7 * MINUTE),
+      checkpointCall('cp2', BASE + 7 * MINUTE + 30_000, {
+        outcome: 'done',
+        verified: [],
+        next: 'third',
+      }),
+    ])
+    const plan = planSummary(records, { from: BASE + 4 * MINUTE, to: BASE + 8 * MINUTE })
+    // cp1's boundary is cp0, not the turn start, so w0 is not recounted.
+    expect(plan?.checkpoints).toBe(2)
+    expect(plan?.dispatches).toEqual([1, 1])
+  })
+
+  it('does not count a reused delegate response as a worker start', () => {
+    const records = extractRecords('s', [
+      event('turn/start', { turn: 1 }, BASE),
+      checkpointCall('cp1', BASE + MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'running' }],
+        bottleneck: { id: 'n', owner: 'lead', action: 'worker_start' },
+        next: 'dispatch',
+      }),
+      call('w1', 'delegate', BASE + 2 * MINUTE),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [
+              {
+                type: 'text',
+                text: 'rule "task-review" PASS (reused record abc123, digest def456)',
+              },
+            ],
+            source: { kind: 'tool', callId: 'w1' },
+            isError: false,
+          },
+        },
+        BASE + 3 * MINUTE,
+      ),
+      checkpointCall('cp2', BASE + 4 * MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'running' }],
+        bottleneck: { id: 'n', owner: 'lead', action: 'worker_start' },
+        next: 'again',
+      }),
+    ])
+    const plan = planSummary(records, FULL_WINDOW)
+    expect(plan?.dispatches).toEqual([0, 0])
+    expect(plan?.resolvedContinue).toBe(0)
+  })
+
   it('keeps lane, owner, and target text out of the records and the summary', () => {
     const secret = 'PLAN-METRIC-SECRET'
     const records = extractRecords('s', [

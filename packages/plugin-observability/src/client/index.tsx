@@ -338,6 +338,13 @@ export const EN: Record<string, string> = {
   'dq.unmapped': 'unmapped closers',
   'dq.comparison': 'comparison sample',
   'dq.partial': 'Partial coverage; the metrics above are lower bounds.',
+  'plan.title': 'Checkpoint plan',
+  'plan.parallelShare': 'parallel share',
+  'plan.blockedLaneRate': 'blocked-lane rate',
+  'plan.remedyResolution': 'remedy resolution',
+  'plan.dispatches': 'dispatch per checkpoint',
+  'plan.notApplicable': 'Not applicable: no checkpoint in this range.',
+  'plan.none': '—',
   'scorecards.title': 'Plugin scorecards',
   'scorecards.empty': 'No signal rows are configured.',
   'scorecard.notApplicable': 'not applicable',
@@ -1859,6 +1866,70 @@ export function DataQualityStrip({ report, t }: { report: Report; t: Translate }
   )
 }
 
+/** The checkpoint plan counters; a window without a checkpoint is not applicable. */
+export function PlanPanel({ report, t }: { report: Report; t: Translate }): ReactNode {
+  const plan = report.plan
+  if (plan === undefined) {
+    return (
+      <section className="dsh-obs-panel" aria-label={t('plan.title')} data-plan="not-applicable">
+        <header className="dsh-obs-panel-head">
+          <h2>{t('plan.title')}</h2>
+        </header>
+        <p className="dsh-obs-muted">{t('plan.notApplicable')}</p>
+      </section>
+    )
+  }
+  const share = (value: number | undefined): string =>
+    value === undefined ? t('plan.none') : `${String(Math.round(value * 100))}%`
+  const facts: ReadonlyArray<{
+    readonly key: string
+    readonly label: string
+    readonly value: string
+  }> = [
+    {
+      key: 'parallel-share',
+      label: t('plan.parallelShare'),
+      value: `${String(plan.parallelCheckpoints)}/${String(plan.checkpoints)} (${share(plan.parallelShare)})`,
+    },
+    {
+      key: 'blocked-lane-rate',
+      label: t('plan.blockedLaneRate'),
+      value:
+        plan.blockedLaneRate === undefined
+          ? t('plan.none')
+          : `${String(plan.blockedLanes)}/${String(plan.lanes)} (${share(plan.blockedLaneRate)})`,
+    },
+    {
+      key: 'remedy-resolution',
+      label: t('plan.remedyResolution'),
+      value:
+        plan.remedyResolution === undefined
+          ? t('plan.none')
+          : `${String(plan.resolvedContinue)}/${String(plan.continueCheckpoints)} (${share(plan.remedyResolution)})`,
+    },
+    {
+      key: 'dispatch',
+      label: t('plan.dispatches'),
+      value: plan.dispatches.length === 0 ? t('plan.none') : plan.dispatches.join(', '),
+    },
+  ]
+  return (
+    <section className="dsh-obs-panel" aria-label={t('plan.title')} data-plan="present">
+      <header className="dsh-obs-panel-head">
+        <h2>{t('plan.title')}</h2>
+      </header>
+      <dl className="dsh-obs-facts">
+        {facts.map((fact) => (
+          <div key={fact.key} data-plan-metric={fact.key}>
+            <dt>{fact.label}</dt>
+            <dd>{fact.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
 /** The scorecard's one-word state; a zero eligible set is not applicable, not silent. */
 export function scorecardStatus(card: Scorecard): ScorecardStatus {
   if (card.eligible === 0) return 'not applicable'
@@ -2561,6 +2632,7 @@ export function OverviewView({
         <ActivityPanel report={report} t={t} />
         <ProcessPanel process={report.process} labels={report.bucketLabels} t={t} />
         <DataQualityStrip report={report} t={t} />
+        <PlanPanel report={report} t={t} />
         <ScorecardList
           scorecards={report.scorecards.filter((card) => !silentIds.has(card.rowId))}
           t={t}

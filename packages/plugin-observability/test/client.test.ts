@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { buildSync } from 'esbuild'
 import { describe, expect, it } from 'vitest'
 import type { HypothesisResult } from '../src/host/hypotheses.ts'
 import { extractRecords } from '../src/host/records.ts'
@@ -562,6 +563,7 @@ interface LoadedModule {
   ProcessSummaryTable?: (props: Record<string, unknown>) => unknown
   ProcessPanel?: (props: Record<string, unknown>) => unknown
   DataQualityStrip?: (props: Record<string, unknown>) => unknown
+  PlanPanel?: (props: Record<string, unknown>) => unknown
   scorecardStatus?: (card: Scorecard) => string
   BaselineStrip?: (props: Record<string, unknown>) => unknown
   ScorecardCard?: (props: Record<string, unknown>) => unknown
@@ -585,9 +587,7 @@ interface LoaderRegistration {
   factory: (require: (id: string) => unknown) => LoadedModule
 }
 
-function loadBundle(required: string[] = []): { module: LoadedModule; required: string[] } {
-  const file = join(packageDir, 'lib', 'client.js')
-  if (!existsSync(file)) throw new Error('run `pnpm build` before this test')
+function evaluateBundle(code: string, required: string[]): LoadedModule {
   let registration: LoaderRegistration | undefined
   const window = {
     __ModuleLoader__: {
@@ -596,9 +596,9 @@ function loadBundle(required: string[] = []): { module: LoadedModule; required: 
       },
     },
   }
-  new Function('window', readFileSync(file, 'utf8'))(window)
+  new Function('window', code)(window)
   if (registration === undefined) throw new Error('the client bundle did not register a module')
-  const module = registration.factory((id) => {
+  return registration.factory((id) => {
     required.push(id)
     if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment }
     if (id === 'react') {
@@ -612,7 +612,46 @@ function loadBundle(required: string[] = []): { module: LoadedModule; required: 
     }
     return {}
   })
-  return { module, required }
+}
+
+function loadBundle(required: string[] = []): { module: LoadedModule; required: string[] } {
+  const file = join(packageDir, 'lib', 'client.js')
+  if (!existsSync(file)) throw new Error('run `pnpm build` before this test')
+  return { module: evaluateBundle(readFileSync(file, 'utf8'), required), required }
+}
+
+/** Bundle the client source so a source edit is exercised without rebuilding lib. */
+function loadSourceBundle(required: string[] = []): { module: LoadedModule; required: string[] } {
+  const result = buildSync({
+    entryPoints: [join(packageDir, 'src', 'client', 'index.tsx')],
+    bundle: true,
+    write: false,
+    format: 'cjs',
+    platform: 'browser',
+    target: 'es2022',
+    jsx: 'automatic',
+    external: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'react/jsx-runtime',
+      'react/jsx-dev-runtime',
+    ],
+    logLevel: 'silent',
+  })
+  const output = result.outputFiles?.[0]
+  if (output === undefined) throw new Error('the client source did not bundle')
+  const code = `window.__ModuleLoader__.load({
+  id: 'dsh-setup-plugin-observability-source',
+  factory: (require) => {
+    var module = { exports: {} };
+    var exports = module.exports;
+${output.text}
+    return module.exports;
+  },
+});
+`
+  return { module: evaluateBundle(code, required), required }
 }
 
 function translate(key: string): string {
@@ -4319,5 +4358,114 @@ describe('process timeline and its Overview panel', () => {
     expect(
       nodesOf(rendered, 'p', (element) => element.props['data-process-intervention'] === 'true'),
     ).toHaveLength(1)
+  })
+})
+
+describe('checkpoint plan rendering', () => {
+  /** Three checkpoints: one parallel plan, one blocked lane, one unresolved remedy. */
+  function planReport(): Report {
+    const checkpoint = (callId: string, at: number, plan: Record<string, unknown>): SessionEvent =>
+      event(
+        'tool/call',
+        { turn: 1, step: 1, callId, name: 'work_checkpoint', arguments: JSON.stringify(plan) },
+        at,
+      )
+    const records = extractRecords('session-1', [
+      event(
+        'user/message',
+        { role: 'user', content: [], source: { kind: 'user' } },
+        NOW - 12 * MINUTE,
+      ),
+      event('turn/start', { turn: 1 }, NOW - 12 * MINUTE),
+      checkpoint('cp1', NOW - 10 * MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [
+          { id: 'a', owner: `lead-${SECRET}`, scope: [`./${SECRET}/src`], state: 'running' },
+          { id: 'b', owner: `worker-${SECRET}`, scope: [`${SECRET}/docs`], state: 'running' },
+        ],
+        bottleneck: {
+          id: 'n',
+          owner: `lead-${SECRET}`,
+          action: 'worker_start',
+          blockingLanes: ['b'],
+        },
+        next: `keep ${SECRET}`,
+      }),
+      event(
+        'tool/call',
+        { turn: 1, step: 1, callId: 'w1', name: 'subagent', arguments: '{}' },
+        NOW - 9 * MINUTE,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 1,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: 'w1' },
+            isError: false,
+          },
+        },
+        NOW - 8 * MINUTE,
+      ),
+      checkpoint('cp2', NOW - 6 * MINUTE, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [
+          { id: 'a', owner: `lead-${SECRET}`, scope: [`${SECRET}/src`], state: 'running' },
+          { id: 'b', owner: `worker-${SECRET}`, scope: [`${SECRET}/docs`], state: 'blocked' },
+        ],
+        bottleneck: {
+          id: 'n',
+          owner: `worker-${SECRET}`,
+          action: 'lead_action',
+          blockingLanes: ['b'],
+          targets: [`${SECRET}/target.ts`],
+        },
+        next: `edit ${SECRET}`,
+      }),
+      checkpoint('cp3', NOW - 4 * MINUTE, {
+        outcome: 'done',
+        verified: [`checked ${SECRET}`],
+        lanes: [{ id: 'a', owner: `lead-${SECRET}`, scope: [`${SECRET}/src`], state: 'done' }],
+        next: `done ${SECRET}`,
+      }),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW - 3 * MINUTE),
+    ])
+    return buildReport({
+      range: 'day',
+      now: NOW,
+      records,
+      configured: [],
+      registry: new Set(),
+    })
+  }
+
+  it('renders the four plan counters with exact values on the Overview', () => {
+    const { module } = loadSourceBundle()
+    const report = planReport()
+    expect(report.plan?.parallelShare).toBeCloseTo(1 / 3)
+    expect(JSON.stringify(report)).not.toContain(SECRET)
+    const text = childText(renderTree(module.OverviewView?.(panelProps(report))))
+    expect(text).toContain('plan.title')
+    expect(text).toContain('plan.parallelShare')
+    expect(text).toContain('1/3 (33%)')
+    expect(text).toContain('1/5 (20%)')
+    expect(text).toContain('1/2 (50%)')
+    expect(text).toContain('0, 1, 0')
+    expect(text).not.toContain(SECRET)
+  })
+
+  it('reads not applicable when the window holds no checkpoint', () => {
+    const { module } = loadSourceBundle()
+    const report = fixtureReport()
+    expect(report.plan).toBeUndefined()
+    const text = childText(renderTree(module.PlanPanel?.({ report, t: translate })))
+    expect(text).toContain('plan.title')
+    expect(text).toContain('plan.notApplicable')
+    expect(text).not.toContain('%')
   })
 })

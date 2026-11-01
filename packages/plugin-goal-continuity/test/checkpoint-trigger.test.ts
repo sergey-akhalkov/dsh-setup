@@ -489,6 +489,28 @@ describe('checkpoint request', () => {
     expect(text).toContain('Bottleneck age: 2')
   })
 
+  it('names every stale lane when the message budget permits', async () => {
+    const harness = await create()
+    const plan = {
+      ...SERIAL,
+      lanes: ['lane-a', 'lane-b', 'lane-c', 'lane-d'].map((id) => ({
+        id,
+        owner: 'lead',
+        scope: [`src/${id}`],
+        state: 'running',
+      })),
+    }
+    harness.turnStart(1)
+    await harness.checkpoint(plan)
+    harness.turnStart(2)
+    await harness.checkpoint(plan)
+    harness.turnStart(3)
+    addWorkingCalls(harness)
+    await harness.turnStopping(3)
+    const text = noticeText(harness.steers[0] as never)
+    for (const id of ['lane-a', 'lane-b', 'lane-c', 'lane-d']) expect(text).toContain(id)
+  })
+
   it('names no stale lane after a state change and resets the age with a new owner', async () => {
     const harness = await create()
     harness.turnStart(1)

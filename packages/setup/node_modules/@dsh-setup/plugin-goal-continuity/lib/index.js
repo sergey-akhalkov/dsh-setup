@@ -1450,7 +1450,6 @@ const MAX_CHECKPOINT_NEXT_CHARS = 400;
 const MAX_CHECKPOINT_PATHS = 5;
 const MAX_CHECKPOINT_PATH_CHARS = 120;
 const MAX_CHECKPOINT_SUMMARY_CHARS = 900;
-const MAX_CHECKPOINT_STALE_LANES = 3;
 /** Whether a registered tool is visible to this agent; an absent registry is absent capability. */
 function toolVisible(ctx, agent, name) {
     const tools = optionalService(ctx, 'tools');
@@ -1500,27 +1499,49 @@ function displayCheckpointPath(workspace, path) {
 const LANE_STATES = Object.freeze(['running', 'blocked', 'done']);
 /** Remedy actions the plugin can verify before the close. */
 const BOTTLENECK_ACTIONS = Object.freeze(['worker_start', 'lead_action', 'user_decision']);
-/** Normalize one scope or destination for component-aware comparison. */
+/** Whether a scope entry names one shared resource instead of a path. */
+function isResourceScope(entry) {
+    return entry.trim().startsWith('resource:');
+}
+/** Normalize one scope or destination: separators unified, dot segments resolved, case folded. */
 function normalizeScopePath(value) {
-    return value.trim().replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/+$/u, '').toLowerCase();
+    const unified = value.trim().replaceAll('\\', '/');
+    const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified);
+    const parts = [];
+    for (const part of unified.split('/')) {
+        if (part === '' || part === '.')
+            continue;
+        if (part === '..') {
+            parts.pop();
+            continue;
+        }
+        parts.push(part);
+    }
+    const joined = parts.join('/').toLowerCase();
+    return rooted ? `/${joined}` : joined;
 }
 /** Whether one path equals another or lies beneath it by path component. */
 function pathContains(outer, inner) {
-    return outer === inner ? true : inner.startsWith(`${outer}/`);
+    if (outer === inner)
+        return true;
+    // The relative root contains every relative descendant, never an absolute path.
+    if (outer === '')
+        return !inner.startsWith('/');
+    return inner.startsWith(`${outer}/`);
 }
-/** Whether two lanes' scopes overlap; a `resource:` entry matches only itself. */
+/** Whether two lanes' scopes overlap; a `resource:` entry matches only itself exactly. */
 function scopesOverlap(left, right) {
     for (const leftEntry of left) {
         for (const rightEntry of right) {
-            const one = normalizeScopePath(leftEntry);
-            const other = normalizeScopePath(rightEntry);
-            if (one.startsWith('resource:') || other.startsWith('resource:')) {
-                if (one === other)
+            const leftResource = isResourceScope(leftEntry);
+            const rightResource = isResourceScope(rightEntry);
+            if (leftResource || rightResource) {
+                if (leftResource && rightResource && leftEntry.trim() === rightEntry.trim())
                     return true;
                 continue;
             }
-            if (one === '' || other === '')
-                continue;
+            const one = normalizeScopePath(leftEntry);
+            const other = normalizeScopePath(rightEntry);
             if (pathContains(one, other) || pathContains(other, one))
                 return true;
         }
@@ -1630,10 +1651,10 @@ function recordBottleneck(record) {
 }
 /**
  * How many consecutive checkpoints named the same bottleneck owner and the
- * same blocking lane ids. A legacy record without the object counts for
- * nothing, so the first plan after the upgrade starts at one.
+ * same blocking lane ids without any blocking lane moving on. A legacy record
+ * without the object counts for nothing, so the first plan starts at one.
  */
-function bottleneckAgeOf(previous, bottleneck) {
+function bottleneckAgeOf(previous, bottleneck, lanes) {
     if (bottleneck === undefined)
         return 0;
     const prior = previous === undefined ? undefined : recordBottleneck(previous);
@@ -1646,7 +1667,20 @@ function bottleneckAgeOf(previous, bottleneck) {
         return 1;
     if (!sameStringSet(prior.blockingLanes, bottleneck.blockingLanes))
         return 1;
+    // A blocking lane that moved on is a route change, not an aged bottleneck.
+    const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
+    const currentStates = new Map(lanes.map((lane) => [lane.id, lane.state]));
+    for (const id of bottleneck.blockingLanes) {
+        const before = previousStates?.get(id);
+        if (before !== undefined && currentStates.get(id) !== before)
+            return 1;
+    }
     return storedAge + 1;
+}
+/** The age the turn's latest checkpoint record stored, or undefined when unavailable. */
+function recordedBottleneckAge(workspace, sessionId, turn) {
+    const age = checkpointRecords(workspace, sessionId, turn, 1)[0]?.bottleneckAge;
+    return typeof age === 'number' && Number.isSafeInteger(age) && age > 0 ? age : undefined;
 }
 /** Lanes whose state a plan carried unchanged for the configured checkpoints. */
 function staleLanes(history, threshold) {
@@ -1773,14 +1807,15 @@ function checkpointEvidence(agent, turn, workspace, shellOutcomes) {
 }
 /**
  * Re-read the latest checkpoint in the turn, so an amendment replaces the
- * earlier plan instead of adding a second obligation.
+ * earlier plan instead of adding a second obligation. Values stay raw here:
+ * remedy matching compares them with the tool call's own destination.
  */
-function checkpointPlan(evidence, workspace) {
+function checkpointPlan(evidence) {
     const checkpoint = evidence.checkpoint;
     if (checkpoint === undefined)
         return undefined;
     try {
-        const input = parseCheckpointInput(JSON.parse(checkpoint.arguments), workspace);
+        const input = parseCheckpointInput(JSON.parse(checkpoint.arguments));
         return {
             outcome: input.outcome,
             lanes: input.lanes,
@@ -1889,7 +1924,6 @@ function composeCheckpointRequest(evidence, workspace, max, step, history) {
     const staleText = history === undefined || history.staleLanes.length === 0
         ? undefined
         : `- Stale lanes: ${history.staleLanes
-            .slice(0, MAX_CHECKPOINT_STALE_LANES)
             .map((lane) => `${bound(redact(lane.id, workspace), MAX_CHECKPOINT_PATH_CHARS)} (${lane.state}, ${history.staleThreshold} checkpoints)`)
             .join(', ')}`;
     const ageText = history?.bottleneckAge === undefined ? undefined : `- Bottleneck age: ${history.bottleneckAge}`;
@@ -1917,37 +1951,40 @@ function composeParallelRequest(id, max) {
     return bound(`Work checkpoint ${id} computes parallel lanes (goal-continuity). Start a worker whose call arguments contain ${id}, or amend the checkpoint with a plan that is serial: one owner or a shared scope.`, max);
 }
 /** The bounded remedy steer naming the bottleneck, its action, and the missing call. */
-function composeRemedyRequest(id, bottleneck, max) {
-    const blocking = bottleneck.blockingLanes.length === 0 ? 'none' : bottleneck.blockingLanes.join(', ');
+function composeRemedyRequest(id, bottleneck, max, workspace) {
+    const blocking = bottleneck.blockingLanes.length === 0
+        ? 'none'
+        : storedList(bottleneck.blockingLanes, workspace, MAX_CHECKPOINT_PATH_CHARS).join(', ');
+    const targets = storedList(bottleneck.targets, workspace, MAX_CHECKPOINT_PATH_CHARS);
     const expected = bottleneck.action === 'worker_start'
         ? `start a worker whose call arguments contain ${id}`
         : bottleneck.action === 'user_decision'
             ? 'ask the user with ask_user_question'
-            : `complete a successful edit or write at ${bottleneck.targets.join(', ') === '' ? '(no target declared)' : bottleneck.targets.join(', ')}`;
-    return bound(`Work checkpoint ${id} names bottleneck "${bottleneck.id}" (owner ${bottleneck.owner}) with action ${bottleneck.action} and blocking lanes: ${blocking} (goal-continuity). Before the close, ${expected}.`, max);
+            : `complete a successful edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
+    return bound(`Work checkpoint ${id} names bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" (owner ${storedText(bottleneck.owner, workspace, MAX_CHECKPOINT_PATH_CHARS)}) with action ${bottleneck.action} and blocking lanes: ${blocking} (goal-continuity). Before the close, ${expected}.`, max);
 }
 /** The bounded age steer requiring a route change rather than another wait. */
-function composeAgeRequest(id, bottleneck, age, max) {
-    return bound(`Work checkpoint ${id} bottleneck "${bottleneck.id}" (owner ${bottleneck.owner}) has persisted for ${age} checkpoints (goal-continuity). Change the route before the close: a new owner, a changing blocking lane, or a user_decision asked with ask_user_question.`, max);
+function composeAgeRequest(id, bottleneck, age, max, workspace) {
+    return bound(`Work checkpoint ${id} bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" (owner ${storedText(bottleneck.owner, workspace, MAX_CHECKPOINT_PATH_CHARS)}) has persisted for ${age} checkpoints (goal-continuity). Change the route before the close: a new owner, a changing blocking lane, or a user_decision asked with ask_user_question.`, max);
 }
-/** One optional non-empty bounded text field, redacted before it is stored. */
-function checkpointText(raw, field, max, workspace) {
+/** One optional non-empty text field; storage bounds and redaction happen at write time. */
+function checkpointText(raw, field) {
     if (raw === undefined || raw === null)
         return undefined;
     if (typeof raw !== 'string' || raw.trim() === '') {
         throw new Error(`work_checkpoint.${field} must be a non-empty string`);
     }
-    return bound(redact(raw.trim(), workspace), max);
+    return raw.trim();
 }
-/** One required non-empty bounded text field. */
-function checkpointRequiredText(raw, field, max, workspace) {
-    const value = checkpointText(raw, field, max, workspace);
+/** One required non-empty text field. */
+function checkpointRequiredText(raw, field) {
+    const value = checkpointText(raw, field);
     if (value === undefined)
         throw new Error(`work_checkpoint.${field} must be a non-empty string`);
     return value;
 }
-/** One bounded list of non-empty redacted strings. */
-function checkpointList(raw, field, workspace, max = MAX_CHECKPOINT_ITEMS, itemMax = MAX_CHECKPOINT_ITEM_CHARS) {
+/** One list of non-empty strings, bounded by count only. */
+function checkpointList(raw, field, max = MAX_CHECKPOINT_ITEMS) {
     if (raw === undefined)
         return [];
     if (!Array.isArray(raw)) {
@@ -1960,11 +1997,11 @@ function checkpointList(raw, field, workspace, max = MAX_CHECKPOINT_ITEMS, itemM
         if (typeof item !== 'string' || item.trim() === '') {
             throw new Error(`work_checkpoint.${field} must be a list of non-empty strings`);
         }
-        return bound(redact(item.trim(), workspace), itemMax);
+        return item.trim();
     });
 }
 /** Validate one lane; every rejection names its position and field. */
-function checkpointLane(raw, index, workspace) {
+function checkpointLane(raw, index) {
     const field = `lanes[${index}]`;
     if (!isRecord(raw))
         throw new Error(`work_checkpoint.${field} must be an object`);
@@ -1973,21 +2010,21 @@ function checkpointLane(raw, index, workspace) {
         if (!allowed.has(key))
             throw new Error(`work_checkpoint.${field}: unknown field "${key}"`);
     }
-    const id = checkpointRequiredText(raw.id, `${field}.id`, MAX_CHECKPOINT_PATH_CHARS, workspace);
-    const owner = checkpointRequiredText(raw.owner, `${field}.owner`, MAX_CHECKPOINT_PATH_CHARS, workspace);
+    const id = checkpointRequiredText(raw.id, `${field}.id`);
+    const owner = checkpointRequiredText(raw.owner, `${field}.owner`);
     const state = raw.state;
     if (!LANE_STATES.includes(state)) {
         throw new Error(`work_checkpoint.${field}.state must be "running", "blocked", or "done"`);
     }
-    const scope = checkpointList(raw.scope, `${field}.scope`, workspace, MAX_SCOPE_ITEMS, MAX_CHECKPOINT_PATH_CHARS);
+    const scope = checkpointList(raw.scope, `${field}.scope`, MAX_SCOPE_ITEMS);
     if (scope.length === 0) {
         throw new Error(`work_checkpoint.${field}.scope must list at least one owned path or resource`);
     }
-    const blockedBy = checkpointList(raw.blockedBy, `${field}.blockedBy`, workspace, MAX_SCOPE_ITEMS, MAX_CHECKPOINT_PATH_CHARS);
+    const blockedBy = checkpointList(raw.blockedBy, `${field}.blockedBy`, MAX_SCOPE_ITEMS);
     return { id, owner, scope, state: state, blockedBy };
 }
 /** Validate the plan: unique ids, a known `blockedBy`, and the lane bound. */
-function checkpointLanes(raw, workspace) {
+function checkpointLanes(raw) {
     if (raw === undefined)
         return [];
     if (!Array.isArray(raw))
@@ -1995,7 +2032,7 @@ function checkpointLanes(raw, workspace) {
     if (raw.length > MAX_LANES) {
         throw new Error(`work_checkpoint.lanes must list at most ${MAX_LANES} lanes`);
     }
-    const lanes = raw.map((lane, index) => checkpointLane(lane, index, workspace));
+    const lanes = raw.map((lane, index) => checkpointLane(lane, index));
     const ids = new Set();
     for (const lane of lanes) {
         if (ids.has(lane.id)) {
@@ -2013,7 +2050,7 @@ function checkpointLanes(raw, workspace) {
     return lanes;
 }
 /** Validate the bottleneck and its remedy; every rejection names its field. */
-function checkpointBottleneck(raw, workspace) {
+function checkpointBottleneck(raw) {
     if (raw === undefined)
         return undefined;
     if (!isRecord(raw))
@@ -2024,14 +2061,14 @@ function checkpointBottleneck(raw, workspace) {
             throw new Error(`work_checkpoint.bottleneck: unknown field "${key}"`);
         }
     }
-    const id = checkpointRequiredText(raw.id, 'bottleneck.id', MAX_CHECKPOINT_PATH_CHARS, workspace);
-    const owner = checkpointRequiredText(raw.owner, 'bottleneck.owner', MAX_CHECKPOINT_PATH_CHARS, workspace);
+    const id = checkpointRequiredText(raw.id, 'bottleneck.id');
+    const owner = checkpointRequiredText(raw.owner, 'bottleneck.owner');
     const action = raw.action;
     if (!BOTTLENECK_ACTIONS.includes(action)) {
         throw new Error('work_checkpoint.bottleneck.action must be "worker_start", "lead_action", or "user_decision"');
     }
-    const blockingLanes = checkpointList(raw.blockingLanes, 'bottleneck.blockingLanes', workspace, MAX_LANES, MAX_CHECKPOINT_PATH_CHARS);
-    const targets = checkpointList(raw.targets, 'bottleneck.targets', workspace, MAX_CHECKPOINT_ITEMS, MAX_CHECKPOINT_PATH_CHARS);
+    const blockingLanes = checkpointList(raw.blockingLanes, 'bottleneck.blockingLanes', MAX_LANES);
+    const targets = checkpointList(raw.targets, 'bottleneck.targets', MAX_CHECKPOINT_ITEMS);
     if (action === 'lead_action' && targets.length === 0) {
         throw new Error('work_checkpoint.bottleneck.targets must list the file or directory the remedy edits when action is "lead_action"');
     }
@@ -2045,7 +2082,7 @@ const REMOVED_CHECKPOINT_FIELDS = Object.freeze({
     speedup: 'state the improvement in work_checkpoint.next instead.',
 });
 /** Validate one `work_checkpoint` argument object; every rejection names its field. */
-function parseCheckpointInput(raw, workspace) {
+function parseCheckpointInput(raw) {
     if (!isRecord(raw))
         throw new Error('work_checkpoint arguments must be an object');
     for (const [field, replacement] of Object.entries(REMOVED_CHECKPOINT_FIELDS)) {
@@ -2062,12 +2099,12 @@ function parseCheckpointInput(raw, workspace) {
         throw new Error('work_checkpoint.outcome must be "done" or "continue"');
     }
     const outcome = raw.outcome;
-    const next = checkpointText(raw.next, 'next', MAX_CHECKPOINT_NEXT_CHARS, workspace);
+    const next = checkpointText(raw.next, 'next');
     if (next === undefined)
         throw new Error('work_checkpoint.next must be a non-empty string');
-    const verified = checkpointList(raw.verified, 'verified', workspace);
-    const lanes = checkpointLanes(raw.lanes, workspace);
-    const bottleneck = checkpointBottleneck(raw.bottleneck, workspace);
+    const verified = checkpointList(raw.verified, 'verified');
+    const lanes = checkpointLanes(raw.lanes);
+    const bottleneck = checkpointBottleneck(raw.bottleneck);
     if (outcome === 'continue') {
         if (lanes.length === 0) {
             throw new Error('work_checkpoint.lanes is required when outcome is "continue"');
@@ -2085,6 +2122,34 @@ const CHECKPOINT_OUTPUT_SCHEMA = {
     required: ['text'],
     additionalProperties: false,
 };
+/** One bounded, redacted copy of a plan value, for the local record and the steers only. */
+function storedText(value, workspace, max = MAX_CHECKPOINT_ITEM_CHARS) {
+    return bound(redact(value, workspace), max);
+}
+/** The bounded, redacted strings the local record stores. */
+function storedList(values, workspace, max = MAX_CHECKPOINT_ITEM_CHARS) {
+    return values.map((value) => storedText(value, workspace, max));
+}
+/** The bounded, redacted lane plan the local record stores. */
+function storedLanes(lanes, workspace) {
+    return lanes.map((lane) => ({
+        id: storedText(lane.id, workspace, MAX_CHECKPOINT_PATH_CHARS),
+        owner: storedText(lane.owner, workspace, MAX_CHECKPOINT_PATH_CHARS),
+        scope: storedList(lane.scope, workspace, MAX_CHECKPOINT_PATH_CHARS),
+        state: lane.state,
+        blockedBy: storedList(lane.blockedBy, workspace, MAX_CHECKPOINT_PATH_CHARS),
+    }));
+}
+/** The bounded, redacted bottleneck the local record stores. */
+function storedBottleneck(bottleneck, workspace) {
+    return {
+        id: storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS),
+        owner: storedText(bottleneck.owner, workspace, MAX_CHECKPOINT_PATH_CHARS),
+        action: bottleneck.action,
+        blockingLanes: storedList(bottleneck.blockingLanes, workspace, MAX_CHECKPOINT_PATH_CHARS),
+        targets: storedList(bottleneck.targets, workspace, MAX_CHECKPOINT_PATH_CHARS),
+    };
+}
 /** Register the checkpoint tool; a host without a tool registry keeps running. */
 function installCheckpointTool(ctx, stateFor) {
     const tools = optionalService(ctx, 'tools');
@@ -2168,7 +2233,7 @@ function installCheckpointTool(ctx, stateFor) {
             if (agent === undefined)
                 throw new Error('work_checkpoint requires a calling agent');
             const workspace = workspaceFor(ctx, agent);
-            const input = parseCheckpointInput(args, workspace);
+            const input = parseCheckpointInput(args);
             const turn = openTurnNumber(agent);
             if (turn === undefined)
                 throw new Error('work_checkpoint: no open turn to record');
@@ -2178,9 +2243,12 @@ function installCheckpointTool(ctx, stateFor) {
             const id = checkpointIdFor(agent.session.id, turn);
             const path = checkpointPathFor(workspace, agent.session.id, turn);
             const display = displayCheckpointPath(workspace, path);
-            const remaining = derivedRemaining(input.lanes);
+            const storedPlan = storedLanes(input.lanes, workspace);
+            const remaining = derivedRemaining(storedPlan);
             const parallelComputed = computesParallel(input.lanes);
-            const age = bottleneckAgeOf(checkpointRecords(workspace, agent.session.id, turn - 1, 1)[0], input.bottleneck);
+            // The record for this turn holds the previous checkpoint while it exists,
+            // so a periodic checkpoint inside one turn counts toward the age too.
+            const age = bottleneckAgeOf(checkpointRecords(workspace, agent.session.id, turn, 1)[0], input.bottleneck, input.lanes);
             // Reuse the same record path for a repeated call in the turn; a legacy v1
             // record stays readable but is never a satisfied plan.
             const written = await writeRecord(path, {
@@ -2188,22 +2256,24 @@ function installCheckpointTool(ctx, stateFor) {
                 checkpoint: id,
                 turn,
                 outcome: input.outcome,
-                verified: input.verified,
-                lanes: input.lanes,
-                ...(input.bottleneck === undefined ? {} : { bottleneck: input.bottleneck }),
+                verified: storedList(input.verified, workspace),
+                lanes: storedPlan,
+                ...(input.bottleneck === undefined
+                    ? {}
+                    : { bottleneck: storedBottleneck(input.bottleneck, workspace) }),
                 derivedRemaining: remaining,
                 parallelComputed,
                 ...(age === 0 ? {} : { bottleneckAge: age }),
-                next: input.next,
+                next: storedText(input.next, workspace, MAX_CHECKPOINT_NEXT_CHARS),
                 time: new Date().toISOString(),
                 // The persisted copy is bounded and redacted like every decision field;
                 // the record path already hashed the original id.
-                session: bound(redact(agent.session.id, workspace), MAX_CHECKPOINT_ITEM_CHARS),
+                session: storedText(agent.session.id, workspace),
             });
             const bottleneck = input.bottleneck === undefined
                 ? 'none'
-                : `${input.bottleneck.id} (${input.bottleneck.action})`;
-            const decision = `${input.outcome}; ${input.lanes.length} lanes, ${remaining.length} remaining; ${parallelComputed ? 'parallel' : 'serial'}; bottleneck: ${bottleneck}; next: ${input.next}`;
+                : `${storedText(input.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)} (${input.bottleneck.action})`;
+            const decision = `${input.outcome}; ${storedPlan.length} lanes, ${remaining.length} remaining; ${parallelComputed ? 'parallel' : 'serial'}; bottleneck: ${bottleneck}; next: ${storedText(input.next, workspace, MAX_CHECKPOINT_NEXT_CHARS)}`;
             const text = written
                 ? `Work checkpoint ${id} recorded at ${display}. ${decision}`
                 : `Work checkpoint ${id} could not write its local record at ${display}; the close gate still counts this checkpoint. ${decision}`;
@@ -2308,7 +2378,7 @@ function installCheckpointGate(ctx, config, stateFor) {
             refuse(agent, budget, composeCheckpointRequest(evidence, workspace, config.maxMessageChars, undefined, checkpointHistory(workspace, agent.session.id, turn, config)), 'goal-continuity: work checkpoint required', 'this turn closed without a successful work_checkpoint after the refusal cap');
             return;
         }
-        const plan = checkpointPlan(evidence, workspace);
+        const plan = checkpointPlan(evidence);
         // A logged successful call is a checkpoint even if its arguments are
         // unreadable; only a readable plan still gates the close.
         if (plan === undefined || plan.outcome === 'done')
@@ -2326,17 +2396,18 @@ function installCheckpointGate(ctx, config, stateFor) {
         if (bottleneck === undefined)
             return;
         if (!remedyMatched(evidence, bottleneck, id)) {
-            refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${bottleneck.id}" after the refusal cap`);
+            refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
             return;
         }
-        const age = bottleneckAgeOf(checkpointRecords(workspace, agent.session.id, turn - 1, 1)[0], bottleneck);
-        if (age < config.bottleneckAge)
+        // The write counted the preceding checkpoint, in this turn or an earlier one.
+        const age = recordedBottleneckAge(workspace, agent.session.id, turn);
+        if (age === undefined || age < config.bottleneckAge)
             return;
-        // A user decision is the live escape; a new owner or a changed blocking
-        // lane set is the data escape and already lowered the age.
+        // A user decision is the live escape; a new owner or a moved blocking lane
+        // is the data escape and already lowered the stored age.
         if (bottleneck.action === 'user_decision')
             return;
-        refuse(agent, budget, composeAgeRequest(id, bottleneck, age, config.maxMessageChars), `goal-continuity: work checkpoint ${id} bottleneck is aged`, `the bottleneck "${bottleneck.id}" survived ${age} checkpoints after the refusal cap`);
+        refuse(agent, budget, composeAgeRequest(id, bottleneck, age, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} bottleneck is aged`, `the bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${age} checkpoints after the refusal cap`);
     }
     /** Steer once per refusal, then allow the close with one UNCHECKED notice. */
     function refuse(agent, budget, text, summary, detail) {

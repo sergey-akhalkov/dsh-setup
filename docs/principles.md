@@ -25,7 +25,7 @@ one prompt section and one skill provider over the Markdown files that ship insi
 | Contribution                         | Size        | Cost per model step |
 | ------------------------------------ | ----------- | ------------------- |
 | Packaged lazy-dev ruleset (Ponytail) | 2,721 bytes | ~0.7k tokens        |
-| This working contract (with footer)  | 5,998 bytes | ~1.5k tokens        |
+| This working contract (with footer)  | 5,995 bytes | ~1.5k tokens        |
 | **Both, active (this page)**         |             | **~2.2k tokens**    |
 
 The setup also ships the [RTK token workflow](rtk.md) routing rule and the [Serena code
@@ -63,12 +63,12 @@ bytes) because it joins the always-on section, whose size is checked by the plug
 The contract ends a substantial pause with a `work_checkpoint` call, and the
 [goal-continuity bundle](goal-continuity.md) requests the same check at each configured step interval
 (`stepInterval`, 40 steps by default). Every checkpoint carries the lane plan, the current
-`bottleneck`, its remedy, and the `next` action: independent lanes start a worker before the turn
-closes, integrated in the main agent, and serial work is a shared scope or a single owner. The remedy
-is executed before the close and the plugin checks for it; a bottleneck that survives a second
-checkpoint needs a route change (a new owner, a changed blocking lane, or a user decision), not
-another wait. A long run thus keeps surfacing what stands between the agent and done instead of
-waiting for the turn to end.
+`bottleneck` with its owner and blocking lanes, its remedy, and the `next` action: independent lanes
+start a worker before the turn closes, integrated in the main agent, and serial work is a shared
+scope or a single owner. The remedy is executed before the close and the plugin checks for it; a
+bottleneck that survives a second checkpoint needs a route change (a new owner, a changed blocking
+lane, or a user decision), not another wait. A long run thus keeps surfacing what stands between the
+agent and done instead of waiting for the turn to end.
 
 ## Install
 

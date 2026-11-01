@@ -47,10 +47,11 @@ export function windowUsage(records, window) {
 function callKeyOf(record) {
     return record.callId === undefined ? undefined : `${record.sessionId}\u0000${record.callId}`;
 }
-/** A worker call joined to a result that did not fail; a pending call is not a start. */
+/** A worker call joined to a result that did not fail; a pending or reused delegate is not a start. */
 function successfulWorkerStarts(records) {
     const results = new Set();
     const failed = new Set();
+    const notStarted = new Set();
     for (const record of records) {
         if (record.eventType !== 'tool/result')
             continue;
@@ -60,6 +61,8 @@ function successfulWorkerStarts(records) {
         results.add(key);
         if (record.failed === true)
             failed.add(key);
+        if (record.delegateStarted === false)
+            notStarted.add(key);
     }
     return records.filter((record) => {
         if (record.eventType !== 'tool/call' || record.tool === undefined)
@@ -67,7 +70,9 @@ function successfulWorkerStarts(records) {
         if (!WORKER_START_TOOLS.has(record.tool))
             return false;
         const key = callKeyOf(record);
-        return key !== undefined && results.has(key) && !failed.has(key);
+        if (key === undefined || !results.has(key) || failed.has(key))
+            return false;
+        return record.tool !== 'delegate' || !notStarted.has(key);
     });
 }
 /** The seq the checkpoint's turn started at, or negative infinity when unrecorded. */
@@ -100,9 +105,11 @@ function dispatchCount(records, checkpoint, checkpoints, starts) {
 }
 /** Aggregate the extracted checkpoint metadata over one window. */
 export function planSummary(records, window) {
-    const checkpoints = records
-        .filter((record) => record.checkpointOutcome !== undefined && inWindow(record, window))
+    // Every checkpoint supplies a dispatch boundary; only in-window ones are reported.
+    const allCheckpoints = records
+        .filter((record) => record.checkpointOutcome !== undefined)
         .sort((left, right) => left.time - right.time || left.seq - right.seq);
+    const checkpoints = allCheckpoints.filter((record) => inWindow(record, window));
     if (checkpoints.length === 0)
         return undefined;
     let lanes = 0;
@@ -134,7 +141,7 @@ export function planSummary(records, window) {
         ...(continueCheckpoints === 0
             ? {}
             : { remedyResolution: resolvedContinue / continueCheckpoints }),
-        dispatches: checkpoints.map((checkpoint) => dispatchCount(records, checkpoint, checkpoints, starts)),
+        dispatches: checkpoints.map((checkpoint) => dispatchCount(records, checkpoint, allCheckpoints, starts)),
     };
 }
 /** Count the steps and messages that recorded usage. */

@@ -17,7 +17,7 @@ function call(callId: string, name: string, arguments_ = '{}'): SessionEvent {
 
 function result(
   callId: string,
-  options: { isError?: boolean; error?: Record<string, unknown> } = {},
+  options: { isError?: boolean; error?: Record<string, unknown>; text?: string } = {},
 ): SessionEvent {
   return event('tool/result', {
     turn: 1,
@@ -25,7 +25,7 @@ function result(
     message: {
       role: 'tool',
       id: `m-${callId}`,
-      content: [],
+      content: options.text === undefined ? [] : [{ type: 'text', text: options.text }],
       source: { kind: 'tool', callId },
       toolCallId: callId,
       isError: options.isError === true,
@@ -279,6 +279,12 @@ describe('neutral record extraction', () => {
     expect(
       planParallel([lane('a', 'lead', ['SRC\\Data']), lane('b', 'worker', ['src/data/file.ts'])]),
     ).toBe(false)
+    // Dot and dot-dot segments are dropped, so an alias is the same scope.
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['./src'])])).toBe(false)
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['.\\src'])])).toBe(false)
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['a/../src'])])).toBe(
+      false,
+    )
     // A running lane waiting on a done lane is runnable; a waiting lane is not.
     expect(
       planParallel([
@@ -356,6 +362,11 @@ describe('neutral record extraction', () => {
     }
     expect(remedy('src\\a.ts', ['src'])).toBe(true)
     expect(remedy('SRC/A.TS', ['src/a.ts'])).toBe(true)
+    // Dot aliases normalize to the same destination and target.
+    expect(remedy('./src/a.ts', ['src'])).toBe(true)
+    expect(remedy('.\\src\\a.ts', ['src'])).toBe(true)
+    expect(remedy('src/a.ts', ['./src'])).toBe(true)
+    expect(remedy('src/a.ts', ['a/../src'])).toBe(true)
     // A textual sibling is not beneath the target by path component.
     expect(remedy('src2/a.ts', ['src'])).toBe(false)
     expect(remedy('src/a.ts', ['src'], true)).toBe(false)
@@ -369,19 +380,60 @@ describe('neutral record extraction', () => {
     expect(contentOnly[0]?.checkpointRemedyResolved).toBe(false)
   })
 
-  it('resolves a user-decision remedy by the question call, not a worker start', () => {
+  it('resolves a user-decision remedy only by a completed question call', () => {
     const resolved = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan({ action: 'user_decision' })),
+      call('q1', 'ask_user_question'),
+      result('q1'),
+      call('cp2', 'work_checkpoint', continuePlan()),
+    ])
+    expect(resolved[0]?.checkpointRemedyResolved).toBe(true)
+    const pending = extractRecords('s1', [
       call('cp1', 'work_checkpoint', continuePlan({ action: 'user_decision' })),
       call('q1', 'ask_user_question'),
       call('cp2', 'work_checkpoint', continuePlan()),
     ])
-    expect(resolved[0]?.checkpointRemedyResolved).toBe(true)
+    expect(pending[0]?.checkpointRemedyResolved).toBe(false)
+    const failed = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan({ action: 'user_decision' })),
+      call('q1', 'ask_user_question'),
+      result('q1', { isError: true }),
+      call('cp2', 'work_checkpoint', continuePlan()),
+    ])
+    expect(failed[0]?.checkpointRemedyResolved).toBe(false)
     const notAQuestion = extractRecords('s1', [
       call('cp1', 'work_checkpoint', continuePlan()),
       call('q1', 'ask_user_question'),
+      result('q1'),
       call('cp2', 'work_checkpoint', continuePlan()),
     ])
     expect(notAQuestion[0]?.checkpointRemedyResolved).toBe(false)
+  })
+
+  it('classifies a reused, pending, or queued delegate result as not a worker start', () => {
+    const cases: ReadonlyArray<readonly [string, boolean]> = [
+      ['rule "task-review" PASS (reused record abc123, digest def456)', false],
+      ['rule "task-review" FINDINGS (reused record abc123, digest def456)', false],
+      ['rule "task-review" ERROR (reused record abc123, digest def456)', false],
+      ['rule "task-review" review already pending', false],
+      ['rule "task-review" review queued', false],
+      ['started the review', true],
+      ['answer\n(no gate record: this answer does not satisfy a strict review rule)', true],
+    ]
+    for (const [text, started] of cases) {
+      const records = extractRecords('s1', [
+        call('cp1', 'work_checkpoint', continuePlan()),
+        call('w1', 'delegate'),
+        result('w1', { text }),
+        call('cp2', 'work_checkpoint', continuePlan()),
+      ])
+      expect(
+        records.find((record) => record.eventType === 'tool/result')?.delegateStarted,
+        text,
+      ).toBe(started)
+      expect(records[0]?.checkpointRemedyResolved, text).toBe(started)
+      expect(JSON.stringify(records)).not.toContain(text)
+    }
   })
 
   it('ends the last checkpoint remedy window at the turn end', () => {
@@ -454,7 +506,7 @@ describe('neutral record extraction', () => {
     expect(records).toHaveLength(3)
     for (const record of records) {
       expect(record.checkpointOutcome).toBeUndefined()
-      expect(record.checkpointVerifiedCount).toBe(0)
+      expect(record.checkpointVerifiedCount).toBeUndefined()
       expect(record.checkpointLaneCount).toBeUndefined()
       expect(record.checkpointBlockedLaneCount).toBeUndefined()
       expect(record.checkpointParallelComputed).toBeUndefined()
@@ -487,6 +539,65 @@ describe('neutral record extraction', () => {
       continuePlan({ lanes: [lane('a', 'lead', ['src']), lane('a', 'worker', ['docs'])] }),
       continuePlan({ lanes: [lane('b', 'worker', ['docs'], 'running', ['missing'])] }),
       continuePlan({ lanes: [lane('a', 'lead', [])] }),
+      continuePlan({ lanes: [] }),
+      continuePlan({
+        lanes: [lane('a', 'lead', ['src']), { ...lane('b', 'worker', ['docs']), extra: 'field' }],
+      }),
+      continuePlan({
+        lanes: [
+          lane(
+            'a',
+            'lead',
+            Array.from({ length: 9 }, (_unused, index) => `src/${String(index)}`),
+          ),
+          lane('b', 'worker', ['docs']),
+        ],
+      }),
+      continuePlan({
+        lanes: [
+          lane('done', 'lead', ['assets'], 'done'),
+          lane(
+            'a',
+            'lead',
+            ['src'],
+            'running',
+            Array.from({ length: 9 }, () => 'done'),
+          ),
+        ],
+      }),
+      checkpoint({
+        outcome: 'continue',
+        lanes: [lane('a', 'lead', ['src'])],
+        bottleneck: {
+          id: 'n',
+          owner: 'lead',
+          action: 'worker_start',
+          blockingLanes: Array.from({ length: 9 }, () => 'a'),
+        },
+        next: 'finish',
+      }),
+      checkpoint({
+        outcome: 'continue',
+        lanes: [lane('a', 'lead', ['src'])],
+        bottleneck: {
+          id: 'n',
+          owner: 'lead',
+          action: 'lead_action',
+          targets: Array.from({ length: 9 }, (_unused, index) => `src/${String(index)}.ts`),
+        },
+        next: 'finish',
+      }),
+      checkpoint({
+        outcome: 'continue',
+        lanes: [lane('a', 'lead', ['src'])],
+        bottleneck: {
+          id: 'n',
+          owner: 'lead',
+          action: 'worker_start',
+          extra: 'field',
+        },
+        next: 'finish',
+      }),
       continuePlan({
         lanes: [
           { id: 'a', owner: 'lead', scope: ['src'], state: 'paused' },
@@ -518,7 +629,7 @@ describe('neutral record extraction', () => {
     const records = extractRecords('s1', events)
     for (const record of records) {
       expect(record.checkpointOutcome).toBeUndefined()
-      expect(record.checkpointVerifiedCount).toBe(0)
+      expect(record.checkpointVerifiedCount).toBeUndefined()
       expect(record.checkpointLaneCount).toBeUndefined()
       expect(record.checkpointBlockedLaneCount).toBeUndefined()
       expect(record.checkpointParallelComputed).toBeUndefined()

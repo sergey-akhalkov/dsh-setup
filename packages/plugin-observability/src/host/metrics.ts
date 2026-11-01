@@ -113,22 +113,25 @@ function callKeyOf(record: TraceRecord): string | undefined {
   return record.callId === undefined ? undefined : `${record.sessionId}\u0000${record.callId}`
 }
 
-/** A worker call joined to a result that did not fail; a pending call is not a start. */
+/** A worker call joined to a result that did not fail; a pending or reused delegate is not a start. */
 function successfulWorkerStarts(records: readonly TraceRecord[]): TraceRecord[] {
   const results = new Set<string>()
   const failed = new Set<string>()
+  const notStarted = new Set<string>()
   for (const record of records) {
     if (record.eventType !== 'tool/result') continue
     const key = callKeyOf(record)
     if (key === undefined) continue
     results.add(key)
     if (record.failed === true) failed.add(key)
+    if (record.delegateStarted === false) notStarted.add(key)
   }
   return records.filter((record) => {
     if (record.eventType !== 'tool/call' || record.tool === undefined) return false
     if (!WORKER_START_TOOLS.has(record.tool)) return false
     const key = callKeyOf(record)
-    return key !== undefined && results.has(key) && !failed.has(key)
+    if (key === undefined || !results.has(key) || failed.has(key)) return false
+    return record.tool !== 'delegate' || !notStarted.has(key)
   })
 }
 
@@ -169,9 +172,11 @@ export function planSummary(
   records: readonly TraceRecord[],
   window: Window,
 ): PlanSummary | undefined {
-  const checkpoints = records
-    .filter((record) => record.checkpointOutcome !== undefined && inWindow(record, window))
+  // Every checkpoint supplies a dispatch boundary; only in-window ones are reported.
+  const allCheckpoints = records
+    .filter((record) => record.checkpointOutcome !== undefined)
     .sort((left, right) => left.time - right.time || left.seq - right.seq)
+  const checkpoints = allCheckpoints.filter((record) => inWindow(record, window))
   if (checkpoints.length === 0) return undefined
   let lanes = 0
   let blockedLanes = 0
@@ -200,7 +205,7 @@ export function planSummary(
       ? {}
       : { remedyResolution: resolvedContinue / continueCheckpoints }),
     dispatches: checkpoints.map((checkpoint) =>
-      dispatchCount(records, checkpoint, checkpoints, starts),
+      dispatchCount(records, checkpoint, allCheckpoints, starts),
     ),
   }
 }

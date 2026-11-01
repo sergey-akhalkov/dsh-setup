@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       ObservabilityView: () => ObservabilityView,
       OutcomeTiles: () => OutcomeTiles,
       OverviewView: () => OverviewView,
+      PlanPanel: () => PlanPanel,
       PluginBoard: () => PluginBoard,
       PluginCard: () => PluginCard,
       ProcessPanel: () => ProcessPanel,
@@ -327,6 +328,13 @@ window.__ModuleLoader__.load({
       "dq.unmapped": "unmapped closers",
       "dq.comparison": "comparison sample",
       "dq.partial": "Partial coverage; the metrics above are lower bounds.",
+      "plan.title": "Checkpoint plan",
+      "plan.parallelShare": "parallel share",
+      "plan.blockedLaneRate": "blocked-lane rate",
+      "plan.remedyResolution": "remedy resolution",
+      "plan.dispatches": "dispatch per checkpoint",
+      "plan.notApplicable": "Not applicable: no checkpoint in this range.",
+      "plan.none": "\u2014",
       "scorecards.title": "Plugin scorecards",
       "scorecards.empty": "No signal rows are configured.",
       "scorecard.notApplicable": "not applicable",
@@ -1497,6 +1505,45 @@ window.__ModuleLoader__.load({
         partial ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("dq.partial") }) : null
       ] });
     }
+    function PlanPanel({ report, t }) {
+      const plan = report.plan;
+      if (plan === void 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("plan.title"), "data-plan": "not-applicable", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("plan.title") }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-obs-muted", children: t("plan.notApplicable") })
+        ] });
+      }
+      const share = (value) => value === void 0 ? t("plan.none") : `${String(Math.round(value * 100))}%`;
+      const facts = [
+        {
+          key: "parallel-share",
+          label: t("plan.parallelShare"),
+          value: `${String(plan.parallelCheckpoints)}/${String(plan.checkpoints)} (${share(plan.parallelShare)})`
+        },
+        {
+          key: "blocked-lane-rate",
+          label: t("plan.blockedLaneRate"),
+          value: plan.blockedLaneRate === void 0 ? t("plan.none") : `${String(plan.blockedLanes)}/${String(plan.lanes)} (${share(plan.blockedLaneRate)})`
+        },
+        {
+          key: "remedy-resolution",
+          label: t("plan.remedyResolution"),
+          value: plan.remedyResolution === void 0 ? t("plan.none") : `${String(plan.resolvedContinue)}/${String(plan.continueCheckpoints)} (${share(plan.remedyResolution)})`
+        },
+        {
+          key: "dispatch",
+          label: t("plan.dispatches"),
+          value: plan.dispatches.length === 0 ? t("plan.none") : plan.dispatches.join(", ")
+        }
+      ];
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-obs-panel", "aria-label": t("plan.title"), "data-plan": "present", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-obs-panel-head", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: t("plan.title") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", { className: "dsh-obs-facts", children: facts.map((fact) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { "data-plan-metric": fact.key, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: fact.label }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: fact.value })
+        ] }, fact.key)) })
+      ] });
+    }
     function scorecardStatus(card) {
       if (card.eligible === 0) return "not applicable";
       if (card.fired === 0) return "silent";
@@ -1967,6 +2014,7 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityPanel, { report, t }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProcessPanel, { process: report.process, labels: report.bucketLabels, t }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DataQualityStrip, { report, t }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanPanel, { report, t }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
             ScorecardList,
             {

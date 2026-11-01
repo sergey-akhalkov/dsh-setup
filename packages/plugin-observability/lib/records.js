@@ -21,6 +21,22 @@ const CHECKPOINT_FIELDS = new Set([
 ]);
 /** The producer's list bound; a longer list is malformed. */
 const MAX_CHECKPOINT_ITEMS = 8;
+/** The fields the producer accepts on one lane; an unknown nested field is malformed. */
+const CHECKPOINT_LANE_FIELDS = new Set([
+    'id',
+    'owner',
+    'scope',
+    'state',
+    'blockedBy',
+]);
+/** The fields the producer accepts on a bottleneck; an unknown nested field is malformed. */
+const CHECKPOINT_BOTTLENECK_FIELDS = new Set([
+    'id',
+    'owner',
+    'action',
+    'blockingLanes',
+    'targets',
+]);
 /** A list's length when the producer would accept it, or undefined when malformed. */
 function checkpointListLength(value) {
     if (value === undefined)
@@ -33,9 +49,9 @@ function checkpointListLength(value) {
     }
     return value.length;
 }
-/** A present string list, or undefined when it holds a non-string or empty entry. */
+/** A present, bounded string list, or undefined when it holds an invalid entry. */
 function checkpointStringList(value) {
-    if (!Array.isArray(value))
+    if (!Array.isArray(value) || value.length > MAX_CHECKPOINT_ITEMS)
         return undefined;
     const items = [];
     for (const item of value) {
@@ -45,7 +61,7 @@ function checkpointStringList(value) {
     }
     return items;
 }
-/** Validate the lane plan; a duplicate id or an unknown `blockedBy` is malformed. */
+/** Validate the lane plan; an unknown nested field, duplicate id, or bad `blockedBy` is malformed. */
 function checkpointLanes(value) {
     if (value === undefined)
         return [];
@@ -56,6 +72,8 @@ function checkpointLanes(value) {
     for (const item of value) {
         const lane = asRecord(item);
         if (lane === undefined)
+            return undefined;
+        if (!Object.keys(lane).every((key) => CHECKPOINT_LANE_FIELDS.has(key)))
             return undefined;
         const id = text(lane.id);
         const owner = text(lane.owner);
@@ -89,6 +107,8 @@ function checkpointBottleneck(value) {
         return undefined;
     const source = asRecord(value);
     if (source === undefined)
+        return null;
+    if (!Object.keys(source).every((key) => CHECKPOINT_BOTTLENECK_FIELDS.has(key)))
         return null;
     const id = text(source.id);
     const owner = text(source.owner);
@@ -142,8 +162,9 @@ function checkpointFacts(raw) {
     const bottleneck = checkpointBottleneck(source.bottleneck);
     if (bottleneck === null)
         return undefined;
-    // A `continue` checkpoint carries the plan; a `done` close may omit it.
-    if (outcome === 'continue' && (source.lanes === undefined || bottleneck === undefined)) {
+    // A `continue` checkpoint carries a non-empty lane plan and a bottleneck; a
+    // `done` close may omit both.
+    if (outcome === 'continue' && (lanes.length === 0 || bottleneck === undefined)) {
         return undefined;
     }
     if (lanes.length > 0 && bottleneck !== undefined) {
@@ -153,9 +174,28 @@ function checkpointFacts(raw) {
     }
     return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) };
 }
-/** Normalize a path-like scope for component-wise comparison. */
+/**
+ * Normalize a path-like scope the way the checkpoint producer does: unify
+ * separators, drop `.`/`..` segments, and fold case. A relative root is empty.
+ */
 function normalizedPath(path) {
-    return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const segments = [];
+    for (const segment of path.trim().replace(/\\/g, '/').toLowerCase().split('/')) {
+        if (segment === '' || segment === '.')
+            continue;
+        if (segment === '..') {
+            segments.pop();
+            continue;
+        }
+        segments.push(segment);
+    }
+    return segments.join('/');
+}
+/** Whether a normalized path equals a root or lies beneath it by path component. */
+function pathIsWithin(path, root) {
+    if (root === '')
+        return true;
+    return path === root || path.startsWith(`${root}/`);
 }
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */
 function scopesOverlap(left, right) {
@@ -165,9 +205,7 @@ function scopesOverlap(left, right) {
         return a === b;
     const normalizedLeft = normalizedPath(a);
     const normalizedRight = normalizedPath(b);
-    return (normalizedLeft === normalizedRight ||
-        normalizedLeft.startsWith(`${normalizedRight}/`) ||
-        normalizedRight.startsWith(`${normalizedLeft}/`));
+    return (pathIsWithin(normalizedLeft, normalizedRight) || pathIsWithin(normalizedRight, normalizedLeft));
 }
 function laneScopesOverlap(left, right) {
     return left.scope.some((a) => right.scope.some((b) => scopesOverlap(a, b)));
@@ -224,10 +262,36 @@ function filePathOf(raw) {
 /** Whether a write destination equals a declared target or lies beneath it by component. */
 function matchesTargets(filePath, targets) {
     const normalized = normalizedPath(filePath);
-    return targets.some((target) => {
-        const normalizedTarget = normalizedPath(target);
-        return normalized === normalizedTarget || normalized.startsWith(`${normalizedTarget}/`);
-    });
+    return targets.some((target) => pathIsWithin(normalized, normalizedPath(target)));
+}
+/** The text blocks of a tool result message; read only to classify a delegate result. */
+function toolResultText(message) {
+    const content = message?.content;
+    if (!Array.isArray(content))
+        return '';
+    const parts = [];
+    for (const block of content) {
+        const record = asRecord(block);
+        if (record?.type !== 'text')
+            continue;
+        const value = text(record.text);
+        if (value !== undefined)
+            parts.push(value);
+    }
+    return parts.join('\n');
+}
+/** Whether a delegate result reports a started run rather than a cached, pending, or queued one. */
+function delegateStarted(resultText) {
+    if (resultText
+        .trimEnd()
+        .endsWith('(no gate record: this answer does not satisfy a strict review rule)')) {
+        return true;
+    }
+    const first = resultText.split(/\r?\n/u)[0] ?? '';
+    if (/^rule "[^"]+" review (?:already pending|queued)$/u.test(first))
+        return false;
+    // Only the engine's own cached-record envelope is reuse, exactly as the gate classifies it.
+    return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first);
 }
 /**
  * Whether the bottleneck's remedy was matched in the window between the
@@ -237,6 +301,7 @@ function matchesTargets(filePath, targets) {
 function remedyMatches(records, start, end, bottleneck, filePaths) {
     const results = new Set();
     const failed = new Set();
+    const notStarted = new Set();
     for (let index = start + 1; index < end; index += 1) {
         const record = records[index];
         if (record === undefined || record.eventType !== 'tool/result')
@@ -247,16 +312,12 @@ function remedyMatches(records, start, end, bottleneck, filePaths) {
         results.add(key);
         if (record.failed === true)
             failed.add(key);
+        if (record.delegateStarted === false)
+            notStarted.add(key);
     }
     for (let index = start + 1; index < end; index += 1) {
         const record = records[index];
         if (record === undefined || record.eventType !== 'tool/call' || record.tool === undefined) {
-            continue;
-        }
-        // A user decision is the question itself; it needs no completed result.
-        if (record.tool === 'ask_user_question') {
-            if (bottleneck.action === 'user_decision')
-                return true;
             continue;
         }
         if (record.callId === undefined)
@@ -264,8 +325,13 @@ function remedyMatches(records, start, end, bottleneck, filePaths) {
         const key = callKey(record.sessionId, record.callId);
         if (!results.has(key) || failed.has(key))
             continue;
-        if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool))
+        if (bottleneck.action === 'user_decision' && record.tool === 'ask_user_question')
             return true;
+        if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool)) {
+            if (record.tool === 'delegate' && notStarted.has(key))
+                continue;
+            return true;
+        }
         if (bottleneck.action === 'lead_action' &&
             (record.tool === 'edit' || record.tool === 'write')) {
             const filePath = filePaths.get(key);
@@ -353,6 +419,7 @@ export function extractRecords(sessionId, events, start = 0, fields) {
         let callId;
         let errorName;
         let errorCode;
+        let delegateStartedValue;
         let turnEnd;
         let usage;
         let goalOperation;
@@ -373,7 +440,7 @@ export function extractRecords(sessionId, events, start = 0, fields) {
                 if (tool === CHECKPOINT_TOOL) {
                     const facts = checkpointFacts(text(data.arguments));
                     checkpointOutcome = facts?.outcome;
-                    checkpointVerifiedCount = facts?.verified ?? 0;
+                    checkpointVerifiedCount = facts?.verified;
                     if (facts !== undefined) {
                         checkpointFactsByIndex.set(records.length, facts);
                         checkpointLaneCount = facts.lanes.length;
@@ -425,6 +492,8 @@ export function extractRecords(sessionId, events, start = 0, fields) {
                 errorCode = text(error?.code);
                 if (message?.isError === true || data.error !== undefined)
                     failed = true;
+                if (tool === 'delegate')
+                    delegateStartedValue = delegateStarted(toolResultText(message));
                 break;
             }
             case 'user/message': {
@@ -479,6 +548,7 @@ export function extractRecords(sessionId, events, start = 0, fields) {
             ...(callId === undefined ? {} : { callId }),
             ...(errorName === undefined ? {} : { errorName }),
             ...(errorCode === undefined ? {} : { errorCode }),
+            ...(delegateStartedValue === undefined ? {} : { delegateStarted: delegateStartedValue }),
             ...(turnEnd === undefined ? {} : { turnEnd }),
             ...(usage === undefined ? {} : { usage }),
             ...(goalOperation === undefined ? {} : { goalOperation }),

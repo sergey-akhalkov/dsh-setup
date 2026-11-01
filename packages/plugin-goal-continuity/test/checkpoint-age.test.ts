@@ -100,6 +100,51 @@ describe('bottleneck age', () => {
     expect(harness.steers).toHaveLength(0)
   })
 
+  it('counts periodic checkpoints within the same turn', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(1)).bottleneckAge).toBe(2)
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
+  })
+
+  it('resets the count when a blocking lane moves from blocked to running', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint({
+      ...plan(),
+      lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src/a.ts'], state: 'blocked' }],
+    })
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('resets the count when a blocking lane moves from blocked to done', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint({
+      ...plan(),
+      lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src/a.ts'], state: 'blocked' }],
+    })
+    harness.turnStart(2)
+    await harness.checkpoint({
+      ...plan(),
+      lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src/a.ts'], state: 'done' }],
+    })
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
   it('ignores a legacy record without a bottleneck object', async () => {
     const harness = await create()
     harness.turnStart(1)

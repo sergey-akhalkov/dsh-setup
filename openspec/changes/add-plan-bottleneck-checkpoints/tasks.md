@@ -46,7 +46,7 @@
 
 ## 10. Generated output and integration gate (owns `packages/*/lib/**`, `packages/*/cordis.patch.yml`, `packages/setup/**`)
 
-- [ ] 10.1 Run `pnpm build` and `pnpm gen`, commit the regenerated `lib/**`, `cordis.patch.yml`, and vendored setup tree; verify `pnpm gen:check` passes and `pnpm build && git diff --exit-code` is clean
+- [x] 10.1 Run `pnpm build` and `pnpm gen`, commit the regenerated `lib/**`, `cordis.patch.yml`, and vendored setup tree; verify `pnpm gen:check` passes and `pnpm build && git diff --exit-code` is clean
 - [x] 10.2 Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, `pnpm validate:composition`, and `pnpm validate:installer`; verify every command passes
 - [x] 10.3 Run `openspec validate add-plan-bottleneck-checkpoints --strict` and fix any reported issue; verify the command reports the change as valid
 

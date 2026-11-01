@@ -487,6 +487,65 @@ describe('work checkpoint record', () => {
     expect(record.bottleneckAge).toBe(1)
   })
 
+  it('writes the documented record example', async () => {
+    const harness = await create()
+    harness.turnStart(3)
+    await harness.checkpoint({
+      outcome: 'continue',
+      verified: ['the parser test fails on the empty input'],
+      lanes: [
+        { id: 'guard', owner: 'lead', scope: ['src/parser.ts'], state: 'done' },
+        {
+          id: 'test',
+          owner: 'lead',
+          scope: ['test/parser.test.ts'],
+          state: 'running',
+          blockedBy: ['guard'],
+        },
+      ],
+      bottleneck: {
+        id: 'test-missing',
+        owner: 'lead',
+        action: 'lead_action',
+        blockingLanes: ['test'],
+        targets: ['test/parser.test.ts'],
+      },
+      next: 'write the regression test',
+    })
+    const record = await harness.readRecord(3)
+    const { checkpoint, time, session, ...decision } = record
+    expect(checkpoint).toMatch(/^checkpoint-3-[a-f0-9]{8}$/u)
+    expect(typeof time).toBe('string')
+    expect(session).toBe(harness.sessionId)
+    expect(decision).toEqual({
+      version: 2,
+      turn: 3,
+      outcome: 'continue',
+      verified: ['the parser test fails on the empty input'],
+      lanes: [
+        { id: 'guard', owner: 'lead', scope: ['src/parser.ts'], state: 'done', blockedBy: [] },
+        {
+          id: 'test',
+          owner: 'lead',
+          scope: ['test/parser.test.ts'],
+          state: 'running',
+          blockedBy: ['guard'],
+        },
+      ],
+      bottleneck: {
+        id: 'test-missing',
+        owner: 'lead',
+        action: 'lead_action',
+        blockingLanes: ['test'],
+        targets: ['test/parser.test.ts'],
+      },
+      derivedRemaining: ['test'],
+      parallelComputed: false,
+      bottleneckAge: 1,
+      next: 'write the regression test',
+    })
+  })
+
   it('returns the summary without claiming a record when the write fails', async () => {
     const harness = await create()
     workingTurn(harness)
@@ -740,8 +799,11 @@ describe('parallel-action gate', () => {
       bottleneck: { id: 'sibling', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
       next: 'fan out',
     })
+    expect((await harness.readRecord()).parallelComputed).toBe(true)
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('computes parallel lanes')
   })
 
   it('does not count a blocked lane as runnable', async () => {
@@ -780,8 +842,11 @@ describe('parallel-action gate', () => {
       bottleneck: { id: 'pair', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
       next: 'dispatch',
     })
+    expect((await harness.readRecord()).parallelComputed).toBe(true)
+    remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('computes parallel lanes')
   })
 
   it('does not accept a failed worker start', async () => {
@@ -889,5 +954,57 @@ describe('parallel-action gate', () => {
     remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
+  })
+})
+
+describe('scope comparison', () => {
+  /** One continue plan over two lanes that resolve to the given scopes. */
+  function twoLanes(left: string, right: string): Record<string, unknown> {
+    return {
+      outcome: 'continue',
+      lanes: [
+        { id: 'one', owner: 'lead', scope: [left], state: 'running' },
+        { id: 'two', owner: 'lane-two', scope: [right], state: 'running' },
+      ],
+      bottleneck: { id: 'pair', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'compare the scopes',
+    }
+  }
+
+  it('compares resource scopes exactly, so case and separators are distinct', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('resource:Stand', 'resource:stand'))
+    expect((await harness.readRecord()).parallelComputed).toBe(true)
+  })
+
+  it('treats two lanes on the same resource as serial', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('resource:live-stand', 'resource:live-stand'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('treats the repository root as containing a descendant scope', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('.', 'src'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('resolves dot segments before comparing scopes', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('src/../docs', 'docs'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+    harness.turnStart(2)
+    await harness.checkpoint(twoLanes('./src', 'src'))
+    expect((await harness.readRecord(2)).parallelComputed).toBe(false)
   })
 })

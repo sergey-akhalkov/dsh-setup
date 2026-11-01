@@ -45,6 +45,11 @@ export interface TraceRecord {
     readonly errorName?: string;
     /** A failed result's code, or the turn failure's stable `LlmFailure.code`. */
     readonly errorCode?: string;
+    /**
+     * A delegate result's classification, kept as a boolean: false means the
+     * result reports reuse or a pending/queued run, so it is not a worker start.
+     */
+    readonly delegateStarted?: boolean;
     /** `turn/end` reason kind, so a cut is distinguishable from a failure. */
     readonly turnEnd?: string;
     /** Assistant message usage; absent when the event recorded none. */

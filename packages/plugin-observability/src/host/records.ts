@@ -48,6 +48,11 @@ export interface TraceRecord {
   readonly errorName?: string
   /** A failed result's code, or the turn failure's stable `LlmFailure.code`. */
   readonly errorCode?: string
+  /**
+   * A delegate result's classification, kept as a boolean: false means the
+   * result reports reuse or a pending/queued run, so it is not a worker start.
+   */
+  readonly delegateStarted?: boolean
   /** `turn/end` reason kind, so a cut is distinguishable from a failure. */
   readonly turnEnd?: string
   /** Assistant message usage; absent when the event recorded none. */
@@ -105,6 +110,24 @@ const CHECKPOINT_FIELDS: ReadonlySet<string> = new Set([
 /** The producer's list bound; a longer list is malformed. */
 const MAX_CHECKPOINT_ITEMS = 8
 
+/** The fields the producer accepts on one lane; an unknown nested field is malformed. */
+const CHECKPOINT_LANE_FIELDS: ReadonlySet<string> = new Set([
+  'id',
+  'owner',
+  'scope',
+  'state',
+  'blockedBy',
+])
+
+/** The fields the producer accepts on a bottleneck; an unknown nested field is malformed. */
+const CHECKPOINT_BOTTLENECK_FIELDS: ReadonlySet<string> = new Set([
+  'id',
+  'owner',
+  'action',
+  'blockingLanes',
+  'targets',
+])
+
 /** One lane of the checkpoint plan; kept in memory only, never in a record. */
 interface CheckpointLane {
   readonly id: string
@@ -140,9 +163,9 @@ function checkpointListLength(value: unknown): number | undefined {
   return value.length
 }
 
-/** A present string list, or undefined when it holds a non-string or empty entry. */
+/** A present, bounded string list, or undefined when it holds an invalid entry. */
 function checkpointStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
+  if (!Array.isArray(value) || value.length > MAX_CHECKPOINT_ITEMS) return undefined
   const items: string[] = []
   for (const item of value) {
     if (typeof item !== 'string' || item.trim() === '') return undefined
@@ -151,7 +174,7 @@ function checkpointStringList(value: unknown): string[] | undefined {
   return items
 }
 
-/** Validate the lane plan; a duplicate id or an unknown `blockedBy` is malformed. */
+/** Validate the lane plan; an unknown nested field, duplicate id, or bad `blockedBy` is malformed. */
 function checkpointLanes(value: unknown): readonly CheckpointLane[] | undefined {
   if (value === undefined) return []
   if (!Array.isArray(value) || value.length > MAX_CHECKPOINT_ITEMS) return undefined
@@ -160,6 +183,7 @@ function checkpointLanes(value: unknown): readonly CheckpointLane[] | undefined 
   for (const item of value) {
     const lane = asRecord(item)
     if (lane === undefined) return undefined
+    if (!Object.keys(lane).every((key) => CHECKPOINT_LANE_FIELDS.has(key))) return undefined
     const id = text(lane.id)
     const owner = text(lane.owner)
     const state = lane.state
@@ -186,6 +210,7 @@ function checkpointBottleneck(value: unknown): CheckpointBottleneck | null | und
   if (value === undefined) return undefined
   const source = asRecord(value)
   if (source === undefined) return null
+  if (!Object.keys(source).every((key) => CHECKPOINT_BOTTLENECK_FIELDS.has(key))) return null
   const id = text(source.id)
   const owner = text(source.owner)
   const action = source.action
@@ -227,8 +252,9 @@ function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
   if (lanes === undefined) return undefined
   const bottleneck = checkpointBottleneck(source.bottleneck)
   if (bottleneck === null) return undefined
-  // A `continue` checkpoint carries the plan; a `done` close may omit it.
-  if (outcome === 'continue' && (source.lanes === undefined || bottleneck === undefined)) {
+  // A `continue` checkpoint carries a non-empty lane plan and a bottleneck; a
+  // `done` close may omit both.
+  if (outcome === 'continue' && (lanes.length === 0 || bottleneck === undefined)) {
     return undefined
   }
   if (lanes.length > 0 && bottleneck !== undefined) {
@@ -238,9 +264,27 @@ function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
   return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) }
 }
 
-/** Normalize a path-like scope for component-wise comparison. */
+/**
+ * Normalize a path-like scope the way the checkpoint producer does: unify
+ * separators, drop `.`/`..` segments, and fold case. A relative root is empty.
+ */
 function normalizedPath(path: string): string {
-  return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const segments: string[] = []
+  for (const segment of path.trim().replace(/\\/g, '/').toLowerCase().split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      segments.pop()
+      continue
+    }
+    segments.push(segment)
+  }
+  return segments.join('/')
+}
+
+/** Whether a normalized path equals a root or lies beneath it by path component. */
+function pathIsWithin(path: string, root: string): boolean {
+  if (root === '') return true
+  return path === root || path.startsWith(`${root}/`)
 }
 
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */
@@ -251,9 +295,7 @@ function scopesOverlap(left: string, right: string): boolean {
   const normalizedLeft = normalizedPath(a)
   const normalizedRight = normalizedPath(b)
   return (
-    normalizedLeft === normalizedRight ||
-    normalizedLeft.startsWith(`${normalizedRight}/`) ||
-    normalizedRight.startsWith(`${normalizedLeft}/`)
+    pathIsWithin(normalizedLeft, normalizedRight) || pathIsWithin(normalizedRight, normalizedLeft)
   )
 }
 
@@ -315,10 +357,36 @@ function filePathOf(raw: string | undefined): string | undefined {
 /** Whether a write destination equals a declared target or lies beneath it by component. */
 function matchesTargets(filePath: string, targets: readonly string[]): boolean {
   const normalized = normalizedPath(filePath)
-  return targets.some((target) => {
-    const normalizedTarget = normalizedPath(target)
-    return normalized === normalizedTarget || normalized.startsWith(`${normalizedTarget}/`)
-  })
+  return targets.some((target) => pathIsWithin(normalized, normalizedPath(target)))
+}
+
+/** The text blocks of a tool result message; read only to classify a delegate result. */
+function toolResultText(message: Record<string, unknown> | undefined): string {
+  const content = message?.content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    const record = asRecord(block)
+    if (record?.type !== 'text') continue
+    const value = text(record.text)
+    if (value !== undefined) parts.push(value)
+  }
+  return parts.join('\n')
+}
+
+/** Whether a delegate result reports a started run rather than a cached, pending, or queued one. */
+function delegateStarted(resultText: string): boolean {
+  if (
+    resultText
+      .trimEnd()
+      .endsWith('(no gate record: this answer does not satisfy a strict review rule)')
+  ) {
+    return true
+  }
+  const first = resultText.split(/\r?\n/u)[0] ?? ''
+  if (/^rule "[^"]+" review (?:already pending|queued)$/u.test(first)) return false
+  // Only the engine's own cached-record envelope is reuse, exactly as the gate classifies it.
+  return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first)
 }
 
 /**
@@ -335,6 +403,7 @@ function remedyMatches(
 ): boolean {
   const results = new Set<string>()
   const failed = new Set<string>()
+  const notStarted = new Set<string>()
   for (let index = start + 1; index < end; index += 1) {
     const record = records[index]
     if (record === undefined || record.eventType !== 'tool/result') continue
@@ -342,21 +411,21 @@ function remedyMatches(
     const key = callKey(record.sessionId, record.callId)
     results.add(key)
     if (record.failed === true) failed.add(key)
+    if (record.delegateStarted === false) notStarted.add(key)
   }
   for (let index = start + 1; index < end; index += 1) {
     const record = records[index]
     if (record === undefined || record.eventType !== 'tool/call' || record.tool === undefined) {
       continue
     }
-    // A user decision is the question itself; it needs no completed result.
-    if (record.tool === 'ask_user_question') {
-      if (bottleneck.action === 'user_decision') return true
-      continue
-    }
     if (record.callId === undefined) continue
     const key = callKey(record.sessionId, record.callId)
     if (!results.has(key) || failed.has(key)) continue
-    if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool)) return true
+    if (bottleneck.action === 'user_decision' && record.tool === 'ask_user_question') return true
+    if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool)) {
+      if (record.tool === 'delegate' && notStarted.has(key)) continue
+      return true
+    }
     if (
       bottleneck.action === 'lead_action' &&
       (record.tool === 'edit' || record.tool === 'write')
@@ -457,6 +526,7 @@ export function extractRecords(
     let callId: string | undefined
     let errorName: string | undefined
     let errorCode: string | undefined
+    let delegateStartedValue: boolean | undefined
     let turnEnd: string | undefined
     let usage: TokenUsage | undefined
     let goalOperation: string | undefined
@@ -477,7 +547,7 @@ export function extractRecords(
         if (tool === CHECKPOINT_TOOL) {
           const facts = checkpointFacts(text(data.arguments))
           checkpointOutcome = facts?.outcome
-          checkpointVerifiedCount = facts?.verified ?? 0
+          checkpointVerifiedCount = facts?.verified
           if (facts !== undefined) {
             checkpointFactsByIndex.set(records.length, facts)
             checkpointLaneCount = facts.lanes.length
@@ -531,6 +601,7 @@ export function extractRecords(
         errorName = text(error?.name)
         errorCode = text(error?.code)
         if (message?.isError === true || data.error !== undefined) failed = true
+        if (tool === 'delegate') delegateStartedValue = delegateStarted(toolResultText(message))
         break
       }
       case 'user/message': {
@@ -585,6 +656,7 @@ export function extractRecords(
       ...(callId === undefined ? {} : { callId }),
       ...(errorName === undefined ? {} : { errorName }),
       ...(errorCode === undefined ? {} : { errorCode }),
+      ...(delegateStartedValue === undefined ? {} : { delegateStarted: delegateStartedValue }),
       ...(turnEnd === undefined ? {} : { turnEnd }),
       ...(usage === undefined ? {} : { usage }),
       ...(goalOperation === undefined ? {} : { goalOperation }),

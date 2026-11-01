@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
 import { noticeText } from './harness.js'
@@ -214,6 +215,56 @@ describe('executed bottleneck remedy', () => {
     await harness.checkpoint(plan('worker_start')).catch(() => undefined)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
+  })
+
+  it('resolves dot segments before matching a target', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['src'])
+    call(harness, 'edit', { file_path: 'src/./a.ts' })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+    // An escaping destination is outside the declared directory.
+    harness.turnStart(2)
+    await harness.checkpoint(plan('lead_action', ['src']))
+    call(harness, 'write', { file_path: 'src/../notes.md', content: 'x' })
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(1)
+  })
+
+  it('matches an absolute declared target against the same absolute destination', async () => {
+    const harness = await create()
+    const target = join(harness.workspace, 'src', 'a.ts')
+    await checkpointed(harness, 'lead_action', [target])
+    call(harness, 'edit', { file_path: target })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('exempts a done checkpoint that still carries a bottleneck', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'done',
+      lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src'], state: 'running' }],
+      bottleneck: {
+        id: 'guard-missing',
+        owner: 'lead',
+        action: 'worker_start',
+        blockingLanes: ['lane-a'],
+      },
+      next: 'report',
+    })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+    expect(harness.injected).toHaveLength(0)
+  })
+
+  it('refuses the continue form of the same plan', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(plan('worker_start'))
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
   })
 
   it('reaches the shared UNCHECKED cap instead of looping', async () => {

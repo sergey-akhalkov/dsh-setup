@@ -74,7 +74,9 @@ describe('always-on contract budget', () => {
       ' ',
     )
     expect(contract).toContain('`work_checkpoint`')
-    expect(section).toContain('the lane plan, `verified`, `bottleneck`, its remedy, `next`')
+    expect(section).toContain(
+      'the lane plan, `verified`, `bottleneck`, its owner, blocking lanes, remedy, `next`',
+    )
     expect(section).toContain('Execute the remedy before the turn closes; the plugin checks for it')
     expect(section).toContain('Independent lanes start a worker before the turn closes')
     expect(section).toContain('integrated in the main agent')
@@ -102,6 +104,7 @@ describe('always-on contract budget', () => {
     expect(delegation).toContain('in the plan before the first edit')
     expect(delegation).toContain('refreshed at each checkpoint')
     expect(delegation).toContain('Start a worker per independent lane')
+    expect(delegation).toContain('verify in a fresh context')
   })
 
   it('expresses serial work as a shared scope or a single owner, never a serial reason', () => {
@@ -124,6 +127,6 @@ describe('always-on contract budget', () => {
     )
     expect(section).toContain('each step interval')
     expect(section).toContain('`bottleneck`')
-    expect(section).toContain('its remedy')
+    expect(section).toContain('blocking lanes, remedy')
   })
 })
