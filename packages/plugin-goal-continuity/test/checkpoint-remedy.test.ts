@@ -226,6 +226,15 @@ describe('executed bottleneck remedy', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('Before the close')
   })
 
+  it('normalizes a UNC destination against a relative target', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['src/a.ts'])
+    const unc = `//server/share/src/a.ts`
+    call(harness, 'edit', { file_path: unc })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
   it('matches a relative target against an absolute destination and the reverse', async () => {
     const harness = await create()
     const absolute = join(harness.workspace, 'src', 'a.ts')

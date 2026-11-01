@@ -543,7 +543,7 @@ describe('work checkpoint record', () => {
         blockingLanes: ['test'],
         targets: ['test/parser.test.ts'],
       },
-      bottleneckKey: '0318b47da62567c5',
+      bottleneckKey: 'fdc2f0da6ab1499a',
       bottleneckChanged: false,
       derivedRemaining: ['test'],
       parallelComputed: false,
@@ -764,7 +764,10 @@ describe('parallel-action gate', () => {
   it('passes after an amendment that leaves one runnable lane', async () => {
     const harness = await create({ availableTools: ['subagent'] })
     await parallelCheckpoint(harness)
-    await harness.checkpoint(SERIAL)
+    await harness.checkpoint({
+      ...SERIAL,
+      bottleneck: { ...SERIAL.bottleneck, owner: 'lane-docs' },
+    })
     remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
@@ -1086,6 +1089,13 @@ describe('scope comparison', () => {
     const harness = await create()
     harness.turnStart()
     await harness.checkpoint(twoLanes('../..', 'src'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+  })
+
+  it('matches a relative scope against an absolute one beneath the workspace', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('src', join(harness.workspace, 'src')))
     expect((await harness.readRecord()).parallelComputed).toBe(false)
   })
 })

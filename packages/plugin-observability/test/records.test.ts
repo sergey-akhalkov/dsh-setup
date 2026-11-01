@@ -329,9 +329,18 @@ describe('neutral record extraction', () => {
     ).toBe(false)
   })
 
-  it('keeps rooted and relative scopes distinct, preserving a leading parent segment', () => {
-    // An absolute scope is not the same as the relative one.
-    expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['src'])])).toBe(true)
+  it('intersects rooted scopes with a relative suffix', () => {
+    // A rooted scope matches a relative path that is a suffix of it.
+    expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['src'])])).toBe(false)
+    expect(
+      planParallel([lane('a', 'lead', ['/workspace/src/a.ts']), lane('b', 'worker', ['src/a.ts'])]),
+    ).toBe(false)
+    expect(
+      planParallel([
+        lane('a', 'lead', ['/workspace/src2/a.ts']),
+        lane('b', 'worker', ['src/a.ts']),
+      ]),
+    ).toBe(true)
     expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['/src/api'])])).toBe(
       false,
     )
@@ -341,7 +350,7 @@ describe('neutral record extraction', () => {
         lane('b', 'worker', [`${DRIVE.toLowerCase()}/src`]),
       ]),
     ).toBe(false)
-    // An unmatched leading `..` stays part of a relative path.
+    // An unmatched leading `..` has no rooted counterpart.
     expect(planParallel([lane('a', 'lead', ['../src']), lane('b', 'worker', ['src'])])).toBe(true)
   })
 
@@ -453,6 +462,54 @@ describe('neutral record extraction', () => {
     ).toEqual([true, false, false, false])
   })
 
+  it('drops a failed checkpoint from age, remedy windows, and plan metadata', () => {
+    const plan = (): string =>
+      continuePlan({
+        owner: 'lead',
+        blockingLanes: ['b'],
+        lanes: [lane('a', 'lead', ['src']), lane('b', 'worker', ['docs'], 'blocked')],
+      })
+    const fields = new Map([['work_checkpoint', new Set(['outcome'])]])
+    const records = extractRecords(
+      's1',
+      [
+        call('cp1', 'work_checkpoint', plan(), NOW),
+        call('cp2', 'work_checkpoint', plan(), NOW + 1_000),
+        result('cp2', { isError: true, time: NOW + 2_000 }),
+        call('w1', 'subagent', '{}', NOW + 3_000),
+        result('w1', { time: NOW + 4_000 }),
+        call('cp3', 'work_checkpoint', plan(), NOW + 5_000),
+      ],
+      0,
+      fields,
+    )
+    const failedCall = records.find(
+      (record) => record.eventType === 'tool/call' && record.callId === 'cp2',
+    )
+    const failedResult = records.find(
+      (record) => record.eventType === 'tool/result' && record.callId === 'cp2',
+    )
+    expect(failedCall?.checkpointOutcome).toBeUndefined()
+    expect(failedCall?.checkpointVerifiedCount).toBeUndefined()
+    expect(failedCall?.checkpointLaneCount).toBeUndefined()
+    expect(failedCall?.checkpointBlockedLaneCount).toBeUndefined()
+    expect(failedCall?.checkpointParallelComputed).toBeUndefined()
+    expect(failedCall?.checkpointBottleneckAction).toBeUndefined()
+    expect(failedCall?.checkpointBottleneckAge).toBeUndefined()
+    expect(failedCall?.argumentValues).toBeUndefined()
+    expect(failedResult?.argumentValues).toBeUndefined()
+    const valid = records.filter((record) => record.checkpointOutcome !== undefined)
+    expect(valid).toHaveLength(2)
+    expect(valid.map((record) => record.checkpointBottleneckAge)).toEqual([1, 2])
+    expect(valid.map((record) => record.argumentValues)).toEqual([
+      { outcome: 'continue' },
+      { outcome: 'continue' },
+    ])
+    // cp1's remedy window reaches cp3 across the rejected call.
+    expect(valid[0]?.checkpointRemedyResolved).toBe(true)
+    expect(valid[0]?.checkpointRemedyResolvedAt).toBe(NOW + 4_000)
+  })
+
   it('matches a lead-action remedy by normalized target or directory descendant', () => {
     const remedy = (filePath: string, targets: readonly string[], failed = false): boolean => {
       const records = extractRecords('s1', [
@@ -470,11 +527,15 @@ describe('neutral record extraction', () => {
     expect(remedy('.\\src\\a.ts', ['src'])).toBe(true)
     expect(remedy('src/a.ts', ['./src'])).toBe(true)
     expect(remedy('src/a.ts', ['a/../src'])).toBe(true)
-    // Roots are preserved: an absolute destination does not match a relative target.
+    // A rooted directory is not a relative file target; same-space containment is unchanged.
     expect(remedy('/src/a.ts', ['src'])).toBe(false)
     expect(remedy('src/a.ts', ['/src'])).toBe(false)
     expect(remedy('/src/a.ts', ['/src'])).toBe(true)
     expect(remedy(`${DRIVE}\\src\\a.ts`, [`${DRIVE.toLowerCase()}/src`])).toBe(true)
+    // A relative file target matches a rooted destination by suffix, in both directions.
+    expect(remedy('/workspace/src/a.ts', ['src/a.ts'])).toBe(true)
+    expect(remedy('src/a.ts', ['/workspace/src/a.ts'])).toBe(true)
+    expect(remedy('//server/share/src/a.ts', ['src/a.ts'])).toBe(true)
     // A padded target is trimmed before comparison.
     expect(remedy('src/a.ts', [' src '])).toBe(true)
     // '.' is the working directory; '..' is its parent.

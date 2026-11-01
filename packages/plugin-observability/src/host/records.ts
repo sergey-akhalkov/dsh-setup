@@ -155,6 +155,20 @@ interface CheckpointFacts {
   readonly bottleneck?: CheckpointBottleneck
 }
 
+/** The previous checkpoint's bottleneck identity and lane states, for the age rule. */
+interface BottleneckState {
+  readonly owner: string
+  readonly blocking: string
+  readonly states: ReadonlyMap<string, string>
+  readonly age: number
+}
+
+/** A record without configured argument values, used when a rejected call must contribute nothing. */
+function withoutArgumentValues(record: TraceRecord): TraceRecord {
+  const { argumentValues, ...rest } = record
+  return argumentValues === undefined ? record : rest
+}
+
 /** A list's length when the producer would accept it, or undefined when malformed. */
 function checkpointListLength(value: unknown): number | undefined {
   if (value === undefined) return 0
@@ -279,7 +293,7 @@ const RELATIVE_PATH_BASE: readonly string[] = Object.freeze([
  */
 function normalizedPath(value: string): string {
   const unified = value.trim().replace(/\\/g, '/')
-  const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified)
+  const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified)
   const parts: string[] = rooted ? [] : [...RELATIVE_PATH_BASE]
   for (const part of unified.split('/')) {
     if (part === '' || part === '.') continue
@@ -302,16 +316,43 @@ function pathIsWithin(path: string, root: string): boolean {
   return path.startsWith(`${root}/`)
 }
 
+/** The part of a relative path below the fixed ancestor chain, or undefined above it. */
+function relativeTail(path: string): string | undefined {
+  if (!path.startsWith(RELATIVE_PATH_ROOT)) return undefined
+  const parts = path.slice(RELATIVE_PATH_ROOT.length).split('/')
+  if (parts.length < RELATIVE_PATH_BASE.length) return undefined
+  for (let index = 0; index < RELATIVE_PATH_BASE.length; index += 1) {
+    if (parts[index] !== RELATIVE_PATH_BASE[index]) return undefined
+  }
+  const tail = parts.slice(RELATIVE_PATH_BASE.length)
+  if (tail.includes('..')) return undefined
+  return tail.join('/')
+}
+
+/**
+ * Whether two normalized paths intersect: by component when both are rooted or
+ * both relative, and by suffix when one is rooted and the other names a
+ * relative tail. A tail containing `..` has no rooted counterpart.
+ */
+function pathsIntersect(left: string, right: string): boolean {
+  const leftRooted = left.startsWith('/')
+  const rightRooted = right.startsWith('/')
+  if (leftRooted === rightRooted) {
+    return pathIsWithin(left, right) || pathIsWithin(right, left)
+  }
+  const rooted = leftRooted ? left : right
+  const relative = leftRooted ? right : left
+  const tail = relativeTail(relative)
+  if (tail === undefined || tail === '') return false
+  return rooted === `/${tail}` || rooted.endsWith(`/${tail}`)
+}
+
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */
 function scopesOverlap(left: string, right: string): boolean {
   const a = left.trim()
   const b = right.trim()
   if (a.startsWith('resource:') || b.startsWith('resource:')) return a === b
-  const normalizedLeft = normalizedPath(a)
-  const normalizedRight = normalizedPath(b)
-  return (
-    pathIsWithin(normalizedLeft, normalizedRight) || pathIsWithin(normalizedRight, normalizedLeft)
-  )
+  return pathsIntersect(normalizedPath(a), normalizedPath(b))
 }
 
 function laneScopesOverlap(left: CheckpointLane, right: CheckpointLane): boolean {
@@ -369,10 +410,10 @@ function filePathOf(raw: string | undefined): string | undefined {
   return text(asRecord(parsed)?.file_path)
 }
 
-/** Whether a write destination equals a declared target or lies beneath it by component. */
+/** Whether a write destination and a declared target intersect under the shared path rule. */
 function matchesTargets(filePath: string, targets: readonly string[]): boolean {
   const normalized = normalizedPath(filePath)
-  return targets.some((target) => pathIsWithin(normalized, normalizedPath(target)))
+  return targets.some((target) => pathsIntersect(normalized, normalizedPath(target)))
 }
 
 /** The text blocks of a tool result message; read only to classify a delegate result. */
@@ -532,10 +573,6 @@ export function extractRecords(
   const records: TraceRecord[] = []
   const callById = new Map<string, { tool: string; values?: Record<string, string> }>()
   const checkpointFactsByIndex = new Map<number, CheckpointFacts>()
-  const lastBottleneck = new Map<
-    string,
-    { owner: string; blocking: string; states: ReadonlyMap<string, string>; age: number }
-  >()
   // The write destination is read for remedy matching only; it never reaches a record.
   const filePaths = new Map<string, string>()
   let currentTurn: number | undefined
@@ -561,52 +598,13 @@ export function extractRecords(
     let goalId: string | undefined
     let goalPhase: string | undefined
     let goalRounds: number | undefined
-    let checkpointOutcome: string | undefined
-    let checkpointVerifiedCount: number | undefined
-    let checkpointLaneCount: number | undefined
-    let checkpointBlockedLaneCount: number | undefined
-    let checkpointParallelComputed: boolean | undefined
-    let checkpointBottleneckAction: string | undefined
-    let checkpointBottleneckAge: number | undefined
     switch (type) {
       case 'tool/call': {
         tool = text(data.name)
         callId = text(data.callId)
         if (tool === CHECKPOINT_TOOL) {
           const facts = checkpointFacts(text(data.arguments))
-          checkpointOutcome = facts?.outcome
-          checkpointVerifiedCount = facts?.verified
-          if (facts !== undefined) {
-            checkpointFactsByIndex.set(records.length, facts)
-            checkpointLaneCount = facts.lanes.length
-            checkpointBlockedLaneCount = facts.lanes.filter(
-              (lane) => lane.state === 'blocked',
-            ).length
-            checkpointParallelComputed = planComputesParallel(facts.lanes)
-            checkpointBottleneckAction = facts.bottleneck?.action
-            if (facts.bottleneck === undefined) {
-              lastBottleneck.delete(sessionId)
-            } else {
-              const blockingIds = [...new Set(facts.bottleneck.blockingLaneIds)].sort()
-              const blocking = blockingIds.join('\u0000')
-              // The producer resets the age when a blocking lane changes state.
-              const states = new Map(facts.lanes.map((lane) => [lane.id, lane.state]))
-              const previous = lastBottleneck.get(sessionId)
-              const unchanged =
-                previous !== undefined &&
-                previous.owner === facts.bottleneck.owner &&
-                previous.blocking === blocking &&
-                blockingIds.every((id) => previous.states.get(id) === states.get(id))
-              const age = previous !== undefined && unchanged ? previous.age + 1 : 1
-              checkpointBottleneckAge = age
-              lastBottleneck.set(sessionId, {
-                owner: facts.bottleneck.owner,
-                blocking,
-                states,
-                age,
-              })
-            }
-          }
+          if (facts !== undefined) checkpointFactsByIndex.set(records.length, facts)
           values = checkpointArgumentValues(facts, fields?.get(tool))
         } else {
           values = argumentValues(
@@ -699,27 +697,85 @@ export function extractRecords(
       ...(goalId === undefined ? {} : { goalId }),
       ...(goalPhase === undefined ? {} : { goalPhase }),
       ...(goalRounds === undefined ? {} : { goalRounds }),
-      ...(checkpointOutcome === undefined ? {} : { checkpointOutcome }),
-      ...(checkpointVerifiedCount === undefined ? {} : { checkpointVerifiedCount }),
-      ...(checkpointLaneCount === undefined ? {} : { checkpointLaneCount }),
-      ...(checkpointBlockedLaneCount === undefined ? {} : { checkpointBlockedLaneCount }),
-      ...(checkpointParallelComputed === undefined ? {} : { checkpointParallelComputed }),
-      ...(checkpointBottleneckAction === undefined ? {} : { checkpointBottleneckAction }),
-      ...(checkpointBottleneckAge === undefined ? {} : { checkpointBottleneckAge }),
     })
     if (type === 'turn/end') currentTurn = undefined
   }
-  // The remedy window ends at the earlier of the next checkpoint and this
+  // A checkpoint only contributes facts when its result did not fail. A failed
+  // call is not an age step, a remedy boundary, or a plan-metric sample.
+  const failedCalls = new Set<string>()
+  const resultIndexByKey = new Map<string, number>()
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
+    if (record === undefined || record.eventType !== 'tool/result') continue
+    if (record.callId === undefined) continue
+    const key = callKey(record.sessionId, record.callId)
+    resultIndexByKey.set(key, index)
+    if (record.failed === true) failedCalls.add(key)
+  }
+  const isFailedCheckpoint = (index: number): boolean => {
+    const record = records[index]
+    if (record === undefined || record.callId === undefined) return false
+    return failedCalls.has(callKey(record.sessionId, record.callId))
+  }
+  const validIndices = [...checkpointFactsByIndex.keys()]
+    .filter((index) => !isFailedCheckpoint(index))
+    .sort((left, right) => left - right)
+  for (const index of checkpointFactsByIndex.keys()) {
+    if (!isFailedCheckpoint(index)) continue
+    const record = records[index]
+    if (record === undefined) continue
+    records[index] = withoutArgumentValues(record)
+    if (record.callId === undefined) continue
+    const resultIndex = resultIndexByKey.get(callKey(record.sessionId, record.callId))
+    if (resultIndex === undefined) continue
+    const result = records[resultIndex]
+    if (result !== undefined) records[resultIndex] = withoutArgumentValues(result)
+  }
+  const bottleneckStates = new Map<string, BottleneckState>()
+  for (const index of validIndices) {
+    const facts = checkpointFactsByIndex.get(index)
+    const record = records[index]
+    if (facts === undefined || record === undefined) continue
+    let action: string | undefined
+    let age: number | undefined
+    if (facts.bottleneck === undefined) {
+      bottleneckStates.delete(sessionId)
+    } else {
+      action = facts.bottleneck.action
+      const blockingIds = [...new Set(facts.bottleneck.blockingLaneIds)].sort()
+      const blocking = blockingIds.join('\u0000')
+      // The producer resets the age when a blocking lane changes state.
+      const states = new Map(facts.lanes.map((lane) => [lane.id, lane.state]))
+      const previous = bottleneckStates.get(sessionId)
+      const unchanged =
+        previous !== undefined &&
+        previous.owner === facts.bottleneck.owner &&
+        previous.blocking === blocking &&
+        blockingIds.every((id) => previous.states.get(id) === states.get(id))
+      age = previous !== undefined && unchanged ? previous.age + 1 : 1
+      bottleneckStates.set(sessionId, { owner: facts.bottleneck.owner, blocking, states, age })
+    }
+    records[index] = {
+      ...record,
+      checkpointOutcome: facts.outcome,
+      checkpointVerifiedCount: facts.verified,
+      checkpointLaneCount: facts.lanes.length,
+      checkpointBlockedLaneCount: facts.lanes.filter((lane) => lane.state === 'blocked').length,
+      checkpointParallelComputed: planComputesParallel(facts.lanes),
+      ...(action === undefined ? {} : { checkpointBottleneckAction: action }),
+      ...(age === undefined ? {} : { checkpointBottleneckAge: age }),
+    }
+  }
+  // The remedy window ends at the earlier of the next valid checkpoint and this
   // checkpoint's turn end; an absent bottleneck needs no remedy.
-  const indices = [...checkpointFactsByIndex.keys()].sort((left, right) => left - right)
-  for (let position = 0; position < indices.length; position += 1) {
-    const index = indices[position]
+  for (let position = 0; position < validIndices.length; position += 1) {
+    const index = validIndices[position]
     if (index === undefined) continue
     const facts = checkpointFactsByIndex.get(index)
     const checkpoint = records[index]
     if (facts?.outcome !== 'continue' || facts.bottleneck === undefined) continue
     if (checkpoint === undefined) continue
-    const next = indices[position + 1]
+    const next = validIndices[position + 1]
     let turnEnd: number | undefined
     for (let cursor = index + 1; cursor < records.length; cursor += 1) {
       const record = records[cursor]

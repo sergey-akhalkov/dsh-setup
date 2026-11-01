@@ -266,7 +266,7 @@ arguments):
     "blockingLanes": ["test"],
     "targets": ["test/parser.test.ts"]
   },
-  "bottleneckKey": "0318b47da62567c5",
+  "bottleneckKey": "fdc2f0da6ab1499a",
   "bottleneckChanged": false,
   "derivedRemaining": ["test"],
   "parallelComputed": false,
@@ -331,9 +331,11 @@ the turn may close only after one of these:
 Two lanes are parallel when both are runnable, they have different owners, and their scopes do not
 overlap. A lane is runnable when its state is `running` and every lane in `blockedBy` is `done`. Scope
 overlap is compared by path component, case-insensitively and with `\` and `/` unified, so `src` and
-`src2` are disjoint; a `resource:` entry matches exactly, so two lanes sharing `resource:live-stand`
-are serial by construction. A shared scope or a single owner is the serial form; it is data, not a
-sentence.
+`src2` are disjoint; dot segments resolve, so `src/./a.ts` and `src/a.ts` are the same path, and
+`../..` still contains `src`. A relative path and an absolute one ending with it — `/ws/src` and
+`src` — are the same location, so the comparison needs no workspace. A `resource:` entry matches
+exactly, so two lanes sharing `resource:live-stand` are serial by construction. A shared scope or a
+single owner is the serial form; it is data, not a sentence.
 
 A failed worker start, an untagged worker start, and a worker start before the checkpoint do not
 satisfy the gate. Each unsatisfied close steers with the checkpoint id, shares the `maxBlocks` budget,
@@ -350,9 +352,9 @@ the action with a later tool call, never with prose:
   and whose serialized arguments contain the checkpoint id; a cached `delegate` reuse and
   `send_message` are not starts;
 - `lead_action`: a successful `edit` or `write` whose `file_path` equals a declared target or lies
-  beneath a declared directory target by path component; `src2/file.ts` does not match `src`, a failed
-  or pending call is not evidence, and a target mentioned only in written content or a shell command
-  does not match;
+  beneath a declared directory target by path component; `src2/file.ts` does not match `src`, a
+  relative target matches an absolute destination ending with it, a failed or pending call is not
+  evidence, and a target mentioned only in written content or a shell command does not match;
 - `user_decision`: an `ask_user_question` call; the independent question review still applies.
 
 No match refuses the close with a steer naming the checkpoint id, the bottleneck id and owner, its
@@ -363,12 +365,12 @@ remedy obligation.
 ### Bottleneck age
 
 The plugin reads the previous checkpoint record of the same session and counts consecutive
-checkpoints whose bottleneck names the same owner and the same blocking lane ids. At
+checkpoints whose bottleneck keeps the same owner while none of its blocking lanes changes state. At
 `bottleneckAge` (default 2) the close is refused with a steer that requires a route change: a new
-owner, a changed blocking lane set (a lane that moved on), or a `user_decision` question to the user.
-Renaming the bottleneck id does not reset the count; changing the owner or the blocking lanes does. A
-record from another session, a record without a bottleneck object (a legacy v1 record), and an
-unreadable record do not count.
+owner, a blocking lane that moved on, or a `user_decision` question to the user. Renaming the
+bottleneck id does not reset the count, and neither does adding or dropping a blocking lane id; a new
+owner or a lane state change does. A record from another session, a record without a bottleneck
+object (a legacy v1 record), an unreadable record, and a failed checkpoint call do not count.
 
 
 ### Goal rounds

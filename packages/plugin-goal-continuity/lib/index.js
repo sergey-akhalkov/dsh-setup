@@ -1541,6 +1541,43 @@ function pathContains(outer, inner) {
         return inner.startsWith('/');
     return inner.startsWith(`${outer}/`);
 }
+/**
+ * Within-workspace tail of one normalized relative path, or undefined when the
+ * path has no base chain or escapes upward.
+ */
+function relativeTail(relative) {
+    const parts = relative.slice(RELATIVE_ROOT.length).split('/');
+    if (parts.length < RELATIVE_BASE.length)
+        return undefined;
+    for (let index = 0; index < RELATIVE_BASE.length; index += 1) {
+        if (parts[index] !== RELATIVE_BASE[index])
+            return undefined;
+    }
+    const tail = parts.slice(RELATIVE_BASE.length).join('/');
+    if (tail === '' || tail.startsWith('..') || tail.includes('/..'))
+        return undefined;
+    return tail;
+}
+/**
+ * Whether a rooted and a relative path name the same location. Without a
+ * workspace the extractor and the producer cannot resolve a base, so the
+ * rooted tail is compared: `/ws/src` meets `src`.
+ */
+function mixedPathSuffix(rooted, relative) {
+    const tail = relativeTail(relative);
+    if (tail === undefined)
+        return false;
+    return rooted === `/${tail}` || rooted.endsWith(`/${tail}`);
+}
+/** Whether two normalized paths intersect; a mixed pair matches by suffix. */
+function pathIntersects(one, other) {
+    if (pathContains(one, other) || pathContains(other, one))
+        return true;
+    const oneRooted = one.startsWith('/');
+    if (oneRooted === other.startsWith('/'))
+        return false;
+    return oneRooted ? mixedPathSuffix(one, other) : mixedPathSuffix(other, one);
+}
 /** Whether two lanes' scopes overlap; a `resource:` entry matches only itself exactly. */
 function scopesOverlap(left, right) {
     for (const leftEntry of left) {
@@ -1552,9 +1589,7 @@ function scopesOverlap(left, right) {
                     return true;
                 continue;
             }
-            const one = normalizeScopePath(leftEntry);
-            const other = normalizeScopePath(rightEntry);
-            if (pathContains(one, other) || pathContains(other, one))
+            if (pathIntersects(normalizeScopePath(leftEntry), normalizeScopePath(rightEntry)))
                 return true;
         }
     }
@@ -1661,18 +1696,27 @@ function recordLaneAges(record) {
     }
     return ages;
 }
-/** A stable, display-free identity for a bottleneck's owner and blocking lanes. */
+/** The blocking lane ids one stored record's bottleneck lists. */
+function recordBlockingLanes(record) {
+    const raw = record.bottleneck;
+    if (!isRecord(raw) || !Array.isArray(raw.blockingLanes))
+        return [];
+    return raw.blockingLanes.filter((id) => typeof id === 'string');
+}
+/**
+ * A stable, display-free identity for a bottleneck's owner. The blocking set
+ * is deliberately excluded: adding or dropping a lane is not a route change.
+ */
 function bottleneckKeyOf(bottleneck) {
-    const blocking = [...new Set(bottleneck.blockingLanes)].sort();
     return createHash('sha256')
-        .update(JSON.stringify({ owner: bottleneck.owner, blocking }))
+        .update(JSON.stringify({ owner: bottleneck.owner }))
         .digest('hex')
         .slice(0, 16);
 }
 /**
- * How many consecutive checkpoints named the same bottleneck owner and the
- * same blocking lane ids without any blocking lane moving on. `changed` is the
- * route-change escape, counted separately so a threshold of 1 still permits it.
+ * How many consecutive checkpoints named the same bottleneck owner without any
+ * of its blocking lanes moving on. `changed` is the route-change escape, counted
+ * separately so a threshold of 1 still permits it.
  */
 function bottleneckAgeOf(previous, bottleneck, storedPlan, workspace) {
     if (bottleneck === undefined)
@@ -1687,13 +1731,18 @@ function bottleneckAgeOf(previous, bottleneck, storedPlan, workspace) {
     if (priorKey !== bottleneckKeyOf(bottleneck))
         return { age: 1, changed: true };
     // A blocking lane that moved on is a route change, not an aged bottleneck.
-    // Compare the stored identities, the same ones the record wrote.
+    // Compare the stored identities, and the union of both blocking sets, so
+    // dropping a lane cannot reset the count.
     const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
     const currentStates = new Map(storedPlan.map((lane) => [lane.id, lane.state]));
-    for (const id of new Set(bottleneck.blockingLanes)) {
-        const storedId = storedText(id, workspace, MAX_CHECKPOINT_PATH_CHARS);
-        const before = previousStates?.get(storedId);
-        if (before !== undefined && currentStates.get(storedId) !== before) {
+    const blockingIds = new Set(recordBlockingLanes(previous));
+    for (const id of bottleneck.blockingLanes) {
+        blockingIds.add(storedText(id, workspace, MAX_CHECKPOINT_PATH_CHARS));
+    }
+    for (const id of blockingIds) {
+        const before = previousStates?.get(id);
+        const after = currentStates.get(id);
+        if (before !== undefined && after !== undefined && before !== after) {
             return { age: 1, changed: true };
         }
     }
@@ -1871,23 +1920,17 @@ function taggedWorkerStarted(evidence, id) {
     }
     return false;
 }
-/** Resolve one path against the workspace when it is relative. */
-function resolveFromWorkspace(value, workspace) {
-    const trimmed = value.trim();
-    const rooted = trimmed.startsWith('/') || /^[A-Za-z]:([\\/]|$)/u.test(trimmed);
-    return rooted ? trimmed : `${workspace}/${trimmed}`;
-}
 /**
  * Whether one successful edit or write landed on a declared remedy target.
- * Both sides resolve against the workspace, so a relative target and an
- * absolute destination for the same file still match.
+ * The comparison follows `pathIntersects`, so a relative target and an
+ * absolute destination for the same file match and the reverse does too.
  */
-function targetMatched(targets, destination, workspace) {
-    const path = normalizeScopePath(resolveFromWorkspace(destination, workspace));
-    return targets.some((target) => pathContains(normalizeScopePath(resolveFromWorkspace(target, workspace)), path));
+function targetMatched(targets, destination) {
+    const path = normalizeScopePath(destination);
+    return targets.some((target) => pathIntersects(normalizeScopePath(target), path));
 }
 /** Whether the declared remedy was executed after the checkpoint. */
-function remedyMatched(evidence, bottleneck, id, workspace) {
+function remedyMatched(evidence, bottleneck, id) {
     const checkpoint = evidence.checkpoint;
     if (checkpoint === undefined)
         return false;
@@ -1901,7 +1944,7 @@ function remedyMatched(evidence, bottleneck, id, workspace) {
         if (bottleneck.action !== 'lead_action' || !WRITE_TOOLS.includes(call.name))
             continue;
         const destination = writtenPathOf(call.arguments);
-        if (destination !== undefined && targetMatched(bottleneck.targets, destination, workspace)) {
+        if (destination !== undefined && targetMatched(bottleneck.targets, destination)) {
             return true;
         }
     }
@@ -2438,7 +2481,7 @@ function installCheckpointGate(ctx, config, stateFor) {
             if (stalePlan !== undefined &&
                 stalePlan.outcome === 'continue' &&
                 stalePlan.bottleneck !== undefined &&
-                !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn), workspace)) {
+                !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn))) {
                 refuse(agent, budget, composeRemedyRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint remedy required', `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
                 return;
             }
@@ -2474,7 +2517,7 @@ function installCheckpointGate(ctx, config, stateFor) {
         const bottleneck = plan.bottleneck;
         if (bottleneck === undefined)
             return;
-        if (!remedyMatched(evidence, bottleneck, id, workspace)) {
+        if (!remedyMatched(evidence, bottleneck, id)) {
             refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
             return;
         }
