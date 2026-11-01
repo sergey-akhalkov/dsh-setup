@@ -345,6 +345,17 @@ describe('neutral record extraction', () => {
     expect(planParallel([lane('a', 'lead', ['../src']), lane('b', 'worker', ['src'])])).toBe(true)
   })
 
+  it('resolves relative scopes from the fixed ancestor chain', () => {
+    // '.' is the working directory, not the whole relative path space.
+    expect(planParallel([lane('a', 'lead', ['.']), lane('b', 'worker', ['../src'])])).toBe(true)
+    expect(planParallel([lane('a', 'lead', ['.']), lane('b', 'worker', ['src'])])).toBe(false)
+    // The parent-directory alias contains the working directory.
+    expect(planParallel([lane('a', 'lead', ['..']), lane('b', 'worker', ['src'])])).toBe(false)
+    expect(
+      planParallel([lane('a', 'lead', ['.', '../src']), lane('b', 'worker', ['..', 'src'])]),
+    ).toBe(false)
+  })
+
   it('trims ids, owners, scopes, and references before comparing', () => {
     // A padded duplicate id is still a duplicate, so the call is malformed.
     expect(
@@ -466,6 +477,11 @@ describe('neutral record extraction', () => {
     expect(remedy(`${DRIVE}\\src\\a.ts`, [`${DRIVE.toLowerCase()}/src`])).toBe(true)
     // A padded target is trimmed before comparison.
     expect(remedy('src/a.ts', [' src '])).toBe(true)
+    // '.' is the working directory; '..' is its parent.
+    expect(remedy('src/a.ts', ['.'])).toBe(true)
+    expect(remedy('../src/a.ts', ['.'])).toBe(false)
+    expect(remedy('src/a.ts', ['..'])).toBe(true)
+    expect(remedy('../src/a.ts', ['..'])).toBe(true)
     // A textual sibling is not beneath the target by path component.
     expect(remedy('src2/a.ts', ['src'])).toBe(false)
     expect(remedy('src/a.ts', ['src'], true)).toBe(false)
@@ -581,6 +597,58 @@ describe('neutral record extraction', () => {
       result('w1'),
     ])
     expect(after[0]?.checkpointRemedyResolved).toBe(false)
+  })
+
+  it('keeps a later checkpoint from extending the remedy window past the turn end', () => {
+    const question = (at: number): SessionEvent[] => [
+      event(
+        'tool/call',
+        { turn: 2, step: 1, callId: 'q1', name: 'ask_user_question', arguments: '{}' },
+        at,
+      ),
+      event(
+        'tool/result',
+        {
+          turn: 2,
+          step: 1,
+          message: {
+            role: 'tool',
+            content: [],
+            source: { kind: 'tool', callId: 'q1' },
+            isError: false,
+          },
+        },
+        at + 1_000,
+      ),
+    ]
+    const checkpoint = (callId: string, turn: number, at: number): SessionEvent =>
+      event(
+        'tool/call',
+        {
+          turn,
+          step: 1,
+          callId,
+          name: 'work_checkpoint',
+          arguments: continuePlan({ action: 'user_decision' }),
+        },
+        at,
+      )
+    const before = extractRecords('s1', [
+      checkpoint('cp1', 1, NOW),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW + 500),
+      ...question(NOW + 2_000),
+    ])
+    expect(before[0]?.checkpointRemedyResolved).toBe(false)
+    const withLaterCheckpoint = extractRecords('s1', [
+      checkpoint('cp1', 1, NOW),
+      event('turn/end', { turn: 1, reason: { kind: 'completed' } }, NOW + 500),
+      ...question(NOW + 2_000),
+      checkpoint('cp2', 2, NOW + 4_000),
+    ])
+    expect(withLaterCheckpoint[0]?.checkpointRemedyResolved).toBe(
+      before[0]?.checkpointRemedyResolved,
+    )
+    expect(withLaterCheckpoint[0]?.checkpointRemedyResolved).toBe(false)
   })
 
   it('counts an empty verified list and a plan-less done close as zeroes', () => {

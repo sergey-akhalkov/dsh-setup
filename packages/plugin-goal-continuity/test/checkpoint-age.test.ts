@@ -170,6 +170,28 @@ describe('bottleneck age', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
   })
 
+  it('refuses the first checkpoint at threshold 1 with no route change', async () => {
+    const harness = await create({ config: { checkpoint: { bottleneckAge: 1 } } })
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    remedy(harness)
+    await harness.turnStopping(1)
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('persisted for 1 checkpoints')
+  })
+
+  it('refuses an aged bottleneck even after the checkpoint expires', async () => {
+    const harness = await create({ config: { checkpoint: { stepInterval: 1 } } })
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    await harness.checkpoint(plan())
+    remedy(harness)
+    await harness.preStep(1)
+    await harness.turnStopping(1)
+    expect(harness.steers).toHaveLength(2)
+    expect(noticeText(harness.steers[1] as never)).toContain('persisted for 2 checkpoints')
+  })
+
   it('resets the count when a blocking lane moves from blocked to running', async () => {
     const harness = await create()
     harness.turnStart(1)

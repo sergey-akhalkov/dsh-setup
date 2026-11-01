@@ -1505,15 +1505,17 @@ function isResourceScope(entry) {
 }
 /** The virtual root of the relative path space; no real path can contain it. */
 const RELATIVE_ROOT = '\u0000';
+/** Virtual ancestors above the working directory, so any parent depth stays comparable. */
+const RELATIVE_BASE = Object.freeze([...Array.from({ length: 16 }, () => 'p'), 'cwd']);
 /**
  * Normalize one scope or destination into one comparable space: separators
  * unified, dot segments resolved, case folded, and relative paths resolved
- * from a virtual current directory so `..` stays comparable with `.`.
+ * from a fixed ancestor chain so `../..` still contains `src`.
  */
 function normalizeScopePath(value) {
     const unified = value.trim().replaceAll('\\', '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified);
-    const parts = rooted ? [] : ['cwd'];
+    const parts = rooted ? [] : [...RELATIVE_BASE];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')
             continue;
@@ -1537,9 +1539,6 @@ function pathContains(outer, inner) {
     // The absolute root contains every absolute descendant.
     if (outer === '/')
         return inner.startsWith('/');
-    // The virtual root above the working directory contains every relative path.
-    if (outer === RELATIVE_ROOT)
-        return inner.startsWith(RELATIVE_ROOT);
     return inner.startsWith(`${outer}/`);
 }
 /** Whether two lanes' scopes overlap; a `resource:` entry matches only itself exactly. */
@@ -1672,20 +1671,21 @@ function bottleneckKeyOf(bottleneck) {
 }
 /**
  * How many consecutive checkpoints named the same bottleneck owner and the
- * same blocking lane ids without any blocking lane moving on. A legacy record
- * without the key counts for nothing, so the first plan starts at one.
+ * same blocking lane ids without any blocking lane moving on. `changed` is the
+ * route-change escape, counted separately so a threshold of 1 still permits it.
  */
 function bottleneckAgeOf(previous, bottleneck, storedPlan, workspace) {
     if (bottleneck === undefined)
-        return 0;
+        return { age: 0, changed: false };
     const priorKey = previous?.bottleneckKey;
     const storedAge = previous?.bottleneckAge;
     if (typeof priorKey !== 'string' || priorKey === '')
-        return 1;
-    if (typeof storedAge !== 'number' || !Number.isSafeInteger(storedAge) || storedAge < 1)
-        return 1;
+        return { age: 1, changed: false };
+    if (typeof storedAge !== 'number' || !Number.isSafeInteger(storedAge) || storedAge < 1) {
+        return { age: 1, changed: false };
+    }
     if (priorKey !== bottleneckKeyOf(bottleneck))
-        return 1;
+        return { age: 1, changed: true };
     // A blocking lane that moved on is a route change, not an aged bottleneck.
     // Compare the stored identities, the same ones the record wrote.
     const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
@@ -1693,15 +1693,19 @@ function bottleneckAgeOf(previous, bottleneck, storedPlan, workspace) {
     for (const id of new Set(bottleneck.blockingLanes)) {
         const storedId = storedText(id, workspace, MAX_CHECKPOINT_PATH_CHARS);
         const before = previousStates?.get(storedId);
-        if (before !== undefined && currentStates.get(storedId) !== before)
-            return 1;
+        if (before !== undefined && currentStates.get(storedId) !== before) {
+            return { age: 1, changed: true };
+        }
     }
-    return storedAge + 1;
+    return { age: storedAge + 1, changed: false };
 }
-/** The age the turn's latest checkpoint record stored, or undefined when unavailable. */
+/** The age and route-change flag the turn's latest checkpoint record stored. */
 function recordedBottleneckAge(workspace, sessionId, turn) {
-    const age = checkpointRecords(workspace, sessionId, turn, 1)[0]?.bottleneckAge;
-    return typeof age === 'number' && Number.isSafeInteger(age) && age > 0 ? age : undefined;
+    const record = checkpointRecords(workspace, sessionId, turn, 1)[0];
+    const age = record?.bottleneckAge;
+    if (typeof age !== 'number' || !Number.isSafeInteger(age) || age < 1)
+        return undefined;
+    return { age, changed: record?.bottleneckChanged === true };
 }
 /** Lanes whose stored unchanged-checkpoint count reached the threshold. */
 function staleLanes(record, threshold) {
@@ -1867,15 +1871,23 @@ function taggedWorkerStarted(evidence, id) {
     }
     return false;
 }
-/** Whether one successful edit or write landed on a declared remedy target. */
-function targetMatched(targets, destination) {
-    const path = normalizeScopePath(destination);
-    if (path === '')
-        return false;
-    return targets.some((target) => pathContains(normalizeScopePath(target), path));
+/** Resolve one path against the workspace when it is relative. */
+function resolveFromWorkspace(value, workspace) {
+    const trimmed = value.trim();
+    const rooted = trimmed.startsWith('/') || /^[A-Za-z]:([\\/]|$)/u.test(trimmed);
+    return rooted ? trimmed : `${workspace}/${trimmed}`;
+}
+/**
+ * Whether one successful edit or write landed on a declared remedy target.
+ * Both sides resolve against the workspace, so a relative target and an
+ * absolute destination for the same file still match.
+ */
+function targetMatched(targets, destination, workspace) {
+    const path = normalizeScopePath(resolveFromWorkspace(destination, workspace));
+    return targets.some((target) => pathContains(normalizeScopePath(resolveFromWorkspace(target, workspace)), path));
 }
 /** Whether the declared remedy was executed after the checkpoint. */
-function remedyMatched(evidence, bottleneck, id) {
+function remedyMatched(evidence, bottleneck, id, workspace) {
     const checkpoint = evidence.checkpoint;
     if (checkpoint === undefined)
         return false;
@@ -1889,8 +1901,9 @@ function remedyMatched(evidence, bottleneck, id) {
         if (bottleneck.action !== 'lead_action' || !WRITE_TOOLS.includes(call.name))
             continue;
         const destination = writtenPathOf(call.arguments);
-        if (destination !== undefined && targetMatched(bottleneck.targets, destination))
+        if (destination !== undefined && targetMatched(bottleneck.targets, destination, workspace)) {
             return true;
+        }
     }
     return false;
 }
@@ -1967,19 +1980,30 @@ function composeCheckpointRequest(evidence, workspace, max, step, history) {
 function composeParallelRequest(id, max) {
     return bound(`Work checkpoint ${id} computes parallel lanes (goal-continuity). Start a worker whose call arguments contain ${id}, or amend the checkpoint with a plan that is serial: one owner or a shared scope.`, max);
 }
-/** The bounded remedy steer: the missing evidence first, so no bound can drop it. */
+/**
+ * The bounded remedy steer with the missing evidence first. Every required
+ * field stays inside `max`: the identifiers shrink until the whole message fits.
+ */
 function composeRemedyRequest(id, bottleneck, max, workspace) {
-    const clip = (value, length) => storedText(value, workspace, length);
-    const blocking = bottleneck.blockingLanes.length === 0
-        ? 'none'
-        : bottleneck.blockingLanes.map((lane) => clip(lane, 30)).join(', ');
-    const targets = bottleneck.targets.map((target) => clip(target, 40));
-    const expected = bottleneck.action === 'worker_start'
-        ? `start a worker whose call arguments contain ${id}`
-        : bottleneck.action === 'user_decision'
-            ? 'ask the user with ask_user_question'
-            : `complete a successful edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
-    return bound(`Before the close, ${expected}. Work checkpoint ${id} bottleneck "${clip(bottleneck.id, 40)}" (owner ${clip(bottleneck.owner, 40)}) with action ${bottleneck.action} and blocking lanes: ${blocking} (goal-continuity).`, max);
+    const build = (clipLength) => {
+        const clip = (value) => storedText(value, workspace, clipLength);
+        const targets = bottleneck.targets.map(clip);
+        const expected = bottleneck.action === 'worker_start'
+            ? `start a worker whose call arguments contain ${id}`
+            : bottleneck.action === 'user_decision'
+                ? 'ask the user with ask_user_question'
+                : `complete a successful edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
+        const blocking = bottleneck.blockingLanes.length === 0 ? 'none' : bottleneck.blockingLanes.map(clip).join(', ');
+        return `Before the close, ${expected}. Checkpoint ${id}: bottleneck "${clip(bottleneck.id)}" ${bottleneck.action}; blocking: ${blocking} (goal-continuity).`;
+    };
+    let text = build(4);
+    for (let clipLength = 6; clipLength <= 40; clipLength += 2) {
+        const candidate = build(clipLength);
+        if (candidate.length > max)
+            break;
+        text = candidate;
+    }
+    return bound(text, max);
 }
 /** The bounded age steer requiring a route change rather than another wait. */
 function composeAgeRequest(id, bottleneck, age, max, workspace) {
@@ -2269,7 +2293,7 @@ function installCheckpointTool(ctx, stateFor) {
             // The record for this turn holds the previous checkpoint while it exists,
             // so a periodic checkpoint inside one turn counts toward the age too.
             const previous = checkpointRecords(workspace, agent.session.id, turn, 1)[0];
-            const age = bottleneckAgeOf(previous, input.bottleneck, storedPlan, workspace);
+            const bottleneckAge = bottleneckAgeOf(previous, input.bottleneck, storedPlan, workspace);
             const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
             const previousAges = previous === undefined ? undefined : recordLaneAges(previous);
             // A lane's unchanged count persists in the record, so a periodic checkpoint
@@ -2296,7 +2320,9 @@ function installCheckpointTool(ctx, stateFor) {
                     }),
                 derivedRemaining: remaining,
                 parallelComputed,
-                ...(age === 0 ? {} : { bottleneckAge: age }),
+                ...(bottleneckAge.age === 0
+                    ? {}
+                    : { bottleneckAge: bottleneckAge.age, bottleneckChanged: bottleneckAge.changed }),
                 next: storedText(input.next, workspace, MAX_CHECKPOINT_NEXT_CHARS),
                 time: new Date().toISOString(),
                 // The persisted copy is bounded and redacted like every decision field;
@@ -2412,8 +2438,18 @@ function installCheckpointGate(ctx, config, stateFor) {
             if (stalePlan !== undefined &&
                 stalePlan.outcome === 'continue' &&
                 stalePlan.bottleneck !== undefined &&
-                !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn))) {
+                !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn), workspace)) {
                 refuse(agent, budget, composeRemedyRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint remedy required', `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
+                return;
+            }
+            // An aged bottleneck keeps its refusal even after the checkpoint expires.
+            const staleAge = recordedBottleneckAge(workspace, agent.session.id, turn);
+            if (staleAge !== undefined &&
+                staleAge.age >= config.bottleneckAge &&
+                !staleAge.changed &&
+                stalePlan?.bottleneck !== undefined &&
+                stalePlan.bottleneck.action !== 'user_decision') {
+                refuse(agent, budget, composeAgeRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, staleAge.age, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint bottleneck is aged', `the bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`);
                 return;
             }
             if (!checkpointRequired(evidence, config))
@@ -2438,21 +2474,20 @@ function installCheckpointGate(ctx, config, stateFor) {
         const bottleneck = plan.bottleneck;
         if (bottleneck === undefined)
             return;
-        if (!remedyMatched(evidence, bottleneck, id)) {
+        if (!remedyMatched(evidence, bottleneck, id, workspace)) {
             refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
             return;
         }
         // The write counted the preceding checkpoint, in this turn or an earlier one.
-        // A bottleneck must survive one repeat, whatever `bottleneckAge` says, so a
-        // route change and a threshold of 1 both still allow the close.
+        // A route change is the escape, so a threshold of 1 still permits the close.
         const age = recordedBottleneckAge(workspace, agent.session.id, turn);
-        if (age === undefined || age < Math.max(config.bottleneckAge, 2))
+        if (age === undefined || age.age < config.bottleneckAge || age.changed)
             return;
         // A user decision is the live escape; a new owner or a moved blocking lane
-        // is the data escape and already lowered the stored age.
+        // is the data escape and already raised `changed`.
         if (bottleneck.action === 'user_decision')
             return;
-        refuse(agent, budget, composeAgeRequest(id, bottleneck, age, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} bottleneck is aged`, `the bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${age} checkpoints after the refusal cap`);
+        refuse(agent, budget, composeAgeRequest(id, bottleneck, age.age, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} bottleneck is aged`, `the bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${age.age} checkpoints after the refusal cap`);
     }
     /** Steer once per refusal, then allow the close with one UNCHECKED notice. */
     function refuse(agent, budget, text, summary, detail) {

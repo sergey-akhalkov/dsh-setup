@@ -544,6 +544,7 @@ describe('work checkpoint record', () => {
         targets: ['test/parser.test.ts'],
       },
       bottleneckKey: '0318b47da62567c5',
+      bottleneckChanged: false,
       derivedRemaining: ['test'],
       parallelComputed: false,
       bottleneckAge: 1,
@@ -1078,6 +1079,13 @@ describe('scope comparison', () => {
     const harness = await create()
     harness.turnStart()
     await harness.checkpoint(twoLanes('..', 'src'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+  })
+
+  it('keeps containment at two parent levels', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('../..', 'src'))
     expect((await harness.readRecord()).parallelComputed).toBe(false)
   })
 })

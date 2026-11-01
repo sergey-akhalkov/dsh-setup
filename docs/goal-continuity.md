@@ -267,6 +267,7 @@ arguments):
     "targets": ["test/parser.test.ts"]
   },
   "bottleneckKey": "0318b47da62567c5",
+  "bottleneckChanged": false,
   "derivedRemaining": ["test"],
   "parallelComputed": false,
   "bottleneckAge": 1,
@@ -293,7 +294,8 @@ and the session. It also carries the lane plan with each lane's consecutive unch
 count (`laneAges`, used to name a stalled lane), the bottleneck plus a `bottleneckKey` hashing its
 owner and blocking lane set (stable across the redaction that bounds the displayed values), the
 `derivedRemaining` lane ids, the computed `parallelComputed` flag, and the `bottleneckAge` of a
-`continue` checkpoint (record version 2). A version 1 record from an earlier release stays readable
+`continue` checkpoint plus a `bottleneckChanged` flag recording whether a route change reset it
+(record version 2). A version 1 record from an earlier release stays readable
 and is never treated as a satisfied plan: its lanes and bottleneck are absent, so the age count
 starts again. Each field is bounded and redacted, and the record is replaced rather than duplicated
 when the same turn calls the tool again. The record is machine-local scratch under `.dsh/` and is

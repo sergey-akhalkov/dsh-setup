@@ -226,18 +226,43 @@ describe('executed bottleneck remedy', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('Before the close')
   })
 
-  it('keeps the missing evidence inside a 200-character steer', async () => {
+  it('matches a relative target against an absolute destination and the reverse', async () => {
+    const harness = await create()
+    const absolute = join(harness.workspace, 'src', 'a.ts')
+    await checkpointed(harness, 'lead_action', ['src/a.ts'])
+    call(harness, 'edit', { file_path: absolute })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+
+    harness.turnStart(2)
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src'], state: 'running' }],
+      bottleneck: {
+        id: 'guard-missing',
+        owner: 'lane-docs',
+        action: 'lead_action',
+        blockingLanes: ['lane-a'],
+        targets: [absolute],
+      },
+      next: 'execute the remedy',
+    })
+    call(harness, 'edit', { file_path: 'src/a.ts' })
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('keeps every required field inside a 200-character steer', async () => {
     const harness = await create({ config: { checkpoint: { maxMessageChars: 200 } } })
     harness.turnStart()
     await harness.checkpoint({
       outcome: 'continue',
       lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src'], state: 'running' }],
       bottleneck: {
-        id: 'b'.repeat(120),
-        owner: 'o'.repeat(120),
-        action: 'lead_action',
+        id: 'guard-missing',
+        owner: 'lead',
+        action: 'worker_start',
         blockingLanes: ['lane-a'],
-        targets: ['src/a.ts'],
       },
       next: 'x',
     })
@@ -245,7 +270,9 @@ describe('executed bottleneck remedy', () => {
     const text = noticeText(harness.steers[0] as never)
     expect(text.length).toBeLessThanOrEqual(200)
     expect(text).toContain('Before the close')
-    expect(text).toContain('src/a.ts')
+    expect(text).toContain('guard-missing')
+    expect(text).toContain('worker_start')
+    expect(text).toContain('lane-a')
   })
 
   it('resolves dot segments before matching a target', async () => {

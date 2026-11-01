@@ -263,55 +263,43 @@ function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
   return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) }
 }
 
-/** A normalized path keeps its root: `/` or a drive `c:`; the relative root is empty. */
-function isRootedPath(path: string): boolean {
-  return path.startsWith('/') || /^[a-z]:/u.test(path)
-}
+/** The virtual root of the relative path space; no real path can contain it. */
+const RELATIVE_PATH_ROOT = '\u0000'
+
+/** Virtual ancestors above the working directory, so any parent depth stays comparable. */
+const RELATIVE_PATH_BASE: readonly string[] = Object.freeze([
+  ...Array.from({ length: 16 }, () => 'p'),
+  'cwd',
+])
 
 /**
- * Normalize a path-like scope the way the checkpoint producer does: unify
- * separators, resolve `.`/`..` (unmatched leading `..` stays on a relative
- * path), fold case, and keep a leading `/` or drive root.
+ * Normalize a path-like scope the way the checkpoint producer does: separators
+ * unified, dot segments resolved, case folded, and a relative path resolved from
+ * a fixed ancestor chain so `../..` still contains `src`.
  */
-function normalizedPath(path: string): string {
-  const unified = path.trim().replace(/\\/g, '/').toLowerCase()
-  const drive = /^([a-z]):(?:\/|$)/u.exec(unified)
-  const rooted = unified.startsWith('/') || drive !== null
-  let root = ''
-  let rest = unified
-  if (drive !== null) {
-    root = `${drive[1]}:`
-    rest = unified.slice(drive[0].length)
-  } else if (unified.startsWith('/')) {
-    root = '/'
-    rest = unified.slice(1)
-  }
-  const segments: string[] = []
-  for (const segment of rest.split('/')) {
-    if (segment === '' || segment === '.') continue
-    if (segment === '..') {
-      const last = segments[segments.length - 1]
-      if (last !== undefined && last !== '..') segments.pop()
-      else if (!rooted) segments.push('..')
+function normalizedPath(value: string): string {
+  const unified = value.trim().replace(/\\/g, '/')
+  const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified)
+  const parts: string[] = rooted ? [] : [...RELATIVE_PATH_BASE]
+  for (const part of unified.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      // An unmatched parent stays visible, so '../a' never collapses onto 'a'.
+      if (parts.length > 0 && parts[parts.length - 1] !== '..') parts.pop()
+      else if (!rooted) parts.push('..')
       continue
     }
-    segments.push(segment)
+    parts.push(part)
   }
-  if (root === '/') return segments.length === 0 ? '/' : `/${segments.join('/')}`
-  if (root !== '') return segments.length === 0 ? root : `${root}/${segments.join('/')}`
-  return segments.join('/')
+  const joined = parts.join('/').toLowerCase()
+  return rooted ? `/${joined}` : `${RELATIVE_PATH_ROOT}${joined}`
 }
 
-/**
- * Whether a normalized path equals a root or lies beneath it by path component.
- * The relative root contains relative descendants only; rooted paths never
- * match a relative root, and a drive root contains only its own drive.
- */
+/** Whether one normalized path equals another or lies beneath it by path component. */
 function pathIsWithin(path: string, root: string): boolean {
-  if (root === '') return !isRootedPath(path)
+  if (path === root) return true
   if (root === '/') return path.startsWith('/')
-  if (isRootedPath(root) !== isRootedPath(path)) return false
-  return path === root || path.startsWith(`${root}/`)
+  return path.startsWith(`${root}/`)
 }
 
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */
@@ -721,8 +709,8 @@ export function extractRecords(
     })
     if (type === 'turn/end') currentTurn = undefined
   }
-  // The remedy window ends at the next checkpoint, or at the turn end when this
-  // is the last one; an absent bottleneck needs no remedy.
+  // The remedy window ends at the earlier of the next checkpoint and this
+  // checkpoint's turn end; an absent bottleneck needs no remedy.
   const indices = [...checkpointFactsByIndex.keys()].sort((left, right) => left - right)
   for (let position = 0; position < indices.length; position += 1) {
     const index = indices[position]
@@ -732,16 +720,15 @@ export function extractRecords(
     if (facts?.outcome !== 'continue' || facts.bottleneck === undefined) continue
     if (checkpoint === undefined) continue
     const next = indices[position + 1]
-    let end = next ?? records.length
-    if (next === undefined) {
-      for (let cursor = index + 1; cursor < records.length; cursor += 1) {
-        const record = records[cursor]
-        if (record === undefined || record.eventType !== 'turn/end') continue
-        if (checkpoint.turn !== undefined && record.turn !== checkpoint.turn) continue
-        end = cursor
-        break
-      }
+    let turnEnd: number | undefined
+    for (let cursor = index + 1; cursor < records.length; cursor += 1) {
+      const record = records[cursor]
+      if (record === undefined || record.eventType !== 'turn/end') continue
+      if (checkpoint.turn !== undefined && record.turn !== checkpoint.turn) continue
+      turnEnd = cursor
+      break
     }
+    const end = Math.min(next ?? records.length, turnEnd ?? records.length)
     const resolvedAt = remedyMatches(records, index, end, facts.bottleneck, filePaths)
     records[index] = {
       ...checkpoint,
