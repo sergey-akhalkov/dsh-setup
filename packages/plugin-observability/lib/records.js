@@ -163,14 +163,10 @@ function checkpointFacts(raw) {
     if (bottleneck === null)
         return undefined;
     // A `continue` checkpoint carries a non-empty lane plan and a bottleneck; a
-    // `done` close may omit both.
+    // `done` close may omit both. The producer accepts any bounded `blockingLanes`
+    // string list, so an entry that names no lane is not malformed here.
     if (outcome === 'continue' && (lanes.length === 0 || bottleneck === undefined)) {
         return undefined;
-    }
-    if (lanes.length > 0 && bottleneck !== undefined) {
-        const ids = new Set(lanes.map((lane) => lane.id));
-        if (!bottleneck.blockingLaneIds.every((id) => ids.has(id)))
-            return undefined;
     }
     return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) };
 }
@@ -337,6 +333,11 @@ function remedyMatches(records, start, end, bottleneck, filePaths) {
     const results = new Map();
     const failed = new Set();
     const notStarted = new Set();
+    let earliest;
+    const note = (time) => {
+        if (earliest === undefined || time < earliest)
+            earliest = time;
+    };
     for (let index = start + 1; index < end; index += 1) {
         const record = records[index];
         if (record === undefined || record.eventType !== 'tool/result')
@@ -362,21 +363,23 @@ function remedyMatches(records, start, end, bottleneck, filePaths) {
         if (completedAt === undefined || failed.has(key))
             continue;
         if (bottleneck.action === 'user_decision' && record.tool === 'ask_user_question') {
-            return completedAt;
+            note(completedAt);
+            continue;
         }
         if (bottleneck.action === 'worker_start' && WORKER_START_TOOLS.has(record.tool)) {
             if (record.tool === 'delegate' && notStarted.has(key))
                 continue;
-            return completedAt;
+            note(completedAt);
+            continue;
         }
         if (bottleneck.action === 'lead_action' &&
             (record.tool === 'edit' || record.tool === 'write')) {
             const filePath = filePaths.get(key);
             if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets))
-                return completedAt;
+                note(completedAt);
         }
     }
-    return undefined;
+    return earliest;
 }
 /** The five usage fields, with a missing field counting as zero, never an estimate. */
 function tokenUsage(value) {

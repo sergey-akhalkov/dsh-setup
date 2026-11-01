@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CheckpointHarness } from './checkpoint-harness.js'
+import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
 import { noticeText } from './harness.js'
 
 /**
@@ -17,8 +17,8 @@ afterEach(async () => {
   cleanup = undefined
 })
 
-async function create(): Promise<CheckpointHarness> {
-  const created = await CheckpointHarness.create()
+async function create(options: CheckpointHarnessOptions = {}): Promise<CheckpointHarness> {
+  const created = await CheckpointHarness.create(options)
   cleanup = created.cleanup
   return created.harness
 }
@@ -129,6 +129,45 @@ describe('bottleneck age', () => {
     harness.turnStart(2)
     await harness.checkpoint(plan({ blockingLanes: ['lane-a', 'lane-a'] }))
     expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+  })
+
+  it('keeps the state escape for a lane id the record truncates', async () => {
+    const harness = await create()
+    const id = 'l'.repeat(121)
+    harness.turnStart(1)
+    await harness.checkpoint({
+      ...plan({ blockingLanes: [id] }),
+      lanes: [{ id, owner: 'lead', scope: ['src/a.ts'], state: 'blocked' }],
+    })
+    harness.turnStart(2)
+    await harness.checkpoint({
+      ...plan({ blockingLanes: [id] }),
+      lanes: [{ id, owner: 'lead', scope: ['src/a.ts'], state: 'running' }],
+    })
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+  })
+
+  it('allows a new owner at threshold 1', async () => {
+    const harness = await create({ config: { checkpoint: { bottleneckAge: 1 } } })
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan({ owner: 'lane-docs' }))
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('refuses a repeated bottleneck at threshold 1', async () => {
+    const harness = await create({ config: { checkpoint: { bottleneckAge: 1 } } })
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
   })
 
   it('resets the count when a blocking lane moves from blocked to running', async () => {

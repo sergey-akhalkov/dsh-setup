@@ -217,6 +217,37 @@ describe('executed bottleneck remedy', () => {
     expect(harness.steers).toHaveLength(0)
   })
 
+  it('refuses a stale checkpoint whose remedy is still outstanding', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'worker_start')
+    for (let step = 0; step < 40; step += 1) await harness.preStep()
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('Before the close')
+  })
+
+  it('keeps the missing evidence inside a 200-character steer', async () => {
+    const harness = await create({ config: { checkpoint: { maxMessageChars: 200 } } })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [{ id: 'lane-a', owner: 'lead', scope: ['src'], state: 'running' }],
+      bottleneck: {
+        id: 'b'.repeat(120),
+        owner: 'o'.repeat(120),
+        action: 'lead_action',
+        blockingLanes: ['lane-a'],
+        targets: ['src/a.ts'],
+      },
+      next: 'x',
+    })
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text.length).toBeLessThanOrEqual(200)
+    expect(text).toContain('Before the close')
+    expect(text).toContain('src/a.ts')
+  })
+
   it('resolves dot segments before matching a target', async () => {
     const harness = await create()
     await checkpointed(harness, 'lead_action', ['src'])

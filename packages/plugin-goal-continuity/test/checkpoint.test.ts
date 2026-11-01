@@ -870,6 +870,30 @@ describe('parallel-action gate', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('computes parallel lanes')
   })
 
+  it('does not count a lane whose blocking dependency is unfinished', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: [
+        {
+          id: 'blocked',
+          owner: 'lead',
+          scope: ['src/blocked.ts'],
+          state: 'running',
+          blockedBy: ['dep'],
+        },
+        { id: 'dep', owner: 'lane-dep', scope: ['src/dep.ts'], state: 'running' },
+      ],
+      bottleneck: { id: 'dep', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'wait for the dependency',
+    })
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
   it('does not accept a failed worker start', async () => {
     const harness = await create({ availableTools: ['subagent'] })
     const id = await parallelCheckpoint(harness)
@@ -1040,6 +1064,20 @@ describe('scope comparison', () => {
     const harness = await create()
     harness.turnStart()
     await harness.checkpoint(twoLanes('/', '/src'))
+    expect((await harness.readRecord()).parallelComputed).toBe(false)
+  })
+
+  it('keeps the working-directory root distinct from a parent-relative scope', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('.', '../sibling'))
+    expect((await harness.readRecord()).parallelComputed).toBe(true)
+  })
+
+  it('treats a parent-relative scope as containing the working directory', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(twoLanes('..', 'src'))
     expect((await harness.readRecord()).parallelComputed).toBe(false)
   })
 })

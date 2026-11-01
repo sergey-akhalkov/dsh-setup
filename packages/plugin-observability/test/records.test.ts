@@ -268,6 +268,21 @@ describe('neutral record extraction', () => {
     })
   })
 
+  it('accepts an external blocking lane name the producer allows', () => {
+    const arguments_ = continuePlan({
+      lanes: [lane('a', 'lead', ['src'], 'blocked')],
+      blockingLanes: ['external'],
+    })
+    const records = extractRecords('s1', [call('c1', 'work_checkpoint', arguments_)])
+    expect(records[0]).toMatchObject({
+      checkpointLaneCount: 1,
+      checkpointBlockedLaneCount: 1,
+      checkpointParallelComputed: false,
+      checkpointBottleneckAction: 'worker_start',
+      checkpointBottleneckAge: 1,
+    })
+  })
+
   it('computes parallel work from runnable lanes, owners, and disjoint scopes', () => {
     // Different owners over a textual sibling scope are disjoint: src and src2.
     expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['src2'])])).toBe(true)
@@ -535,6 +550,20 @@ describe('neutral record extraction', () => {
     ])
     expect(records[0]?.checkpointRemedyResolved).toBe(true)
     expect(records[0]?.checkpointRemedyResolvedAt).toBe(completedAt)
+  })
+
+  it('records the earliest remedy completion when calls complete out of order', () => {
+    const records = extractRecords('s1', [
+      call('cp1', 'work_checkpoint', continuePlan(), NOW),
+      call('w1', 'subagent', '{}', NOW + 10_000),
+      call('w2', 'subagent', '{}', NOW + 20_000),
+      // The second-dispatched call completes first.
+      result('w2', { time: NOW + 30_000 }),
+      result('w1', { time: NOW + 50_000 }),
+      call('cp2', 'work_checkpoint', continuePlan(), NOW + 60_000),
+    ])
+    expect(records[0]?.checkpointRemedyResolved).toBe(true)
+    expect(records[0]?.checkpointRemedyResolvedAt).toBe(NOW + 30_000)
   })
 
   it('ends the last checkpoint remedy window at the turn end', () => {

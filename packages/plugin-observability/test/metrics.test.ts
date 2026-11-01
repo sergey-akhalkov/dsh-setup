@@ -1464,6 +1464,31 @@ describe('checkpoint plan metrics', () => {
     expect(planSummary(records, FULL_WINDOW)?.resolvedContinue).toBe(1)
   })
 
+  it('counts the earliest remedy completion when calls complete out of order', () => {
+    const continuePlan = (callId: string, at: number): SessionEvent =>
+      checkpointCall(callId, at, {
+        outcome: 'continue',
+        verified: [],
+        lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'running' }],
+        bottleneck: { id: 'n', owner: 'lead', action: 'worker_start' },
+        next: 'dispatch',
+      })
+    const records = extractRecords('s', [
+      event('turn/start', { turn: 1 }, BASE),
+      continuePlan('cp1', BASE + MINUTE),
+      call('w1', 'subagent', BASE + 2 * MINUTE),
+      call('w2', 'subagent', BASE + 3 * MINUTE),
+      // The second-dispatched call completes first.
+      result('w2', BASE + 30 * MINUTE),
+      result('w1', BASE + 50 * MINUTE),
+      continuePlan('cp2', BASE + 60 * MINUTE),
+    ])
+    const cutoff = planSummary(records, { from: BASE, to: BASE + 40 * MINUTE })
+    expect(cutoff?.checkpoints).toBe(1)
+    expect(cutoff?.resolvedContinue).toBe(1)
+    expect(cutoff?.remedyResolution).toBe(1)
+  })
+
   it('keeps lane, owner, and target text out of the records and the summary', () => {
     const secret = 'PLAN-METRIC-SECRET'
     const records = extractRecords('s', [
