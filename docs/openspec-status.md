@@ -415,3 +415,11 @@ match identity, the age rule over owner, blocking set and lane state, failed-wri
 bounded steer content) were fixed with regression tests before their PASS. `openspec validate --all
 --strict` still reports long-requirement warnings across existing specs, including
 `admin-indicator`; they predate this change and the repository's CI does not run that command.
+
+It shipped in v0.22.0 (tag on commit `e05b8a6`) after the release workflow passed DSH 0.2.1-rc.3
+and 0.2.1-rc.5, the publish job and the Pages deployment, and the validate workflow on `main`
+passed. The published index returns HTTP 200, lists all 18 setup and plugin packages at 0.22.0 pinned
+to that commit, and retains the earlier versions. The owner's desktop profile runs the code through
+the linked setup bundle; installing the published 0.22.0 from the market (or re-running the installer
+from an external PowerShell with the app closed) is what makes the tagged build the installed one,
+and it is also the first live check of the breaking `work_checkpoint` v2 schema and the plan panel.
