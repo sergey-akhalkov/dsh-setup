@@ -158,12 +158,13 @@ hindsight-embed daemon status
 hindsight-embed daemon logs -n 50
 ```
 
-The daemon binds `127.0.0.1:8888` only. If another process owns that port, the script refuses to
-kill it and reports the conflict. The CLI's own liveness check accepts any HTTP 200, so before
-reusing an occupied port the script additionally requires the Hindsight health payload
-(`status: healthy`, `database: connected`) and the expected daemon identity (process command line
-or default-profile lock). It refuses a foreign listener and never terminates it. Stop that process
-or choose another port with `-ApiPort`, then update the row or `coding-agent.json` to match.
+The daemon binds `127.0.0.1:8888` only. Before reusing an occupied port the script requires the
+Hindsight health payload (`status: healthy`, `database: connected`) and the expected daemon identity,
+read from the listener's process command line. A healthy daemon is reused; a Hindsight daemon that is
+unhealthy (for example after a broken embedded database) is stopped and started again, so it does not
+block a rerun. A listener that cannot be identified as Hindsight is never terminated: the script names
+the owning process and refuses. Stop that process or choose another port with `-ApiPort`, then update
+the row or `coding-agent.json` to match.
 
 ### Persistence across a restart
 

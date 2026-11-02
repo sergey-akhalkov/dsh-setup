@@ -722,36 +722,58 @@ function Test-HindsightProcess([int]$ProcessId) {
   return ($process.CommandLine -match 'hindsight_api|hindsight-api')
 }
 
+function Resolve-HindsightPortAction([bool]$Healthy, [bool]$Owned) {
+  # Only an identified Hindsight daemon may be stopped; a foreign listener is never touched.
+  if (-not $Owned) { return 'foreign' }
+  if ($Healthy) { return 'reuse' }
+  return 'recover'
+}
+
+function Get-ProcessLabel([int]$ProcessId) {
+  $process = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ProcessId) -ErrorAction SilentlyContinue
+  if ($null -eq $process) {
+    return "PID $ProcessId"
+  }
+  if ([string]::IsNullOrWhiteSpace($process.ExecutablePath)) {
+    return "$($process.Name) (PID $ProcessId)"
+  }
+  return "$($process.Name) at $($process.ExecutablePath) (PID $ProcessId)"
+}
+
 function Start-HindsightDaemon([string]$EmbedPath, [int]$Port, [string]$CertPath, [bool]$Restart) {
   $env:HINDSIGHT_EMBED_PROFILE = 'default'
   Assert-LoopbackListener $Port
   $pidOnPort = Get-ListenerPid $Port
   if ($null -ne $pidOnPort) {
-    if (Test-HindsightHealth $Port) {
-      if (Test-HindsightProcess $pidOnPort) {
-        if (-not $Restart) {
-          Write-Skip "Hindsight daemon is already healthy on 127.0.0.1:$Port"
-          return
-        }
-        Write-Step 'Restarting the Hindsight daemon to apply changed profile settings'
-        $stopped = Invoke-NativeCapture $EmbedPath @('daemon', 'stop')
-        if ($stopped.ExitCode -ne 0) {
-          throw "Could not stop the running Hindsight daemon. See $DaemonLogPath."
-        }
-        $stopDeadline = (Get-Date).AddSeconds(30)
-        while ((Get-Date) -lt $stopDeadline -and $null -ne (Get-ListenerPid $Port)) {
-          Start-Sleep -Seconds 1
-        }
-        if ($null -ne (Get-ListenerPid $Port)) {
-          throw "The Hindsight daemon did not release port $Port."
-        }
+    $healthy = Test-HindsightHealth $Port
+    $action = Resolve-HindsightPortAction $healthy (Test-HindsightProcess $pidOnPort)
+    if ($action -eq 'foreign') {
+      $label = Get-ProcessLabel $pidOnPort
+      if ($healthy) {
+        throw "Port $Port answers like a healthy Hindsight daemon, but its listener $label is not the expected daemon. Refusing to reuse or stop it. See $DaemonLogPath."
       }
-      else {
-        throw "Port $Port is healthy but its listener PID $pidOnPort is not the expected Hindsight daemon. Refusing to reuse or kill it. See $DaemonLogPath."
-      }
+      throw "Port $Port is in use by $label, which is not the Hindsight daemon. Stop that process or choose another port. See $DaemonLogPath."
+    }
+    if ($action -eq 'reuse' -and -not $Restart) {
+      Write-Skip "Hindsight daemon is already healthy on 127.0.0.1:$Port"
+      return
+    }
+    if ($action -eq 'reuse') {
+      Write-Step 'Restarting the Hindsight daemon to apply changed profile settings'
     }
     else {
-      throw "Port $Port is in use by PID $pidOnPort and does not answer as Hindsight. Stop that process or choose another port. See $DaemonLogPath."
+      Write-Step "Restarting the unhealthy Hindsight daemon on 127.0.0.1:$Port (PID $pidOnPort)"
+    }
+    $stopped = Invoke-NativeCapture $EmbedPath @('daemon', 'stop')
+    if ($stopped.ExitCode -ne 0) {
+      throw "Could not stop the Hindsight daemon on port $Port. See $DaemonLogPath."
+    }
+    $stopDeadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $stopDeadline -and $null -ne (Get-ListenerPid $Port)) {
+      Start-Sleep -Seconds 1
+    }
+    if ($null -ne (Get-ListenerPid $Port)) {
+      throw "The Hindsight daemon did not release port $Port."
     }
   }
   Write-Step "Starting the Hindsight daemon on 127.0.0.1:$Port"
@@ -1428,6 +1450,19 @@ function Invoke-HindsightSelfTest {
     throw 'Listener identity self-test accepted the current shell as a Hindsight daemon.'
   }
   Write-Ok 'Listener identity self-test passed'
+  $portCases = @(
+    @{ Healthy = $true; Owned = $true; Expected = 'reuse' },
+    @{ Healthy = $false; Owned = $true; Expected = 'recover' },
+    @{ Healthy = $true; Owned = $false; Expected = 'foreign' },
+    @{ Healthy = $false; Owned = $false; Expected = 'foreign' }
+  )
+  foreach ($case in $portCases) {
+    $action = Resolve-HindsightPortAction $case.Healthy $case.Owned
+    if ($action -ne $case.Expected) {
+      throw "Port listener self-test failed for healthy=$($case.Healthy), owned=$($case.Owned): got $action"
+    }
+  }
+  Write-Ok 'Port listener self-test passed'
   # The foreign-listener fixture (Start-Job plus a raw TCP listener) made
   # Defender/AMSI block the documented irm | iex form. The runtime refusal stays
   # in Start-HindsightDaemon and the manual acceptance; the ACL probe uses the
