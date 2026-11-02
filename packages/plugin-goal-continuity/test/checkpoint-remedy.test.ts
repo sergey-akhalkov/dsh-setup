@@ -284,6 +284,15 @@ describe('executed bottleneck remedy', () => {
     expect(text).toContain('lane-a')
   })
 
+  it('clamps parent segments at the drive root', async () => {
+    const harness = await create()
+    const drive = /^[A-Za-z]:/u.exec(harness.workspace)?.[0] ?? ''
+    await checkpointed(harness, 'lead_action', [`${drive}/src`])
+    call(harness, 'edit', { file_path: `${drive}/../src/a.ts` })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
   it('resolves a root-relative destination against the workspace drive', async () => {
     const harness = await create()
     const rootRelative = `${harness.workspace.replace(/^[A-Za-z]:/u, '')}/src/a.ts`

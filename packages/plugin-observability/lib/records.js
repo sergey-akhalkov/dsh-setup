@@ -185,9 +185,11 @@ function normalizedPath(value) {
     const unified = value.trim().replace(/\\/g, '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified);
     // A leading // is a network share on Windows, never the local drive root; its
-    // server and share components are a boundary no parent segment can cross.
+    // server and share components are a boundary no parent segment can cross, and
+    // a drive letter is a boundary too.
     const unc = unified.startsWith('//');
-    const protectedPrefix = unc ? 2 : 0;
+    const drive = !unc && /^[A-Za-z]:/u.test(unified) ? 1 : 0;
+    const protectedPrefix = unc ? 2 : drive;
     const parts = [];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')

@@ -480,6 +480,8 @@ interface AgentState {
   steps: number
   /** `steps` when the latest successful checkpoint ran, if one did. */
   checkpointStep: number | undefined
+  /** The revision the latest checkpoint call attempted to persist. */
+  checkpointRevision: number | undefined
   /** `steps` when the mid-turn trigger last steered. */
   steerStep: number
   /** The last structured outcome of each shell call in this session, by call id. */
@@ -2132,9 +2134,11 @@ function normalizeScopePath(value: string, workspace: string): string {
   const unified = resolveFromWorkspace(value, workspace).replaceAll('\\', '/')
   const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified)
   // A leading // is a network share on Windows, never the local drive root; its
-  // server and share components are a boundary no parent segment can cross.
+  // server and share components are a boundary no parent segment can cross, and
+  // a drive letter is a boundary too.
   const unc = unified.startsWith('//')
-  const protectedPrefix = unc ? 2 : 0
+  const drive = !unc && /^[A-Za-z]:/u.test(unified) ? 1 : 0
+  const protectedPrefix = unc ? 2 : drive
   const parts: string[] = rooted ? [] : [...RELATIVE_BASE]
   for (const part of unified.split('/')) {
     if (part === '' || part === '.') continue
@@ -2349,7 +2353,7 @@ function bottleneckAgeOf(
  * The age and route-change flag this checkpoint's own record stored. A failed
  * write leaves an older record behind — another turn's or the same turn's
  * earlier checkpoint — and that record is never evidence about this checkpoint,
- * so its age is not enforced.
+ * so the check binds to the revision the current call attempted.
  */
 function recordedBottleneckAge(
   workspace: string,
@@ -2357,8 +2361,10 @@ function recordedBottleneckAge(
   turn: number,
   checkpointId: string,
   bottleneckKey: string,
+  revision: number | undefined,
 ): BottleneckAge | undefined {
   const record = checkpointRecords(workspace, sessionId, turn, 1)[0]
+  if (revision === undefined || record?.revision !== revision) return undefined
   if (record?.checkpoint !== checkpointId) return undefined
   if (record.bottleneckKey !== bottleneckKey) return undefined
   const age = record.bottleneckAge
@@ -3092,6 +3098,8 @@ function installCheckpointTool(ctx: Context, stateFor: (agent: Agent) => AgentSt
       // so a periodic checkpoint inside one turn counts toward the age too.
       const previous = checkpointRecords(workspace, agent.session.id, turn, 1)[0]
       const bottleneckAge = bottleneckAgeOf(previous, input.bottleneck, storedPlan, workspace)
+      const revision = (typeof previous?.revision === 'number' ? previous.revision : 0) + 1
+      state.checkpointRevision = revision
       const previousStates = previous === undefined ? undefined : recordLaneStates(previous)
       const previousAges = previous === undefined ? undefined : recordLaneAges(previous)
       // A lane's unchanged count persists in the record, so a periodic checkpoint
@@ -3106,6 +3114,7 @@ function installCheckpointTool(ctx: Context, stateFor: (agent: Agent) => AgentSt
       const written = await writeRecord(path, {
         version: 2,
         checkpoint: id,
+        revision,
         turn,
         outcome: input.outcome,
         verified: storedList(input.verified, workspace),
@@ -3278,6 +3287,7 @@ function installCheckpointGate(
               turn,
               checkpointIdFor(agent.session.id, turn),
               bottleneckKeyOf(staleBottleneck),
+              state.checkpointRevision,
             )
       if (
         staleAge !== undefined &&
@@ -3358,6 +3368,7 @@ function installCheckpointGate(
       turn,
       id,
       bottleneckKeyOf(bottleneck),
+      state.checkpointRevision,
     )
     if (age === undefined || age.age < config.bottleneckAge || age.changed) return
     // A user decision is the live escape; a new owner or a moved blocking lane
@@ -3469,6 +3480,7 @@ export function apply(ctx: Context, config?: Config): void {
         stepTurn: undefined,
         steps: 0,
         checkpointStep: undefined,
+        checkpointRevision: undefined,
         steerStep: 0,
         shellOutcomes: new Map(),
       }

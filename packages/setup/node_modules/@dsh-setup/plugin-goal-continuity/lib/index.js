@@ -1531,9 +1531,11 @@ function normalizeScopePath(value, workspace) {
     const unified = resolveFromWorkspace(value, workspace).replaceAll('\\', '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified);
     // A leading // is a network share on Windows, never the local drive root; its
-    // server and share components are a boundary no parent segment can cross.
+    // server and share components are a boundary no parent segment can cross, and
+    // a drive letter is a boundary too.
     const unc = unified.startsWith('//');
-    const protectedPrefix = unc ? 2 : 0;
+    const drive = !unc && /^[A-Za-z]:/u.test(unified) ? 1 : 0;
+    const protectedPrefix = unc ? 2 : drive;
     const parts = rooted ? [] : [...RELATIVE_BASE];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')
@@ -1740,10 +1742,12 @@ function bottleneckAgeOf(previous, bottleneck, storedPlan, workspace) {
  * The age and route-change flag this checkpoint's own record stored. A failed
  * write leaves an older record behind — another turn's or the same turn's
  * earlier checkpoint — and that record is never evidence about this checkpoint,
- * so its age is not enforced.
+ * so the check binds to the revision the current call attempted.
  */
-function recordedBottleneckAge(workspace, sessionId, turn, checkpointId, bottleneckKey) {
+function recordedBottleneckAge(workspace, sessionId, turn, checkpointId, bottleneckKey, revision) {
     const record = checkpointRecords(workspace, sessionId, turn, 1)[0];
+    if (revision === undefined || record?.revision !== revision)
+        return undefined;
     if (record?.checkpoint !== checkpointId)
         return undefined;
     if (record.bottleneckKey !== bottleneckKey)
@@ -2339,6 +2343,8 @@ function installCheckpointTool(ctx, stateFor) {
             // so a periodic checkpoint inside one turn counts toward the age too.
             const previous = checkpointRecords(workspace, agent.session.id, turn, 1)[0];
             const bottleneckAge = bottleneckAgeOf(previous, input.bottleneck, storedPlan, workspace);
+            const revision = (typeof previous?.revision === 'number' ? previous.revision : 0) + 1;
+            state.checkpointRevision = revision;
             const previousStates = previous === undefined ? undefined : recordLaneStates(previous);
             const previousAges = previous === undefined ? undefined : recordLaneAges(previous);
             // A lane's unchanged count persists in the record, so a periodic checkpoint
@@ -2352,6 +2358,7 @@ function installCheckpointTool(ctx, stateFor) {
             const written = await writeRecord(path, {
                 version: 2,
                 checkpoint: id,
+                revision,
                 turn,
                 outcome: input.outcome,
                 verified: storedList(input.verified, workspace),
@@ -2491,7 +2498,7 @@ function installCheckpointGate(ctx, config, stateFor) {
             const staleBottleneck = stalePlan?.outcome === 'continue' ? stalePlan.bottleneck : undefined;
             const staleAge = staleBottleneck === undefined
                 ? undefined
-                : recordedBottleneckAge(workspace, agent.session.id, turn, checkpointIdFor(agent.session.id, turn), bottleneckKeyOf(staleBottleneck));
+                : recordedBottleneckAge(workspace, agent.session.id, turn, checkpointIdFor(agent.session.id, turn), bottleneckKeyOf(staleBottleneck), state.checkpointRevision);
             if (staleAge !== undefined &&
                 staleAge.age >= config.bottleneckAge &&
                 !staleAge.changed &&
@@ -2528,7 +2535,7 @@ function installCheckpointGate(ctx, config, stateFor) {
         }
         // The write counted the preceding checkpoint, in this turn or an earlier one.
         // A route change is the escape, so a threshold of 1 still permits the close.
-        const age = recordedBottleneckAge(workspace, agent.session.id, turn, id, bottleneckKeyOf(bottleneck));
+        const age = recordedBottleneckAge(workspace, agent.session.id, turn, id, bottleneckKeyOf(bottleneck), state.checkpointRevision);
         if (age === undefined || age.age < config.bottleneckAge || age.changed)
             return;
         // A user decision is the live escape; a new owner or a moved blocking lane
@@ -2613,6 +2620,7 @@ export function apply(ctx, config) {
                 stepTurn: undefined,
                 steps: 0,
                 checkpointStep: undefined,
+                checkpointRevision: undefined,
                 steerStep: 0,
                 shellOutcomes: new Map(),
             };

@@ -170,6 +170,23 @@ describe('bottleneck age', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
   })
 
+  it('does not enforce an older same-turn record after a failed state amendment', async () => {
+    const harness = await create()
+    const lanes = (state: 'blocked' | 'running'): Record<string, unknown>[] => [
+      { id: 'lane-a', owner: 'lead', scope: ['src/a.ts'], state },
+    ]
+    harness.turnStart(1)
+    await harness.checkpoint({ ...plan(), lanes: lanes('blocked') })
+    await harness.checkpoint({ ...plan(), lanes: lanes('blocked') })
+    const stale = await readFile(harness.recordPath(1), 'utf8')
+    await harness.checkpoint({ ...plan(), lanes: lanes('running') })
+    // Simulate the amendment's write failing and leaving the earlier record.
+    await writeFile(harness.recordPath(1), stale, 'utf8')
+    remedy(harness)
+    await harness.turnStopping(1)
+    expect(harness.steers).toHaveLength(0)
+  })
+
   it('does not enforce an older same-turn record after a failed amendment', async () => {
     const harness = await create()
     harness.turnStart(1)

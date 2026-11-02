@@ -239,6 +239,7 @@ arguments):
 {
   "version": 2,
   "checkpoint": "checkpoint-3-1a2b3c4d",
+  "revision": 1,
   "turn": 3,
   "outcome": "continue",
   "verified": ["the parser test fails on the empty input"],
@@ -289,8 +290,9 @@ too, and each diagnostic names the field that replaces it (`lanes` for the first
 ```
 
 The session key is the SHA-256 prefix of the session id, matching the delegation session ledger; the
-record carries the decision, a stable checkpoint id (`checkpoint-<turn>-<hash>`), the turn, the time,
-and the session. It also carries the lane plan with each lane's consecutive unchanged-checkpoint
+record carries the decision, a stable checkpoint id (`checkpoint-<turn>-<hash>`), a session-wide
+`revision` that identifies the persisted checkpoint (the age gate trusts only the revision the current
+call attempted), the turn, the time, and the session. It also carries the lane plan with each lane's consecutive unchanged-checkpoint
 count (`laneAges`, used to name a stalled lane), the bottleneck plus a `bottleneckKey` hashing its
 owner and blocking lane set (stable across the redaction that bounds the displayed values), the
 `derivedRemaining` lane ids, the computed `parallelComputed` flag, and the `bottleneckAge` of a

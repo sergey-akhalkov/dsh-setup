@@ -519,6 +519,7 @@ describe('work checkpoint record', () => {
     expect(session).toBe(harness.sessionId)
     expect(decision).toEqual({
       version: 2,
+      revision: 1,
       turn: 3,
       outcome: 'continue',
       verified: ['the parser test fails on the empty input'],
