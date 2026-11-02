@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
 import { noticeText } from './harness.js'
@@ -168,6 +168,20 @@ describe('bottleneck age', () => {
     await harness.turnStopping(2)
     expect(harness.steers).toHaveLength(1)
     expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
+  })
+
+  it('does not enforce an older same-turn record after a failed amendment', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    await harness.checkpoint(plan())
+    const stale = await readFile(harness.recordPath(1), 'utf8')
+    await harness.checkpoint(plan({ owner: 'lane-docs' }))
+    // Simulate the amendment's write failing and leaving the earlier record.
+    await writeFile(harness.recordPath(1), stale, 'utf8')
+    remedy(harness)
+    await harness.turnStopping(1)
+    expect(harness.steers).toHaveLength(0)
   })
 
   it('does not enforce an older record when the current write fails', async () => {

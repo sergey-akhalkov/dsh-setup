@@ -2109,12 +2109,18 @@ const RELATIVE_ROOT = '\u0000'
 /** Virtual ancestors above the working directory, so any parent depth stays comparable. */
 const RELATIVE_BASE = Object.freeze([...Array.from({ length: 16 }, () => 'p'), 'cwd'])
 
-/** Resolve one path field against the workspace when it is relative. */
+/** Resolve one path field against the workspace; a Windows root-relative path
+ * belongs to the workspace drive, and a UNC share keeps its own root. */
 function resolveFromWorkspace(value: string, workspace: string): string {
   const trimmed = value.trim()
-  const rooted =
-    trimmed.startsWith('/') || trimmed.startsWith('\\') || /^[A-Za-z]:([\\/]|$)/u.test(trimmed)
-  return rooted ? trimmed : `${workspace}/${trimmed}`
+  const unified = trimmed.replaceAll('\\', '/')
+  if (unified.startsWith('//')) return trimmed
+  if (/^[A-Za-z]:/u.test(unified)) return trimmed
+  if (unified.startsWith('/')) {
+    const drive = /^([A-Za-z]:)/u.exec(workspace.replaceAll('\\', '/'))?.[1]
+    return drive === undefined ? trimmed : `${drive}${unified}`
+  }
+  return `${workspace}/${trimmed}`
 }
 
 /**
@@ -2341,17 +2347,20 @@ function bottleneckAgeOf(
 
 /**
  * The age and route-change flag this checkpoint's own record stored. A failed
- * write leaves an older record behind, and that record is never evidence about
- * the current checkpoint, so its age is not enforced.
+ * write leaves an older record behind — another turn's or the same turn's
+ * earlier checkpoint — and that record is never evidence about this checkpoint,
+ * so its age is not enforced.
  */
 function recordedBottleneckAge(
   workspace: string,
   sessionId: string,
   turn: number,
   checkpointId: string,
+  bottleneckKey: string,
 ): BottleneckAge | undefined {
   const record = checkpointRecords(workspace, sessionId, turn, 1)[0]
   if (record?.checkpoint !== checkpointId) return undefined
+  if (record.bottleneckKey !== bottleneckKey) return undefined
   const age = record.bottleneckAge
   if (typeof age !== 'number' || !Number.isSafeInteger(age) || age < 1) return undefined
   return { age, changed: record.bottleneckChanged === true }
@@ -3259,32 +3268,36 @@ function installCheckpointGate(
         return
       }
       // An aged bottleneck keeps its refusal even after the checkpoint expires.
-      const staleAge = recordedBottleneckAge(
-        workspace,
-        agent.session.id,
-        turn,
-        checkpointIdFor(agent.session.id, turn),
-      )
+      const staleBottleneck = stalePlan?.outcome === 'continue' ? stalePlan.bottleneck : undefined
+      const staleAge =
+        staleBottleneck === undefined
+          ? undefined
+          : recordedBottleneckAge(
+              workspace,
+              agent.session.id,
+              turn,
+              checkpointIdFor(agent.session.id, turn),
+              bottleneckKeyOf(staleBottleneck),
+            )
       if (
         staleAge !== undefined &&
         staleAge.age >= config.bottleneckAge &&
         !staleAge.changed &&
-        stalePlan?.outcome === 'continue' &&
-        stalePlan.bottleneck !== undefined &&
-        stalePlan.bottleneck.action !== 'user_decision'
+        staleBottleneck !== undefined &&
+        staleBottleneck.action !== 'user_decision'
       ) {
         refuse(
           agent,
           budget,
           composeAgeRequest(
             checkpointIdFor(agent.session.id, turn),
-            stalePlan.bottleneck,
+            staleBottleneck,
             staleAge.age,
             config.maxMessageChars,
             workspace,
           ),
           'goal-continuity: work checkpoint bottleneck is aged',
-          `the bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`,
+          `the bottleneck "${storedText(staleBottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`,
         )
         return
       }
@@ -3339,7 +3352,13 @@ function installCheckpointGate(
     }
     // The write counted the preceding checkpoint, in this turn or an earlier one.
     // A route change is the escape, so a threshold of 1 still permits the close.
-    const age = recordedBottleneckAge(workspace, agent.session.id, turn, id)
+    const age = recordedBottleneckAge(
+      workspace,
+      agent.session.id,
+      turn,
+      id,
+      bottleneckKeyOf(bottleneck),
+    )
     if (age === undefined || age.age < config.bottleneckAge || age.changed) return
     // A user decision is the live escape; a new owner or a moved blocking lane
     // is the data escape and already raised `changed`.

@@ -284,6 +284,24 @@ describe('executed bottleneck remedy', () => {
     expect(text).toContain('lane-a')
   })
 
+  it('resolves a root-relative destination against the workspace drive', async () => {
+    const harness = await create()
+    const rootRelative = `${harness.workspace.replace(/^[A-Za-z]:/u, '')}/src/a.ts`
+    await checkpointed(harness, 'lead_action', ['src/a.ts'])
+    call(harness, 'edit', { file_path: rootRelative })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('does not match a destination on another drive', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['src/a.ts'])
+    const otherDrive = `${String.fromCharCode(90)}:/elsewhere/src/a.ts`
+    call(harness, 'edit', { file_path: otherDrive })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+  })
+
   it('does not let a local path satisfy a UNC target', async () => {
     const harness = await create()
     await checkpointed(harness, 'lead_action', ['//server/share/src'])
