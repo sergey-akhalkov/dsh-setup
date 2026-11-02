@@ -1521,6 +1521,8 @@ function resolveFromWorkspace(value, workspace) {
 function normalizeScopePath(value, workspace) {
     const unified = resolveFromWorkspace(value, workspace).replaceAll('\\', '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified);
+    // A leading // is a network share on Windows, never the local drive root.
+    const unc = unified.startsWith('//');
     const parts = rooted ? [] : [...RELATIVE_BASE];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')
@@ -1536,15 +1538,17 @@ function normalizeScopePath(value, workspace) {
         parts.push(part);
     }
     const joined = parts.join('/').toLowerCase();
-    return rooted ? `/${joined}` : `${RELATIVE_ROOT}${joined}`;
+    if (!rooted)
+        return `${RELATIVE_ROOT}${joined}`;
+    return unc ? `//${joined}` : `/${joined}`;
 }
 /** Whether one path equals another or lies beneath it by path component. */
 function pathContains(outer, inner) {
     if (outer === inner)
         return true;
-    // The absolute root contains every absolute descendant.
+    // The local root contains local paths only, never a UNC share.
     if (outer === '/')
-        return inner.startsWith('/');
+        return inner.startsWith('/') && !inner.startsWith('//');
     return inner.startsWith(`${outer}/`);
 }
 /** Whether two lanes' scopes overlap; a `resource:` entry matches only itself exactly. */
@@ -1998,29 +2002,33 @@ function composeParallelRequest(id, max) {
     return bound(`Work checkpoint ${id} computes parallel lanes (goal-continuity). Start a worker whose call arguments contain ${id}, or amend the checkpoint with a plan that is serial: one owner or a shared scope.`, max);
 }
 /**
- * The bounded remedy steer with the missing evidence first. Every required
- * field stays inside `max`: the identifiers shrink until the whole message fits.
+ * The bounded remedy steer. Every required field — the missing evidence, each
+ * blocking lane, the bottleneck id and its action — stays inside `max`: the
+ * identifiers shrink until the whole message fits, and the checkpoint id is
+ * added only when room remains.
  */
 function composeRemedyRequest(id, bottleneck, max, workspace) {
-    const build = (clipLength) => {
+    const build = (clipLength, withId) => {
         const clip = (value) => storedText(value, workspace, clipLength);
         const targets = bottleneck.targets.map(clip);
         const expected = bottleneck.action === 'worker_start'
             ? `start a worker whose call arguments contain ${id}`
             : bottleneck.action === 'user_decision'
                 ? 'ask the user with ask_user_question'
-                : `complete a successful edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
+                : `complete an edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
         const blocking = bottleneck.blockingLanes.length === 0 ? 'none' : bottleneck.blockingLanes.map(clip).join(', ');
-        return `Before the close, ${expected}. Checkpoint ${id}: bottleneck "${clip(bottleneck.id)}" ${bottleneck.action}; blocking: ${blocking} (goal-continuity).`;
+        const suffix = withId ? ` Checkpoint ${id}.` : '';
+        return `Before the close, ${expected}. Blocking lanes: ${blocking}. Bottleneck "${clip(bottleneck.id)}" ${bottleneck.action}.${suffix}`;
     };
-    let text = build(4);
-    for (let clipLength = 6; clipLength <= 40; clipLength += 2) {
-        const candidate = build(clipLength);
-        if (candidate.length > max)
-            break;
-        text = candidate;
+    // Prefer the longest readable identifiers, then drop the checkpoint id.
+    for (const withId of [true, false]) {
+        for (let clipLength = 40; clipLength >= 3; clipLength -= 1) {
+            const candidate = build(clipLength, withId);
+            if (candidate.length <= max)
+                return candidate;
+        }
     }
-    return bound(text, max);
+    return bound(build(3, false), max);
 }
 /** The bounded age steer requiring a route change rather than another wait. */
 function composeAgeRequest(id, bottleneck, age, max, workspace) {
@@ -2464,7 +2472,8 @@ function installCheckpointGate(ctx, config, stateFor) {
             if (staleAge !== undefined &&
                 staleAge.age >= config.bottleneckAge &&
                 !staleAge.changed &&
-                stalePlan?.bottleneck !== undefined &&
+                stalePlan?.outcome === 'continue' &&
+                stalePlan.bottleneck !== undefined &&
                 stalePlan.bottleneck.action !== 'user_decision') {
                 refuse(agent, budget, composeAgeRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, staleAge.age, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint bottleneck is aged', `the bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" survived ${staleAge.age} checkpoints after the refusal cap`);
                 return;

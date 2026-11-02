@@ -289,6 +289,8 @@ const FALLBACK_WORKSPACE = '/workspace'
 function normalizedPath(value: string): string {
   const unified = value.trim().replace(/\\/g, '/')
   const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified)
+  // A leading // is a network share on Windows, never the local drive root.
+  const unc = unified.startsWith('//')
   const parts: string[] = []
   for (const part of unified.split('/')) {
     if (part === '' || part === '.') continue
@@ -300,7 +302,8 @@ function normalizedPath(value: string): string {
     parts.push(part)
   }
   const joined = parts.join('/').toLowerCase()
-  return rooted ? `/${joined}` : joined
+  if (!rooted) return joined
+  return unc ? `//${joined}` : `/${joined}`
 }
 
 /**
@@ -310,14 +313,17 @@ function normalizedPath(value: string): string {
 function resolvedPath(value: string, workspace: string | undefined): string {
   const base = workspace === undefined || workspace.trim() === '' ? FALLBACK_WORKSPACE : workspace
   const unified = value.trim()
-  const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified)
+  // The producer treats a leading backslash (a UNC or a drive-relative root) as
+  // rooted before it unifies separators; extraction must do the same.
+  const rooted = unified.startsWith('/') || unified.startsWith('\\') || /^[A-Za-z]:/u.test(unified)
   return normalizedPath(rooted ? unified : `${base}/${unified}`)
 }
 
 /** Whether one normalized path equals another or lies beneath it by path component. */
 function pathIsWithin(path: string, root: string): boolean {
   if (path === root) return true
-  if (root === '/') return path.startsWith('/')
+  // The local root contains local paths only, never a UNC share.
+  if (root === '/') return path.startsWith('/') && !path.startsWith('//')
   return path.startsWith(`${root}/`)
 }
 

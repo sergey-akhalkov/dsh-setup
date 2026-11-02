@@ -382,6 +382,12 @@ describe('neutral record extraction', () => {
     ).toBe(false)
   })
 
+  it('treats a backslash-rooted scope as rooted, not workspace-relative', () => {
+    expect(
+      planParallel([lane('a', 'lead', ['\\\\server\\share\\src']), lane('b', 'worker', ['src'])]),
+    ).toBe(true)
+  })
+
   it('trims ids, owners, scopes, and references before comparing', () => {
     // A padded duplicate id is still a duplicate, so the call is malformed.
     expect(
@@ -569,6 +575,9 @@ describe('neutral record extraction', () => {
     expect(remedy('src/a.ts', ['/src'])).toBe(false)
     expect(remedy('/src/a.ts', ['/src'])).toBe(true)
     expect(remedy(`${DRIVE}\\src\\a.ts`, [`${DRIVE.toLowerCase()}/src`])).toBe(true)
+    // A UNC share is not the local root of the same path.
+    expect(remedy('\\\\server\\share\\src\\a.ts', ['\\\\server\\share\\src'])).toBe(true)
+    expect(remedy('/server/share/src/a.ts', ['\\\\server\\share\\src'])).toBe(false)
     // A padded target is trimmed before comparison.
     expect(remedy('src/a.ts', [' src '])).toBe(true)
     // '.' is the working directory; '..' is its parent.

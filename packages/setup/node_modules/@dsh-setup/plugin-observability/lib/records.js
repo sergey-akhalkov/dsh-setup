@@ -184,6 +184,8 @@ const FALLBACK_WORKSPACE = '/workspace';
 function normalizedPath(value) {
     const unified = value.trim().replace(/\\/g, '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified);
+    // A leading // is a network share on Windows, never the local drive root.
+    const unc = unified.startsWith('//');
     const parts = [];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')
@@ -198,7 +200,9 @@ function normalizedPath(value) {
         parts.push(part);
     }
     const joined = parts.join('/').toLowerCase();
-    return rooted ? `/${joined}` : joined;
+    if (!rooted)
+        return joined;
+    return unc ? `//${joined}` : `/${joined}`;
 }
 /**
  * Resolve one scope or destination against the session's workspace, then
@@ -207,15 +211,18 @@ function normalizedPath(value) {
 function resolvedPath(value, workspace) {
     const base = workspace === undefined || workspace.trim() === '' ? FALLBACK_WORKSPACE : workspace;
     const unified = value.trim();
-    const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified);
+    // The producer treats a leading backslash (a UNC or a drive-relative root) as
+    // rooted before it unifies separators; extraction must do the same.
+    const rooted = unified.startsWith('/') || unified.startsWith('\\') || /^[A-Za-z]:/u.test(unified);
     return normalizedPath(rooted ? unified : `${base}/${unified}`);
 }
 /** Whether one normalized path equals another or lies beneath it by path component. */
 function pathIsWithin(path, root) {
     if (path === root)
         return true;
+    // The local root contains local paths only, never a UNC share.
     if (root === '/')
-        return path.startsWith('/');
+        return path.startsWith('/') && !path.startsWith('//');
     return path.startsWith(`${root}/`);
 }
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */

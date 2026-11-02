@@ -284,6 +284,37 @@ describe('executed bottleneck remedy', () => {
     expect(text).toContain('lane-a')
   })
 
+  it('does not let a local path satisfy a UNC target', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['//server/share/src'])
+    call(harness, 'edit', { file_path: '/server/share/src/a.ts' })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+  })
+
+  it('keeps every blocking lane inside the minimum steer bound', async () => {
+    const harness = await create({ config: { checkpoint: { maxMessageChars: 200 } } })
+    const lanes = ['aaaa', 'bbbb', 'cccc', 'dddd', 'eeee', 'ffff', 'gggg', 'hhhh']
+    harness.turnStart()
+    await harness.checkpoint({
+      outcome: 'continue',
+      lanes: lanes.map((id) => ({ id, owner: 'lead', scope: [`src/${id}`], state: 'running' })),
+      bottleneck: {
+        id: 'guard-missing',
+        owner: 'lead',
+        action: 'lead_action',
+        blockingLanes: lanes,
+        targets: ['src0', 'src1', 'src2', 'src3', 'src4', 'src5', 'src6', 'src7'],
+      },
+      next: 'unblock them',
+    })
+    await harness.turnStopping()
+    const text = noticeText(harness.steers[0] as never)
+    expect(text.length).toBeLessThanOrEqual(200)
+    expect(text).toContain('Before the close')
+    for (const id of lanes) expect(text).toContain(id)
+  })
+
   it('resolves dot segments before matching a target', async () => {
     const harness = await create()
     await checkpointed(harness, 'lead_action', ['src'])
