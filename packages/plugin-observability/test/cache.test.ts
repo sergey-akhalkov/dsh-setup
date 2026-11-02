@@ -212,7 +212,13 @@ describe('per-session cache', () => {
     const first = await readSessions({ query, range: 'session', now: NOW, sessionId: id, cache })
     const second = await readSessions({ query, range: 'session', now: NOW, sessionId: id, cache })
     const expected = [
-      { id: 'child', parentSession: 'root', origin: 'subagent', delegationDepth: 1 },
+      {
+        id: 'child',
+        cwd: '/workspace',
+        parentSession: 'root',
+        origin: 'subagent',
+        delegationDepth: 1,
+      },
     ]
     expect(first.sessions).toEqual(expected)
     expect(second.sessions).toEqual(expected)

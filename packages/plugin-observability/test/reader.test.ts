@@ -449,7 +449,7 @@ describe('session reader', () => {
     expect(episode?.children.map((child) => child.sessionId)).toEqual(['child'])
   })
 
-  it('carries parent, origin, and delegation depth without path or preset text', async () => {
+  it('carries parent, origin, delegation depth, and cwd without preset text', async () => {
     const headers = [
       record('root', '/workspace'),
       record('sub', '/workspace', 'root', { origin: 'subagent', delegationDepth: 1 }),
@@ -470,16 +470,84 @@ describe('session reader', () => {
       sessionId: 'root' as unknown as SessionId,
     })
     const byId = new Map(sessions.map((meta) => [meta.id, meta]))
-    expect(byId.get('root')).toEqual({ id: 'root' })
+    expect(byId.get('root')).toEqual({ id: 'root', cwd: '/workspace' })
     expect(byId.get('sub')).toMatchObject({
       parentSession: 'root',
       origin: 'subagent',
       delegationDepth: 1,
+      cwd: '/workspace',
     })
     expect(byId.get('team')).toMatchObject({ parentSession: 'root', delegationDepth: 1 })
     expect(byId.get('orphan')).toMatchObject({ parentSession: 'outside', origin: 'subagent' })
-    // The header carries a cwd and a preset; neither reaches the report input.
-    expect(JSON.stringify(sessions)).not.toContain('/workspace')
+    // The cwd is needed to resolve relative plan paths; preset text still stays out.
+    expect(JSON.stringify(sessions)).toContain('/workspace')
+  })
+
+  it('resolves remedy targets against the session header cwd', async () => {
+    const at = NOW - HOUR
+    const checkpoint = JSON.stringify({
+      outcome: 'continue',
+      verified: [],
+      lanes: [{ id: 'a', owner: 'lead', scope: ['src'], state: 'running' }],
+      bottleneck: { id: 'n', owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] },
+      next: 'edit the target',
+    })
+    const sessions = [record('workspace', '/workspace')]
+    const snapshots = new Map<string, SessionLogSnapshot>([
+      [
+        'workspace',
+        snapshot('workspace', [
+          event('turn/start', { turn: 1 }, at),
+          event(
+            'tool/call',
+            {
+              turn: 1,
+              step: 1,
+              callId: 'cp1',
+              name: 'work_checkpoint',
+              arguments: checkpoint,
+            },
+            at + 1_000,
+          ),
+          event(
+            'tool/call',
+            {
+              turn: 1,
+              step: 1,
+              callId: 'e1',
+              name: 'edit',
+              arguments: JSON.stringify({ file_path: '/workspace/src/a.ts' }),
+            },
+            at + 2_000,
+          ),
+          event(
+            'tool/result',
+            {
+              turn: 1,
+              step: 1,
+              message: {
+                role: 'tool',
+                content: [],
+                source: { kind: 'tool', callId: 'e1' },
+                isError: false,
+              },
+            },
+            at + 3_000,
+          ),
+          event('turn/end', { turn: 1, reason: { kind: 'completed' } }, at + 4_000),
+        ]),
+      ],
+    ])
+    const query = new FakeQuery(sessions, snapshots)
+    const { records } = await readSessions({
+      query,
+      range: 'day',
+      now: NOW,
+      sessionId: 'workspace' as unknown as SessionId,
+    })
+    const checkpointRecord = records.find((entry) => entry.callId === 'cp1')
+    expect(checkpointRecord?.checkpointRemedyResolved).toBe(true)
+    expect(checkpointRecord?.checkpointRemedyResolvedAt).toBe(at + 3_000)
   })
 
   it('selects only workspace sessions whose events fall in the window', async () => {

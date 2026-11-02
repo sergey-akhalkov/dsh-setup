@@ -19,13 +19,14 @@ export interface SessionReadResult {
   readonly sessions: readonly SessionMeta[]
 }
 
-/** Keep only the header fields the report uses, so no path or preset text travels. */
+/** Keep only the header fields the report uses, so no preset text travels. */
 function sessionMeta(header: SessionHeader): SessionMeta {
   return {
     id: String(header.id),
     ...(header.parentSession === undefined ? {} : { parentSession: String(header.parentSession) }),
     ...(header.origin === undefined ? {} : { origin: header.origin }),
     ...(header.delegationDepth === undefined ? {} : { delegationDepth: header.delegationDepth }),
+    ...(header.cwd === undefined ? {} : { cwd: header.cwd }),
   }
 }
 
@@ -145,7 +146,13 @@ async function readOne(
       : { records: [...cached.records], meta: cached.meta }
   }
   const snapshot = await query.readSession(id)
-  const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount), fields)
+  const records = extractRecords(
+    id,
+    snapshot.events,
+    Number(snapshot.inheritedEventCount),
+    fields,
+    listed?.cwd ?? snapshot.session?.cwd,
+  )
   const meta = listed ?? sessionMeta(snapshot.session)
   cache?.set(String(id), stamp, records, meta)
   return { records, meta }

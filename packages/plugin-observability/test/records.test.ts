@@ -87,8 +87,17 @@ function continuePlan(
   })
 }
 
-function planParallel(lanes: readonly Record<string, unknown>[]): boolean | undefined {
-  const records = extractRecords('s1', [call('c1', 'work_checkpoint', continuePlan({ lanes }))])
+function planParallel(
+  lanes: readonly Record<string, unknown>[],
+  cwd?: string,
+): boolean | undefined {
+  const records = extractRecords(
+    's1',
+    [call('c1', 'work_checkpoint', continuePlan({ lanes }))],
+    0,
+    undefined,
+    cwd,
+  )
   return records[0]?.checkpointParallelComputed
 }
 
@@ -329,18 +338,22 @@ describe('neutral record extraction', () => {
     ).toBe(false)
   })
 
-  it('intersects rooted scopes with a relative suffix', () => {
-    // A rooted scope matches a relative path that is a suffix of it.
-    expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['src'])])).toBe(false)
+  it('resolves rooted and relative scopes against the workspace', () => {
+    // The relative scope resolves to the rooted path in the same workspace.
     expect(
-      planParallel([lane('a', 'lead', ['/workspace/src/a.ts']), lane('b', 'worker', ['src/a.ts'])]),
+      planParallel(
+        [lane('a', 'lead', ['/workspace/src/a.ts']), lane('b', 'worker', ['src/a.ts'])],
+        '/workspace',
+      ),
     ).toBe(false)
     expect(
-      planParallel([
-        lane('a', 'lead', ['/workspace/src2/a.ts']),
-        lane('b', 'worker', ['src/a.ts']),
-      ]),
+      planParallel(
+        [lane('a', 'lead', ['/workspace/src2/a.ts']), lane('b', 'worker', ['src/a.ts'])],
+        '/workspace',
+      ),
     ).toBe(true)
+    // A rooted path outside the workspace is a different location.
+    expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['src'])])).toBe(true)
     expect(planParallel([lane('a', 'lead', ['/src']), lane('b', 'worker', ['/src/api'])])).toBe(
       false,
     )
@@ -350,11 +363,15 @@ describe('neutral record extraction', () => {
         lane('b', 'worker', [`${DRIVE.toLowerCase()}/src`]),
       ]),
     ).toBe(false)
-    // An unmatched leading `..` has no rooted counterpart.
+    // '../src' resolves above the workspace, so it is not 'src'.
     expect(planParallel([lane('a', 'lead', ['../src']), lane('b', 'worker', ['src'])])).toBe(true)
+    // A textual sibling never overlaps.
+    expect(planParallel([lane('a', 'lead', ['src']), lane('b', 'worker', ['src2/file.ts'])])).toBe(
+      true,
+    )
   })
 
-  it('resolves relative scopes from the fixed ancestor chain', () => {
+  it('resolves relative scopes against the workspace', () => {
     // '.' is the working directory, not the whole relative path space.
     expect(planParallel([lane('a', 'lead', ['.']), lane('b', 'worker', ['../src'])])).toBe(true)
     expect(planParallel([lane('a', 'lead', ['.']), lane('b', 'worker', ['src'])])).toBe(false)
@@ -396,7 +413,7 @@ describe('neutral record extraction', () => {
     expect(ages).toEqual([1, 2])
   })
 
-  it('counts bottleneck age across consecutive checkpoints by owner and blocking lanes', () => {
+  it('counts bottleneck age by owner and the unique blocking set', () => {
     const plan = (owner: string, blockingLanes: readonly string[]): string =>
       continuePlan({
         owner,
@@ -406,7 +423,9 @@ describe('neutral record extraction', () => {
     const records = extractRecords('s1', [
       call('c1', 'work_checkpoint', plan('lead', ['b'])),
       call('c2', 'work_checkpoint', plan('lead', ['b'])),
+      // A new owner resets the count.
       call('c3', 'work_checkpoint', plan('other', ['b'])),
+      // A different blocking set is a data change and resets it too.
       call('c4', 'work_checkpoint', plan('other', ['a', 'b'])),
       call('c5', 'work_checkpoint', plan('other', ['a', 'b'])),
     ])
@@ -511,13 +530,24 @@ describe('neutral record extraction', () => {
   })
 
   it('matches a lead-action remedy by normalized target or directory descendant', () => {
-    const remedy = (filePath: string, targets: readonly string[], failed = false): boolean => {
-      const records = extractRecords('s1', [
-        call('cp1', 'work_checkpoint', continuePlan({ action: 'lead_action', targets })),
-        call('e1', 'edit', JSON.stringify({ file_path: filePath })),
-        result('e1', { isError: failed }),
-        call('cp2', 'work_checkpoint', continuePlan()),
-      ])
+    const remedy = (
+      filePath: string,
+      targets: readonly string[],
+      failed = false,
+      cwd?: string,
+    ): boolean => {
+      const records = extractRecords(
+        's1',
+        [
+          call('cp1', 'work_checkpoint', continuePlan({ action: 'lead_action', targets })),
+          call('e1', 'edit', JSON.stringify({ file_path: filePath })),
+          result('e1', { isError: failed }),
+          call('cp2', 'work_checkpoint', continuePlan()),
+        ],
+        0,
+        undefined,
+        cwd,
+      )
       return records[0]?.checkpointRemedyResolved === true
     }
     expect(remedy('src\\a.ts', ['src'])).toBe(true)
@@ -527,15 +557,18 @@ describe('neutral record extraction', () => {
     expect(remedy('.\\src\\a.ts', ['src'])).toBe(true)
     expect(remedy('src/a.ts', ['./src'])).toBe(true)
     expect(remedy('src/a.ts', ['a/../src'])).toBe(true)
-    // A rooted directory is not a relative file target; same-space containment is unchanged.
+    expect(remedy('src/../src/a.ts', ['src/a.ts'], false, '/workspace')).toBe(true)
+    // Workspace resolution makes a relative target and an absolute destination equal.
+    expect(remedy('/workspace/src/a.ts', ['src/a.ts'], false, '/workspace')).toBe(true)
+    expect(remedy('src/a.ts', ['/workspace/src/a.ts'], false, '/workspace')).toBe(true)
+    expect(remedy('//server/share/src/a.ts', ['src/a.ts'], false, '//server/share')).toBe(true)
+    // Only the destination may be beneath the target; an ancestor is not evidence.
+    expect(remedy('src', ['src/a.ts'], false, '/workspace')).toBe(false)
+    // A rooted directory is not a relative file target outside its workspace.
     expect(remedy('/src/a.ts', ['src'])).toBe(false)
     expect(remedy('src/a.ts', ['/src'])).toBe(false)
     expect(remedy('/src/a.ts', ['/src'])).toBe(true)
     expect(remedy(`${DRIVE}\\src\\a.ts`, [`${DRIVE.toLowerCase()}/src`])).toBe(true)
-    // A relative file target matches a rooted destination by suffix, in both directions.
-    expect(remedy('/workspace/src/a.ts', ['src/a.ts'])).toBe(true)
-    expect(remedy('src/a.ts', ['/workspace/src/a.ts'])).toBe(true)
-    expect(remedy('//server/share/src/a.ts', ['src/a.ts'])).toBe(true)
     // A padded target is trimmed before comparison.
     expect(remedy('src/a.ts', [' src '])).toBe(true)
     // '.' is the working directory; '..' is its parent.

@@ -175,27 +175,20 @@ function checkpointFacts(raw) {
     }
     return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) };
 }
-/** The virtual root of the relative path space; no real path can contain it. */
-const RELATIVE_PATH_ROOT = '\u0000';
-/** Virtual ancestors above the working directory, so any parent depth stays comparable. */
-const RELATIVE_PATH_BASE = Object.freeze([
-    ...Array.from({ length: 16 }, () => 'p'),
-    'cwd',
-]);
+/** The virtual workspace for extraction without a recorded cwd. */
+const FALLBACK_WORKSPACE = '/workspace';
 /**
- * Normalize a path-like scope the way the checkpoint producer does: separators
- * unified, dot segments resolved, case folded, and a relative path resolved from
- * a fixed ancestor chain so `../..` still contains `src`.
+ * Normalize one path: separators unified, dot segments resolved, case folded,
+ * and a root (`/` or drive) kept. Relative input is resolved first.
  */
 function normalizedPath(value) {
     const unified = value.trim().replace(/\\/g, '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified);
-    const parts = rooted ? [] : [...RELATIVE_PATH_BASE];
+    const parts = [];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')
             continue;
         if (part === '..') {
-            // An unmatched parent stays visible, so '../a' never collapses onto 'a'.
             if (parts.length > 0 && parts[parts.length - 1] !== '..')
                 parts.pop();
             else if (!rooted)
@@ -205,7 +198,17 @@ function normalizedPath(value) {
         parts.push(part);
     }
     const joined = parts.join('/').toLowerCase();
-    return rooted ? `/${joined}` : `${RELATIVE_PATH_ROOT}${joined}`;
+    return rooted ? `/${joined}` : joined;
+}
+/**
+ * Resolve one scope or destination against the session's workspace, then
+ * normalize it. A rooted value keeps its own root.
+ */
+function resolvedPath(value, workspace) {
+    const base = workspace === undefined || workspace.trim() === '' ? FALLBACK_WORKSPACE : workspace;
+    const unified = value.trim();
+    const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified);
+    return normalizedPath(rooted ? unified : `${base}/${unified}`);
 }
 /** Whether one normalized path equals another or lies beneath it by path component. */
 function pathIsWithin(path, root) {
@@ -215,57 +218,25 @@ function pathIsWithin(path, root) {
         return path.startsWith('/');
     return path.startsWith(`${root}/`);
 }
-/** The part of a relative path below the fixed ancestor chain, or undefined above it. */
-function relativeTail(path) {
-    if (!path.startsWith(RELATIVE_PATH_ROOT))
-        return undefined;
-    const parts = path.slice(RELATIVE_PATH_ROOT.length).split('/');
-    if (parts.length < RELATIVE_PATH_BASE.length)
-        return undefined;
-    for (let index = 0; index < RELATIVE_PATH_BASE.length; index += 1) {
-        if (parts[index] !== RELATIVE_PATH_BASE[index])
-            return undefined;
-    }
-    const tail = parts.slice(RELATIVE_PATH_BASE.length);
-    if (tail.includes('..'))
-        return undefined;
-    return tail.join('/');
-}
-/**
- * Whether two normalized paths intersect: by component when both are rooted or
- * both relative, and by suffix when one is rooted and the other names a
- * relative tail. A tail containing `..` has no rooted counterpart.
- */
-function pathsIntersect(left, right) {
-    const leftRooted = left.startsWith('/');
-    const rightRooted = right.startsWith('/');
-    if (leftRooted === rightRooted) {
-        return pathIsWithin(left, right) || pathIsWithin(right, left);
-    }
-    const rooted = leftRooted ? left : right;
-    const relative = leftRooted ? right : left;
-    const tail = relativeTail(relative);
-    if (tail === undefined || tail === '')
-        return false;
-    return rooted === `/${tail}` || rooted.endsWith(`/${tail}`);
-}
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */
-function scopesOverlap(left, right) {
+function scopesOverlap(left, right, workspace) {
     const a = left.trim();
     const b = right.trim();
     if (a.startsWith('resource:') || b.startsWith('resource:'))
         return a === b;
-    return pathsIntersect(normalizedPath(a), normalizedPath(b));
+    const one = resolvedPath(a, workspace);
+    const other = resolvedPath(b, workspace);
+    return pathIsWithin(one, other) || pathIsWithin(other, one);
 }
-function laneScopesOverlap(left, right) {
-    return left.scope.some((a) => right.scope.some((b) => scopesOverlap(a, b)));
+function laneScopesOverlap(left, right, workspace) {
+    return left.scope.some((a) => right.scope.some((b) => scopesOverlap(a, b, workspace)));
 }
 /** A lane is runnable when it runs and every lane it waits on is done. */
 function laneIsRunnable(lane, byId) {
     return lane.state === 'running' && lane.blockedBy.every((id) => byId.get(id)?.state === 'done');
 }
 /** Two runnable lanes with different owners and disjoint scopes compute parallel work. */
-function planComputesParallel(lanes) {
+function planComputesParallel(lanes, workspace) {
     const byId = new Map(lanes.map((lane) => [lane.id, lane]));
     const runnable = lanes.filter((lane) => laneIsRunnable(lane, byId));
     for (let left = 0; left < runnable.length; left += 1) {
@@ -274,7 +245,7 @@ function planComputesParallel(lanes) {
             const b = runnable[right];
             if (a === undefined || b === undefined)
                 continue;
-            if (a.owner !== b.owner && !laneScopesOverlap(a, b))
+            if (a.owner !== b.owner && !laneScopesOverlap(a, b, workspace))
                 return true;
         }
     }
@@ -309,10 +280,13 @@ function filePathOf(raw) {
     }
     return text(asRecord(parsed)?.file_path);
 }
-/** Whether a write destination and a declared target intersect under the shared path rule. */
-function matchesTargets(filePath, targets) {
-    const normalized = normalizedPath(filePath);
-    return targets.some((target) => pathsIntersect(normalized, normalizedPath(target)));
+/**
+ * Whether a write destination equals or lies beneath a declared target. Both
+ * sides resolve against the workspace; the ancestor direction never matches.
+ */
+function matchesTargets(filePath, targets, workspace) {
+    const destination = resolvedPath(filePath, workspace);
+    return targets.some((target) => pathIsWithin(destination, resolvedPath(target, workspace)));
 }
 /** The text blocks of a tool result message; read only to classify a delegate result. */
 function toolResultText(message) {
@@ -349,7 +323,7 @@ function delegateStarted(resultText) {
  * recorded successful result is evidence; the plugin gate's exact tagged-id
  * rule is not part of this metric.
  */
-function remedyMatches(records, start, end, bottleneck, filePaths) {
+function remedyMatches(records, start, end, bottleneck, filePaths, workspace) {
     const results = new Map();
     const failed = new Set();
     const notStarted = new Set();
@@ -395,8 +369,9 @@ function remedyMatches(records, start, end, bottleneck, filePaths) {
         if (bottleneck.action === 'lead_action' &&
             (record.tool === 'edit' || record.tool === 'write')) {
             const filePath = filePaths.get(key);
-            if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets))
+            if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets, workspace)) {
                 note(completedAt);
+            }
         }
     }
     return earliest;
@@ -455,7 +430,7 @@ function argumentValues(raw, fields) {
  * parent prefix and owns only what follows it. `fields` names the argument
  * fields a configured predicate reads; anything else in the arguments is dropped.
  */
-export function extractRecords(sessionId, events, start = 0, fields) {
+export function extractRecords(sessionId, events, start = 0, fields, cwd) {
     const records = [];
     const callById = new Map();
     const checkpointFactsByIndex = new Map();
@@ -643,17 +618,30 @@ export function extractRecords(sessionId, events, start = 0, fields) {
         }
         else {
             action = facts.bottleneck.action;
-            const blockingIds = [...new Set(facts.bottleneck.blockingLaneIds)].sort();
-            const blocking = blockingIds.join('\u0000');
-            // The producer resets the age when a blocking lane changes state.
+            const blocking = [...new Set(facts.bottleneck.blockingLaneIds)].sort();
             const states = new Map(facts.lanes.map((lane) => [lane.id, lane.state]));
             const previous = bottleneckStates.get(sessionId);
-            const unchanged = previous !== undefined &&
-                previous.owner === facts.bottleneck.owner &&
-                previous.blocking === blocking &&
-                blockingIds.every((id) => previous.states.get(id) === states.get(id));
-            age = previous !== undefined && unchanged ? previous.age + 1 : 1;
-            bottleneckStates.set(sessionId, { owner: facts.bottleneck.owner, blocking, states, age });
+            const sameBlockingSet = previous !== undefined &&
+                previous.blocking.length === blocking.length &&
+                previous.blocking.every((id, index) => id === blocking[index]);
+            age = 1;
+            // Same owner and the same unique blocking set continue the age; a lane
+            // that moved on is the route change that escapes it.
+            if (previous !== undefined && previous.owner === facts.bottleneck.owner && sameBlockingSet) {
+                const union = new Set([...previous.blocking, ...blocking]);
+                const changed = [...union].some((id) => {
+                    const before = previous.states.get(id);
+                    const after = states.get(id);
+                    return before !== undefined && after !== undefined && before !== after;
+                });
+                age = changed ? 1 : previous.age + 1;
+            }
+            bottleneckStates.set(sessionId, {
+                owner: facts.bottleneck.owner,
+                blocking,
+                states,
+                age,
+            });
         }
         records[index] = {
             ...record,
@@ -661,7 +649,7 @@ export function extractRecords(sessionId, events, start = 0, fields) {
             checkpointVerifiedCount: facts.verified,
             checkpointLaneCount: facts.lanes.length,
             checkpointBlockedLaneCount: facts.lanes.filter((lane) => lane.state === 'blocked').length,
-            checkpointParallelComputed: planComputesParallel(facts.lanes),
+            checkpointParallelComputed: planComputesParallel(facts.lanes, cwd),
             ...(action === undefined ? {} : { checkpointBottleneckAction: action }),
             ...(age === undefined ? {} : { checkpointBottleneckAge: age }),
         };
@@ -690,7 +678,7 @@ export function extractRecords(sessionId, events, start = 0, fields) {
             break;
         }
         const end = Math.min(next ?? records.length, turnEnd ?? records.length);
-        const resolvedAt = remedyMatches(records, index, end, facts.bottleneck, filePaths);
+        const resolvedAt = remedyMatches(records, index, end, facts.bottleneck, filePaths, cwd);
         records[index] = {
             ...checkpoint,
             checkpointRemedyResolved: resolvedAt !== undefined,

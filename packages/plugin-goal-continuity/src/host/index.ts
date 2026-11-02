@@ -2109,13 +2109,21 @@ const RELATIVE_ROOT = '\u0000'
 /** Virtual ancestors above the working directory, so any parent depth stays comparable. */
 const RELATIVE_BASE = Object.freeze([...Array.from({ length: 16 }, () => 'p'), 'cwd'])
 
+/** Resolve one path field against the workspace when it is relative. */
+function resolveFromWorkspace(value: string, workspace: string): string {
+  const trimmed = value.trim()
+  const rooted =
+    trimmed.startsWith('/') || trimmed.startsWith('\\') || /^[A-Za-z]:([\\/]|$)/u.test(trimmed)
+  return rooted ? trimmed : `${workspace}/${trimmed}`
+}
+
 /**
- * Normalize one scope or destination into one comparable space: separators
- * unified, dot segments resolved, case folded, and relative paths resolved
- * from a fixed ancestor chain so `../..` still contains `src`.
+ * Normalize one workspace-resolved path: separators unified, dot segments
+ * resolved, case folded. A relative base keeps the ancestor chain so `../..`
+ * still contains `src` when the workspace itself is relative.
  */
-function normalizeScopePath(value: string): string {
-  const unified = value.trim().replaceAll('\\', '/')
+function normalizeScopePath(value: string, workspace: string): string {
+  const unified = resolveFromWorkspace(value, workspace).replaceAll('\\', '/')
   const rooted = unified.startsWith('/') || /^[A-Za-z]:(\/|$)/u.test(unified)
   const parts: string[] = rooted ? [] : [...RELATIVE_BASE]
   for (const part of unified.split('/')) {
@@ -2140,42 +2148,12 @@ function pathContains(outer: string, inner: string): boolean {
   return inner.startsWith(`${outer}/`)
 }
 
-/**
- * Within-workspace tail of one normalized relative path, or undefined when the
- * path has no base chain or escapes upward.
- */
-function relativeTail(relative: string): string | undefined {
-  const parts = relative.slice(RELATIVE_ROOT.length).split('/')
-  if (parts.length < RELATIVE_BASE.length) return undefined
-  for (let index = 0; index < RELATIVE_BASE.length; index += 1) {
-    if (parts[index] !== RELATIVE_BASE[index]) return undefined
-  }
-  const tail = parts.slice(RELATIVE_BASE.length).join('/')
-  if (tail === '' || tail.startsWith('..') || tail.includes('/..')) return undefined
-  return tail
-}
-
-/**
- * Whether a rooted and a relative path name the same location. Without a
- * workspace the extractor and the producer cannot resolve a base, so the
- * rooted tail is compared: `/ws/src` meets `src`.
- */
-function mixedPathSuffix(rooted: string, relative: string): boolean {
-  const tail = relativeTail(relative)
-  if (tail === undefined) return false
-  return rooted === `/${tail}` || rooted.endsWith(`/${tail}`)
-}
-
-/** Whether two normalized paths intersect; a mixed pair matches by suffix. */
-function pathIntersects(one: string, other: string): boolean {
-  if (pathContains(one, other) || pathContains(other, one)) return true
-  const oneRooted = one.startsWith('/')
-  if (oneRooted === other.startsWith('/')) return false
-  return oneRooted ? mixedPathSuffix(one, other) : mixedPathSuffix(other, one)
-}
-
 /** Whether two lanes' scopes overlap; a `resource:` entry matches only itself exactly. */
-function scopesOverlap(left: readonly string[], right: readonly string[]): boolean {
+function scopesOverlap(
+  left: readonly string[],
+  right: readonly string[],
+  workspace: string,
+): boolean {
   for (const leftEntry of left) {
     for (const rightEntry of right) {
       const leftResource = isResourceScope(leftEntry)
@@ -2184,7 +2162,9 @@ function scopesOverlap(left: readonly string[], right: readonly string[]): boole
         if (leftResource && rightResource && leftEntry.trim() === rightEntry.trim()) return true
         continue
       }
-      if (pathIntersects(normalizeScopePath(leftEntry), normalizeScopePath(rightEntry))) return true
+      const one = normalizeScopePath(leftEntry, workspace)
+      const other = normalizeScopePath(rightEntry, workspace)
+      if (pathContains(one, other) || pathContains(other, one)) return true
     }
   }
   return false
@@ -2197,7 +2177,7 @@ function laneRunnable(lane: LanePlan, byId: ReadonlyMap<string, LanePlan>): bool
 }
 
 /** Whether the plan holds two runnable lanes with different owners and disjoint scopes. */
-function computesParallel(lanes: readonly LanePlan[]): boolean {
+function computesParallel(lanes: readonly LanePlan[], workspace: string): boolean {
   const byId = new Map(lanes.map((lane) => [lane.id, lane]))
   const runnable = lanes.filter((lane) => laneRunnable(lane, byId))
   for (let left = 0; left < runnable.length; left += 1) {
@@ -2205,7 +2185,7 @@ function computesParallel(lanes: readonly LanePlan[]): boolean {
       const one = runnable[left] as LanePlan
       const other = runnable[right] as LanePlan
       if (one.owner === other.owner) continue
-      if (!scopesOverlap(one.scope, other.scope)) return true
+      if (!scopesOverlap(one.scope, other.scope, workspace)) return true
     }
   }
   return false
@@ -2298,12 +2278,14 @@ function recordBlockingLanes(record: Record<string, unknown>): string[] {
 }
 
 /**
- * A stable, display-free identity for a bottleneck's owner. The blocking set
- * is deliberately excluded: adding or dropping a lane is not a route change.
+ * A stable, display-free identity for a bottleneck's owner and blocking lane
+ * set. The set is compared because the age counts the same owner and the same
+ * set of blocking lane ids; duplicates and order do not matter.
  */
 function bottleneckKeyOf(bottleneck: BottleneckPlan): string {
+  const blocking = [...new Set(bottleneck.blockingLanes)].sort()
   return createHash('sha256')
-    .update(JSON.stringify({ owner: bottleneck.owner }))
+    .update(JSON.stringify({ owner: bottleneck.owner, blocking }))
     .digest('hex')
     .slice(0, 16)
 }
@@ -2539,7 +2521,10 @@ interface CheckpointPlan {
  * earlier plan instead of adding a second obligation. Values stay raw here:
  * remedy matching compares them with the tool call's own destination.
  */
-function checkpointPlan(evidence: CheckpointEvidence): CheckpointPlan | undefined {
+function checkpointPlan(
+  evidence: CheckpointEvidence,
+  workspace: string,
+): CheckpointPlan | undefined {
   const checkpoint = evidence.checkpoint
   if (checkpoint === undefined) return undefined
   try {
@@ -2548,7 +2533,7 @@ function checkpointPlan(evidence: CheckpointEvidence): CheckpointPlan | undefine
       outcome: input.outcome,
       lanes: input.lanes,
       bottleneck: input.bottleneck,
-      parallelComputed: computesParallel(input.lanes),
+      parallelComputed: computesParallel(input.lanes, workspace),
     }
   } catch {
     return undefined
@@ -2572,12 +2557,17 @@ function taggedWorkerStarted(evidence: CheckpointEvidence, id: string): boolean 
 
 /**
  * Whether one successful edit or write landed on a declared remedy target.
- * The comparison follows `pathIntersects`, so a relative target and an
- * absolute destination for the same file match and the reverse does too.
+ * Both sides resolve against the workspace, so a relative target and an
+ * absolute destination for the same file match, and only the destination may
+ * lie beneath the target.
  */
-function targetMatched(targets: readonly string[], destination: string): boolean {
-  const path = normalizeScopePath(destination)
-  return targets.some((target) => pathIntersects(normalizeScopePath(target), path))
+function targetMatched(
+  targets: readonly string[],
+  destination: string,
+  workspace: string,
+): boolean {
+  const path = normalizeScopePath(destination, workspace)
+  return targets.some((target) => pathContains(normalizeScopePath(target, workspace), path))
 }
 
 /** Whether the declared remedy was executed after the checkpoint. */
@@ -2585,6 +2575,7 @@ function remedyMatched(
   evidence: CheckpointEvidence,
   bottleneck: BottleneckPlan,
   id: string,
+  workspace: string,
 ): boolean {
   const checkpoint = evidence.checkpoint
   if (checkpoint === undefined) return false
@@ -2594,7 +2585,7 @@ function remedyMatched(
     if (bottleneck.action === 'user_decision' && call.name === 'ask_user_question') return true
     if (bottleneck.action !== 'lead_action' || !WRITE_TOOLS.includes(call.name)) continue
     const destination = writtenPathOf(call.arguments)
-    if (destination !== undefined && targetMatched(bottleneck.targets, destination)) {
+    if (destination !== undefined && targetMatched(bottleneck.targets, destination, workspace)) {
       return true
     }
   }
@@ -3072,7 +3063,7 @@ function installCheckpointTool(ctx: Context, stateFor: (agent: Agent) => AgentSt
       const storedPlan = storedLanes(input.lanes, workspace)
       assertStoredIdsUnique(storedPlan)
       const remaining = derivedRemaining(storedPlan)
-      const parallelComputed = computesParallel(input.lanes)
+      const parallelComputed = computesParallel(input.lanes, workspace)
       // The record for this turn holds the previous checkpoint while it exists,
       // so a periodic checkpoint inside one turn counts toward the age too.
       const previous = checkpointRecords(workspace, agent.session.id, turn, 1)[0]
@@ -3226,12 +3217,17 @@ function installCheckpointGate(
     if (!freshCheckpoint(evidence, state)) {
       // A readable checkpoint still owes its remedy, even once it is too old to
       // satisfy the close; the obligation is not erased by the new request.
-      const stalePlan = checkpointPlan(evidence)
+      const stalePlan = checkpointPlan(evidence, workspace)
       if (
         stalePlan !== undefined &&
         stalePlan.outcome === 'continue' &&
         stalePlan.bottleneck !== undefined &&
-        !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn))
+        !remedyMatched(
+          evidence,
+          stalePlan.bottleneck,
+          checkpointIdFor(agent.session.id, turn),
+          workspace,
+        )
       ) {
         refuse(
           agent,
@@ -3287,7 +3283,7 @@ function installCheckpointGate(
       )
       return
     }
-    const plan = checkpointPlan(evidence)
+    const plan = checkpointPlan(evidence, workspace)
     // A logged successful call is a checkpoint even if its arguments are
     // unreadable; only a readable plan still gates the close.
     if (plan === undefined || plan.outcome === 'done') return
@@ -3310,7 +3306,7 @@ function installCheckpointGate(
     }
     const bottleneck = plan.bottleneck
     if (bottleneck === undefined) return
-    if (!remedyMatched(evidence, bottleneck, id)) {
+    if (!remedyMatched(evidence, bottleneck, id, workspace)) {
       refuse(
         agent,
         budget,

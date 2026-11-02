@@ -543,7 +543,7 @@ describe('work checkpoint record', () => {
         blockingLanes: ['test'],
         targets: ['test/parser.test.ts'],
       },
-      bottleneckKey: 'fdc2f0da6ab1499a',
+      bottleneckKey: '0318b47da62567c5',
       bottleneckChanged: false,
       derivedRemaining: ['test'],
       parallelComputed: false,

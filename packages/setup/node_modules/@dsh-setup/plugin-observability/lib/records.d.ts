@@ -19,6 +19,8 @@ export interface SessionMeta {
     readonly origin?: string;
     /** Delegation depth; absent means top level. */
     readonly delegationDepth?: number;
+    /** The workspace the session ran in; relative plan and remedy paths resolve here. */
+    readonly cwd?: string;
 }
 /**
  * One neutral fact extracted from a session event. Aggregation works on these,
@@ -95,4 +97,4 @@ export type ArgumentFieldMap = ReadonlyMap<string, ReadonlySet<string>>;
  * parent prefix and owns only what follows it. `fields` names the argument
  * fields a configured predicate reads; anything else in the arguments is dropped.
  */
-export declare function extractRecords(sessionId: string, events: readonly SessionEvent[], start?: number, fields?: ArgumentFieldMap): TraceRecord[];
+export declare function extractRecords(sessionId: string, events: readonly SessionEvent[], start?: number, fields?: ArgumentFieldMap, cwd?: string): TraceRecord[];

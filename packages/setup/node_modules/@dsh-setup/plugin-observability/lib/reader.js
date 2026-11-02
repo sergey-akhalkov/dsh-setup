@@ -1,12 +1,13 @@
 import { rangeWindow } from './aggregate.js';
 import { extractRecords, } from './records.js';
-/** Keep only the header fields the report uses, so no path or preset text travels. */
+/** Keep only the header fields the report uses, so no preset text travels. */
 function sessionMeta(header) {
     return {
         id: String(header.id),
         ...(header.parentSession === undefined ? {} : { parentSession: String(header.parentSession) }),
         ...(header.origin === undefined ? {} : { origin: header.origin }),
         ...(header.delegationDepth === undefined ? {} : { delegationDepth: header.delegationDepth }),
+        ...(header.cwd === undefined ? {} : { cwd: header.cwd }),
     };
 }
 /** Resolve titles for the unique failure sessions; every failure mode drops a title only. */
@@ -84,7 +85,7 @@ async function readOne(query, id, stamp, cache, fields, listed) {
             : { records: [...cached.records], meta: cached.meta };
     }
     const snapshot = await query.readSession(id);
-    const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount), fields);
+    const records = extractRecords(id, snapshot.events, Number(snapshot.inheritedEventCount), fields, listed?.cwd ?? snapshot.session?.cwd);
     const meta = listed ?? sessionMeta(snapshot.session);
     cache?.set(String(id), stamp, records, meta);
     return { records, meta };

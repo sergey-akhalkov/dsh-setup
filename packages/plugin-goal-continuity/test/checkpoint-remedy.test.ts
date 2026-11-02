@@ -226,9 +226,9 @@ describe('executed bottleneck remedy', () => {
     expect(noticeText(harness.steers[0] as never)).toContain('Before the close')
   })
 
-  it('normalizes a UNC destination against a relative target', async () => {
+  it('normalizes a UNC directory target and its destination', async () => {
     const harness = await create()
-    await checkpointed(harness, 'lead_action', ['src/a.ts'])
+    await checkpointed(harness, 'lead_action', ['//server/share/src'])
     const unc = `//server/share/src/a.ts`
     call(harness, 'edit', { file_path: unc })
     await harness.turnStopping()

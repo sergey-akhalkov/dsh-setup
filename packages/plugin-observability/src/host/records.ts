@@ -21,6 +21,8 @@ export interface SessionMeta {
   readonly origin?: string
   /** Delegation depth; absent means top level. */
   readonly delegationDepth?: number
+  /** The workspace the session ran in; relative plan and remedy paths resolve here. */
+  readonly cwd?: string
 }
 
 /**
@@ -158,7 +160,7 @@ interface CheckpointFacts {
 /** The previous checkpoint's bottleneck identity and lane states, for the age rule. */
 interface BottleneckState {
   readonly owner: string
-  readonly blocking: string
+  readonly blocking: readonly string[]
   readonly states: ReadonlyMap<string, string>
   readonly age: number
 }
@@ -277,28 +279,20 @@ function checkpointFacts(raw: string | undefined): CheckpointFacts | undefined {
   return { outcome, verified, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) }
 }
 
-/** The virtual root of the relative path space; no real path can contain it. */
-const RELATIVE_PATH_ROOT = '\u0000'
-
-/** Virtual ancestors above the working directory, so any parent depth stays comparable. */
-const RELATIVE_PATH_BASE: readonly string[] = Object.freeze([
-  ...Array.from({ length: 16 }, () => 'p'),
-  'cwd',
-])
+/** The virtual workspace for extraction without a recorded cwd. */
+const FALLBACK_WORKSPACE = '/workspace'
 
 /**
- * Normalize a path-like scope the way the checkpoint producer does: separators
- * unified, dot segments resolved, case folded, and a relative path resolved from
- * a fixed ancestor chain so `../..` still contains `src`.
+ * Normalize one path: separators unified, dot segments resolved, case folded,
+ * and a root (`/` or drive) kept. Relative input is resolved first.
  */
 function normalizedPath(value: string): string {
   const unified = value.trim().replace(/\\/g, '/')
   const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified)
-  const parts: string[] = rooted ? [] : [...RELATIVE_PATH_BASE]
+  const parts: string[] = []
   for (const part of unified.split('/')) {
     if (part === '' || part === '.') continue
     if (part === '..') {
-      // An unmatched parent stays visible, so '../a' never collapses onto 'a'.
       if (parts.length > 0 && parts[parts.length - 1] !== '..') parts.pop()
       else if (!rooted) parts.push('..')
       continue
@@ -306,7 +300,18 @@ function normalizedPath(value: string): string {
     parts.push(part)
   }
   const joined = parts.join('/').toLowerCase()
-  return rooted ? `/${joined}` : `${RELATIVE_PATH_ROOT}${joined}`
+  return rooted ? `/${joined}` : joined
+}
+
+/**
+ * Resolve one scope or destination against the session's workspace, then
+ * normalize it. A rooted value keeps its own root.
+ */
+function resolvedPath(value: string, workspace: string | undefined): string {
+  const base = workspace === undefined || workspace.trim() === '' ? FALLBACK_WORKSPACE : workspace
+  const unified = value.trim()
+  const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified)
+  return normalizedPath(rooted ? unified : `${base}/${unified}`)
 }
 
 /** Whether one normalized path equals another or lies beneath it by path component. */
@@ -316,47 +321,22 @@ function pathIsWithin(path: string, root: string): boolean {
   return path.startsWith(`${root}/`)
 }
 
-/** The part of a relative path below the fixed ancestor chain, or undefined above it. */
-function relativeTail(path: string): string | undefined {
-  if (!path.startsWith(RELATIVE_PATH_ROOT)) return undefined
-  const parts = path.slice(RELATIVE_PATH_ROOT.length).split('/')
-  if (parts.length < RELATIVE_PATH_BASE.length) return undefined
-  for (let index = 0; index < RELATIVE_PATH_BASE.length; index += 1) {
-    if (parts[index] !== RELATIVE_PATH_BASE[index]) return undefined
-  }
-  const tail = parts.slice(RELATIVE_PATH_BASE.length)
-  if (tail.includes('..')) return undefined
-  return tail.join('/')
-}
-
-/**
- * Whether two normalized paths intersect: by component when both are rooted or
- * both relative, and by suffix when one is rooted and the other names a
- * relative tail. A tail containing `..` has no rooted counterpart.
- */
-function pathsIntersect(left: string, right: string): boolean {
-  const leftRooted = left.startsWith('/')
-  const rightRooted = right.startsWith('/')
-  if (leftRooted === rightRooted) {
-    return pathIsWithin(left, right) || pathIsWithin(right, left)
-  }
-  const rooted = leftRooted ? left : right
-  const relative = leftRooted ? right : left
-  const tail = relativeTail(relative)
-  if (tail === undefined || tail === '') return false
-  return rooted === `/${tail}` || rooted.endsWith(`/${tail}`)
-}
-
 /** Whether two scopes overlap; a `resource:` scope is compared exactly. */
-function scopesOverlap(left: string, right: string): boolean {
+function scopesOverlap(left: string, right: string, workspace: string | undefined): boolean {
   const a = left.trim()
   const b = right.trim()
   if (a.startsWith('resource:') || b.startsWith('resource:')) return a === b
-  return pathsIntersect(normalizedPath(a), normalizedPath(b))
+  const one = resolvedPath(a, workspace)
+  const other = resolvedPath(b, workspace)
+  return pathIsWithin(one, other) || pathIsWithin(other, one)
 }
 
-function laneScopesOverlap(left: CheckpointLane, right: CheckpointLane): boolean {
-  return left.scope.some((a) => right.scope.some((b) => scopesOverlap(a, b)))
+function laneScopesOverlap(
+  left: CheckpointLane,
+  right: CheckpointLane,
+  workspace: string | undefined,
+): boolean {
+  return left.scope.some((a) => right.scope.some((b) => scopesOverlap(a, b, workspace)))
 }
 
 /** A lane is runnable when it runs and every lane it waits on is done. */
@@ -365,7 +345,10 @@ function laneIsRunnable(lane: CheckpointLane, byId: ReadonlyMap<string, Checkpoi
 }
 
 /** Two runnable lanes with different owners and disjoint scopes compute parallel work. */
-function planComputesParallel(lanes: readonly CheckpointLane[]): boolean {
+function planComputesParallel(
+  lanes: readonly CheckpointLane[],
+  workspace: string | undefined,
+): boolean {
   const byId = new Map(lanes.map((lane) => [lane.id, lane]))
   const runnable = lanes.filter((lane) => laneIsRunnable(lane, byId))
   for (let left = 0; left < runnable.length; left += 1) {
@@ -373,7 +356,7 @@ function planComputesParallel(lanes: readonly CheckpointLane[]): boolean {
       const a = runnable[left]
       const b = runnable[right]
       if (a === undefined || b === undefined) continue
-      if (a.owner !== b.owner && !laneScopesOverlap(a, b)) return true
+      if (a.owner !== b.owner && !laneScopesOverlap(a, b, workspace)) return true
     }
   }
   return false
@@ -410,10 +393,17 @@ function filePathOf(raw: string | undefined): string | undefined {
   return text(asRecord(parsed)?.file_path)
 }
 
-/** Whether a write destination and a declared target intersect under the shared path rule. */
-function matchesTargets(filePath: string, targets: readonly string[]): boolean {
-  const normalized = normalizedPath(filePath)
-  return targets.some((target) => pathsIntersect(normalized, normalizedPath(target)))
+/**
+ * Whether a write destination equals or lies beneath a declared target. Both
+ * sides resolve against the workspace; the ancestor direction never matches.
+ */
+function matchesTargets(
+  filePath: string,
+  targets: readonly string[],
+  workspace: string | undefined,
+): boolean {
+  const destination = resolvedPath(filePath, workspace)
+  return targets.some((target) => pathIsWithin(destination, resolvedPath(target, workspace)))
 }
 
 /** The text blocks of a tool result message; read only to classify a delegate result. */
@@ -457,6 +447,7 @@ function remedyMatches(
   end: number,
   bottleneck: CheckpointBottleneck,
   filePaths: ReadonlyMap<string, string>,
+  workspace: string | undefined,
 ): number | undefined {
   const results = new Map<string, number>()
   const failed = new Set<string>()
@@ -497,7 +488,9 @@ function remedyMatches(
       (record.tool === 'edit' || record.tool === 'write')
     ) {
       const filePath = filePaths.get(key)
-      if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets)) note(completedAt)
+      if (filePath !== undefined && matchesTargets(filePath, bottleneck.targets, workspace)) {
+        note(completedAt)
+      }
     }
   }
   return earliest
@@ -569,6 +562,7 @@ export function extractRecords(
   events: readonly SessionEvent[],
   start = 0,
   fields?: ArgumentFieldMap,
+  cwd?: string,
 ): TraceRecord[] {
   const records: TraceRecord[] = []
   const callById = new Map<string, { tool: string; values?: Record<string, string> }>()
@@ -742,18 +736,31 @@ export function extractRecords(
       bottleneckStates.delete(sessionId)
     } else {
       action = facts.bottleneck.action
-      const blockingIds = [...new Set(facts.bottleneck.blockingLaneIds)].sort()
-      const blocking = blockingIds.join('\u0000')
-      // The producer resets the age when a blocking lane changes state.
+      const blocking = [...new Set(facts.bottleneck.blockingLaneIds)].sort()
       const states = new Map(facts.lanes.map((lane) => [lane.id, lane.state]))
       const previous = bottleneckStates.get(sessionId)
-      const unchanged =
+      const sameBlockingSet =
         previous !== undefined &&
-        previous.owner === facts.bottleneck.owner &&
-        previous.blocking === blocking &&
-        blockingIds.every((id) => previous.states.get(id) === states.get(id))
-      age = previous !== undefined && unchanged ? previous.age + 1 : 1
-      bottleneckStates.set(sessionId, { owner: facts.bottleneck.owner, blocking, states, age })
+        previous.blocking.length === blocking.length &&
+        previous.blocking.every((id, index) => id === blocking[index])
+      age = 1
+      // Same owner and the same unique blocking set continue the age; a lane
+      // that moved on is the route change that escapes it.
+      if (previous !== undefined && previous.owner === facts.bottleneck.owner && sameBlockingSet) {
+        const union = new Set([...previous.blocking, ...blocking])
+        const changed = [...union].some((id) => {
+          const before = previous.states.get(id)
+          const after = states.get(id)
+          return before !== undefined && after !== undefined && before !== after
+        })
+        age = changed ? 1 : previous.age + 1
+      }
+      bottleneckStates.set(sessionId, {
+        owner: facts.bottleneck.owner,
+        blocking,
+        states,
+        age,
+      })
     }
     records[index] = {
       ...record,
@@ -761,7 +768,7 @@ export function extractRecords(
       checkpointVerifiedCount: facts.verified,
       checkpointLaneCount: facts.lanes.length,
       checkpointBlockedLaneCount: facts.lanes.filter((lane) => lane.state === 'blocked').length,
-      checkpointParallelComputed: planComputesParallel(facts.lanes),
+      checkpointParallelComputed: planComputesParallel(facts.lanes, cwd),
       ...(action === undefined ? {} : { checkpointBottleneckAction: action }),
       ...(age === undefined ? {} : { checkpointBottleneckAge: age }),
     }
@@ -785,7 +792,7 @@ export function extractRecords(
       break
     }
     const end = Math.min(next ?? records.length, turnEnd ?? records.length)
-    const resolvedAt = remedyMatches(records, index, end, facts.bottleneck, filePaths)
+    const resolvedAt = remedyMatches(records, index, end, facts.bottleneck, filePaths, cwd)
     records[index] = {
       ...checkpoint,
       checkpointRemedyResolved: resolvedAt !== undefined,

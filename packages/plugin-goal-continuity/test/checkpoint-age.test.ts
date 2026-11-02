@@ -75,13 +75,16 @@ describe('bottleneck age', () => {
     expect(harness.steers).toHaveLength(0)
   })
 
-  it('keeps the age when only the blocking lane set changes', async () => {
+  it('resets the count when the blocking lane set changes', async () => {
     const harness = await create()
     harness.turnStart(1)
     await harness.checkpoint(plan())
     harness.turnStart(2)
     await harness.checkpoint(plan({ blockingLanes: [] }))
-    expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(1)
+    remedy(harness)
+    await harness.turnStopping(2)
+    expect(harness.steers).toHaveLength(0)
   })
 
   it('lets a user_decision question escape an aged bottleneck', async () => {
