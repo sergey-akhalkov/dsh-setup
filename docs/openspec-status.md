@@ -423,3 +423,18 @@ to that commit, and retains the earlier versions. The owner's desktop profile ru
 the linked setup bundle; installing the published 0.22.0 from the market (or re-running the installer
 from an external PowerShell with the app closed) is what makes the tagged build the installed one,
 and it is also the first live check of the breaking `work_checkpoint` v2 schema and the plan panel.
+
+An installer-only bugfix shipped in v0.22.1 (tag on commit `69cbaa2`). A Hindsight daemon that owned
+`127.0.0.1:8888` with a dead embedded database made the Hindsight phase throw "does not answer as
+Hindsight. Stop that process", which told the owner to kill the daemon the installer manages and made
+every rerun fail the same way; the supplied daemon log showed a competing start stopping the shared
+`pg0` while the surviving API kept serving. `install.ps1` now resolves the listener first: an
+identified Hindsight daemon is reused when healthy and stopped and started again when unhealthy; a
+listener that cannot be identified as Hindsight is still never terminated, and its error now names
+the owning process and path. No OpenSpec delta: this restores the documented provisioning behavior
+rather than changing a requirement. The release workflow passed DSH 0.2.1-rc.3 and 0.2.1-rc.5, the
+publish job and the Pages deployment; the validate workflow on `main` passed; the published index
+returns HTTP 200 and lists all 18 packages at 0.22.1 pinned to `69cbaa2`, retaining 0.22.0. The
+recovery path is covered by `install.ps1 -SelfTest` and a stub harness over the real
+`Start-HindsightDaemon`; the live rerun on the affected PC is the remaining acceptance, since
+reproducing the poisoned state here would require stopping the owner's live `pg0`.
