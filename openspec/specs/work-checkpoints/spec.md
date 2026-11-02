@@ -61,11 +61,12 @@ than `stepInterval` steps. A turn MUST trigger at most one checkpoint per `stepI
 ### Requirement: Checkpoint request
 
 The plugin SHALL inject one bounded checkpoint request before the close and when the step interval
-is reached. The request SHALL name the tool-call count, the step count and interval, up to a
-bounded number of written paths, the last shell command and its exit state, the last failed tool
-result, and worker starts, when observed. It SHALL ask whether the work is done, what is verified,
-what remains, whether the remainder has independent parallel lanes, what the current bottleneck is,
-and the next action. It MUST be attributed to `goal-continuity` and stay within `maxMessageChars`.
+is reached. The request SHALL name the tool-call count, the step count and interval, up to a bounded
+number of written paths, the last shell command and its exit state, the last failed tool result,
+each lane whose state did not change for `laneStaleCheckpoints` checkpoints, the age of the current
+bottleneck, and worker starts, when observed. It SHALL ask for the lane plan, the bottleneck and its
+remedy, and the next action. It MUST be attributed to `goal-continuity` and stay within
+`maxMessageChars`.
 
 #### Scenario: Evidence is named
 
@@ -87,10 +88,26 @@ and the next action. It MUST be attributed to `goal-continuity` and stay within 
 - **WHEN** the request is steered at the step interval
 - **THEN** it names the step count and the interval
 
+#### Scenario: Lane plan is asked
+
+- **WHEN** the request is injected
+- **THEN** it asks for the lanes, their owners and scopes, and their states
+
 #### Scenario: Bottleneck is asked
 
 - **WHEN** the request is injected
-- **THEN** it asks for the current bottleneck and the next action that removes it
+- **THEN** it asks for the current bottleneck, its owner, its blocking lanes, and the action that
+  removes it
+
+#### Scenario: Stale lane is named
+
+- **WHEN** a lane's state did not change for `laneStaleCheckpoints` checkpoints
+- **THEN** the request names that lane and its age
+
+#### Scenario: Bottleneck age is named
+
+- **WHEN** the current bottleneck persists across checkpoints
+- **THEN** the request names its age
 
 #### Scenario: Redaction
 
@@ -110,33 +127,48 @@ and the next action. It MUST be attributed to `goal-continuity` and stay within 
 ### Requirement: Checkpoint tool and record
 
 The plugin SHALL register a `work_checkpoint` tool that accepts the outcome `done` or `continue`,
-verified facts, remaining items, a parallel flag, a serial reason required when the outcome is
-`continue` and parallel is false, a bottleneck required when the outcome is `continue`, the next
-action, and an optional speedup. A successful call SHALL write one atomic, bounded, redacted local
-record under `.dsh/work-checkpoints/<session>/<turn>.json`, return a short summary, and be reused for
-the same turn; a later call in the same turn replaces the record with the latest decision. The
-record MUST NOT be tracked.
+verified facts, the lane plan, the bottleneck and its remedy, and the next action. A successful call
+SHALL write one atomic, bounded, redacted local record under
+`.dsh/work-checkpoints/<session>/<turn>.json`, return a short summary, and be reused for the same
+turn; a later call in the same turn replaces the record with the latest decision. The record MUST
+NOT be tracked.
 
-#### Scenario: Continue with a serial reason
+#### Scenario: Continue with a lane plan and remedy
 
-- **WHEN** the outcome is `continue`, parallel is false, the serial reason is non-empty, and the
-  bottleneck is non-empty
+- **WHEN** the outcome is `continue` and the call carries a valid lane plan, a bottleneck with a
+  remedy, and a next action
 - **THEN** the call succeeds and the record is written
 
-#### Scenario: Missing serial reason
+#### Scenario: Missing lane plan
 
-- **WHEN** the outcome is `continue`, parallel is false, and the serial reason is empty or absent
+- **WHEN** the outcome is `continue` and `lanes` is empty or absent
 - **THEN** the call is rejected with a field diagnostic
 
 #### Scenario: Missing bottleneck
 
-- **WHEN** the outcome is `continue` and the bottleneck is empty or absent
+- **WHEN** the outcome is `continue` and the bottleneck or its action is empty or absent
 - **THEN** the call is rejected with a field diagnostic
+
+#### Scenario: Continue with a serial reason
+
+- **WHEN** a `continue` call carries `parallel: false`, a serial reason, and no lane plan
+- **THEN** the call is rejected with a field diagnostic naming the removed fields and the missing
+  lane plan
+
+#### Scenario: Missing serial reason
+
+- **WHEN** a `continue` call omits both the lane plan and a serial reason
+- **THEN** the call is rejected with a field diagnostic naming `lanes` as required
 
 #### Scenario: Parallel declaration
 
-- **WHEN** the outcome is `continue`, parallel is true, and the bottleneck is non-empty
-- **THEN** the call succeeds without a serial reason
+- **WHEN** a `continue` call carries `parallel: true` and a bottleneck but no lane plan
+- **THEN** the call is rejected with a field diagnostic naming `parallel` as removed
+
+#### Scenario: Done without a plan
+
+- **WHEN** the outcome is `done` and the call omits `lanes` and the bottleneck
+- **THEN** the call succeeds and the record states completion
 
 #### Scenario: Invalid field
 
@@ -176,9 +208,10 @@ A checkpoint call SHALL count as a successful checkpoint for the close gate when
 
 After a substantial pause the plugin SHALL refuse the turn close until a successful checkpoint
 younger than `stepInterval` steps exists for the turn, steering the request on each refusal. It
-SHALL allow at most `maxBlocks` refusals per turn and then allow the close with a visible UNCHECKED
-notice that is not a pass. It MUST fail open on an internal state error and MUST NOT evaluate a
-subagent turn.
+SHALL also refuse a close whose checkpoint names a bottleneck whose remedy is not executed or whose
+bottleneck reached `bottleneckAge`. It SHALL allow at most `maxBlocks` refusals per turn and then
+allow the close with a visible UNCHECKED notice that is not a pass. It MUST fail open on an internal
+state error and MUST NOT evaluate a subagent turn.
 
 #### Scenario: Missing checkpoint
 
@@ -192,13 +225,23 @@ subagent turn.
 
 #### Scenario: Stale checkpoint
 
-- **WHEN** the latest checkpoint is `stepInterval` or more steps old at the close
+- **WHEN** the latest checkpoint in the turn is `stepInterval` or more steps old and the turn closes
 - **THEN** the close is refused and a new checkpoint request is steered
 
 #### Scenario: Two-step checkpoint
 
 - **WHEN** a checkpoint was recorded 2 steps before the close and `stepInterval` is 40
 - **THEN** the close is allowed without another request
+
+#### Scenario: Remedy outstanding
+
+- **WHEN** the checkpoint names a remedy that no later call executed
+- **THEN** the close is refused and the steer names the missing evidence
+
+#### Scenario: Aged bottleneck
+
+- **WHEN** the checkpoint's bottleneck reached `bottleneckAge` and no escape applies
+- **THEN** the close is refused and the steer requires a route change
 
 #### Scenario: Cap reached
 
@@ -217,21 +260,53 @@ subagent turn.
 
 ### Requirement: Parallel-action gate
 
-When a checkpoint with outcome `continue` declares parallel remaining work, the plugin SHALL require a successful worker start whose arguments contain the checkpoint id before the turn closes, or an amendment that sets parallel to false with a serial reason. A failed or untagged worker start MUST NOT satisfy the gate.
+When the plugin computes parallel remaining work from the checkpoint's lane plan, it SHALL require a
+successful worker start whose arguments contain the checkpoint id before the turn closes, or a later
+checkpoint in the same turn whose lane plan removes the parallel work. Two lanes are parallel when
+both are runnable, they have different owners, and their scopes do not overlap, compared by path
+components so `src` and `src2` are disjoint. A failed or untagged worker start MUST NOT satisfy the
+gate.
 
 #### Scenario: Worker start satisfies
 
 - **WHEN** a worker start after the checkpoint contains the checkpoint id
 - **THEN** the gate passes
 
+#### Scenario: Plan amendment satisfies
+
+- **WHEN** a later checkpoint in the turn changes the plan so only one lane is runnable
+- **THEN** the gate passes
+
 #### Scenario: Serial amendment
 
-- **WHEN** the checkpoint is amended to parallel false with a serial reason
+- **WHEN** a later checkpoint in the turn changes the plan so the remaining work is serial, through a
+  shared scope, a single owner, or a blocked lane
 - **THEN** the gate passes
+
+#### Scenario: Textual sibling is disjoint
+
+- **WHEN** two runnable lanes have scopes `src` and `src2`
+- **THEN** the plugin computes parallel work, because neither scope contains the other by path
+  component
+
+#### Scenario: Shared scope is serial
+
+- **WHEN** two runnable lanes share a scope entry
+- **THEN** the plugin does not compute parallel work
+
+#### Scenario: Same owner is serial
+
+- **WHEN** two runnable lanes have the same owner
+- **THEN** the plugin does not compute parallel work
+
+#### Scenario: Blocked lane is not runnable
+
+- **WHEN** a lane is blocked by a lane that is not `done`
+- **THEN** it does not count as runnable
 
 #### Scenario: Failed worker start
 
-- **WHEN** the worker start fails or does not contain the checkpoint id
+- **WHEN** a worker start fails or does not contain the checkpoint id
 - **THEN** it does not satisfy the gate
 
 #### Scenario: Untagged worker
@@ -241,11 +316,15 @@ When a checkpoint with outcome `continue` declares parallel remaining work, the 
 
 ### Requirement: Parallel gate refusal and cap
 
-The plugin SHALL steer on each unsatisfied parallel-gate close with the checkpoint id, share the `maxBlocks` budget with the close gate, and after the cap allow the close with a visible UNCHECKED notice. When no worker-start tool is registered or the checkpoint outcome is `done`, the gate SHALL report nothing.
+The plugin SHALL steer on each unsatisfied parallel-gate close with the checkpoint id, share the
+`maxBlocks` budget with the close gate, and after the cap allow the close with a visible UNCHECKED
+notice. When no worker-start tool is registered, `enforceParallel` is false, or the checkpoint
+outcome is `done`, the gate SHALL report nothing.
 
 #### Scenario: Missing worker
 
-- **WHEN** the turn closes after a parallel checkpoint with no tagged worker start and no amendment
+- **WHEN** the turn closes after a computed parallel plan with no tagged worker start and no plan
+  amendment
 - **THEN** the gate steers with the checkpoint id and the turn does not close for this gate
 
 #### Scenario: Repeated close
@@ -261,6 +340,11 @@ The plugin SHALL steer on each unsatisfied parallel-gate close with the checkpoi
 #### Scenario: No worker tool
 
 - **WHEN** no worker-start tool is registered
+- **THEN** the gate reports nothing and the turn may close
+
+#### Scenario: Gate disabled
+
+- **WHEN** `enforceParallel` is false
 - **THEN** the gate reports nothing and the turn may close
 
 #### Scenario: Done outcome
@@ -295,24 +379,35 @@ The trigger SHALL apply to a goal round's turn close through the same path. The 
 ### Requirement: Configuration and off switch
 
 The checkpoint SHALL be enabled by default with `minToolCalls`, `requireWrite`, `maxBlocks`,
-`enforceParallel`, `maxMessageChars`, and `stepInterval` (default 40), validated fail-loud; unknown
-or out-of-range fields SHALL fail plugin load with a field diagnostic. `checkpoint.enabled: false`
-SHALL disable only the checkpoint; disabling the plugin row or `enabled: false` SHALL disable it
-with the rest of the bundle.
+`enforceParallel`, `maxMessageChars`, `stepInterval` (default 40), `bottleneckAge` (default 2), and
+`laneStaleCheckpoints` (default 2), validated fail-loud; unknown or out-of-range fields SHALL fail
+plugin load with a field diagnostic. `checkpoint.enabled: false` SHALL disable only the checkpoint;
+disabling the plugin row or `enabled: false` SHALL disable it with the rest of the bundle.
 
 #### Scenario: Default configuration
 
 - **WHEN** a profile mounts the row with default configuration
-- **THEN** the checkpoint is enabled with the documented defaults, including `stepInterval: 40`
+- **THEN** the checkpoint is enabled with the documented defaults, including `stepInterval: 40`,
+  `bottleneckAge: 2`, and `laneStaleCheckpoints: 2`
 
 #### Scenario: Configurable interval
 
 - **WHEN** the profile sets `stepInterval` to 25
 - **THEN** the mid-turn trigger uses 25 steps
 
+#### Scenario: Configurable thresholds
+
+- **WHEN** the profile sets `bottleneckAge` to 3 and `laneStaleCheckpoints` to 1
+- **THEN** the age refusal and the stale-lane evidence use those values
+
 #### Scenario: Invalid step interval
 
 - **WHEN** `stepInterval` is zero, negative, or not an integer
+- **THEN** plugin load fails with a field diagnostic
+
+#### Scenario: Invalid threshold
+
+- **WHEN** `bottleneckAge` or `laneStaleCheckpoints` is zero, negative, or not an integer
 - **THEN** plugin load fails with a field diagnostic
 
 #### Scenario: Section disabled
@@ -392,3 +487,169 @@ MUST NOT start an idle agent.
 
 - **WHEN** no agent is running
 - **THEN** the request is not injected
+
+### Requirement: Lane plan
+
+The work checkpoint SHALL carry the current work as lanes, each with an id, an owner, at least one
+scope entry, a state of `running`, `blocked`, or `done`, and optional `blockedBy` lane ids. The
+plugin MUST derive the remaining work from lanes that are not `done` and MUST reject duplicate ids,
+an unknown `blockedBy`, an empty scope, or more than a bounded number of lanes.
+
+#### Scenario: Lane plan recorded
+
+- **WHEN** a `continue` checkpoint carries two lanes with owners, scopes, and states
+- **THEN** the record stores both lanes and the derived remaining work
+
+#### Scenario: Remaining derived
+
+- **WHEN** one lane is `done` and another is `running`
+- **THEN** the derived remaining work lists only the running lane
+
+#### Scenario: Unknown blockedBy
+
+- **WHEN** a lane is blocked by an id no lane defines
+- **THEN** the call is rejected with a field diagnostic
+
+#### Scenario: Duplicate lane id
+
+- **WHEN** two lanes share one id
+- **THEN** the call is rejected with a field diagnostic
+
+#### Scenario: Empty scope
+
+- **WHEN** a lane carries no scope entry
+- **THEN** the call is rejected with a field diagnostic
+
+#### Scenario: Lane bound
+
+- **WHEN** the plan carries more lanes than the configured bound
+- **THEN** the call is rejected with a field diagnostic
+
+### Requirement: Executed bottleneck remedy
+
+A `continue` checkpoint SHALL carry a bottleneck with an id, an owner, an action of
+`worker_start`, `lead_action`, or `user_decision`, the blocking lane ids, and, for `lead_action`,
+the target paths. The plugin MUST refuse the close until a later tool call matches the action: a
+successful worker start carrying the checkpoint id, a successful edit or write at a declared target,
+or a question to the user.
+
+#### Scenario: Worker start remedy
+
+- **WHEN** the checkpoint names `worker_start` and a later worker start that the plugin's classifier
+  counts carries the checkpoint id
+- **THEN** the gate passes
+
+#### Scenario: User decision remedy
+
+- **WHEN** the checkpoint names `user_decision` and a later `ask_user_question` call runs
+- **THEN** the gate passes and the question review still applies
+
+#### Scenario: Missing remedy
+
+- **WHEN** the turn closes after a `continue` checkpoint with no matching call
+- **THEN** the close is refused and the steer names the action, the bottleneck id, and the missing
+  evidence
+
+#### Scenario: Non-start tool does not pass
+
+- **WHEN** the checkpoint names `worker_start` and the only later call is `send_message` or
+  `todo_write`
+- **THEN** the gate does not pass
+
+#### Scenario: Cached delegate does not pass
+
+- **WHEN** a later `delegate` reuses an existing record instead of starting a run
+- **THEN** the gate does not pass
+
+#### Scenario: Unrelated worker
+
+- **WHEN** a worker starts without the checkpoint id
+- **THEN** the gate does not pass
+
+#### Scenario: Done outcome
+
+- **WHEN** the checkpoint outcome is `done`
+- **THEN** the remedy gate reports nothing
+
+### Requirement: Bottleneck remedy evidence
+
+A remedy match SHALL require a completed successful result and, for `lead_action`, a destination path
+equal to a declared target or beneath a declared directory target by path component. A failed or
+pending call, a textual mention in written content or a shell command, and a textual sibling such as
+`src2/file.ts` for `src` MUST NOT match.
+
+#### Scenario: Lead action remedy
+
+- **WHEN** the checkpoint names `lead_action` and a later `edit` or `write` completes successfully
+  with a destination path equal to or beneath a declared target
+- **THEN** the gate passes
+
+#### Scenario: Wrong target
+
+- **WHEN** the checkpoint names `lead_action` with a declared target and the later calls touch only
+  other paths
+- **THEN** the gate does not pass
+
+#### Scenario: Sibling prefix does not pass
+
+- **WHEN** the declared target is `src` and the destination is `src2/file.ts`
+- **THEN** the gate does not pass
+
+#### Scenario: Failed write does not pass
+
+- **WHEN** the matching `edit` or `write` returns an error result
+- **THEN** the gate does not pass
+
+#### Scenario: Pending write does not pass
+
+- **WHEN** the matching `edit` or `write` has no completed result before the close
+- **THEN** the gate does not pass
+
+#### Scenario: Content mention does not pass
+
+- **WHEN** a write's destination is another path and its content only mentions a declared target
+- **THEN** the gate does not pass
+
+#### Scenario: Shell mention does not pass
+
+- **WHEN** a shell command only contains a declared target in its text
+- **THEN** the gate does not pass
+
+### Requirement: Bottleneck age
+
+The plugin SHALL read the previous checkpoint record of the same session and count consecutive
+checkpoints whose bottleneck names the same owner and the same set of blocking lane ids. At
+`bottleneckAge` such checkpoints (default 2) it MUST refuse the close until the owner changes, a
+blocking lane changes state, or a `user_decision` question was asked. It MUST NOT count a record
+from another session or one without a bottleneck.
+
+#### Scenario: Age reached
+
+- **WHEN** the second consecutive checkpoint names the same owner and blocking lanes, and no escape
+  applies
+- **THEN** the close is refused and the steer requires a route change
+
+#### Scenario: Owner change
+
+- **WHEN** the new checkpoint moves the bottleneck to a different owner
+- **THEN** the age count resets and the close may pass
+
+#### Scenario: Blocking lane resolved
+
+- **WHEN** a blocking lane moves from `blocked` to `running` or `done`
+- **THEN** that lane no longer counts as blocking and the age count resets
+
+#### Scenario: User decision escape
+
+- **WHEN** the aged checkpoint records `user_decision` and the question was asked
+- **THEN** the close may pass and the decision stays in the record
+
+#### Scenario: Legacy record
+
+- **WHEN** the previous record predates the bottleneck object
+- **THEN** no age is computed and the record is not an error
+
+#### Scenario: Other session
+
+- **WHEN** another session recorded a checkpoint with the same owner and blocking lanes
+- **THEN** it does not count toward this session's age

@@ -394,3 +394,24 @@ on `main` passed. The published index returns HTTP 200, lists all 18 setup and p
 code through the linked setup bundle; installing the published 0.21.0 from the market (or re-running
 the installer from an external PowerShell with the app closed) is what makes the tagged build the
 installed one, and it is also the first live check of the question gate and the Process panel.
+
+The `2026-11-02-add-plan-bottleneck-checkpoints` change was implemented in one session by three
+lanes (goal-continuity in the lead, the always-on working contract, and observability) and archived
+after ten task-review rounds; the archived tasks record 20/20 and every checked task carries a
+portable task-review PASS. `openspec archive` synced the deltas into `work-checkpoints` (+4
+requirements, 6 modified), `session-guidance` (3 modified) and `observability` (+1, 1 modified).
+The checkpoint tool is now v2: a lane plan with owners, scopes, states and blocking ids, a bottleneck
+with an executable remedy, a parallel obligation computed from the plan, a bottleneck-age refusal
+with a route-change escape, stalled-lane evidence in the request, and a session-wide record revision
+that a failed write cannot fake. The `work_checkpoint` schema break rejects `parallel`,
+`serialReason`, `remaining` and `speedup` with the replacement named; local v1 records stay
+readable. The observability row now derives parallel share, blocked-lane rate, remedy resolution and
+dispatch per checkpoint, and exposes `parallel-share` and `remedy-resolution` in the hypothesis
+catalog. The gate was green before archiving: `pnpm test` (1600 tests), `pnpm build` with no
+diff, `pnpm gen:check` (324 files), `validate:repo`, `validate:composition`,
+`validate:installer`, and the change's `openspec validate --strict`. Each review round's P1
+findings (path normalization across dot segments, the UNC share and drive roots, redaction versus
+match identity, the age rule over owner, blocking set and lane state, failed-write persistence, and
+bounded steer content) were fixed with regression tests before their PASS. `openspec validate --all
+--strict` still reports long-requirement warnings across existing specs, including
+`admin-indicator`; they predate this change and the repository's CI does not run that command.
