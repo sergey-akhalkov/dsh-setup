@@ -315,6 +315,14 @@ describe('executed bottleneck remedy', () => {
     for (const id of lanes) expect(text).toContain(id)
   })
 
+  it('does not let a parent segment cross the UNC share boundary', async () => {
+    const harness = await create()
+    await checkpointed(harness, 'lead_action', ['//server/other'])
+    call(harness, 'write', { file_path: '//server/share/../other/file.ts', content: 'x' })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+  })
+
   it('resolves dot segments before matching a target', async () => {
     const harness = await create()
     await checkpointed(harness, 'lead_action', ['src'])

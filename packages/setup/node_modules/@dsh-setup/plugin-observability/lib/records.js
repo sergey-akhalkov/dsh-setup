@@ -184,14 +184,16 @@ const FALLBACK_WORKSPACE = '/workspace';
 function normalizedPath(value) {
     const unified = value.trim().replace(/\\/g, '/');
     const rooted = unified.startsWith('/') || /^[A-Za-z]:/u.test(unified);
-    // A leading // is a network share on Windows, never the local drive root.
+    // A leading // is a network share on Windows, never the local drive root; its
+    // server and share components are a boundary no parent segment can cross.
     const unc = unified.startsWith('//');
+    const protectedPrefix = unc ? 2 : 0;
     const parts = [];
     for (const part of unified.split('/')) {
         if (part === '' || part === '.')
             continue;
         if (part === '..') {
-            if (parts.length > 0 && parts[parts.length - 1] !== '..')
+            if (parts.length > protectedPrefix && parts[parts.length - 1] !== '..')
                 parts.pop();
             else if (!rooted)
                 parts.push('..');

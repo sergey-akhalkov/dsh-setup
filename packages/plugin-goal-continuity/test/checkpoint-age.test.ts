@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
 import { noticeText } from './harness.js'
@@ -168,6 +168,23 @@ describe('bottleneck age', () => {
     await harness.turnStopping(2)
     expect(harness.steers).toHaveLength(1)
     expect(noticeText(harness.steers[0] as never)).toContain('persisted for 2 checkpoints')
+  })
+
+  it('does not enforce an older record when the current write fails', async () => {
+    const harness = await create()
+    harness.turnStart(1)
+    await harness.checkpoint(plan())
+    harness.turnStart(2)
+    await harness.checkpoint(plan())
+    expect((await harness.readRecord(2)).bottleneckAge).toBe(2)
+    harness.turnStart(3)
+    // A directory at the record path makes the write fail while older records read.
+    await mkdir(harness.recordPath(3))
+    const written = await harness.checkpoint(plan({ owner: 'lane-docs' }))
+    expect(written.text).toContain('could not write')
+    remedy(harness)
+    await harness.turnStopping(3)
+    expect(harness.steers).toHaveLength(0)
   })
 
   it('does not enforce the age on an expired done checkpoint', async () => {
