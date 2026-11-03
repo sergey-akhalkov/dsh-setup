@@ -5,6 +5,8 @@ export declare const EXPORT_GIT_IDENTITY: Readonly<{
 }>;
 /** Ignored scratch and journal paths, written only when the file is absent. */
 export declare const EXPORT_GITIGNORE: string;
+/** Largest blob a push may carry: GitHub and the other documented remotes reject more. */
+export declare const MAX_PUSHABLE_BLOB_BYTES: number;
 /** Write (or reuse) the failing askpass helper inside the repository. */
 export declare function prepareAskpass(dir: string): string;
 export interface GitRunOptions {
@@ -14,6 +16,8 @@ export interface GitRunOptions {
     allowFailure?: boolean;
     /** Failing askpass program; set for every command that may authenticate. */
     askpass?: string;
+    /** Bytes written to the child's stdin; used by plumbing that reads object ids. */
+    input?: string;
 }
 export interface GitRunResult {
     code: number;
@@ -22,6 +26,20 @@ export interface GitRunResult {
 }
 /** Diagnostics for one command, for callers that expect a failure. */
 export declare function gitOutput(args: string[], options: GitRunOptions): Promise<GitRunResult>;
+/** Loose objects that trigger a repack: enough to stay bounded, rare enough to be cheap. */
+export declare const LOOSE_OBJECT_LIMIT = 500;
+export interface PackOptions {
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+    /** Overridable threshold; defaults to {@link LOOSE_OBJECT_LIMIT}. */
+    looseLimit?: number;
+}
+/**
+ * Pack the loose objects a snapshot leaves behind. Below the threshold this is
+ * one `git count-objects` call; a failure is swallowed because housekeeping must
+ * never fail an export, and the next cycle runs it again.
+ */
+export declare function packLooseObjects(dir: string, options?: PackOptions): Promise<void>;
 export interface GitBootstrapOptions {
     dir: string;
     /** Private remote; its absence keeps the repository local. */
@@ -60,6 +78,8 @@ export declare function hasUnpushedCommits(dir: string): Promise<boolean>;
 export interface PushOptions {
     timeoutMs?: number;
     env?: NodeJS.ProcessEnv;
+    /** Blob size a push accepts; defaults to {@link MAX_PUSHABLE_BLOB_BYTES}. */
+    maxBlobBytes?: number;
 }
 export interface PushResult {
     pushed: boolean;

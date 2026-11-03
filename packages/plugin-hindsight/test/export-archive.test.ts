@@ -40,6 +40,8 @@ function archiveFor(bankId: string) {
     ['documents/000000.json', encoder.encode('{"id":"doc-1"}')],
     ['observations.json', encoder.encode('[]')],
     ['knowledge_pages.json', encoder.encode('[]')],
+    ['mental_model_history.json', encoder.encode('[]')],
+    ['data/async_operations.json', encoder.encode('[]')],
     ['history/audit_log.json', encoder.encode('[]')],
     ['attachments.json', encoder.encode('[]')],
     ['blobs/000001.bin', new Uint8Array([1, 2, 3])],
@@ -107,6 +109,8 @@ describe('per-bank metadata', () => {
   it('omits history and attachments unless enabled', () => {
     const off = applyArchiveScope(archiveFor('b'), DEFAULT_SCOPE)
     expect(off.has('history/audit_log.json')).toBe(false)
+    expect(off.has('mental_model_history.json')).toBe(false)
+    expect(off.has('data/async_operations.json')).toBe(false)
     expect(off.has('attachments.json')).toBe(false)
     expect(off.has('blobs/000001.bin')).toBe(false)
     expect(off.has('documents/000000.json')).toBe(true)
@@ -116,8 +120,36 @@ describe('per-bank metadata', () => {
       includeAttachments: true,
     })
     expect(on.has('history/audit_log.json')).toBe(true)
+    expect(on.has('mental_model_history.json')).toBe(true)
+    expect(on.has('data/async_operations.json')).toBe(true)
     expect(on.has('attachments.json')).toBe(true)
     expect(on.has('blobs/000001.bin')).toBe(true)
+  })
+
+  it('records history for each operational section on its own', () => {
+    const manifests = new Map<string, Uint8Array>([
+      ['manifest.json', manifestFor('coding-agent::repo')],
+      ['documents/000000.json', encoder.encode('{"id":"doc-1"}')],
+    ])
+    for (const path of ['mental_model_history.json', 'data/async_operations.json']) {
+      const { metadata } = buildBankFiles({
+        bankId: 'coding-agent::repo',
+        operationId: 'op-1',
+        exportedAt: '2026-10-29T12:00:00.000Z',
+        entries: new Map([...manifests, [path, encoder.encode('[]')]]),
+        scope: { includeHistory: true, includeAttachments: false },
+      })
+      expect(metadata.includes_history).toBe(true)
+    }
+
+    const plain = buildBankFiles({
+      bankId: 'coding-agent::repo',
+      operationId: 'op-1',
+      exportedAt: '2026-10-29T12:00:00.000Z',
+      entries: manifests,
+      scope: { includeHistory: true, includeAttachments: false },
+    })
+    expect(plain.metadata.includes_history).toBe(false)
   })
 
   it('rejects an archive that is not a whole-bank export of the requested bank', () => {

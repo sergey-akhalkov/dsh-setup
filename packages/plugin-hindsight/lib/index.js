@@ -11,7 +11,7 @@ export { TransferClient } from './export-client.js';
 export { DEFAULT_EXPORT_CONFIG, EXPORT_CONFIG_FILE, isForbiddenExportDir, machineExportConfigPath, readMachineExportConfig, resolveExportConfig, } from './export-config.js';
 export { runExportCycle } from './export-cycle.js';
 export { ExportError, messageOf } from './export-errors.js';
-export { bootstrapRepository, commitSnapshot, currentBranch, EXPORT_GIT_IDENTITY, EXPORT_GITIGNORE, gitOutput, hasCommits, hasUnpushedCommits, pushSnapshot, } from './export-git.js';
+export { bootstrapRepository, commitSnapshot, currentBranch, EXPORT_GIT_IDENTITY, EXPORT_GITIGNORE, gitOutput, hasCommits, hasUnpushedCommits, LOOSE_OBJECT_LIMIT, MAX_PUSHABLE_BLOB_BYTES, packLooseObjects, pushSnapshot, } from './export-git.js';
 export { createExportScheduler } from './export-scheduler.js';
 export { acquireSnapshotLock, DEFAULT_LOCK_STALE_MS, LOCK_FILE, normalizedContentHash, PENDING_FILE, recoverPendingSnapshot, STAGING_DIR, writeSnapshot, } from './export-snapshot.js';
 export { packArchive, unpackArchive } from './export-zip.js';

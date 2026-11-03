@@ -1,7 +1,7 @@
 import { TransferClient } from './export-client.js';
 import { isForbiddenExportDir } from './export-config.js';
 import { ExportError, messageOf } from './export-errors.js';
-import { bootstrapRepository, commitSnapshot, hasUnpushedCommits, pushSnapshot, } from './export-git.js';
+import { bootstrapRepository, commitSnapshot, hasUnpushedCommits, packLooseObjects, pushSnapshot, } from './export-git.js';
 import { acquireSnapshotLock, writeSnapshot } from './export-snapshot.js';
 import { unpackArchive } from './export-zip.js';
 const IDLE = {
@@ -157,7 +157,14 @@ export async function runExportCycle(options) {
         return { ...IDLE, outcome: 'failed', reason };
     }
     finally {
-        lock?.release();
+        if (lock !== undefined) {
+            // Every cycle that holds the lock packs, including failed and empty ones.
+            await packLooseObjects(config.dir, {
+                timeoutMs: options.git?.timeoutMs,
+                env: options.git?.env,
+            });
+            lock.release();
+        }
     }
 }
 async function snapshotAndPublish(options, banks, now) {

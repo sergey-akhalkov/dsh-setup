@@ -26,6 +26,8 @@ const HEADLESS_GIT_ENV = {
 };
 /** A non-interactive askpass program that always fails; credentials come from helpers. */
 const ASKPASS_SCRIPT = process.platform === 'win32' ? '@exit /b 1\r\n' : '#!/bin/sh\nexit 1\n';
+/** Largest blob a push may carry: GitHub and the other documented remotes reject more. */
+export const MAX_PUSHABLE_BLOB_BYTES = 100 * 1024 * 1024;
 /** Write (or reuse) the failing askpass helper inside the repository. */
 export function prepareAskpass(dir) {
     mkdirSync(dir, { recursive: true });
@@ -61,7 +63,13 @@ function runGit(args, options) {
         });
     }
     return new Promise((resolve, reject) => {
-        const child = spawn('git', args, { cwd: options.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+        const child = spawn('git', args, {
+            cwd: options.cwd,
+            env,
+            stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        });
+        if (options.input !== undefined)
+            child.stdin?.end(options.input);
         let stdout = '';
         let stderr = '';
         const timer = setTimeout(() => {
@@ -93,6 +101,26 @@ function runGit(args, options) {
 /** Diagnostics for one command, for callers that expect a failure. */
 export async function gitOutput(args, options) {
     return runGit(args, options);
+}
+/** Loose objects that trigger a repack: enough to stay bounded, rare enough to be cheap. */
+export const LOOSE_OBJECT_LIMIT = 500;
+/**
+ * Pack the loose objects a snapshot leaves behind. Below the threshold this is
+ * one `git count-objects` call; a failure is swallowed because housekeeping must
+ * never fail an export, and the next cycle runs it again.
+ */
+export async function packLooseObjects(dir, options = {}) {
+    const run = { cwd: dir, timeoutMs: options.timeoutMs, env: options.env };
+    try {
+        const counted = await runGit(['count-objects', '-v'], { ...run, allowFailure: true });
+        const loose = Number(/^count:\s*(\d+)/mu.exec(counted.stdout)?.[1] ?? '0');
+        if (loose <= (options.looseLimit ?? LOOSE_OBJECT_LIMIT))
+            return;
+        await runGit(['repack', '-d', '-q'], { ...run, allowFailure: true });
+    }
+    catch {
+        // Best effort: an unreadable count or a timed-out repack is retried next cycle.
+    }
 }
 async function originUrl(options) {
     const result = await runGit(['remote', 'get-url', 'origin'], { ...options, allowFailure: true });
@@ -210,6 +238,52 @@ function firstLine(text) {
         ?.trim() ?? 'unknown error');
 }
 /**
+ * Whether the range a push would send carries a blob over `limit`. The range,
+ * not only the current snapshot, is checked: a file a later snapshot drops
+ * still makes every push fail, and retrying that every cycle is the loop this
+ * guard ends. An inspection that cannot complete fails closed, because pushing
+ * blind would rebuild the pack the guard exists to avoid.
+ */
+async function inspectPushRange(branch, run, limit) {
+    const tracking = await runGit(['rev-parse', '--verify', `origin/${branch}`], {
+        ...run,
+        allowFailure: true,
+    });
+    const range = tracking.code === 0 ? `origin/${branch}..HEAD` : 'HEAD';
+    const listed = await runGit(['rev-list', '--objects', range], { ...run, allowFailure: true });
+    if (listed.code !== 0) {
+        return { safe: false, reason: `cannot inspect the push range (${firstLine(listed.stderr)})` };
+    }
+    const paths = new Map();
+    const ids = [];
+    for (const line of listed.stdout.split('\n')) {
+        const [id, ...path] = line.split(' ');
+        if (id === undefined || id === '')
+            continue;
+        ids.push(id);
+        if (path.length > 0)
+            paths.set(id, path.join(' '));
+    }
+    if (ids.length === 0)
+        return { safe: true };
+    const sizes = await runGit(['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], { ...run, input: `${ids.join('\n')}\n`, allowFailure: true });
+    if (sizes.code !== 0) {
+        return { safe: false, reason: `cannot read the push object sizes (${firstLine(sizes.stderr)})` };
+    }
+    for (const line of sizes.stdout.split('\n')) {
+        const [id, type, size] = line.split(' ');
+        if (type !== 'blob' || size === undefined)
+            continue;
+        if (Number(size) > limit) {
+            return {
+                safe: false,
+                reason: `snapshot carries ${paths.get(id ?? '') ?? id} (${Number(size)} bytes), over the remote blob limit`,
+            };
+        }
+    }
+    return { safe: true };
+}
+/**
  * Push the current branch without force. A diverged remote is reconciled with a
  * fetch and rebase (this runs under the single-writer lock); anything else keeps
  * the local commit and reports, and the next cycle tries again.
@@ -234,6 +308,13 @@ export async function pushSnapshot(dir, options = {}) {
     if (!(await hasCommits(dir)))
         return { pushed: false, reason: 'nothing committed yet' };
     const branch = await currentBranch(dir);
+    const limit = options.maxBlobBytes ?? MAX_PUSHABLE_BLOB_BYTES;
+    const beforePush = await inspectPushRange(branch, run, limit);
+    if (!beforePush.safe) {
+        // A push with this range can never succeed; report once per cycle instead of
+        // rebuilding a multi-gigabyte pack every five minutes.
+        return { pushed: false, reason: beforePush.reason };
+    }
     const push = await runGit(['push', '--porcelain', 'origin', 'HEAD'], {
         ...run,
         allowFailure: true,
@@ -252,6 +333,11 @@ export async function pushSnapshot(dir, options = {}) {
                 await runGit(['rebase', '--abort'], { ...run, allowFailure: true });
                 return { pushed: false, reason: `remote diverged: ${firstLine(rebase.stderr)}` };
             }
+            // The rebase rewrote our commits, and a rebase can merge two fitting files
+            // into one oversized blob: check the range that will now go out.
+            const afterRebase = await inspectPushRange(await currentBranch(dir), run, limit);
+            if (!afterRebase.safe)
+                return { pushed: false, reason: afterRebase.reason };
             const retry = await runGit(['push', '--porcelain', 'origin', 'HEAD'], {
                 ...run,
                 allowFailure: true,

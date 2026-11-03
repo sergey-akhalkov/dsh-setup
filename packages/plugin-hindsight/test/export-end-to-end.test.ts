@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { bankFolderName, createExportScheduler, type ResolvedExportConfig } from '../lib/index.js'
 import { type FakeHindsight, fakeArchive, startFakeHindsight } from './fake-hindsight.js'
+import { looseObjectCount, seedLooseBacklog } from './loose-backlog.js'
 
 /**
  * End to end over the real snapshot writer, Git repository, and a fake
@@ -174,6 +175,72 @@ describe('export end to end', () => {
       expect(git(config.dir, ['status', '--porcelain'])).toBe('')
       // No push for an unchanged cycle.
       expect(counter.pushes()).toBe(2)
+    } finally {
+      await scheduler.dispose()
+    }
+  })
+
+  it('packs a loose-object backlog on an unchanged cycle', async () => {
+    const root = tempDir()
+    const server = await fake()
+    const remote = bareRemote(root)
+    const config = exportConfig({ dir: join(root, 'repo'), remote })
+    repositoryWithPushCounter(config.dir, remote, join(root, 'pushes.log'))
+    const scheduler = createExportScheduler({
+      config,
+      apiUrl: server.url,
+      client: FAST_CLIENT,
+    })
+    try {
+      await scheduler.run('interval')
+      const head = git(config.dir, ['rev-parse', 'HEAD'])
+      seedLooseBacklog(config.dir, root, 520)
+      expect(looseObjectCount(config.dir)).toBeGreaterThan(500)
+
+      const unchanged = await scheduler.run('interval')
+
+      expect(unchanged).toMatchObject({ outcome: 'unchanged', committed: false })
+      expect(git(config.dir, ['rev-parse', 'HEAD'])).toBe(head)
+      expect(looseObjectCount(config.dir)).toBe(0)
+    } finally {
+      await scheduler.dispose()
+    }
+  })
+
+  it('packs a loose-object backlog on a cycle that exports no banks', async () => {
+    const root = tempDir()
+    const server = await startFakeHindsight({ banks: [] })
+    servers.push(server)
+    const remote = bareRemote(root)
+    const config = exportConfig({ dir: join(root, 'repo') })
+    repositoryWithPushCounter(config.dir, remote, join(root, 'pushes.log'))
+    seedLooseBacklog(config.dir, root, 520)
+    const scheduler = createExportScheduler({ config, apiUrl: server.url, client: FAST_CLIENT })
+    try {
+      const result = await scheduler.run('interval')
+
+      expect(result).toMatchObject({ outcome: 'unchanged', changed: false })
+      expect(looseObjectCount(config.dir)).toBe(0)
+    } finally {
+      await scheduler.dispose()
+    }
+  })
+
+  it('packs a loose-object backlog on a cycle that fails before exporting', async () => {
+    const root = tempDir()
+    const config = exportConfig({ dir: join(root, 'repo') })
+    repositoryWithPushCounter(config.dir, bareRemote(root), join(root, 'pushes.log'))
+    seedLooseBacklog(config.dir, root, 520)
+    const scheduler = createExportScheduler({
+      config,
+      apiUrl: 'http://127.0.0.1:1',
+      client: FAST_CLIENT,
+    })
+    try {
+      const result = await scheduler.run('interval')
+
+      expect(result).toMatchObject({ outcome: 'failed' })
+      expect(looseObjectCount(config.dir)).toBe(0)
     } finally {
       await scheduler.dispose()
     }

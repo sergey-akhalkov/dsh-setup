@@ -10,7 +10,9 @@ import {
   EXPORT_GIT_IDENTITY,
   ExportError,
   hasCommits,
+  packLooseObjects,
 } from '../lib/index.js'
+import { looseObjectCount, seedLooseBacklog } from './loose-backlog.js'
 
 const tempDirs: string[] = []
 
@@ -142,5 +144,28 @@ describe('export repository bootstrap', () => {
     const expected = `${EXPORT_GIT_IDENTITY.name} <${EXPORT_GIT_IDENTITY.email}>`
     expect(git(dir, ['log', '-1', '--format=%an <%ae>'])).toBe(expected)
     expect(git(dir, ['log', '-1', '--format=%cn <%ce>'])).toBe(expected)
+  })
+})
+
+describe('loose object packing', () => {
+  it('packs a reachable loose-object backlog', async () => {
+    const dir = join(tempDir(), 'repo')
+    await bootstrapRepository({ dir })
+    seedLooseBacklog(dir, tempDir(), 3)
+    expect(looseObjectCount(dir)).toBe(5)
+
+    await packLooseObjects(dir, { looseLimit: 0 })
+
+    expect(looseObjectCount(dir)).toBe(0)
+  })
+
+  it('leaves a repository below the threshold loose', async () => {
+    const dir = join(tempDir(), 'repo')
+    await bootstrapRepository({ dir })
+    seedLooseBacklog(dir, tempDir(), 2)
+
+    await packLooseObjects(dir)
+
+    expect(looseObjectCount(dir)).toBeGreaterThan(0)
   })
 })

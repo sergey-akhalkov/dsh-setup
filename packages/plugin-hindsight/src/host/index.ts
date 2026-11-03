@@ -59,6 +59,7 @@ export type {
   GitBootstrapResult,
   GitRunOptions,
   GitRunResult,
+  PackOptions,
   PushOptions,
   PushResult,
 } from './export-git.js'
@@ -71,6 +72,9 @@ export {
   gitOutput,
   hasCommits,
   hasUnpushedCommits,
+  LOOSE_OBJECT_LIMIT,
+  MAX_PUSHABLE_BLOB_BYTES,
+  packLooseObjects,
   pushSnapshot,
 } from './export-git.js'
 export type { ExportScheduler, SchedulerOptions } from './export-scheduler.js'

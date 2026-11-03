@@ -1,5 +1,13 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -141,6 +149,87 @@ describe('automatic push', () => {
     expect(git(bare, ['rev-parse', 'HEAD'])).toBe(localHead)
     // The inherited askpass program never ran: no prompt was ever attempted.
     expect(existsSync(recorder.log)).toBe(false)
+  })
+
+  it('skips a push whose objects carry a blob over the limit', async () => {
+    const root = tempDir()
+    const { bare } = seedBare(root)
+    const dir = join(root, 'repo')
+    await bootstrapRepository({ dir, remote: bare })
+    const remoteHead = git(bare, ['rev-parse', 'HEAD'])
+    writeFileSync(join(dir, 'big.bin'), Buffer.alloc(2048, 7))
+    expect((await commitSnapshot(dir, { message: 'big snapshot' })).committed).toBe(true)
+    const localHead = git(dir, ['rev-parse', 'HEAD'])
+
+    const blocked = await pushSnapshot(dir, { maxBlobBytes: 1024, timeoutMs: 20_000 })
+
+    expect(blocked.pushed).toBe(false)
+    expect(blocked.reason).toContain('big.bin')
+    expect(blocked.reason).toContain('blob limit')
+    // The local commit is kept and nothing reached the remote.
+    expect(git(dir, ['rev-parse', 'HEAD'])).toBe(localHead)
+    expect(git(dir, ['status', '--porcelain'])).toBe('')
+    expect(git(bare, ['rev-parse', 'HEAD'])).toBe(remoteHead)
+
+    const pushed = await pushSnapshot(dir, { maxBlobBytes: 4096, timeoutMs: 20_000 })
+    expect(pushed.pushed).toBe(true)
+    expect(git(bare, ['rev-parse', 'HEAD'])).toBe(localHead)
+  })
+
+  it('refuses a push whose range cannot be inspected', async () => {
+    const root = tempDir()
+    const { bare } = seedBare(root)
+    const dir = join(root, 'repo')
+    await bootstrapRepository({ dir, remote: bare })
+    writeFileSync(join(dir, 'snapshot.json'), '{"ok":true}\n')
+    expect((await commitSnapshot(dir, { message: 'local export' })).committed).toBe(true)
+    const localHead = git(dir, ['rev-parse', 'HEAD'])
+    const remoteHead = git(bare, ['rev-parse', 'HEAD'])
+    const emptyObjects = join(root, 'no-objects')
+    mkdirSync(emptyObjects)
+
+    // A broken object store makes `git rev-list` fail after the ref checks pass.
+    const result = await pushSnapshot(dir, {
+      timeoutMs: 20_000,
+      env: { GIT_OBJECT_DIRECTORY: emptyObjects },
+    })
+
+    expect(result.pushed).toBe(false)
+    expect(result.reason).toContain('inspect')
+    expect(git(dir, ['rev-parse', 'HEAD'])).toBe(localHead)
+    expect(git(bare, ['rev-parse', 'HEAD'])).toBe(remoteHead)
+  })
+
+  it('refuses to retry when a rebase merges two fitting files into an oversized one', async () => {
+    const root = tempDir()
+    const { bare } = seedBare(root)
+    const dir = join(root, 'repo')
+    await bootstrapRepository({ dir, remote: bare })
+
+    // Local side appends a block under the limit to the seeded file.
+    const seeded = readFileSync(join(dir, 'README.md'), 'utf8')
+    writeFileSync(join(dir, 'README.md'), `${seeded}${'local '.repeat(100)}\n`)
+    expect((await commitSnapshot(dir, { message: 'local export' })).committed).toBe(true)
+
+    // Another writer prepends a block to the same file, non-conflictingly.
+    const other = join(root, 'other')
+    git(root, ['clone', bare, other])
+    writeFileSync(join(other, 'README.md'), `${'remote '.repeat(100)}\nseed\n`)
+    commitIn(other, 'remote change')
+    git(other, ['push', 'origin', 'HEAD'])
+    const remoteHead = git(bare, ['rev-parse', 'HEAD'])
+
+    // Each side fits under 1 KB; the rebase's merged file does not.
+    const blocked = await pushSnapshot(dir, { maxBlobBytes: 1024, timeoutMs: 20_000 })
+
+    expect(blocked.pushed).toBe(false)
+    expect(blocked.reason).toContain('README.md')
+    expect(blocked.reason).toContain('blob limit')
+    expect(git(bare, ['rev-parse', 'HEAD'])).toBe(remoteHead)
+    // The rebased local change survives: both blocks are in the local snapshot.
+    const merged = git(dir, ['show', 'HEAD:README.md'])
+    expect(merged).toContain('local')
+    expect(merged).toContain('remote')
   })
 
   it('does nothing when no remote is configured', async () => {

@@ -5,6 +5,7 @@ import {
   bootstrapRepository,
   commitSnapshot,
   hasUnpushedCommits,
+  packLooseObjects,
   pushSnapshot,
 } from './export-git.js'
 import { acquireSnapshotLock, type BankSnapshotInput, writeSnapshot } from './export-snapshot.js'
@@ -198,7 +199,14 @@ export async function runExportCycle(options: ExportCycleOptions): Promise<Expor
     report(options, `cycle failed: ${reason}`)
     return { ...IDLE, outcome: 'failed', reason }
   } finally {
-    lock?.release()
+    if (lock !== undefined) {
+      // Every cycle that holds the lock packs, including failed and empty ones.
+      await packLooseObjects(config.dir, {
+        timeoutMs: options.git?.timeoutMs,
+        env: options.git?.env,
+      })
+      lock.release()
+    }
   }
 }
 

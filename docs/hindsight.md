@@ -267,11 +267,13 @@ The layout is one folder per bank plus an index:
     documents/000001.json
     observations.json
     mental_models.json
+    mental_model_history.json  # only with includeHistory
     knowledge_pages.json
     data/<table>.json
-    history/<table>.json      # only with includeHistory
-    attachments.json          # only with includeAttachments
-    blobs/<ordinal>           # only with includeAttachments
+    data/async_operations.json # only with includeHistory
+    history/<table>.json       # only with includeHistory
+    attachments.json           # only with includeAttachments
+    blobs/<ordinal>            # only with includeAttachments
 ```
 
 - `index.json` lists every bank folder, its export time and operation, and the normalized content
@@ -284,9 +286,12 @@ The layout is one folder per bank plus an index:
   consumes exactly what Hindsight produced.
 - Embeddings are never exported. Hindsight recomputes them on import, so a restore costs CPU time
   but no model tokens.
-- History (audit log and LLM request log) and attachments are off by default. Attachments travel
-  with the data section on the wire, so the exporter strips `attachments.json` and `blobs/**`
-  unless `includeAttachments` is on.
+- History and attachments are off by default. `includeHistory` covers the audit log and LLM request
+  log (`history/**`), each mental model's refresh history (`mental_model_history.json`), and the
+  server's operation log (`data/async_operations.json`): the entries that grow with every cycle, so
+  the default snapshot carries the memory itself rather than the logs about it. Attachments travel
+  with the data section on the wire, so the exporter strips `attachments.json` and `blobs/**` unless
+  `includeAttachments` is on.
 
 ### Git behavior
 
@@ -296,15 +301,43 @@ The layout is one folder per bank plus an index:
   identity is never borrowed.
 - A snapshot is committed only when its normalized content changes (key order and array order are
   normalized, `exported_at` is ignored), so an unchanged bank produces no commit and no push.
+- After every cycle the exporter packs loose objects once they exceed 500 (`git count-objects`, then
+  `git repack -d`), changed snapshot or not, so the repository cannot accumulate the unpacked
+  revisions a commit-only policy leaves between manual cleanups.
 - With a remote configured and `autoPush` on, the commit is pushed without force. A failed push
   keeps the local commit and is retried on a later cycle, including cycles where the content did
   not change. A diverged remote is reconciled with fetch and rebase; a conflict stops the push and
-  is reported.
+  is reported. A push whose objects would carry a blob over 100 MB is skipped and reported instead:
+  GitHub rejects such a blob, the local commit stays, and a later cycle pushes once the oversized
+  object is no longer in the unpushed range — retrying it would rebuild a multi-gigabyte pack every
+  cycle. A push whose range cannot be inspected is skipped for the same reason.
 - Git runs headless: `GIT_TERMINAL_PROMPT=0`, Git Credential Manager in non-interactive mode, and a
   failing askpass helper, so no credential dialog can block a cycle. Authentication comes from the
   existing Git credential helper or SSH agent.
 - One writer at a time: a lock file inside the repository serializes cycles across Host processes,
   and an abandoned lock is taken over after fifteen minutes.
+
+### Repository size
+
+The snapshot is bounded by the memory itself: documents, facts, observations, mental models,
+knowledge pages, directives, webhooks, and bank configuration. The exporter does not truncate
+memory, only the logs about it, and every cycle packs what it wrote.
+
+A repository written by an earlier version that still carried the per-model refresh history can be
+reclaimed once. Stop every exporter that targets the repository first — close Harness and let any
+in-flight or shutdown export finish — because `git gc --prune=now` deletes objects an export in
+progress has written but not yet committed. Then run, with no export running:
+
+```powershell
+git -C "<export dir>" gc --prune=now
+git -C "<export dir>" count-objects -vH
+```
+
+Start Harness again afterwards; the next cycle exports the current memory and packs as usual.
+
+If an oversized snapshot did reach the remote, only a rewritten history removes those blobs: they
+stay in every clone and on the hosting side. The export is a backup of the current memory, not an
+audit archive, so replacing the remote branch with the current snapshot is a legitimate way back.
 
 ### Server-side archive
 
@@ -365,16 +398,16 @@ exporter rebuilds the archive from memory on its next cycle):
 
 ### Configuration
 
-| Key                  | Default | Meaning                                                           |
-| -------------------- | ------- | ----------------------------------------------------------------- |
-| `enabled`            | `true`  | Export at all; `false` stops every write and Git command.         |
-| `dir`                | -       | Target directory; machine-local file and profile patch only.      |
-| `intervalMinutes`    | `5`     | Minutes between automatic cycles.                                 |
-| `autoCommit`         | `true`  | Commit a changed snapshot.                                        |
-| `autoPush`           | `true`  | Push after a commit when a remote is configured.                  |
-| `includeHistory`     | `false` | Also carry the audit log and LLM request log.                     |
-| `includeAttachments` | `false` | Also carry attachment rows and bytes.                             |
-| `importOnEmpty`      | `false` | Log a restore hint when the server lists no banks; never imports. |
+| Key                  | Default | Meaning                                                                                              |
+| -------------------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `enabled`            | `true`  | Export at all; `false` stops every write and Git command.                                            |
+| `dir`                | -       | Target directory; machine-local file and profile patch only.                                         |
+| `intervalMinutes`    | `5`     | Minutes between automatic cycles.                                                                    |
+| `autoCommit`         | `true`  | Commit a changed snapshot.                                                                           |
+| `autoPush`           | `true`  | Push after a commit when a remote is configured.                                                     |
+| `includeHistory`     | `false` | Also carry the audit log, the LLM request log, the per-model refresh history, and the operation log. |
+| `includeAttachments` | `false` | Also carry attachment rows and bytes.                                                                |
+| `importOnEmpty`      | `false` | Log a restore hint when the server lists no banks; never imports.                                    |
 
 The row configuration is a complete object, so a profile override restates every key it keeps:
 
@@ -505,7 +538,8 @@ commands.
 - History and attachments are restored only if they were exported and requested.
 - The daemon must be reachable, or `hindsight-admin` must be installed for the offline path.
 - A failed push delays the remote copy; the local repository still has the snapshot.
-- A very large bank makes a large repository; move the target or prune its history if needed.
+- A very large bank still makes a large snapshot; the exporter bounds the logs, not the memory
+  itself.
 
 ## Autostart
 

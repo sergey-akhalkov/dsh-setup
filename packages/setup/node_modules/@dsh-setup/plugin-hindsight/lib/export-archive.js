@@ -57,8 +57,15 @@ export function unsanitizeBankId(encoded) {
 export function bankFolderName(bankId) {
     return `${sanitizeBankId(bankId)}-${sha256Text(bankId).slice(0, 8)}`;
 }
+/** Archive entries that carry operational history rather than memory content. */
+const OPERATIONAL_HISTORY_FILES = new Set([
+    'mental_model_history.json',
+    'data/async_operations.json',
+]);
 function scopedPath(path, scope) {
     if (!scope.includeHistory && (path === 'history' || path.startsWith('history/')))
+        return false;
+    if (!scope.includeHistory && OPERATIONAL_HISTORY_FILES.has(path))
         return false;
     if (!scope.includeAttachments &&
         (path === 'attachments.json' || path === 'blobs' || path.startsWith('blobs/'))) {
@@ -144,7 +151,9 @@ export function buildBankFiles(options) {
             webhooks: count(manifest, 'webhook_count'),
             attachments: count(manifest, 'attachment_count'),
         },
-        includes_history: hasSection(files, 'history/'),
+        includes_history: hasSection(files, 'history/') ||
+            files.has('mental_model_history.json') ||
+            files.has('data/async_operations.json'),
         includes_attachments: files.has('attachments.json'),
         checksums,
     };
