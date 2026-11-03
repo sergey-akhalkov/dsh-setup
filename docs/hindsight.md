@@ -306,6 +306,63 @@ The layout is one folder per bank plus an index:
 - One writer at a time: a lock file inside the repository serializes cycles across Host processes,
   and an abandoned lock is taken over after fifteen minutes.
 
+### Server-side archive
+
+The transfer archive the exporter downloads is not the durable copy. The server stores it under
+`file_storage` as `banks/<bank>/exports/<operation>/transfer.zip`, and the completed `export_bank`
+operation row is its only handle. The exporter deletes that operation as soon as the bytes are in
+hand, before unpacking, committing, or pushing, so a malformed archive or a failed commit and push
+cannot leave it behind.
+
+- Cleanup needs the pinned server. Hindsight 1.1.0's
+  `DELETE /v1/default/banks/<bank>/operations/<id>/delete` removes the operation row and then the
+  archive's manifest and chunk rows. A server that answers 404 or 405 for the operation routes is
+  reported once as `hindsight export: archive cleanup unavailable: ...`, and export continues.
+- A failed delete is logged as `hindsight export: archive cleanup for bank "<id>" failed: ...`,
+  never fails a cycle, and is retried by the next one.
+- Each cycle also sweeps completed `export_bank` operations that finished more than an hour ago, at
+  most one page of 100 per bank, so the backlog left by earlier versions or by a crash between
+  download and delete drains without a burst of requests. The grace period leaves an export that
+  another Host process, or a manual export from the control plane, is still downloading untouched.
+- Operation retention does not replace this. Retention prunes operation rows, and 1.1.0 also deletes
+  the archives of rows it still holds, but no retention setting can find an archive whose operation
+  row is already gone.
+
+To check the server payload, run this against the daemon's database. The instance file supplies the
+connection values, so no machine-specific path or credential is stored here:
+
+```powershell
+$pg0 = Get-Content "$env:USERPROFILE\.pg0\instances\hindsight-embed-default\instance.json" | ConvertFrom-Json
+$env:PGPASSWORD = $pg0.password
+$psql = Get-ChildItem (Join-Path $pg0.installation_dir '*\bin\psql.exe') |
+  Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+& $psql -w -h 127.0.0.1 -p $pg0.port -U $pg0.username -d $pg0.database -c @"
+SELECT count(*) AS archive_rows,
+       pg_size_pretty(coalesce(sum(octet_length(data)), 0)) AS archive_bytes
+FROM file_storage
+WHERE storage_key LIKE 'banks/%/exports/%';
+SELECT pg_size_pretty(pg_total_relation_size('file_storage')) AS relation_size;
+"@
+```
+
+`archive_rows` should stop growing and return to the exports still in flight. `relation_size` does
+not drop when rows are deleted: autovacuum reuses the space, and the operating system gets it back
+only after a rewrite.
+
+The server deletes the operation row before it reclaims the archive, and swallows a storage failure,
+so an acknowledged delete can leave a blob no row names. Neither the exporter nor retention can find
+that one again. Look for the server's `Failed to delete export archive <storage_key>` warning in
+`%USERPROFILE%\.hindsight\daemon.log`, and use the count above to see what it left. To drop every
+stored export archive and return the disk space, run these while no export is in flight (the
+exporter rebuilds the archive from memory on its next cycle):
+
+```powershell
+& $psql -w -h 127.0.0.1 -p $pg0.port -U $pg0.username -d $pg0.database -c "DELETE FROM file_storage WHERE storage_key LIKE 'banks/%/exports/%';"
+& $psql -w -h 127.0.0.1 -p $pg0.port -U $pg0.username -d $pg0.database -c "VACUUM (FULL) file_storage;"
+```
+
+`VACUUM (FULL)` rewrites the table, so it needs free disk space about the size of `file_storage`.
+
 ### Configuration
 
 | Key                  | Default | Meaning                                                           |

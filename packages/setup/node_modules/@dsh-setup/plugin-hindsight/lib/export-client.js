@@ -166,4 +166,54 @@ export class TransferClient {
             throw await this.#failure(response, `archive download for bank "${bankId}"`, 'http');
         return new Uint8Array(await response.arrayBuffer());
     }
+    /**
+     * Delete one terminal operation. The server treats the row as the archive's
+     * only handle, so this is what drops the stored transfer ZIP. A 404 that names
+     * the operation is an operation already gone and counts as deleted; the
+     * framework's bare 404 means the route itself is missing.
+     */
+    async deleteOperation(bankId, operationId) {
+        const path = `/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(operationId)}/delete`;
+        const response = await this.#send(path, { method: 'DELETE' });
+        if (response.status === 404) {
+            const detail = await detailOf(response);
+            if (detail === 'Not Found') {
+                throw new ExportError('cleanup-unavailable', `Hindsight at ${this.#apiUrl} does not offer operation deletion`);
+            }
+            return;
+        }
+        if (response.ok)
+            return;
+        if (response.status === 405) {
+            throw new ExportError('cleanup-unavailable', `Hindsight at ${this.#apiUrl} does not offer operation deletion`);
+        }
+        throw await this.#failure(response, `delete of operation ${operationId}`, 'http');
+    }
+    /** One page of completed whole-bank export operations, newest first. */
+    async listCompletedExportOperations(bankId, page = {}) {
+        const query = new URLSearchParams({
+            type: 'export_bank',
+            status: 'completed',
+            limit: String(page.limit ?? 100),
+            offset: String(page.offset ?? 0),
+        });
+        const path = `/v1/default/banks/${encodeURIComponent(bankId)}/operations?${query.toString()}`;
+        const response = await this.#send(path);
+        if (response.status === 404 || response.status === 405) {
+            throw new ExportError('cleanup-unavailable', `Hindsight at ${this.#apiUrl} does not offer operation listing`);
+        }
+        if (!response.ok) {
+            throw await this.#failure(response, `operation list for bank "${bankId}"`, 'http');
+        }
+        const document = await this.#json(response, 'operation list');
+        const listed = Array.isArray(document.operations) ? document.operations : [];
+        return listed.flatMap((entry) => {
+            if (!isRecord(entry) || typeof entry.id !== 'string')
+                return [];
+            const completedAt = entry.updated_at ?? entry.created_at;
+            return typeof completedAt === 'string'
+                ? [{ id: entry.id, completedAt: new Date(completedAt) }]
+                : [];
+        });
+    }
 }

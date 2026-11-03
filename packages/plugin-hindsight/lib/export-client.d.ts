@@ -6,6 +6,12 @@ export interface BankTransferResult {
     metadata: OperationMetadata;
     zip: Uint8Array;
 }
+/** One completed whole-bank export, as the stale-archive sweep sees it. */
+export interface CompletedExportOperation {
+    id: string;
+    /** Completion time: `updated_at`, falling back to `created_at`. */
+    completedAt: Date;
+}
 /** Connection and polling knobs; production defaults keep one cycle short. */
 export interface TransferClientOptions {
     apiUrl: string;
@@ -30,4 +36,16 @@ export declare class TransferClient {
     exportBank(bankId: string, options: {
         includeHistory: boolean;
     }): Promise<BankTransferResult>;
+    /**
+     * Delete one terminal operation. The server treats the row as the archive's
+     * only handle, so this is what drops the stored transfer ZIP. A 404 that names
+     * the operation is an operation already gone and counts as deleted; the
+     * framework's bare 404 means the route itself is missing.
+     */
+    deleteOperation(bankId: string, operationId: string): Promise<void>;
+    /** One page of completed whole-bank export operations, newest first. */
+    listCompletedExportOperations(bankId: string, page?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<CompletedExportOperation[]>;
 }

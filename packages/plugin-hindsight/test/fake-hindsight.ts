@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { zipSync } from 'fflate'
@@ -14,6 +15,15 @@ export interface FakeBank {
   archive: Uint8Array
 }
 
+/** One async operation the fake server lists; the test owns its timestamps. */
+export interface FakeOperation {
+  id: string
+  task_type: string
+  status: string
+  created_at: string
+  updated_at?: string
+}
+
 export interface FakeHindsightOptions {
   /** Bank ids the server lists and exports. */
   banks?: string[]
@@ -27,15 +37,42 @@ export interface FakeHindsightOptions {
   relativeDownloadUrl?: boolean
   /** Extra JSON body keys merged into a completed operation's result_metadata. */
   metadata?: Record<string, unknown>
+  /** Operations that predate this run, e.g. a completed-export backlog. */
+  operations?: FakeOperation[]
+  /** Answer the operations list route with this status; 404 models an old server. */
+  listStatus?: number
+  /** Answer the operation-delete route with this status. */
+  deleteStatus?: number
+  /** Answer the operation-delete route with the framework's bare 404, as a missing route would. */
+  missingDeleteRoute?: boolean
+  /** Answer an archive download with this status. */
+  downloadStatus?: number
+  /** Acknowledge a delete but keep the stored archive, as a failed storage step would. */
+  retainArchiveOnDelete?: boolean
+  /** Append each request to this file, so a Git hook can interleave its own marker. */
+  requestLog?: string
 }
 
 export interface FakeHindsight {
   url: string
   requests: FakeRequest[]
   banks: Map<string, FakeBank>
+  operations: Map<string, FakeOperation>
+  /** Storage keys of archives the fake still holds: a leak is one that outlives its use. */
+  storedArchives(): string[]
+  /** Change the download answer between cycles; undefined restores the archive. */
+  setDownloadStatus(status: number | undefined): void
   /** Replace a bank's archive between cycles. */
   setArchive(bankId: string, archive: Uint8Array): void
   close(): Promise<void>
+}
+
+interface OperationState extends FakeOperation {
+  result: Record<string, unknown>
+  error?: string
+  polls: number
+  /** Storage key of the archive this operation produced, when the fake created it. */
+  storageKey?: string
 }
 
 const encoder = new TextEncoder()
@@ -85,6 +122,11 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(payload)
 }
 
+/** The time the list route sorts and the sweep filters by. */
+function completedAt(operation: FakeOperation): string {
+  return operation.updated_at ?? operation.created_at
+}
+
 /**
  * A minimal stand-in for the Hindsight bank-transfer REST API. It serves the
  * documented endpoints only, so a test client can fail the way the real one
@@ -93,15 +135,18 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 export async function startFakeHindsight(
   options: FakeHindsightOptions = {},
 ): Promise<FakeHindsight> {
-  const operations = new Map<
-    string,
-    { status: string; result: Record<string, unknown>; error?: string; polls: number }
-  >()
+  const operations = new Map<string, OperationState>()
+  for (const operation of options.operations ?? []) {
+    operations.set(operation.id, { ...operation, result: {}, polls: 0 })
+  }
+  /** Archive storage key -> the bank whose bytes are served for it. */
+  const archives = new Map<string, string>()
   const banks = new Map<string, FakeBank>()
   for (const bankId of options.banks ?? [])
     banks.set(bankId, { archive: fakeArchive(bankId, 'first') })
   const requests: FakeRequest[] = []
   const pageSize = options.pageSize ?? 100
+  let downloadStatus = options.downloadStatus
   let baseUrl = ''
   let operationSeq = 0
 
@@ -110,6 +155,9 @@ export async function startFakeHindsight(
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const method = request.method ?? 'GET'
       requests.push({ method, path: url.pathname, query: url.searchParams })
+      if (options.requestLog !== undefined) {
+        appendFileSync(options.requestLog, `${method} ${url.pathname}\n`)
+      }
       const segments = url.pathname.split('/').filter((segment) => segment !== '')
 
       // GET /v1/default/banks?limit=&offset=
@@ -146,8 +194,13 @@ export async function startFakeHindsight(
             options.relativeDownloadUrl === true
               ? `/v1/default/files/download/${key}`
               : `${baseUrl}/v1/default/files/download/${key}`
+          const createdAt = new Date().toISOString()
           operations.set(operationId, {
+            id: operationId,
+            task_type: 'export_bank',
             status,
+            created_at: createdAt,
+            updated_at: createdAt,
             result:
               status === 'completed'
                 ? {
@@ -161,8 +214,76 @@ export async function startFakeHindsight(
             error:
               status === 'completed' ? undefined : `export of ${bankId} failed in the fake server`,
             polls: 0,
+            storageKey: key,
           })
+          archives.set(key, bankId)
           sendJson(response, 202, { operation_id: operationId, status: 'pending' })
+          return
+        }
+        // GET /v1/default/banks/{bank}/operations?type=&status=&limit=&offset=
+        if (method === 'GET' && segments[4] === 'operations' && segments[5] === undefined) {
+          if (options.listStatus !== undefined) {
+            sendJson(response, options.listStatus, {
+              detail: `operation list answered ${options.listStatus}`,
+            })
+            return
+          }
+          const type = url.searchParams.get('type')
+          const status = url.searchParams.get('status')
+          const offset = Number(url.searchParams.get('offset') ?? '0')
+          const limit = Number(url.searchParams.get('limit') ?? '20')
+          const matching = [...operations.values()]
+            .filter((operation) => type === null || operation.task_type === type)
+            .filter((operation) => status === null || operation.status === status)
+            .sort((a, b) => completedAt(b).localeCompare(completedAt(a)))
+          sendJson(response, 200, {
+            bank_id: bankId,
+            total: matching.length,
+            limit,
+            offset,
+            operations: matching.slice(offset, offset + limit).map((operation) => ({
+              id: operation.id,
+              task_type: operation.task_type,
+              status: operation.status,
+              created_at: operation.created_at,
+              updated_at: operation.updated_at ?? null,
+            })),
+          })
+          return
+        }
+        // DELETE /v1/default/banks/{bank}/operations/{id}/delete
+        if (
+          method === 'DELETE' &&
+          segments[4] === 'operations' &&
+          segments[5] !== undefined &&
+          segments[6] === 'delete'
+        ) {
+          const operationId = decodeURIComponent(segments[5] ?? '')
+          if (options.missingDeleteRoute === true) {
+            sendJson(response, 404, { detail: 'Not Found' })
+            return
+          }
+          if (options.deleteStatus !== undefined) {
+            sendJson(response, options.deleteStatus, {
+              detail: `operation delete answered ${options.deleteStatus}`,
+            })
+            return
+          }
+          if (!operations.delete(operationId)) {
+            sendJson(response, 404, { detail: 'operation not found' })
+            return
+          }
+          if (options.retainArchiveOnDelete !== true) {
+            const prefix = `banks/${bankId}/exports/${operationId}/`
+            for (const key of [...archives.keys()]) {
+              if (key.startsWith(prefix)) archives.delete(key)
+            }
+          }
+          sendJson(response, 200, {
+            success: true,
+            message: `Operation ${operationId} deleted`,
+            operation_id: operationId,
+          })
           return
         }
         // GET /v1/default/banks/{bank}/operations/{id}
@@ -188,9 +309,13 @@ export async function startFakeHindsight(
 
       // GET /v1/default/files/download/{key...}
       if (method === 'GET' && url.pathname.startsWith('/v1/default/files/download/')) {
+        if (downloadStatus !== undefined) {
+          sendJson(response, downloadStatus, { detail: `download answered ${downloadStatus}` })
+          return
+        }
         const key = decodeURIComponent(url.pathname.slice('/v1/default/files/download/'.length))
-        const match = /^banks\/([^/]+)\/exports\//u.exec(key)
-        const bank = match?.[1] === undefined ? undefined : banks.get(match[1])
+        const bankId = archives.get(key)
+        const bank = bankId === undefined ? undefined : banks.get(bankId)
         if (bank === undefined) {
           sendJson(response, 404, { detail: 'file not found' })
           return
@@ -223,6 +348,11 @@ export async function startFakeHindsight(
     url: baseUrl,
     requests,
     banks,
+    operations,
+    storedArchives: () => [...archives.keys()],
+    setDownloadStatus: (status) => {
+      downloadStatus = status
+    },
     setArchive: (bankId, archive) => {
       banks.set(bankId, { archive })
     },

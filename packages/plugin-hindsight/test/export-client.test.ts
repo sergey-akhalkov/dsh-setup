@@ -79,6 +79,89 @@ describe('Hindsight transfer client', () => {
     expect(unpackArchive(result.zip).has('manifest.json')).toBe(true)
   })
 
+  it('deletes a completed export operation and the archive it stored', async () => {
+    const server = await fake({ banks: ['b'] })
+    const transfer = await client(server.url).exportBank('b', { includeHistory: false })
+    expect(server.storedArchives()).toHaveLength(1)
+    await client(server.url).deleteOperation('b', transfer.operationId)
+    const deletes = server.requests.filter((request) => request.method === 'DELETE')
+    expect(deletes.map((request) => request.path)).toEqual([
+      `/v1/default/banks/b/operations/${transfer.operationId}/delete`,
+    ])
+    expect(server.operations.has(transfer.operationId)).toBe(false)
+    expect(server.storedArchives()).toEqual([])
+  })
+
+  it('treats a missing operation as already deleted', async () => {
+    const server = await fake({ banks: ['b'] })
+    await expect(client(server.url).deleteOperation('b', 'op-gone')).resolves.toBeUndefined()
+  })
+
+  it('reports a missing delete route as cleanup unavailable', async () => {
+    const server = await fake({ banks: ['b'], missingDeleteRoute: true })
+    let error: unknown
+    try {
+      await client(server.url).deleteOperation('b', 'op-1')
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(ExportError)
+    expect((error as ExportError).code).toBe('cleanup-unavailable')
+  })
+
+  it('surfaces a non-terminal operation as a retryable cleanup failure', async () => {
+    const server = await fake({ banks: ['b'], deleteStatus: 409 })
+    let error: unknown
+    try {
+      await client(server.url).deleteOperation('b', 'op-1')
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(ExportError)
+    expect((error as ExportError).code).toBe('http')
+    expect((error as ExportError).message).toContain('409')
+  })
+
+  it('lists completed export operations with the sweep filters', async () => {
+    const server = await fake({
+      banks: ['b'],
+      operations: [
+        {
+          id: 'updated',
+          task_type: 'export_bank',
+          status: 'completed',
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T02:00:00.000Z',
+        },
+        {
+          id: 'created-only',
+          task_type: 'export_bank',
+          status: 'completed',
+          created_at: '2026-01-01T01:00:00.000Z',
+        },
+        {
+          id: 'pending',
+          task_type: 'export_bank',
+          status: 'pending',
+          created_at: '2026-01-01T03:00:00.000Z',
+        },
+      ],
+    })
+    const listed = await client(server.url).listCompletedExportOperations('b')
+    expect(listed.map((operation) => operation.id)).toEqual(['updated', 'created-only'])
+    expect(listed.map((operation) => operation.completedAt.toISOString())).toEqual([
+      '2026-01-01T02:00:00.000Z',
+      '2026-01-01T01:00:00.000Z',
+    ])
+    const list = server.requests.find(
+      (request) => request.path === '/v1/default/banks/b/operations',
+    )
+    expect(list?.query.get('type')).toBe('export_bank')
+    expect(list?.query.get('status')).toBe('completed')
+    expect(list?.query.get('limit')).toBe('100')
+    expect(list?.query.get('offset')).toBe('0')
+  })
+
   it('reports a missing bank as a typed bank-not-found error', async () => {
     const server = await fake({ banks: ['present'] })
     await expect(

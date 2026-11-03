@@ -35,6 +35,7 @@ export {
 } from './export-archive.js'
 export type {
   BankTransferResult,
+  CompletedExportOperation,
   OperationMetadata,
   TransferClientOptions,
 } from './export-client.js'

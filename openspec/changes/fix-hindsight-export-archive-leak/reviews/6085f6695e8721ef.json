@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "fix-hindsight-export-archive-leak",
+  "scope": "task",
+  "taskId": "6085f6695e8721ef",
+  "digest": "bcff1420c8b6947170c9d39c098f93e9fdeb31869561de9d5e8e0919c98086e1",
+  "worktreeDigest": "9e2253144d9888576cfff15e5d4d740d860712a49ceca31d1072cd5cb928fe32",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-03T12:04:04.488Z"
+}
