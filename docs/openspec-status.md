@@ -438,3 +438,24 @@ returns HTTP 200 and lists all 18 packages at 0.22.1 pinned to `69cbaa2`, retain
 recovery path is covered by `install.ps1 -SelfTest` and a stub harness over the real
 `Start-HindsightDaemon`; the live rerun on the affected PC is the remaining acceptance, since
 reproducing the poisoned state here would require stopping the owner's live `pg0`.
+
+An exporter bugfix shipped in v0.22.2 (tag on commit `4a20cab`). Every export cycle left its
+transfer archive in the server's `file_storage` because the completed `export_bank` operation that
+names the blob was never deleted: the live database held 6,929 archive rows (16 GB) when measured.
+The exporter now deletes each completed export operation right after the download and before
+unpack, commit and push; a failed delete is reported and retried by the next cycle; each cycle
+sweeps completed export operations older than an hour, one page of 100 deletions per bank, walking
+past recent pages; and a server without the operation routes is reported once as archive cleanup
+unavailable. The change is archived as `2026-11-03-fix-hindsight-export-archive-leak` and its two
+requirements are merged into the `hindsight-memory` spec. Review found and the change fixed a
+NaN-timestamp sweep case, a full page of recent operations blocking the backlog, and a 404
+classification that could swallow a missing route. Acceptance ran on a throwaway `pg0` instance
+(archive rows returned to zero after every cycle, the relation stayed flat at 32 kB, a 150-operation
+backlog drained 100 then 50, and the documented prune went 88 kB -> 88 kB -> 16 kB); the owner's
+live database was only read. The release workflow passed DSH 0.2.1-rc.3 and 0.2.1-rc.5, the publish
+job and the Pages deployment; the validate workflow on `main` passed; the published index returns
+HTTP 200 and lists all 18 packages at 0.22.2 pinned to `4a20cab`, retaining 0.22.1. Installing the
+published 0.22.2 from the market (or re-running the installer from an external PowerShell with the
+app closed) is what makes the tagged exporter the installed one; until then the live daemon keeps
+accumulating archives, and the manual prune documented in `docs/hindsight.md` reclaims the storage
+already consumed.
