@@ -35,9 +35,9 @@ Owned: `docs/hindsight.md`
 ## 5. Integration verification
 Owned: `packages/plugin-hindsight/lib/**`, `packages/setup/node_modules/@dsh-setup/plugin-hindsight/**`
 
-- [ ] 5.1 Run `pnpm build`, `pnpm gen`, `pnpm check`, `pnpm gen:check`, and `pnpm validate:repo`; commit the regenerated `packages/plugin-hindsight/lib/**` and `packages/setup/node_modules/@dsh-setup/plugin-hindsight/**` and confirm `git diff --exit-code` after a rebuild shows no drift.
+- [x] 5.1 Run `pnpm build`, `pnpm gen`, `pnpm check`, `pnpm gen:check`, and `pnpm validate:repo`; commit the regenerated `packages/plugin-hindsight/lib/**` and `packages/setup/node_modules/@dsh-setup/plugin-hindsight/**` and confirm `git diff --exit-code` after a rebuild shows no drift.
 
-- [ ] 5.2 Live acceptance on a dedicated throwaway `pg0` instance (never the owner's live database, following the archived export change's recipe): run two export cycles for a test bank, then query `file_storage` and assert the bank's `exports/` rows return to zero after each cycle and the relation size stays flat across cycles; seed more stale operations than one page and confirm the backlog shrinks by one page per cycle. Record the SQL counts in the change's verification notes.
+- [x] 5.2 Live acceptance on a dedicated throwaway `pg0` instance (never the owner's live database, following the archived export change's recipe): run two export cycles for a test bank, then query `file_storage` and assert the bank's `exports/` rows return to zero after each cycle and the relation size stays flat across cycles; seed more stale operations than one page and confirm the backlog shrinks by one page per cycle. Record the SQL counts in the change's verification notes.
 
 ## Workflow follow-up
 

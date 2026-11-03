@@ -22,17 +22,18 @@ is in fact extraction only and does not touch the transfer/archive path.
 The built `packages/plugin-hindsight/lib` was driven through `runExportCycle` with `autoPush: false`
 and an export directory inside the scratch tree.
 
-| Step                                      | export archive rows | export operations | `file_storage` relation |
-| ----------------------------------------- | ------------------- | ----------------- | ----------------------- |
-| after cycle 1                             | 0                   | 0                 | 32 kB                   |
-| after cycle 2                             | 0                   | 0                 | 32 kB                   |
-| 150 stale completed `export_bank` rows    | 0                   | 150               | -                       |
-| after cycle 3                             | 0                   | 100               | -                       |
-| after cycle 4                             | 0                   | 0                 | 48 kB                   |
+| Step                                   | export archive rows | export operations left | `file_storage` relation |
+| -------------------------------------- | ------------------- | ---------------------- | ----------------------- |
+| after cycle 1                          | 0                   | 0                      | 32 kB                   |
+| after cycle 2                          | 0                   | 0                      | 32 kB                   |
+| 150 stale completed `export_bank` rows | 0                   | 150                    | -                       |
+| after cycle 3                          | 0                   | 50                     | -                       |
+| after cycle 4                          | 0                   | 0                      | 48 kB                   |
 
 The seeded rows were inserted into `async_operations` with
-`updated_at = now() - interval '2 hours'`. Cycle 3 deleted exactly one page (100) and cycle 4 the
-remaining 50, matching the bounded sweep; the archive row count returned to zero after every cycle.
+`updated_at = now() - interval '2 hours'`. Cycle 3 deleted exactly one page (100, leaving 50) and
+cycle 4 the remaining 50, matching the bounded sweep; the archive row count returned to zero after
+every cycle.
 
 Both documented prune commands were then run on the same throwaway database, with three seeded
 `banks/acceptance-bank/exports/.../transfer.zip` rows:
