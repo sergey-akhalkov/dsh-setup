@@ -459,3 +459,28 @@ published 0.22.2 from the market (or re-running the installer from an external P
 app closed) is what makes the tagged exporter the installed one; until then the live daemon keeps
 accumulating archives, and the manual prune documented in `docs/hindsight.md` reclaims the storage
 already consumed.
+
+An export-size change shipped in v0.23.0 (tag on commit `a088a3f`). On the owner's PC the durable
+export repository had grown to 3.29 GB while the memory it protects was about 235 MB: `.git` carried
+9,065 loose objects (2.85 GB) because every five-minute cycle re-committed the 187 MB
+`mental_model_history.json` in full and nothing packed it, and the private remote had been frozen
+since 2026-10-31 because that file crossed GitHub's 100 MB blob limit — the last pushed snapshot
+carried it at 99.6 MB, the next commit at 101.0 MB, so 398 commits queued locally and every cycle
+retried a multi-gigabyte push. The default export scope now drops the per-model refresh history and
+the operation log unless `includeHistory` is set, every cycle that holds the repository lock packs
+loose objects above 500, and a push whose range carries an over-100 MB blob — or cannot be inspected
+— is skipped and reported instead of retried. The change is archived as
+`2026-11-03-bound-hindsight-export-growth` and its two modified requirements are merged into the
+`hindsight-memory` spec. Review found and the change fixed commit-only packing that skipped failed
+and empty-bank cycles, an object-inspection failure that bypassed the guard, and a post-rebase range
+that can merge two fitting files into an oversized one. Operational cleanup on the owner's PC:
+7,364 orphaned transfer archives deleted and `file_storage` vacuumed (database 19.4 GB -> 292 MB and
+19.4 GB -> 1.3 GB on disk at cleanup time), the export repository reset to the last pushed snapshot
+and repacked (3.16 GB -> 61 MB), and the still-installed 0.22.0 exporter paused with the export
+lock so it stops re-creating either problem. The release workflow passed DSH 0.2.1-rc.3 and
+0.2.1-rc.5, the publish job and the Pages deployment; the validate workflow on `main` passed; the
+published index returns HTTP 200 and lists all 18 packages at 0.23.0 pinned to `a088a3f`, retaining
+0.22.2. Installing the published 0.23.0 (or re-running the installer from an external PowerShell
+with the app closed) is what makes the bounded exporter the installed one and resumes the export;
+until then the live 0.22.0 keeps its lock, and the new sweep deletes the 51 archives the paused
+exporter left in `file_storage`.
