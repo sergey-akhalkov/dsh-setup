@@ -273,12 +273,14 @@ export async function startFakeHindsight(
           }
           if (options.deleteStatus !== undefined) {
             sendJson(response, options.deleteStatus, {
-              detail: `operation delete answered ${options.deleteStatus}`,
+              detail: `operation delete answered ${options.deleteStatus} for ${url.pathname}`,
             })
             return
           }
           if (!operations.delete(operationId)) {
-            sendJson(response, 404, { detail: 'operation not found' })
+            sendJson(response, 404, {
+              detail: `Operation ${operationId} not found for bank ${bankId}`,
+            })
             return
           }
           if (options.retainArchiveOnDelete !== true) {

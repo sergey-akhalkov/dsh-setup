@@ -10,6 +10,9 @@ export interface BankTransferResult {
   zip: Uint8Array
 }
 
+/** The server's own 404 for an operation row that is already gone. */
+const MISSING_OPERATION = /^Operation .+ not found for bank /u
+
 /** One completed whole-bank export, as the stale-archive sweep sees it. */
 export interface CompletedExportOperation {
   id: string
@@ -228,17 +231,17 @@ export class TransferClient {
 
   /**
    * Delete one terminal operation. The server treats the row as the archive's
-   * only handle, so this is what drops the stored transfer ZIP. A 404 counts as
-   * deleted only when its body names the missing operation; any other 404 (the
-   * framework's bare one, a proxy page, an empty body) means the route is not
-   * there, which must be reported instead of silently leaving archives behind.
+   * only handle, so this is what drops the stored transfer ZIP. Only the
+   * server's own "Operation <id> not found for bank <bank>" 404 counts as
+   * already deleted; any other 404 (a bare framework one, a proxy page, an empty
+   * body) means the route is not there and must be reported, not swallowed.
    */
   async deleteOperation(bankId: string, operationId: string): Promise<void> {
     const path = `/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(operationId)}/delete`
     const response = await this.#send(path, { method: 'DELETE' })
     if (response.status === 404) {
       const detail = await detailOf(response)
-      if (detail?.toLowerCase().includes('operation')) return
+      if (detail !== undefined && MISSING_OPERATION.test(detail)) return
       throw new ExportError(
         'cleanup-unavailable',
         `Hindsight at ${this.#apiUrl} does not offer operation deletion`,

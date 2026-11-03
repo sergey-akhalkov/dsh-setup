@@ -112,6 +112,18 @@ describe('Hindsight transfer client', () => {
     },
   )
 
+  it('does not treat a 404 that mentions the request path as a deleted operation', async () => {
+    const server = await fake({ banks: ['b'], deleteStatus: 404 })
+    let error: unknown
+    try {
+      await client(server.url).deleteOperation('b', 'op-1')
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(ExportError)
+    expect((error as ExportError).code).toBe('cleanup-unavailable')
+  })
+
   it('surfaces a non-terminal operation as a retryable cleanup failure', async () => {
     const server = await fake({ banks: ['b'], deleteStatus: 409 })
     let error: unknown
