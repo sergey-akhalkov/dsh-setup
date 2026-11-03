@@ -97,17 +97,20 @@ describe('Hindsight transfer client', () => {
     await expect(client(server.url).deleteOperation('b', 'op-gone')).resolves.toBeUndefined()
   })
 
-  it('reports a missing delete route as cleanup unavailable', async () => {
-    const server = await fake({ banks: ['b'], missingDeleteRoute: true })
-    let error: unknown
-    try {
-      await client(server.url).deleteOperation('b', 'op-1')
-    } catch (caught) {
-      error = caught
-    }
-    expect(error).toBeInstanceOf(ExportError)
-    expect((error as ExportError).code).toBe('cleanup-unavailable')
-  })
+  it.each(['json', 'empty', 'html'] as const)(
+    'reports a %s 404 from the delete route as cleanup unavailable',
+    async (body) => {
+      const server = await fake({ banks: ['b'], missingDeleteRoute: body })
+      let error: unknown
+      try {
+        await client(server.url).deleteOperation('b', 'op-1')
+      } catch (caught) {
+        error = caught
+      }
+      expect(error).toBeInstanceOf(ExportError)
+      expect((error as ExportError).code).toBe('cleanup-unavailable')
+    },
+  )
 
   it('surfaces a non-terminal operation as a retryable cleanup failure', async () => {
     const server = await fake({ banks: ['b'], deleteStatus: 409 })

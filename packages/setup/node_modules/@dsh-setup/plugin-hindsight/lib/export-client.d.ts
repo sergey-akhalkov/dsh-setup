@@ -38,9 +38,10 @@ export declare class TransferClient {
     }): Promise<BankTransferResult>;
     /**
      * Delete one terminal operation. The server treats the row as the archive's
-     * only handle, so this is what drops the stored transfer ZIP. A 404 that names
-     * the operation is an operation already gone and counts as deleted; the
-     * framework's bare 404 means the route itself is missing.
+     * only handle, so this is what drops the stored transfer ZIP. A 404 counts as
+     * deleted only when its body names the missing operation; any other 404 (the
+     * framework's bare one, a proxy page, an empty body) means the route is not
+     * there, which must be reported instead of silently leaving archives behind.
      */
     deleteOperation(bankId: string, operationId: string): Promise<void>;
     /** One page of completed whole-bank export operations, newest first. */

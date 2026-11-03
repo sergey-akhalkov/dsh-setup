@@ -43,8 +43,8 @@ export interface FakeHindsightOptions {
   listStatus?: number
   /** Answer the operation-delete route with this status. */
   deleteStatus?: number
-  /** Answer the operation-delete route with the framework's bare 404, as a missing route would. */
-  missingDeleteRoute?: boolean
+  /** Answer the operation-delete route with a 404 that does not name the operation. */
+  missingDeleteRoute?: 'json' | 'empty' | 'html'
   /** Answer an archive download with this status. */
   downloadStatus?: number
   /** Acknowledge a delete but keep the stored archive, as a failed storage step would. */
@@ -259,8 +259,16 @@ export async function startFakeHindsight(
           segments[6] === 'delete'
         ) {
           const operationId = decodeURIComponent(segments[5] ?? '')
-          if (options.missingDeleteRoute === true) {
-            sendJson(response, 404, { detail: 'Not Found' })
+          if (options.missingDeleteRoute !== undefined) {
+            if (options.missingDeleteRoute === 'json') {
+              sendJson(response, 404, { detail: 'Not Found' })
+            } else if (options.missingDeleteRoute === 'html') {
+              response.writeHead(404, { 'content-type': 'text/html' })
+              response.end('<html><body>Not Found</body></html>')
+            } else {
+              response.writeHead(404, { 'content-length': 0 })
+              response.end()
+            }
             return
           }
           if (options.deleteStatus !== undefined) {

@@ -381,7 +381,7 @@ describe('stale export archive sweep', () => {
 
   it('reports a missing delete route as unavailable, not as a deleted operation', async () => {
     const root = tempDir()
-    const server = await fake({ banks: ['a', 'b'], missingDeleteRoute: true })
+    const server = await fake({ banks: ['a', 'b'], missingDeleteRoute: 'json' })
     const config = exportConfig({ dir: join(root, 'repo') })
     const reported: string[] = []
 
