@@ -19,4 +19,4 @@ Owned: `docs/hindsight.md`, `packages/plugin-hindsight/lib/**`, `packages/setup/
 
 - [x] 3.1 Document the bounded default scope in the export layout and configuration table, the packing step and the oversize-push rule under Git behavior, and a reclamation recipe for an already oversized export repository. Verify with `pnpm lint:fix` and `pnpm gen:check`.
 
-- [ ] 3.2 Run `pnpm build`, `pnpm gen`, `pnpm check`, `pnpm gen:check`, and `pnpm validate:repo`; commit the regenerated `packages/plugin-hindsight/lib/**` and `packages/setup/node_modules/@dsh-setup/plugin-hindsight/**`, and confirm a second `pnpm build` leaves `git diff --exit-code` clean.
+- [x] 3.2 Run `pnpm build`, `pnpm gen`, `pnpm check`, `pnpm gen:check`, and `pnpm validate:repo`; commit the regenerated `packages/plugin-hindsight/lib/**` and `packages/setup/node_modules/@dsh-setup/plugin-hindsight/**`, and confirm a second `pnpm build` leaves `git diff --exit-code` clean.

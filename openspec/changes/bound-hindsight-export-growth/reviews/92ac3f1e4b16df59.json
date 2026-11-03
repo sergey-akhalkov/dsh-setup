@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "bound-hindsight-export-growth",
+  "scope": "task",
+  "taskId": "92ac3f1e4b16df59",
+  "digest": "069b6c1ddf85b766760a1aad3d2546f5b57b5c7cd98867775588cf7a1589a9f1",
+  "worktreeDigest": "4bdd5cc6c4561dc5d427870e6e6e0effcb259e5c0971167b6cafe7f5f0e20b47",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-03T14:55:05.459Z"
+}
