@@ -61,7 +61,7 @@ A session with no involvement is not steered for the change. To opt in, edit the
 | `spec-ready` | A change this session created or whose spec artifacts it changed is review-ready and its whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
 | `spec-task-ready` | A task this session checked has no task-review PASS/ERROR record. | `review` scope `task` |
 | `implementation-work` | The turn changed implementation files in a change this session is involved in and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
-| `lane-assignment` | A readable `tasks.md` in a change this session is involved in has at least two non-serial lanes that name owned paths and hold unchecked tasks, the turn ticked a task or changed implementation files, and an unassigned non-current lane has neither a tagged worker start nor a serial note. | `note` |
+| `lane-assignment` | A readable `tasks.md` in a change this session is involved in has at least two non-serial lanes with tasks (a completed lane still counts), the turn ticked a task or changed implementation files, and an unassigned non-current lane with unchecked tasks names owned paths and has neither a tagged worker start nor a serial note. | `note` |
 | `lane-boundary` (deprecated) | A task this session ticked in this turn completed the last unchecked task of a `tasks.md` lane, another non-`serial` lane with owned paths still has an unchecked task, and the turn started no parallel worker (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`). Satisfied by a worker start or by a matching progress note in a remaining lane. Kept for existing profiles; use `lane-assignment` for new rules. | `note` |
 | `implementation-complete` | This session completed the change's task list and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
 | `failure-streak` | The configured number of consecutive failed tool calls has no intervening success and no consultation attempt for that streak. | `answer` (soft) |
@@ -154,11 +154,11 @@ current, or complete.
 
 It fires only when all of these hold:
 
-- `tasks.md` is readable and has at least two non-serial lanes that name owned paths and hold
-  unchecked tasks;
+- `tasks.md` is readable and has at least two non-serial lanes with tasks; a completed lane still
+  counts toward the threshold;
 - the turn ticked a task or changed implementation files;
-- an unassigned non-serial lane with unchecked tasks is not a lane this session ticked in the turn
-  and has neither a tagged worker start nor a serial note.
+- an unassigned non-serial lane with unchecked tasks is not a lane this session ticked in the turn,
+  names owned paths, and has neither a tagged worker start nor a serial note.
 
 A plan with exactly one non-serial lane, or whose remaining work is a hot-file, generated-output, or
 serial-gate lane (a heading containing `serial`), reports nothing.

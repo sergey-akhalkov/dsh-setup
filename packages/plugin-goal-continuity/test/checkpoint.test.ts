@@ -785,6 +785,31 @@ describe('bottleneck owner rule', () => {
     expect(harness.steers).toHaveLength(0)
   })
 
+  it('does not accept a worker start for a worker-owned user_decision', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    const result = await harness.checkpoint(plan({ owner: 'lane-docs', action: 'user_decision' }))
+    const id = result.text.match(ID_PATTERN)?.[0] as string
+    worker(harness, { prompt: `take the lane for ${id} on guard-missing` })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('ask_user_question')
+  })
+
+  it('matches a worker start carrying an id with JSON-escaped characters', async () => {
+    for (const bottleneckId of ['guard"missing', 'guard\\missing']) {
+      const harness = await create({ availableTools: ['subagent'] })
+      harness.turnStart()
+      const result = await harness.checkpoint(
+        plan({ id: bottleneckId, owner: 'lead', action: 'worker_start' }),
+      )
+      const id = result.text.match(ID_PATTERN)?.[0] as string
+      worker(harness, { prompt: `take the lane for ${id} on ${bottleneckId}` })
+      await harness.turnStopping()
+      expect(harness.steers).toHaveLength(0)
+    }
+  })
+
   it('fails open to a targeted lead_action when no worker tool is visible', async () => {
     const harness = await create()
     harness.turnStart()

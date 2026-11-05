@@ -133,6 +133,8 @@ describe('model-facing budget', () => {
       expect(text).toContain('worker_start')
       expect(text).toContain('user_decision')
       expect(text).toContain('Worker-assigned checkpoint lanes')
+      // A completed non-serial lane still counts toward the two-lane threshold.
+      expect(text).toContain('completed lane still counts')
     }
     expect(skill).toContain('`lane-tag: <change>#<n>`')
     expect(docs).toContain('lane-tag: <change>#<n>')

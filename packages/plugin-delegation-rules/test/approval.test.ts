@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -762,6 +762,67 @@ describe('reviewer binding at the host surfaces', () => {
     expect(reused).toContain('reused record')
     expect(reused).toContain('target: codex-subagent')
     expect(subagents.startCalls).toBe(1)
+  })
+
+  it('selects the earlier checked task when its PASS names another reviewer', async () => {
+    const root = await hostWorkspace()
+    await writeChange(root, 'change-a', [
+      { number: '1.1', text: 'First task', checked: true },
+      { number: '1.2', text: 'Second task', checked: true },
+    ])
+    await writeMarker(root, { reviewerProvider: 'codex-subagent' })
+    const subagents = registered()
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: subagents })
+    await writeLocalPass(root, taskIdOf('First task'), 'other-reviewer')
+    await writeLocalPass(root, taskIdOf('Second task'), 'codex-subagent')
+
+    const started = await harness.toolText('delegate', { rule: 'task-review' })
+    expect(started).toContain('review started')
+    await harness.waitForRun(runIdFrom(started))
+    expect(subagents.startCalls).toBe(1)
+    // The mismatched first task was selected and re-reviewed by the pinned reviewer.
+    const first = JSON.parse(
+      await readFile(
+        localTaskRecordPath(root, 'task-review', 'change-a', taskIdOf('First task')),
+        'utf8',
+      ),
+    ) as { target: { provider: string } }
+    expect(first.target.provider).toBe('codex-subagent')
+  })
+
+  it('does not reuse a cached PASS when the approval marker is unreadable', async () => {
+    const root = await hostWorkspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Bound task', checked: true }])
+    await writeMarker(root, {})
+    await writeFile(join(root, 'openspec', 'review-approval.json'), '{not json', 'utf8')
+    const subagents = registered()
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: subagents })
+    await writeLocalPass(root, taskIdOf('Bound task'), 'codex-subagent')
+
+    const started = await harness.toolText('delegate', { rule: 'task-review' })
+    expect(started).toContain('review started')
+    expect(started).not.toContain('reused record')
+    await harness.waitForRun(runIdFrom(started))
+    expect(subagents.startCalls).toBe(1)
+  })
+
+  it('refuses the live task gate when the approval marker is malformed', async () => {
+    const root = await hostWorkspace()
+    const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'Bound task' }])
+    await writeMarker(root, {})
+    await writeFile(join(root, 'openspec', 'review-approval.json'), '{not json', 'utf8')
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: registered() })
+    const before = '# Tasks\n\n- [ ] 1.1 Bound task\n'
+    const after = '# Tasks\n\n- [x] 1.1 Bound task\n'
+    await writeFile(join(dir, 'tasks.md'), before, 'utf8')
+    await harness.preStep(1)
+    await harness.writeResult(join(dir, 'tasks.md'), before, after, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), after, 'utf8')
+    await writeLocalPass(root, taskIdOf('Bound task'), 'codex-subagent')
+    await harness.turnStopping(1)
+    const message = steerTexts(harness.agent).join('\n')
+    expect(message).toContain('approval marker')
+    expect(message).toContain('review-approval.json')
   })
 
   it('refuses the live task gate for a local PASS from another reviewer', async () => {

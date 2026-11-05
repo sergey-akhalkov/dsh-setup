@@ -66,10 +66,10 @@ result contract is a code extension.
   and has neither a newly checked-and-reviewed task nor a `task_progress` note matching the
   current worktree digest.
 - `lane-assignment` — an involved change has a readable `tasks.md` with at least two non-serial
-  lanes that name owned paths and hold unchecked tasks, the turn ticked a task or changed
-  implementation files, and a lane with unchecked tasks that is not current has neither a tagged
-  worker start nor a serial note; satisfied per lane by a `lane-tag` worker start or a matching
-  `task_progress` note.
+  lanes with tasks (a completed lane still counts toward the threshold), the turn ticked a task or
+  changed implementation files, and an unassigned non-serial lane with unchecked tasks that is not
+  current names owned paths and has neither a tagged worker start nor a serial note; satisfied per
+  lane by a `lane-tag` worker start or a matching `task_progress` note.
 - `lane-boundary` (deprecated) — a task this session ticked in this turn completed the last
   unchecked task of a `tasks.md` lane, another non-tail lane still has an unchecked task, and the
   turn started no parallel worker; satisfied by a worker start or by a progress note in a remaining
@@ -556,10 +556,10 @@ its owned paths are the backticked segments of that heading — the shape the ta
 The trigger reports when all of these hold:
 
 - the change is attributed to this session, its `tasks.md` is readable, and it has at least two
-  non-serial lanes that name owned paths and hold unchecked tasks;
+  non-serial lanes with tasks; a completed lane still counts toward the threshold;
 - the turn ticked a task or changed implementation files;
-- at least one non-serial lane with unchecked tasks has no assignment and is not the lane this
-  session ticked in this turn (all lanes ticked this turn are current).
+- at least one unassigned non-serial lane with unchecked tasks is not the lane this session ticked
+  in this turn (all lanes ticked this turn are current) and names owned paths.
 
 A lane is satisfied by a successful tagged worker start or by a serial note; a lane that is complete,
 disappeared, or renamed no longer carries a decision. The state is a session-scoped ledger, so another
@@ -684,7 +684,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 
 - Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
   (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 19988 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 20063 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
   integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`

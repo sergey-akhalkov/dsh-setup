@@ -2456,23 +2456,35 @@ async function approvalRuleId(
     : { id: fallback.id }
 }
 
+/** The reviewer binding the marker declares, or why it could not be read. */
+interface ReviewerRead {
+  reviewer?: ReviewerBinding
+  error?: string
+}
+
 /**
  * The reviewer binding the marker declares, read from an OpenSpec root. A
- * missing or unreadable marker keeps provider-agnostic behavior (fail open);
- * the archive gate still fails closed on a malformed marker.
+ * missing marker keeps provider-agnostic behavior; an unreadable or invalid
+ * marker is reported so the live task gate can fail closed instead of treating
+ * it as "no binding".
  */
-async function readReviewerBinding(openspecRoot: string): Promise<ReviewerBinding | undefined> {
+async function readReviewerBinding(openspecRoot: string): Promise<ReviewerRead> {
   let raw: string
   try {
     raw = await readFile(join(openspecRoot, APPROVAL_MARKER_FILE), 'utf8')
-  } catch {
-    return undefined
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` }
   }
   try {
     const parsed = parseReviewApprovalMarker(JSON.parse(raw))
-    return reviewerBindingOf(parsed.marker)
-  } catch {
-    return undefined
+    if (parsed.marker === undefined) {
+      return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` }
+    }
+    const reviewer = reviewerBindingOf(parsed.marker)
+    return reviewer === undefined ? {} : { reviewer }
+  } catch (error) {
+    return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` }
   }
 }
 
@@ -3320,8 +3332,14 @@ class DelegationEngine {
           (record.verdict === 'FINDINGS' && record.digest === prepared.digest)
         const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest
         // A cached PASS from another reviewer is not reused: the marker binding
-        // prescribes a fresh run of the configured reviewer instead.
-        if (reusable && current && reviewerMatches(record.target, reviewer)) {
+        // prescribes a fresh run of the configured reviewer instead. An
+        // unreadable marker also forbids reuse until it is repaired.
+        if (
+          reusable &&
+          current &&
+          reviewer.error === undefined &&
+          reviewerMatches(record.target, reviewer.reviewer)
+        ) {
           await this.discardSnapshot(run)
           await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'))
           this.freeRun(run)
@@ -3795,13 +3813,15 @@ class DelegationEngine {
 
   private async taskHasReview(change: ChangeInfo, cwd: string, taskId: string): Promise<boolean> {
     // A record from another reviewer is not a review: task selection must pick
-    // this task so the delegate call starts the configured reviewer.
+    // this task so the delegate call starts the configured reviewer. An
+    // unreadable marker cannot prove any record, so the task reads unreviewed.
     const reviewer = await readReviewerBinding(dirname(dirname(change.dir)))
+    if (reviewer.error !== undefined) return false
     for (const rule of this.taskReviewRules()) {
       const state = await inspectRecord(recordPath(cwd, rule, change.name, taskId))
       if (
         state.kind === 'record' &&
-        reviewerMatches(state.record.target, reviewer) &&
+        reviewerMatches(state.record.target, reviewer.reviewer) &&
         recordSatisfies(state, change.name, 'task', undefined, taskId)
       ) {
         return true
@@ -4058,14 +4078,20 @@ class DelegationEngine {
           lines.push(`  ${rule.id}: ${detail} at ${relativePath(cwd, path)}`)
         }
         const reviewer = await readReviewerBinding(dirname(dirname(change.dir)))
+        if (reviewer.error !== undefined) {
+          lines.push(
+            `  approval marker: unreadable (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)})`,
+          )
+        }
         for (const rule of this.taskReviewRules()) {
           const reviewed = new Set<string>()
           for (const task of checked) {
             const path = recordPath(cwd, rule, change.name, task.id)
             const state = await inspectRecord(path)
             if (
+              reviewer.error === undefined &&
               state.kind === 'record' &&
-              reviewerMatches(state.record.target, reviewer) &&
+              reviewerMatches(state.record.target, reviewer.reviewer) &&
               (state.record.verdict === 'PASS' || state.record.verdict === 'ERROR')
             ) {
               reviewed.add(task.id)
@@ -4505,8 +4531,9 @@ async function evaluateGate(
         for (const rule of taskRules) {
           const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id))
           if (
+            reviewer.error === undefined &&
             state.kind === 'record' &&
-            reviewerMatches(state.record.target, reviewer) &&
+            reviewerMatches(state.record.target, reviewer.reviewer) &&
             recordSatisfies(state, change.name, 'task', undefined, task.id)
           ) {
             satisfied = true
@@ -4518,16 +4545,20 @@ async function evaluateGate(
         const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review'
         const pending = pendingFor(ruleId, change.name, task.id)
         const detail =
-          pending !== undefined
-            ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
-            : findingsOnly
-              ? 'its review record has unresolved findings'
-              : 'it has no task-review PASS/ERROR record'
+          reviewer.error !== undefined
+            ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
+            : pending !== undefined
+              ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
+              : findingsOnly
+                ? 'its review record has unresolved findings'
+                : 'it has no task-review PASS/ERROR record'
         const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`
         const call =
-          pending === undefined
-            ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
-            : `delegation_status (run ${pending.id})`
+          reviewer.error !== undefined
+            ? `repair openspec/${APPROVAL_MARKER_FILE}`
+            : pending === undefined
+              ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
+              : `delegation_status (run ${pending.id})`
         if (strictTaskRule !== undefined) pushStrict(ruleId, text, call)
         else if (softTaskRule !== undefined) {
           pushSoft(`task-review:${change.name}:${task.id}`, ruleId, text, call)
@@ -4595,8 +4626,9 @@ async function evaluateGate(
           for (const rule of taskRules) {
             const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id))
             if (
+              reviewer.error === undefined &&
               state.kind === 'record' &&
-              reviewerMatches(state.record.target, reviewer) &&
+              reviewerMatches(state.record.target, reviewer.reviewer) &&
               recordSatisfies(state, change.name, 'task', undefined, task.id)
             ) {
               reviewedOwn.add(task.id)

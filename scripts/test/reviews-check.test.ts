@@ -481,6 +481,50 @@ describe('reviews:check --staged', () => {
     expect(text).toContain('missing 1.1 "Renamed task"')
   })
 
+  it('refuses a staged deletion of an approval record', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    const changeDir = await writeArchive(root, '2026-10-10-approved', [{ text: 'Approved task' }])
+    await writePass(changeDir, 'approved', 'Approved task')
+    await commit(root, 'add the approved archive')
+    await rm(join(changeDir, 'reviews', `${taskIdOf('Approved task')}.json`))
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(false)
+    expect(result.lines.join('\n')).toContain('missing 1.1 "Approved task"')
+  })
+
+  it('refuses a staged move of an approval record out of the archive', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    const changeDir = await writeArchive(root, '2026-10-10-approved', [{ text: 'Approved task' }])
+    await writePass(changeDir, 'approved', 'Approved task')
+    await commit(root, 'add the approved archive')
+    await rename(
+      join(changeDir, 'reviews', `${taskIdOf('Approved task')}.json`),
+      join(root, 'moved-approval.json'),
+    )
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(false)
+    expect(result.lines.join('\n')).toContain('missing 1.1 "Approved task"')
+  })
+
+  it('audits a staged non-ASCII path in an unapproved archive', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    const changeDir = await writeArchive(root, '2026-10-10-quoted', [
+      { text: 'Unapproved task' },
+    ])
+    await writeFile(join(changeDir, 'café.md'), 'first\n', 'utf8')
+    await commit(root, 'add the unapproved archive')
+    await writeFile(join(changeDir, 'café.md'), 'second\n', 'utf8')
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(false)
+    expect(result.lines.join('\n')).toContain('missing 1.1 "Unapproved task"')
+  })
+
   it('fails closed with the manual audit when the staged range is unreadable', async () => {
     const { root } = await fixture()
     const result = await auditStaged(root)

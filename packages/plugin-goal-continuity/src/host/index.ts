@@ -2566,10 +2566,29 @@ function checkpointPlan(
   }
 }
 
+/** Every decoded string value in one tool call's serialized arguments. */
+function argumentStrings(text: string): string[] {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return [text]
+  }
+  const collect = (node: unknown): string[] => {
+    if (typeof node === 'string') return [node]
+    if (Array.isArray(node)) return node.flatMap(collect)
+    if (isRecord(node)) return Object.values(node).flatMap(collect)
+    return []
+  }
+  return collect(value)
+}
+
 /**
  * Whether a successful worker start after the checkpoint carries the id. The
  * bottleneck id is optional so the parallel fan-out gate keeps its id-only
- * evidence; the remedy gate passes it and requires both.
+ * evidence; the remedy gate passes it and requires both. Matching decodes the
+ * call arguments, so an id with JSON-escaped characters still matches the text
+ * the worker received.
  */
 function taggedWorkerStarted(
   evidence: CheckpointEvidence,
@@ -2581,11 +2600,30 @@ function taggedWorkerStarted(
   for (const call of evidence.calls.values()) {
     if (call.index <= checkpoint.index || call.result !== 'success') continue
     if (!WORKER_START_TOOLS.includes(call.name)) continue
-    if (!call.arguments.includes(id)) continue
-    if (bottleneckId !== undefined && !call.arguments.includes(bottleneckId)) continue
+    const texts = argumentStrings(call.arguments)
+    if (!texts.some((text) => text.includes(id))) continue
+    if (bottleneckId !== undefined && !texts.some((text) => text.includes(bottleneckId))) {
+      continue
+    }
     // A delegate can answer from a cached record without starting a target.
     if (call.name === 'delegate' && !delegateStarted(call.resultText)) continue
     return true
+  }
+  return false
+}
+
+/** Whether a successful ask_user_question call followed the checkpoint. */
+function userDecisionAsked(evidence: CheckpointEvidence): boolean {
+  const checkpoint = evidence.checkpoint
+  if (checkpoint === undefined) return false
+  for (const call of evidence.calls.values()) {
+    if (
+      call.index > checkpoint.index &&
+      call.result === 'success' &&
+      call.name === 'ask_user_question'
+    ) {
+      return true
+    }
   }
   return false
 }
@@ -2623,15 +2661,15 @@ function remedyMatched(
   if (bottleneck.action === 'worker_start') {
     return taggedWorkerStarted(evidence, id, bottleneck.id)
   }
+  if (bottleneck.action === 'user_decision') return userDecisionAsked(evidence)
   const workerOwned = bottleneck.owner !== 'lead' && workerVisible
-  if (workerOwned && taggedWorkerStarted(evidence, id, bottleneck.id)) return true
+  // The worker remedy replaces a refused non-lead lead_action; without worker
+  // tools a targeted edit/write stays the fail-open escape.
+  if (workerOwned) {
+    return taggedWorkerStarted(evidence, id, bottleneck.id) || userDecisionAsked(evidence)
+  }
   for (const call of evidence.calls.values()) {
     if (call.index <= checkpoint.index || call.result !== 'success') continue
-    if (call.name === 'ask_user_question') {
-      if (bottleneck.action === 'user_decision' || workerOwned) return true
-      continue
-    }
-    if (bottleneck.action !== 'lead_action' || workerOwned) continue
     if (!WRITE_TOOLS.includes(call.name)) continue
     const destination = writtenPathOf(call.arguments)
     if (destination !== undefined && targetMatched(bottleneck.targets, destination, workspace)) {

@@ -645,27 +645,31 @@ export async function auditPush(cwd: string, stdin: string): Promise<AuditResult
   return { ok, lines }
 }
 
-/** Archived change directories a staged name-status lists as added, modified, copied, or renamed. */
+/** Archived change directories one staged NUL-delimited name-status touches, both sides of a rename. */
 function stagedArchives(nameStatus: string): string[] {
   const directories = new Set<string>()
-  for (const row of nameStatus.split(/\r?\n/)) {
-    const fields = row.split('\t')
-    const status = fields[0] ?? ''
+  const fields = nameStatus.split('\0')
+  for (let index = 0; index < fields.length; ) {
+    const status = fields[index++] ?? ''
     if (status === '') continue
-    // A deletion has no staged artifact left to approve; a rename names the
-    // destination last, which is the path the commit will contain.
-    if (status.startsWith('D')) continue
-    const directory = ARCHIVE_PATH.exec(fields[fields.length - 1] ?? '')?.[1]
-    if (directory !== undefined) directories.add(directory)
+    const source = fields[index++] ?? ''
+    // A rename or copy names both the old and the new path; either can be the
+    // archived one, so a move out of the archive still selects that change.
+    const destination = /^[RC]/u.test(status) ? fields[index++] : undefined
+    for (const path of [source, destination]) {
+      if (path === undefined || path === '') continue
+      const directory = ARCHIVE_PATH.exec(path)?.[1]
+      if (directory !== undefined) directories.add(directory)
+    }
   }
   return [...directories].sort()
 }
 
-/** Audit every archived change a staged commit adds or modifies. */
+/** Audit every archived change a staged commit touches. */
 export async function auditStaged(cwd: string): Promise<AuditResult> {
   let nameStatus: string
   try {
-    nameStatus = git(cwd, ['diff', '--cached', '--name-status'])
+    nameStatus = git(cwd, ['diff', '--cached', '--name-status', '-z'])
   } catch (error) {
     return failClosed(`cannot read the staged changes (${message(error)})`)
   }
@@ -686,10 +690,13 @@ export async function auditStaged(cwd: string): Promise<AuditResult> {
   let ok = true
   const archiveRoot = join(openspecRoot, 'changes', 'archive')
   for (const directory of directories) {
+    const changeDir = join(archiveRoot, directory)
+    // A commit that removes the whole archived change leaves nothing to approve.
+    if (!statSync(changeDir, { throwIfNoEntry: false })?.isDirectory()) continue
     const change = archivedChangeName(directory)
     const displayDir = `openspec/changes/archive/${directory}`
     const audit = await auditChange(
-      join(archiveRoot, directory),
+      changeDir,
       displayDir,
       change,
       rule,
