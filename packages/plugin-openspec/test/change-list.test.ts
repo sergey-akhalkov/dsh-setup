@@ -49,7 +49,8 @@ function workspace(withRoot: boolean): string {
 function cliPath(): string {
   const directory = temporaryDirectory('openspec-bin-')
   writeFileSync(join(directory, 'openspec'), '')
-  writeFileSync(join(directory, 'openspec.cmd'), '')
+  // Match the stubbed PATHEXT casing so discovery works on case-sensitive filesystems.
+  writeFileSync(join(directory, 'openspec.CMD'), '')
   return directory
 }
 
@@ -69,9 +70,21 @@ function complete(child: FakeChild, code: number | null, stdout = '', stderr = '
   child.emit('close', code)
 }
 
+/** Force one platform branch for a test and restore it even when the test throws. */
+async function withPlatform(platform: NodeJS.Platform, run: () => Promise<void>): Promise<void> {
+  const original = process.platform
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+  try {
+    await run()
+  } finally {
+    Object.defineProperty(process, 'platform', { value: original, configurable: true })
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('PATH', cliPath())
+  vi.stubEnv('PATHEXT', '.CMD')
 })
 
 afterEach(() => {
@@ -212,46 +225,76 @@ describe('openspec change list', () => {
     kill.mockRestore()
   })
 
-  it('keeps waiting when a descendant holds the inherited pipes open', async () => {
+  it('keeps waiting while a hanging descendant holds the inherited pipes open', async () => {
     vi.useFakeTimers()
-    execFileMock.mockImplementation(
-      (_file: string, _args: string[], _options: unknown, callback: (error: null) => void) => {
-        callback(null)
-      },
-    )
-    const cwd = workspace(true)
-    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
-    const child = spawnChild()
-    const rejection = expect(listWorkspaceChanges(cwd)).rejects.toThrow(TIMEOUT_MESSAGE)
-    // The parent exited but its descendant still owns stdout/stderr: no close.
-    child.emit('exit', 0, null)
-    await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS)
-    await rejection
-    expect(execFileMock).toHaveBeenCalled()
-    kill.mockRestore()
+    await withPlatform('win32', async () => {
+      execFileMock.mockImplementation(
+        (_file: string, _args: string[], _options: unknown, callback: (error: null) => void) => {
+          callback(null)
+        },
+      )
+      const cwd = workspace(true)
+      const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+      spawnChild()
+      const rejection = expect(listWorkspaceChanges(cwd)).rejects.toThrow(TIMEOUT_MESSAGE)
+      // The shim and its Node child are still running; only the pipes stay open.
+      await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS)
+      await rejection
+      expect(execFileMock).toHaveBeenCalledWith(
+        'taskkill',
+        ['/pid', '4242', '/T', '/F'],
+        { windowsHide: true },
+        expect.any(Function),
+      )
+      expect(kill).not.toHaveBeenCalled()
+      kill.mockRestore()
+    })
+  })
+
+  it('does not taskkill a Windows PID whose process already exited', async () => {
+    vi.useFakeTimers()
+    await withPlatform('win32', async () => {
+      execFileMock.mockImplementation(
+        (_file: string, _args: string[], _options: unknown, callback: (error: null) => void) => {
+          callback(null)
+        },
+      )
+      const cwd = workspace(true)
+      const child = spawnChild()
+      const rejection = expect(listWorkspaceChanges(cwd)).rejects.toThrow(
+        /could not be confirmed terminated/,
+      )
+      // The shim exited and its PID may be reused; never target it again.
+      child.emit('exit', 0, null)
+      await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS)
+      await rejection
+      expect(execFileMock).not.toHaveBeenCalled()
+    })
   })
 
   it('reports a process tree it could not confirm terminated', async () => {
     vi.useFakeTimers()
-    execFileMock.mockImplementation(
-      (_file: string, _args: string[], _options: unknown, callback: (error: Error) => void) => {
-        callback(new Error('denied'))
-      },
-    )
-    const cwd = workspace(true)
-    spawnChild()
-    const rejection = expect(listWorkspaceChanges(cwd)).rejects.toThrow(
-      /could not be confirmed terminated/,
-    )
-    await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS)
-    await rejection
+    await withPlatform('win32', async () => {
+      execFileMock.mockImplementation(
+        (_file: string, _args: string[], _options: unknown, callback: (error: Error) => void) => {
+          callback(new Error('denied'))
+        },
+      )
+      const cwd = workspace(true)
+      const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+      spawnChild()
+      const rejection = expect(listWorkspaceChanges(cwd)).rejects.toThrow(
+        /could not be confirmed terminated/,
+      )
+      await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS)
+      await rejection
+      kill.mockRestore()
+    })
   })
 
   it('detaches the POSIX call and kills its process group', async () => {
     vi.useFakeTimers()
-    const original = process.platform
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
-    try {
+    await withPlatform('linux', async () => {
       const cwd = workspace(true)
       const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
       spawnChild()
@@ -262,9 +305,7 @@ describe('openspec change list', () => {
       expect(kill).toHaveBeenCalledWith(-4242, 'SIGKILL')
       expect(execFileMock).not.toHaveBeenCalled()
       kill.mockRestore()
-    } finally {
-      Object.defineProperty(process, 'platform', { value: original, configurable: true })
-    }
+    })
   })
 })
 

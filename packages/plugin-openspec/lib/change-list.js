@@ -140,6 +140,7 @@ function runList(workspace) {
         let stderr = '';
         let settled = false;
         let timedOut = false;
+        let childExited = false;
         const finish = (settle) => {
             if (settled)
                 return;
@@ -147,9 +148,14 @@ function runList(workspace) {
             clearTimeout(timer);
             settle();
         };
+        // shortcut: on Windows taskkill /T needs the cmd.exe shim alive, so a
+        // detached descendant that outlives the shim is reported as unconfirmed
+        // rather than killed; move to a job object or supervisor if the CLI ever
+        // detaches.
         const timer = setTimeout(() => {
             timedOut = true;
-            void killTree(child.pid).then((killed) => {
+            const tree = process.platform !== 'win32' || !childExited;
+            void (tree ? killTree(child.pid) : Promise.resolve(false)).then((killed) => {
                 finish(() => reject(new Error(killed
                     ? TIMEOUT_MESSAGE
                     : `${TIMEOUT_MESSAGE} Its process tree could not be confirmed terminated.`)));
@@ -162,6 +168,10 @@ function runList(workspace) {
         child.stderr?.setEncoding('utf8');
         child.stderr?.on('data', (chunk) => {
             stderr += chunk;
+        });
+        // A stale Windows PID may be reused; never taskkill one after its process exited.
+        child.on('exit', () => {
+            childExited = true;
         });
         child.on('error', (error) => {
             if (timedOut)

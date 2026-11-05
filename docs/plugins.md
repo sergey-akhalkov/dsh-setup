@@ -461,7 +461,8 @@ shipped map in `packages/setup/defaults.yml`:
 
 [`packages/plugin-openspec`](../packages/plugin-openspec) adds one Client command, `/openspec-apply`.
 Typing it opens the native `popupSelect` shell with one row per unfinished change in the open
-session's workspace, labeled with the change name and its `completed/total` task progress. The rows
+session's workspace, labeled with the change name and its `completed/total` task progress. Completed
+changes are omitted, so a root whose changes are all closed shows the shell's empty state. The rows
 come from `GET /plugins/dsh-setup-openspec/changes?session=<id>`: a read-only, session-scoped Host
 route that runs the documented `openspec list --json` CLI in that session's workspace under a
 10-second process-tree timeout. A workspace without its own `openspec/` root, or one whose CLI

@@ -17,7 +17,7 @@
 
 - [x] 3.1 Run `pnpm gen` and `pnpm build` and commit the regenerated patch, `lib/**`, and vendored setup tree; verify `pnpm gen:check` passes and the vendored `plugin-openspec` carries `lib/client.js`.
 - [x] 3.2 Run `pnpm validate` (typecheck, lint, build, test, `gen:check`, `validate:repo`, `validate:composition`, `validate:installer`); verify it exits zero.
-- [ ] 3.3 Run `pnpm build && git diff --exit-code` and `pnpm dogfood`; verify there is no build drift and the installer check passes against a copy of the live desktop profile.
+- [x] 3.3 Run `pnpm build && git diff --exit-code` and `pnpm dogfood`; verify there is no build drift and the installer check passes against a copy of the live desktop profile.
 
 ## Workflow follow-up
 
