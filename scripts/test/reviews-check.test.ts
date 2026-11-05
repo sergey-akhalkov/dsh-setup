@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,7 +8,14 @@ import {
   portableTaskRecordPath,
   taskIdOf,
 } from '../../packages/plugin-delegation-rules/src/shared/approval.ts'
-import { auditActive, auditAll, auditPush, exportChange, readMarker } from '../reviews-check.ts'
+import {
+  auditActive,
+  auditAll,
+  auditPush,
+  auditStaged,
+  exportChange,
+  readMarker,
+} from '../reviews-check.ts'
 
 const DIGEST_A = 'a'.repeat(64)
 const DIGEST_B = 'b'.repeat(64)
@@ -199,9 +206,13 @@ async function commit(root: string, message: string): Promise<string> {
   return git(root, ['rev-parse', 'HEAD']).trim()
 }
 
-async function writeMarker(root: string): Promise<void> {
+async function writeMarker(root: string, overrides: Record<string, unknown> = {}): Promise<void> {
   await mkdir(join(root, 'openspec'), { recursive: true })
-  await writeFile(join(root, 'openspec', 'review-approval.json'), JSON.stringify(MARKER), 'utf8')
+  await writeFile(
+    join(root, 'openspec', 'review-approval.json'),
+    JSON.stringify({ ...MARKER, ...overrides }),
+    'utf8',
+  )
 }
 
 async function writeArchive(
@@ -218,7 +229,12 @@ async function writeArchive(
   return changeDir
 }
 
-async function writePass(changeDir: string, change: string, taskText: string): Promise<void> {
+async function writePass(
+  changeDir: string,
+  change: string,
+  taskText: string,
+  provider = 'codex-subagent',
+): Promise<void> {
   const taskId = taskIdOf(taskText)
   await mkdir(join(changeDir, 'reviews'), { recursive: true })
   await writeFile(
@@ -232,7 +248,7 @@ async function writePass(changeDir: string, change: string, taskText: string): P
       worktreeDigest: DIGEST_B,
       verdict: 'PASS',
       findings: [],
-      target: { provider: 'codex-subagent' },
+      target: { provider },
       time: '2026-10-29T08:55:43.317Z',
     }),
     'utf8',
@@ -267,6 +283,7 @@ describe('reviews:check --change', () => {
       version: 1,
       archiveGate: true,
       taskRule: 'task-review',
+      reviewerProvider: 'codex-subagent',
       cutoff: 'v0.12.0',
     })
     expect(Object.keys(marker.marker.grandfathered ?? {}).sort()).toEqual([
@@ -370,6 +387,121 @@ describe('reviews:check --all', () => {
     expect(result.ok).toBe(false)
     expect(text).not.toContain('old-change: pre-cutoff historical baseline')
     expect(text).toContain('2026-10-01-old-change: task-review PASS 0/1')
+  })
+})
+
+describe('reviewer binding', () => {
+  it('fails a PASS from another provider and names both providers', async () => {
+    const { root, freshDir } = await historyFixture()
+    await writePass(freshDir as string, 'fresh-change', 'Fresh one')
+    await commit(root, 'record the fresh approval')
+    await writeMarker(root, { reviewerProvider: 'other-reviewer' })
+    await commit(root, 'pin another reviewer')
+    const result = await auditAll(root)
+    expect(result.ok).toBe(false)
+    expect(result.lines.join('\n')).toContain(
+      'target provider "codex-subagent" (marker reviewer "other-reviewer")',
+    )
+  })
+
+  it('passes when the record names the pinned provider', async () => {
+    const { root, freshDir } = await historyFixture()
+    await writePass(freshDir as string, 'fresh-change', 'Fresh one')
+    await commit(root, 'record the fresh approval')
+    await writeMarker(root, { reviewerProvider: 'codex-subagent' })
+    await commit(root, 'pin the codex reviewer')
+    const result = await auditAll(root)
+    expect(result.ok, result.lines.join('\n')).toBe(true)
+  })
+
+  it('fails a PASS whose model differs from a pinned reviewer model', async () => {
+    const { root, freshDir } = await historyFixture()
+    await writePass(freshDir as string, 'fresh-change', 'Fresh one')
+    await commit(root, 'record the fresh approval')
+    await writeMarker(root, { reviewerProvider: 'codex-subagent', reviewerModel: 'gpt-6' })
+    await commit(root, 'pin the reviewer model')
+    const result = await auditAll(root)
+    expect(result.ok).toBe(false)
+    expect(result.lines.join('\n')).toContain(
+      'target model "(none)" (marker reviewer model "gpt-6")',
+    )
+  })
+})
+
+describe('reviews:check --staged', () => {
+  it('refuses a staged archive whose checked task has no PASS', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    await writeArchive(root, '2026-10-10-fresh-change', [{ text: 'Fresh one' }])
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(false)
+    const text = result.lines.join('\n')
+    expect(text).toContain('missing 1.1 "Fresh one"')
+    expect(text).toContain('pnpm reviews:check --all')
+    expect(text).toContain('refusing the commit')
+  })
+
+  it('passes a staged archive once every checked task has a PASS', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    const changeDir = await writeArchive(root, '2026-10-10-fresh-change', [{ text: 'Fresh one' }])
+    await writePass(changeDir, 'fresh-change', 'Fresh one')
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok, result.lines.join('\n')).toBe(true)
+    expect(result.lines.join('\n')).toContain('task-review PASS 1/1')
+  })
+
+  it('passes without an archive audit when no archive path is staged', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    await writeFile(join(root, 'notes.txt'), 'ordinary change\n', 'utf8')
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(true)
+    expect(result.lines.join('\n')).toContain('no archived change is staged')
+  })
+
+  it('audits a staged rename into the archive directory', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    const active = join(root, 'openspec', 'changes', 'change-a')
+    await mkdir(active, { recursive: true })
+    await writeFile(join(active, 'tasks.md'), '# Tasks\n\n- [x] 1.1 Renamed task\n', 'utf8')
+    await commit(root, 'add the active change')
+    const archived = join(root, 'openspec', 'changes', 'archive', '2026-10-10-change-a')
+    await mkdir(join(archived, '..'), { recursive: true })
+    await rename(active, archived)
+    git(root, ['add', '-A'])
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(false)
+    const text = result.lines.join('\n')
+    expect(text).toContain('openspec/changes/archive/2026-10-10-change-a')
+    expect(text).toContain('missing 1.1 "Renamed task"')
+  })
+
+  it('fails closed with the manual audit when the staged range is unreadable', async () => {
+    const { root } = await fixture()
+    const result = await auditStaged(root)
+    expect(result.ok).toBe(false)
+    const text = result.lines.join('\n')
+    expect(text).toContain('cannot read the staged changes')
+    expect(text).toContain('pnpm reviews:check --all')
+  })
+
+  it('runs as the documented pre-commit command', async () => {
+    const root = await initRepo()
+    await writeMarker(root)
+    await writeArchive(root, '2026-10-10-fresh-change', [{ text: 'Fresh one' }])
+    git(root, ['add', '-A'])
+    const script = join(import.meta.dirname, '..', 'reviews-check.ts')
+    const run = spawnSync(process.execPath, [script, '--staged'], {
+      cwd: root,
+      encoding: 'utf8',
+    })
+    expect(run.status, run.stderr).toBe(1)
+    expect(run.stdout).toContain('refusing the commit')
   })
 })
 

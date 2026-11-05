@@ -18,6 +18,14 @@ that produces and evaluates the records is described in
   session whose tick makes the task list fully checked must obtain a `PASS` for every checked task;
   before completion each writer only reviews its own ticked tasks. An `ERROR` record can still close
   a turn with the failure visible, but it never approves an archive or a push.
+- When the marker declares a reviewer, the record's `target.provider` must match and, when declared,
+  so must `target.model`. A mismatch is an approval error whose detail names the expected and actual
+  values; it is not a missing record. The live archive gate, the live task gate, `delegation_status`,
+  and every `pnpm reviews:check` mode apply the same binding. A marker without the fields keeps the
+  previous provider-agnostic behavior.
+- A cached local record is reused only when its target matches the declared reviewer. A record from
+  another provider is treated as unreviewed, so `nextTaskForReview` selects that task and the
+  prescribed `delegate` call starts the required reviewer instead of returning the old `PASS`.
 
 ## The portable record
 
@@ -56,8 +64,9 @@ and it cannot invent an approval.
 pnpm reviews:check --change <name>   # one active change
 pnpm reviews:check --all             # every archived change, cutoff and exception reported
 pnpm reviews:check --push            # the archived changes a push adds or modifies (stdin refs)
+pnpm reviews:check --staged          # the archived changes this commit stages
 pnpm reviews:export --change <name>  # copy existing local .dsh PASS records into the change
-pnpm hooks:install                   # select the checked-in .githooks as core.hooksPath
+pnpm hooks:install                   # select the checked-in .githooks as core.hooksPath (once per clone)
 ```
 
 Each audit prints the per-change coverage and names every gap with its exact review call:
@@ -74,6 +83,11 @@ archive, or a later modification of any archive, is checked under the normal rul
 the pre-push refs from stdin, audits the archived changes added or modified by those commits (from
 the pushed commit tree, not the working directory, including deletions and merge diffs), and fails
 closed with `pnpm reviews:check --all` when it cannot determine the range or read the evidence.
+`--staged` reads `git diff --cached --name-status` and audits every archived change the index adds,
+modifies, copies, or renames into `openspec/changes/archive/`; a commit that stages no archive path
+passes without an archive audit, and an unreadable staged range or unreadable evidence fails closed
+with the same `pnpm reviews:check --all` hint. It reads the worktree, so an index-only edit that has
+no worktree file is reported as unreadable and the committed audit remains the authority.
 
 ## The marker and the opt-in boundary
 
@@ -84,17 +98,22 @@ A repository opts in with a tracked `openspec/review-approval.json`:
   "version": 1,
   "archiveGate": true,
   "taskRule": "task-review",
+  "reviewerProvider": "codex-subagent",
+  "reviewerModel": "<optional model pin>",
   "cutoff": "v0.12.0",
   "grandfathered": { "<change>": "<why it is reported, not enforced>" }
 }
 ```
 
-`taskRule` must name a configured strict task-scoped review rule. `cutoff` names the tag before
-which archives are the historical baseline. `grandfathered` lists changes that are reported as an
-explicit exception. Without the marker, or with `"archiveGate": false`, nothing changes: the plugin
-is global, and a workspace that did not opt in keeps its archive behavior. A malformed marker, an
-unreadable `tasks.md`/record, or a `taskRule` that is missing, not task-scoped, or not strict refuses
-the archive with the cause (fail closed).
+`taskRule` must name a configured strict task-scoped review rule. `reviewerProvider` and
+`reviewerModel` pin the reviewer identity: a record whose `target.provider` (and, when declared,
+`target.model`) differs is unapproved, and the detail names both values. Both fields are optional;
+omitting them keeps the provider-agnostic behavior for standalone and other repositories. `cutoff`
+names the tag before which archives are the historical baseline. `grandfathered` lists changes that
+are reported as an explicit exception. Without the marker, or with `"archiveGate": false`, nothing
+changes: the plugin is global, and a workspace that did not opt in keeps its archive behavior. A
+malformed marker, an unreadable `tasks.md`/record, or a `taskRule` that is missing, not task-scoped,
+or not strict refuses the archive with the cause (fail closed).
 
 The repository's own marker sets the `v0.12.0` cutoff and grandfathers the three v0.12.0 changes;
 [openspec-status.md](openspec-status.md) records the post-hoc integration review `PASS` and the
@@ -115,18 +134,27 @@ restored. It applies to subagents too (only the turn-stopping gate skips them). 
 the command run unchanged. It is a guard, not a sandbox: a deliberately obfuscated move can archive
 locally, and the push audit is the backstop for that.
 
-## Push and CI
+## Hooks, push, and CI
 
-`.githooks/pre-push` is checked in and selected by `pnpm hooks:install`
-(`git config core.hooksPath .githooks`). It runs `pnpm reviews:check --push`; a missing approval
-refuses the push and names the change, the commit, the missing tasks, and the review calls. If the
-hook cannot determine the pushed range or find `pnpm`, it fails closed with
-`pnpm reviews:check --all` as the manual command. A hook can be skipped with `git push --no-verify`,
-and the hook does not cover an archive form the guard and the push audit do not recognize.
+Two tracked hooks live in `.githooks/`, and `pnpm hooks:install` selects the directory by setting this
+repository's local `core.hooksPath` (`.githooks`). Run it **once per clone**: the hook files are
+tracked, but the Git configuration that activates them is local, so a fresh clone has no active hooks
+until that command runs. The installer checks that both hook files exist and reports the local
+configuration it wrote.
+
+- `.githooks/pre-commit` runs `pnpm reviews:check --staged`, so a manual move, an editor rename, or a
+  `run_code` move into `changes/archive/` is audited before the commit exists.
+- `.githooks/pre-push` runs `pnpm reviews:check --push`; a missing approval refuses the push and names
+  the change, the commit, the missing tasks, and the review calls.
+
+If a hook cannot find `pnpm`, determine the range, or read the evidence, it fails closed with
+`pnpm reviews:check --all` as the manual command. A hook can be skipped with `--no-verify`
+(`git commit --no-verify`, `git push --no-verify`): that bypass is visible only locally and the
+pre-push/CI audit still checks the committed tree, so it is a convenience, not an approval.
 
 Both CI workflows (`.github/workflows/validate.yml` and `release.yml`) run
 `pnpm reviews:check --all` on `windows-latest` with full git history and tags, so the merge gate
-catches an archive a `--no-verify` push let through. The full local check is:
+catches an archive a `--no-verify` commit or push let through. The full local check is:
 
 ```sh
 pnpm reviews:check --all
@@ -135,11 +163,13 @@ pnpm reviews:check --all
 ## Known limits
 
 - The guard recognizes the documented archive forms only; another spelling archives locally and is
-  caught by the push audit, not before the move.
-- The pre-push hook is a local convenience; `--no-verify`, a missing hook, or a Git client without
-  `pnpm` on `PATH` relies on CI, which is the remote boundary.
+  caught by the pre-commit staged audit, the push audit, or CI, not before the move.
+- The hooks are local conveniences; a missing hook, `--no-verify`, or a Git client without `pnpm` on
+  `PATH` relies on CI, which is the remote boundary.
 - Records are process integrity, not anti-forgery: a model with filesystem access can write a
-  record-shaped file, exactly as it can write a `.dsh` record. The audit checks that the record is
-  well formed, identifies its change and task, and is committed with the change.
+  record-shaped file, exactly as it can write a `.dsh` record. The reviewer binding and the audits
+  check that the record is well formed, identifies its change and task, and names the configured
+  reviewer; a hand-written `codex-subagent` `PASS` still passes. Signed records or CI attestation are
+  a different threat model and are out of scope; branch protection and CI are the remote boundary.
 - The archive gate is live only after the setup release is installed in the workspace; before that,
-  `pnpm reviews:check` and the pre-push hook are the enforcement.
+  `pnpm reviews:check` and the hooks are the enforcement.
