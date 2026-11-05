@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { selectCiVersions } from '../ci-versions.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { resolveCiVersions, selectCiVersions } from '../ci-versions.ts'
 
 const RANGE = '>=0.2.1-rc.3 <0.3.0'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('selectCiVersions', () => {
   it('includes the range floor', () => {
@@ -35,5 +39,32 @@ describe('selectCiVersions', () => {
     expect(
       selectCiVersions(RANGE, '0.2.1-rc.5', ['0.2.1-rc.2', '0.2.1-rc.5', '0.3.0', '0.2.2-rc.1']),
     ).toEqual(['0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.1'])
+  })
+})
+
+describe('resolveCiVersions', () => {
+  it('uses the published versions when the lookup succeeds', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(resolveCiVersions(RANGE, '0.2.1-rc.5', () => ['0.2.2-rc.1'])).toEqual({
+      versions: ['0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.1'],
+      degraded: false,
+    })
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the floor and runtime with a reported degradation', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(
+      resolveCiVersions(RANGE, '0.2.1-rc.5', () => {
+        throw new Error('registry unreachable')
+      }),
+    ).toEqual({ versions: ['0.2.1-rc.3', '0.2.1-rc.5'], degraded: true })
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('falling back'))
+  })
+
+  it('does not hide an invalid engines range behind the fallback', () => {
+    expect(() => resolveCiVersions('not-a-range', '0.2.1-rc.5', () => [])).toThrow(
+      /invalid DSH engines range/,
+    )
   })
 })

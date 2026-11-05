@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "widen-dsh-support-to-engine-range",
+  "scope": "task",
+  "taskId": "eac06225cab562c9",
+  "digest": "1fb092b4052bb6e4472752542de1de90f677b0e122b9648659420415837c7b7a",
+  "worktreeDigest": "6e09945005d1b20157264cb6fa659cc9459afe4a7c1d95e74fa54984d278932b",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-05T17:28:39.028Z"
+}
