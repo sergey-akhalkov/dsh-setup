@@ -483,27 +483,56 @@ skills.
 
 [`packages/plugin-openspec`](../packages/plugin-openspec) also contributes one OpenSpec tab type to the
 right sidebar. A Start-page card, the sidebar's panel list, and client navigation open its root page
-(`sidebar://openspec`), which lists the workspace's `openspec list --json` changes by default: name,
-status, `completed/total` task progress, and the artifact kinds the change already carries, unfinished
-first. The `Specs` segment (`dsh-resource://openspec/specs`, the address that opens the same root on
-that segment) lists the `openspec list --specs --json` capabilities with their requirement counts.
+(`sidebar://openspec`): a workspace header with the workspace totals (`N changes · N specs · N
+archived`), `Explore` and `Propose` actions that fill `/openspec-explore ` and `/openspec-propose `
+without submitting, and three counted segments — `Changes`, `Specs` and `Archive`. The segment labels
+carry the totals from the first `/changes` read, so all three are complete before Specs is opened.
+`Changes` lists the workspace's active changes, unfinished first. Each card states the derived status
+(`planning`, `ready to apply`, `applying` or `complete`) as a semantic tag, a task progress bar with
+`completed/total`, the proposal's one-line `## Why` summary, the artifact kinds the change carries,
+when it last changed, and the last commit. An empty change list repeats both actions, shows the
+workspace totals, and lists the three most recently archived changes with a link to the full archive.
+The `Specs` segment (`dsh-resource://openspec/specs`, the address that opens the same root on that
+segment) lists the accepted capabilities with their purpose, requirement count and provenance — the
+newest archived change that touched the capability, its archive date and task completion, and the
+spec file's last commit. Spec and Archive rows are filtered in memory by name or purpose. `Archive`
+lists archived changes newest first with date, task completion, purpose and commit.
 
-Choosing a change opens its own tab at `dsh-resource://openspec/change/<name>` — one canonical address
-per change, so reopening focuses the existing tab and two changes can sit side by side. Its artifact
-segments are Why (`proposal.md`), Design, Specs (each delta spec, with a switcher when a change carries
-several), and Tasks; each renders through the shared Markdown renderer, and a missing artifact is a
-disabled segment that says it is not written yet. Choosing a capability opens
-`dsh-resource://openspec/spec/<id>` with its accepted spec. The panel is read-only: `Apply change`
-writes `/openspec-apply-change <name>` into the composer draft and an empty change list offers
-`/openspec-propose `, both without submitting. The native refresh re-reads the current request, and a
-body re-reads when its tab becomes visible after being hidden.
+Choosing an active change opens its own tab at `dsh-resource://openspec/change/<name>` — one canonical
+address per change, so reopening focuses the existing tab and two changes can sit side by side. An
+archived change opens at `dsh-resource://openspec/archive-change/<name>`, so an active and an archived
+change with the same name keep separate tabs and separate content. The change view header states the
+derived status, purpose, overall task progress, last-updated time and last commit, with `Apply change`
+for active changes only; `Apply change` writes `/openspec-apply-change <name>` into the composer draft
+without submitting. Its `Why | Design | Specs (N) | Tasks` tabs follow the shipped keyboard model:
+proposal and design render through the shared Markdown renderer, a missing artifact states that it is
+not written yet, delta specs render one card per requirement with `ADDED`/`MODIFIED`/`REMOVED`/
+`RENAMED` operation tags, a `RENAMED` from/to pair, capability pills when several are carried, and an
+`Open accepted spec` action; a delta file the Host could not parse keeps its raw Markdown body. `Tasks`
+is a grouped checklist parsed with the pinned CLI's exact task-line grammar, with per-group
+`done/total` and the CLI overall counts in the header; if the parsed total differs from the CLI total,
+a one-line note names the remainder.
 
-The two read routes are `GET /api/plugins/dsh-setup-openspec/change?session=<id>&name=<change>` and
-`GET /api/plugins/dsh-setup-openspec/specs?session=<id>` (add `&id=<capability>` for one spec). Like the
-change list they resolve the workspace from the session, refuse a workspace without its own
-`openspec/` root, and read artifact bodies only for items the CLI reports. The DSH component library is
-consumed as a host-provided external module, and a host without the right-sidebar services registers
-no panel and keeps the picker and the six skills.
+Choosing a capability opens `dsh-resource://openspec/spec/<id>` with its purpose, requirement and
+scenario counts, acceptance date, producing change and commit. `Requirements (N) | History (M)` tabs
+show the accepted requirements as structured cards — normative `SHALL`/`MUST`/`MUST NOT` marked,
+scenario `WHEN`/`THEN`/`AND`/`BUT` steps labelled, backticked code preserved — with a text filter when
+a spec has more than twelve requirements, and a newest-first history of the archived changes whose
+delta specs touched that capability. A history row opens its archived change tab. The panel is
+read-only: it never archives, syncs, validates, ticks a task, or edits a file.
+
+The three read routes are `GET /api/plugins/dsh-setup-openspec/changes?session=<id>` (active
+`changes`, additive `archived`, and `counts`),
+`GET /api/plugins/dsh-setup-openspec/change?session=<id>&name=<change>` (add `&archived=1` for the
+archive family), and `GET /api/plugins/dsh-setup-openspec/specs?session=<id>` (add `&id=<capability>`
+for one spec). All stay additive: the `changes` array keeps its active-only legacy contract and
+`status` values, so the `/openspec-apply` picker and an already-loaded older client keep working. Like
+the change list they resolve the workspace from the session, refuse a workspace without its own
+`openspec/` root, and read artifact bodies only for items the CLI reports. Commit facts come from a
+bounded read-only `git log` in the Host; when the workspace is not a git repository or git is
+unavailable, rows and details render without commit facts and no error is shown. The DSH component
+library is consumed as a host-provided external module, and a host without the right-sidebar services
+registers no panel and keeps the picker and the six skills.
 
 An open change or capability view also follows its files through the host's shipped file observation:
 the client `file` resource provider over the Host's `workspaceFiles.changes` feed. A change watches
@@ -512,9 +541,10 @@ the client `file` resource provider over the Host's `workspaceFiles.changes` fee
 version is the baseline, and any later version, appearance, or disappearance schedules exactly one
 re-read 300 ms after the last change, so artifact bodies, task counts, and the header's last-updated
 fact move together. Subscriptions and the pending timer dispose with the tab body, and no timer runs
-while nothing changes. The header states when the shown files were last modified in local time, adding
-the date when it is not today. A host without the provider reports no live resource, and the native
-refresh plus the hidden-to-visible re-read remain the fallback.
+while nothing changes. Archived views are immutable by convention and skip observation; native refresh
+re-reads them. A host without the provider reports no live resource, and the native refresh plus the
+hidden-to-visible re-read remain the fallback. A failing read shows the Host's cause with a `Retry`
+action rather than an empty workspace.
 
 ## Adding a package
 
