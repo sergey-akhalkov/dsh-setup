@@ -537,3 +537,14 @@ live profile's 0.22.0 delegation plugin cannot parse the marker's `reviewerProvi
 archive used the repository's 10/10 portable audit plus a temporary local marker parse workaround; the
 committed marker is unchanged. Open owner follow-up: install the release that carries the picker and
 open `/openspec-apply` in a workspace with an `openspec/` root.
+
+It shipped in v0.25.0 (tag on commit `2d87c9b`) after the release workflow passed DSH 0.2.1-rc.3 and
+0.2.1-rc.5, the one-command installer exercise, the publish job and the Pages deployment, and the
+validate workflow on `main` passed. The first release run failed only the rc.3 unit-test job on two
+pre-existing `plugin-hindsight` export-end-to-end timeouts; a full re-run passed and deployed. The
+installer round-trip (`pnpm dogfood`) passed against a copy of the live desktop profile without
+touching the live profile or the running Harness. The published index returns HTTP 200, lists all 18
+setup and plugin packages at 0.25.0 pinned to that commit, and retains 0.24.0 and earlier versions.
+The owner installs the published 0.25.0 from the market (or re-runs the installer from an external
+PowerShell with the app closed); that install is what makes the picker and the reviewer-bound
+delegation plugin live.
