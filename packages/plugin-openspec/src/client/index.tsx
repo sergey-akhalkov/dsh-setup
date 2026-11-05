@@ -1511,7 +1511,12 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
         onChange={props.onArtifact}
         label={t('change.artifactLabel')}
       />
-      <div className="dsh-openspec-scroll">
+      <div
+        className="dsh-openspec-scroll"
+        id={`${baseId}-${artifact}-panel`}
+        role="tabpanel"
+        aria-labelledby={`${baseId}-${artifact}`}
+      >
         {artifactBody(change, artifact, delta, deltas, t, labels, props)}
       </div>
     </div>
@@ -1616,10 +1621,24 @@ function DeltaView(props: {
         raw === undefined ? (
           <p className="dsh-openspec-state">{props.t('artifact.notWritten')}</p>
         ) : (
-          // Archived unparsed-file fallback: the file body stays readable.
-          <div className="dsh-openspec-body">
-            <MarkdownText text={raw.body} labels={props.labels} />
-          </div>
+          <>
+            <div className="dsh-openspec-delta-head">
+              <span className="dsh-openspec-card-title">{current}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                icon={<primitives.IconRightUpOutlineRegular size={14} />}
+                onClick={() => props.onOpenCapability(current)}
+              >
+                {props.t('capability.openAccepted')}
+              </Button>
+            </div>
+            {/* Archived unparsed-file fallback: the file body stays readable. */}
+            <div className="dsh-openspec-body">
+              <MarkdownText text={raw.body} labels={props.labels} />
+            </div>
+          </>
         )
       ) : (
         groups.map((entry) => (

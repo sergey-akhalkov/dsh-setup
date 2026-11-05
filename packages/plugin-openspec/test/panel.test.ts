@@ -2055,9 +2055,7 @@ describe('OpenSpec root view', () => {
     await settle()
     second.render()
     expect(viewProps(second.tree, RootView).segment).toBe('specs')
-    expect(
-      (viewProps(second.tree, RootView).capabilities as { phase: string }).phase,
-    ).toBe('ready')
+    expect((viewProps(second.tree, RootView).capabilities as { phase: string }).phase).toBe('ready')
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/specs'))).toBe(true)
     second.destroy()
   })
@@ -2112,6 +2110,10 @@ describe('OpenSpec change view', () => {
     expect(items.map((item) => item.value)).toEqual(['proposal', 'design', 'specs', 'tasks'])
     expect(new Set(items.map((item) => item.id)).size).toBe(4)
     expect(items.every((item) => String(item.panelId).endsWith('-panel'))).toBe(true)
+    const selected = items.find((item) => item.value === 'proposal')
+    const panel = nodes(tree).find((node) => node.props.role === 'tabpanel')
+    expect(panel?.props.id).toBe(selected?.panelId)
+    expect(panel?.props['aria-labelledby']).toBe(selected?.id)
     ;(control.props.onChange as (value: string) => void)('design')
     expect(chosen).toEqual(['design'])
     expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('# Why')
@@ -2183,19 +2185,27 @@ describe('OpenSpec change view', () => {
   })
 
   it('falls back to raw Markdown for a capability without a structured delta', () => {
+    const opened: string[] = []
     const change: ChangeDetail = {
       ...TWO_DELTAS,
       deltas: [AUTH_DELTA],
       specs: [{ capability: 'archived-cap', body: '# archived raw', modified: '' }],
     }
     const fallback = ChangeView(
-      changeViewProps({ change, artifact: 'specs', delta: 'archived-cap' }),
+      changeViewProps({
+        change,
+        artifact: 'specs',
+        delta: 'archived-cap',
+        onOpenCapability: (id) => opened.push(id),
+      }),
     )
     expect(typed(fallback, 'Pill').map((pill) => pill.props.children)).toEqual([
       'auth',
       'archived-cap',
     ])
     expect(typed(fallback, 'MarkdownText')[0]?.props.text).toBe('# archived raw')
+    click(buttonByText(fallback, 'Open accepted spec'))
+    expect(opened).toEqual(['archived-cap'])
     const structured = ChangeView(changeViewProps({ change, artifact: 'specs', delta: 'auth' }))
     expect(textOf(structured)).toContain('Sign-in')
     expect(typed(structured, 'MarkdownText')).toHaveLength(0)
@@ -2289,6 +2299,24 @@ describe('OpenSpec capability view', () => {
     const items = tabControl(tree).props.items as Array<Record<string, string>>
     expect(items.map((item) => item.label)).toEqual(['Requirements (2)', 'History (2)'])
     expect(textOf(tree)).toContain('Sign-in')
+  })
+
+  it('renders the commit date even when it differs from the modification date', () => {
+    const tree = CapabilityView(
+      capabilityViewProps({
+        capability: {
+          ...CAPABILITY,
+          modified: '2026-10-30T10:00:00Z',
+          commit: {
+            short: 'bbb2222',
+            at: '2026-10-05T08:00:00Z',
+            subject: 'fix: earlier commit',
+          },
+        },
+      }),
+    )
+    expect(textOf(tree)).toContain('bbb2222')
+    expect(textOf(tree)).toContain('2026-10-05')
   })
 
   it('switches to the history section through the tabs', () => {
