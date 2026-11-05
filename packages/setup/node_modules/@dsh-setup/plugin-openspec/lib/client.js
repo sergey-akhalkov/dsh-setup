@@ -1298,6 +1298,7 @@ window.__ModuleLoader__.load({
           (row) => CapabilityCard({
             row,
             t: props.t,
+            now: props.now,
             onOpen: props.onOpenCapability
           })
         ) })
@@ -1375,10 +1376,8 @@ window.__ModuleLoader__.load({
             }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(props.row.presence, props.t) }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-tail", children: [
-                props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t("change.tasks")}` }) : null,
-                props.row.commit === void 0 || props.row.commit === null ? null : CommitFactView({ commit: props.row.commit })
-              ] })
+              props.row.commit === void 0 || props.row.commit === null ? null : CommitFactView({ commit: props.row.commit }),
+              props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t("change.tasks")}` }) : null
             ] })
           ]
         }
@@ -1387,19 +1386,21 @@ window.__ModuleLoader__.load({
     function CapabilityCard(props) {
       const provenance = props.row.lastChange;
       const commit = props.row.commit ?? provenance?.commit ?? null;
+      const accepted = provenance === void 0 || provenance === null ? null : isoDate(provenance.date);
+      const updated = relativeLabel(props.row.modified, props.now);
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { type: "button", className: "dsh-openspec-card", onClick: () => props.onOpen(props.row.id), children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
+          accepted === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: accepted }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.id }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.requirementCount)} ${props.t("specs.req")}` })
+          updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
         ] }),
         summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one", children: props.row.purpose }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
-          provenance === void 0 || provenance === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(props.row.requirementCount)} ${props.t("capability.requirements")}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${props.t("specs.acceptedVia")} ${provenance.name}` }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isoDate(provenance.date) ?? provenance.date }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(provenance.completedTasks)}/${String(provenance.totalTasks)}` })
-          ] }),
-          commit === null ? null : CommitFactView({ commit })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: provenance === void 0 || provenance === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${props.t("specs.acceptedVia")} ${provenance.name}` }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-tail", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.requirementCount)} ${props.t("specs.req")}` }),
+            commit === null ? null : CommitFactView({ commit })
+          ] })
         ] })
       ] });
     }

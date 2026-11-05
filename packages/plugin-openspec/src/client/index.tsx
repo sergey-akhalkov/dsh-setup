@@ -1183,6 +1183,7 @@ function specsBody(
             CapabilityCard({
               row,
               t: props.t,
+              now: props.now,
               onOpen: props.onOpenCapability,
             }),
           )}
@@ -1306,36 +1307,38 @@ function ChangeCard(props: {
       )}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">{presenceFacts(props.row.presence, props.t)}</span>
-        <span className="dsh-openspec-card-tail">
-          {props.row.totalTasks > 0 ? (
-            <span className="dsh-openspec-card-count">
-              {`${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t('change.tasks')}`}
-            </span>
-          ) : null}
-          {props.row.commit === undefined || props.row.commit === null
-            ? null
-            : CommitFactView({ commit: props.row.commit })}
-        </span>
+        {props.row.commit === undefined || props.row.commit === null
+          ? null
+          : CommitFactView({ commit: props.row.commit })}
+        {props.row.totalTasks > 0 ? (
+          <span className="dsh-openspec-card-count">
+            {`${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t('change.tasks')}`}
+          </span>
+        ) : null}
       </span>
     </button>
   )
 }
 
-/** One capability row: name, purpose, requirement count, and provenance. */
+/** One capability row: date, name, purpose, and acceptance/commit facts. */
 function CapabilityCard(props: {
   readonly row: CapabilitySummary
   readonly t: Translate
+  readonly now?: Date
   onOpen(id: string): void
 }): ReactNode {
   const provenance = props.row.lastChange
   const commit = props.row.commit ?? provenance?.commit ?? null
+  const accepted = provenance === undefined || provenance === null ? null : isoDate(provenance.date)
+  const updated = relativeLabel(props.row.modified, props.now)
   return (
     <button type="button" className="dsh-openspec-card" onClick={() => props.onOpen(props.row.id)}>
       <span className="dsh-openspec-card-head">
+        {accepted === null ? null : <Tag tone="quiet">{accepted}</Tag>}
         <span className="dsh-openspec-card-title">{props.row.id}</span>
-        <span className="dsh-openspec-card-count">
-          {`${String(props.row.requirementCount)} ${props.t('specs.req')}`}
-        </span>
+        {updated === null ? null : (
+          <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
+        )}
       </span>
       {summaryText(props.row.purpose) === null ? null : (
         <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one">
@@ -1343,16 +1346,17 @@ function CapabilityCard(props: {
         </span>
       )}
       <span className="dsh-openspec-meta">
-        {provenance === undefined || provenance === null ? (
-          <span>{`${String(props.row.requirementCount)} ${props.t('capability.requirements')}`}</span>
-        ) : (
-          <>
+        <span className="dsh-openspec-tags">
+          {provenance === undefined || provenance === null ? null : (
             <span>{`${props.t('specs.acceptedVia')} ${provenance.name}`}</span>
-            <span>{isoDate(provenance.date) ?? provenance.date}</span>
-            <span>{`${String(provenance.completedTasks)}/${String(provenance.totalTasks)}`}</span>
-          </>
-        )}
-        {commit === null ? null : CommitFactView({ commit })}
+          )}
+        </span>
+        <span className="dsh-openspec-card-tail">
+          <span className="dsh-openspec-card-count">
+            {`${String(props.row.requirementCount)} ${props.t('specs.req')}`}
+          </span>
+          {commit === null ? null : CommitFactView({ commit })}
+        </span>
       </span>
     </button>
   )

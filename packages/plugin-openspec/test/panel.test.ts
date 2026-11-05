@@ -1876,6 +1876,29 @@ describe('OpenSpec root view', () => {
     )
   })
 
+  it('renders the capability card with the change-card head and meta layout', () => {
+    const tree = RootView(
+      rootProps({
+        segment: 'specs',
+        changes: { phase: 'ready', value: listOf([], [], { capabilities: 2 }) },
+        capabilities: { phase: 'ready', value: CAPABILITY_ROWS },
+        now: new Date('2026-10-27T12:00:00'),
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('capability card missing')
+    const head = nodes(card).find((node) => node.props.className === 'dsh-openspec-card-head')
+    expect(textOf(head)).toContain('2026-10-27')
+    expect(textOf(head)).toContain('admin-indicator')
+    expect(textOf(head)).toContain('updated 2h ago')
+    expect(textOf(head)).not.toContain('10 req')
+    const text = textOf(card)
+    expect(text).toContain('Accepted via 2026-10-27-add-admin-indicator')
+    expect(text).toContain('10 req')
+    expect(text).toContain('7e87448')
+    expect(text).not.toContain('5/5')
+  })
+
   it('filters archived changes and states an empty match', () => {
     const rows = [ARCHIVED_ROW, OLDER_ARCHIVED_ROW]
     const tree = RootView(
