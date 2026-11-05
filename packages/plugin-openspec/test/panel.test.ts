@@ -1830,13 +1830,11 @@ describe('OpenSpec root view', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
     expect(typed(card, 'Tooltip')[0]?.props.label).toBe(why)
-    const toggle = nodes(card).find((node) =>
-      String(node.props.className ?? '').includes('dsh-openspec-purpose-toggle'),
+    const purpose = nodes(card).find((node) =>
+      String(node.props.className ?? '').includes('dsh-openspec-purpose-clamp'),
     )
-    expect(toggle?.props.tabIndex).toBe(0)
-    expect(toggle?.props.role).toBe('button')
-    expect(PANEL_CSS).toContain(':focus-within')
-    expect(PANEL_CSS).toContain('-webkit-line-clamp: unset')
+    expect(purpose?.props.onClick).toBeUndefined()
+    expect(String(purpose?.props.className)).not.toContain('purpose-toggle')
   })
 
   it('opens a change at the artifact whose card tag was clicked', () => {
@@ -3676,7 +3674,6 @@ describe('OpenSpec panel visual contract', () => {
     expect(PANEL_CSS).toContain('prefers-reduced-motion')
     expect(PANEL_CSS).toContain('-webkit-line-clamp: 3')
     expect(PANEL_CSS).toContain('flex-wrap: wrap')
-    expect(PANEL_CSS).toContain('.dsh-openspec-purpose-toggle')
-    expect(PANEL_CSS).toContain(':focus-within')
+    expect(PANEL_CSS).not.toContain('.dsh-openspec-purpose-toggle')
   })
 })
