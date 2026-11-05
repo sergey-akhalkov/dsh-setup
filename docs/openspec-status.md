@@ -548,3 +548,15 @@ setup and plugin packages at 0.25.0 pinned to that commit, and retains 0.24.0 an
 The owner installs the published 0.25.0 from the market (or re-runs the installer from an external
 PowerShell with the app closed); that install is what makes the picker and the reviewer-bound
 delegation plugin live.
+
+The picker route was fixed in v0.25.1 (tag on commit `fa73c09`). The 0.25.0 route was registered on
+`webServer`, which the desktop shell host does not mount, so the desktop picker showed
+`The OpenSpec change list request failed (404)` while the Web GUI worked. The route now registers on
+the carrier-neutral `connection.fetch` registry under
+`/api/plugins/dsh-setup-openspec/changes`, and the Client addresses it document-relative, the same
+contract the shipped feature Fetch routes use; the Web `/api` bridge and the desktop shell carrier
+both serve it, and the carrier admits origin and cookie before dispatch. A regression test covers a
+host with `connection.fetch` but no `webServer`. The release workflow passed DSH 0.2.1-rc.3 and
+0.2.1-rc.5, the publish job and the Pages deployment; the published index returns HTTP 200, lists all
+18 packages at 0.25.1 pinned to that commit, and retains 0.25.0 and earlier. The owner installs
+0.25.1 the same way; the picker then opens on both carriers.
