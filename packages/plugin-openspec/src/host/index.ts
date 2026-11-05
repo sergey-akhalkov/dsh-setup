@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill'
+import { listWorkspaceChanges } from './change-list.js'
 
 /**
  * OpenSpec plugin: registers the six generated core skills from a pinned
@@ -11,10 +13,11 @@ import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill'
  * layer. The skill bodies load from the vendored assets only when invoked.
  *
  * The OpenSpec CLI is a machine prerequisite, not a bundle dependency: this
- * module never spawns it, downloads it, or adds it to PATH. The adapter note
- * carried by every loaded skill states the prerequisite and the project-local
- * root/cleanup rules at the point of use; the task-lifecycle skills also carry
- * the plugin-owned task-lane guidance.
+ * module never installs, downloads, or fetches it. The Web-only change-list
+ * route runs the documented CLI on demand for the `/openspec-apply` picker;
+ * the adapter note carried by every loaded skill states the prerequisite and
+ * the project-local root/cleanup rules at the point of use, and the
+ * task-lifecycle skills also carry the plugin-owned task-lane guidance.
  */
 
 /** Cordis plugin name, equal to the package name. */
@@ -194,4 +197,104 @@ export function apply(ctx: Context): void {
   assertGuidanceTargets(lock.skills)
   const guidance = readGuidance()
   ctx.skills.registerProvider(() => createSkillProvider(lock, guidance))
+  registerChangeRoute(ctx)
+}
+
+/** Read-only route the Client picker asks for the session workspace's change list. */
+export const CHANGES_ROUTE = '/plugins/dsh-setup-openspec/changes'
+
+/**
+ * The four Web Host services the change-list route needs. They are probed with
+ * `ctx.get` so a CLI, TUI, or ACP host keeps the six skills and registers
+ * nothing.
+ */
+interface ChangeRouteHost {
+  readonly webServer: {
+    register(route: {
+      kind: 'exact'
+      path: string
+      handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void
+    }): () => void
+  }
+  readonly connection: {
+    requestRejection(request: { headers: IncomingHttpHeaders }): 401 | 403 | undefined
+  }
+  readonly agents: {
+    get(id: string): { readonly session: unknown } | undefined
+  }
+  readonly workingDirectory: {
+    get(session: unknown): string
+  }
+}
+
+function changeRouteHost(ctx: Context): ChangeRouteHost | undefined {
+  const webServer = ctx.get('webServer') as ChangeRouteHost['webServer'] | undefined
+  const connection = ctx.get('connection') as ChangeRouteHost['connection'] | undefined
+  const agents = ctx.get('agents') as ChangeRouteHost['agents'] | undefined
+  const workingDirectory = ctx.get('workingDirectory') as
+    | ChangeRouteHost['workingDirectory']
+    | undefined
+  if (
+    webServer === undefined ||
+    connection === undefined ||
+    agents === undefined ||
+    workingDirectory === undefined
+  ) {
+    return undefined
+  }
+  return { webServer, connection, agents, workingDirectory }
+}
+
+function writeJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+/**
+ * Register the workspace-scoped, read-only change list route when the Web Host
+ * services exist. The request carries only a session id; the workspace comes
+ * from that live session, never from the request.
+ */
+export function registerChangeRoute(ctx: Context): void {
+  const host = changeRouteHost(ctx)
+  if (host === undefined) return
+  ctx.effect(
+    () =>
+      host.webServer.register({
+        kind: 'exact',
+        path: CHANGES_ROUTE,
+        handler: async (req, res) => {
+          if (req.method !== 'GET') {
+            res.writeHead(405, { allow: 'GET' })
+            res.end()
+            return
+          }
+          const rejection = host.connection.requestRejection({ headers: req.headers })
+          if (rejection !== undefined) {
+            writeJson(res, rejection, { error: rejection === 401 ? 'Unauthorized' : 'Forbidden' })
+            return
+          }
+          const url = new URL(req.url ?? CHANGES_ROUTE, 'http://localhost')
+          const sessionId = url.searchParams.get('session')
+          if (sessionId === null || sessionId === '') {
+            writeJson(res, 400, { error: 'A session id is required.' })
+            return
+          }
+          const agent = host.agents.get(sessionId)
+          if (agent === undefined) {
+            writeJson(res, 400, { error: 'The session is not live in this host.' })
+            return
+          }
+          try {
+            const changes = await listWorkspaceChanges(host.workingDirectory.get(agent.session))
+            writeJson(res, 200, { changes })
+          } catch (error) {
+            writeJson(res, 500, {
+              error: error instanceof Error ? error.message : 'The change list could not be read.',
+            })
+          }
+        },
+      }),
+    'dsh-setup-openspec: change list route',
+  )
 }

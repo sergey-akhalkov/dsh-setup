@@ -74,6 +74,19 @@ describe('vendored setup imports', () => {
     ).rejects.toThrow(/also mounted as a static adapter/)
   })
 
+  it('resolves the vendored OpenSpec host entry', async () => {
+    const entry = join(
+      rootDir,
+      'packages/setup/node_modules/@dsh-setup/plugin-openspec/lib/index.js',
+    )
+    const module = (await import(pathToFileURL(entry).href)) as {
+      name: string
+      inject: string[]
+    }
+    expect(module.name).toBe('@dsh-setup/plugin-openspec')
+    expect(module.inject).toEqual(['skills'])
+  })
+
   it('ships the updated Nuphus guidance in the vendored setup', () => {
     const skill = readFileSync(
       join(

@@ -12,6 +12,7 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./cordis.fragment.yml": "./cordis.fragment.yml",
     "./locale/*.json": "./locale/*.json",
@@ -23,6 +24,9 @@
     "locale/*.json",
     "lib/index.js",
     "lib/index.d.ts",
+    "lib/change-list.js",
+    "lib/change-list.d.ts",
+    "lib/client.js",
     "cordis.patch.yml",
     "cordis.fragment.yml",
     "assets/openspec/LICENSE",
@@ -48,6 +52,14 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-commands"
+      ],
+      "external": []
     }
   }
 }

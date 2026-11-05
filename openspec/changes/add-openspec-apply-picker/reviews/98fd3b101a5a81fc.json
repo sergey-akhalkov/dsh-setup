@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-openspec-apply-picker",
+  "scope": "task",
+  "taskId": "98fd3b101a5a81fc",
+  "digest": "a13139ceaab192719af2b0867277e0bbd9b36cecb7c5cd49a49fb52b00a600b8",
+  "worktreeDigest": "b045e97e1d24e7ce3f7a8d3a4838eeae702df15b61621acc72f2449e4994a76c",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-05T11:57:59.368Z"
+}

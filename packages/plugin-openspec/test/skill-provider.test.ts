@@ -44,6 +44,7 @@ interface SkillProviderShape {
 
 interface FakeContext {
   skills: { registerProvider: (create: () => SkillProviderShape) => void }
+  get: (name: string) => undefined
 }
 
 interface PluginModule {
@@ -66,6 +67,7 @@ function createContext(): { ctx: FakeContext; providers: SkillProviderShape[] } 
         providers.push(create())
       },
     },
+    get: () => undefined,
   }
   return { ctx, providers }
 }
