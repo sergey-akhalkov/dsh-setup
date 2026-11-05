@@ -557,6 +557,23 @@ describe('git provenance', () => {
       async () => 'abc1234\t2026-11-01T10:00:00+03:00\tsubject\nopenspec/changes/x\tinjected.md\n',
     )
     expect(badPath).toBeNull()
+    const badSection = await readGitLog(cwd, ['openspec'], async () =>
+      [
+        'abc1234\t2026-11-01T10:00:00+03:00\tfirst',
+        'openspec/changes/a/f.md',
+        '',
+        'malformed header with spaces',
+        'openspec/changes/x/tasks.md',
+        '',
+      ].join('\n'),
+    )
+    expect(badSection).toBeNull()
+    const yearOnly = await readGitLog(
+      cwd,
+      ['openspec'],
+      async () => 'abc1234\t2026\tfirst\nopenspec/changes/a/f.md\n',
+    )
+    expect(yearOnly).toBeNull()
   })
 
   it('keeps an empty-subject commit separate from the previous one', async () => {

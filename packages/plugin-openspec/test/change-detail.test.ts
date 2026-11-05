@@ -841,7 +841,7 @@ describe('archived change detail', () => {
     })
   })
 
-  it('ignores headings inside a fenced example', () => {
+  it('ignores headings inside a fenced example, including a shorter nested fence', () => {
     const deltas = parseArchivedDeltas(
       'alpha',
       [
@@ -851,6 +851,7 @@ describe('archived change detail', () => {
         '',
         'Real text with an example:',
         '',
+        '````markdown',
         '```markdown',
         '### Requirement: Example only',
         '',
@@ -858,6 +859,7 @@ describe('archived change detail', () => {
         '',
         '- **WHEN** fake',
         '```',
+        '````',
         '',
         '### Requirement: Second',
         '',
@@ -869,6 +871,38 @@ describe('archived change detail', () => {
     expect(deltas[0]?.requirements.map((req) => req.name)).toEqual(['Real', 'Second'])
     expect(deltas[0]?.requirements[0]?.scenarios).toEqual([])
     expect(deltas[0]?.requirements[0]?.text).toContain('### Requirement: Example only')
+  })
+
+  it('keeps a subheading and its following content inside the requirement', () => {
+    const deltas = parseArchivedDeltas(
+      'alpha',
+      [
+        '## ADDED Requirements',
+        '',
+        '### Requirement: Bounded',
+        '',
+        'The system SHALL stay bounded.',
+        '',
+        '##### Limits',
+        '',
+        'The bound is described below.',
+        '',
+        '#### Scenario: Too large',
+        '',
+        '- **WHEN** the input is large',
+        '- **THEN** the system refuses it',
+        '',
+      ].join('\n'),
+    )
+    const requirement = deltas[0]?.requirements[0]
+    expect(requirement?.text).toContain('##### Limits')
+    expect(requirement?.text).toContain('The bound is described below.')
+    expect(requirement?.scenarios).toEqual([
+      {
+        name: 'Too large',
+        rawText: '- **WHEN** the input is large\n- **THEN** the system refuses it',
+      },
+    ])
   })
 
   it('stops at an unsupported section instead of inheriting the operation', () => {
@@ -1348,30 +1382,49 @@ describe('openspec capability reads', () => {
     )
   })
 
-  it('quotes a CLI-reported id so cmd cannot run an embedded command', async () => {
+  it('refuses a CLI-reported id a Windows shell could re-parse', async () => {
     const cwd = workspace()
-    const evil = 'alpha&echo.PWNED&rem'
-    writeSpec(cwd, evil, '# Evil\n\n## Purpose\n\nQuoted.\n')
+    const payloads = ['alpha&echo.PWNED&rem', '%CMDCMDLINE%&echo.PWNED&rem']
+    for (const evil of payloads) {
+      autoCli((args) => {
+        const command = commandOf(args)
+        if (command[0] === 'list' && command[1] === '--specs') {
+          return { stdout: specsOutput(cwd, [{ id: evil, requirementCount: 0 }]) }
+        }
+        if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
+        if (command[0] === 'show') {
+          return { stdout: specShowOutput(cwd, evil, 'Overview.', []) }
+        }
+        return undefined
+      })
+      await expect(readWorkspaceCapability(cwd, evil)).rejects.toThrow(
+        'cannot be passed to the CLI safely',
+      )
+      expect(
+        spawnMock.mock.calls.some(
+          (call) => commandOf(call[1]).at(0) === 'show' && commandOf(call[1]).at(1) === evil,
+        ),
+      ).toBe(false)
+    }
+  })
+
+  it('falls back to the CLI overview when the inventory purpose section is unreadable', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n### Purpose\n\nOnly the CLI sees this.\n')
     autoCli((args) => {
       const command = commandOf(args)
       if (command[0] === 'list' && command[1] === '--specs') {
-        return { stdout: specsOutput(cwd, [{ id: evil, requirementCount: 0 }]) }
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 2 }]) }
       }
       if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
       if (command[0] === 'show') {
-        return { stdout: specShowOutput(cwd, evil, 'Overview.', []) }
+        expect(command).toEqual(['show', 'alpha', '--json', '--type', 'spec'])
+        return { stdout: specShowOutput(cwd, 'alpha', 'The CLI overview.', []) }
       }
       return undefined
     })
-    await readWorkspaceCapability(cwd, evil)
-    const showCall = spawnMock.mock.calls.find((call) => commandOf(call[1]).at(0) === 'show')
-    if (showCall === undefined) throw new Error('the show command was not spawned')
-    if (process.platform === 'win32') {
-      expect(String((showCall[1] as string[])[3])).toContain(`"${evil}"`)
-      expect(showCall[2]).toMatchObject({ windowsVerbatimArguments: true })
-    } else {
-      expect(commandOf(showCall[1] as string[])).toEqual(['show', evil, '--json', '--type', 'spec'])
-    }
+    const rows = await listWorkspaceCapabilityRows(cwd)
+    expect(rows[0]).toMatchObject({ id: 'alpha', purpose: 'The CLI overview.' })
   })
 
   it('refuses a capability spec that links outside the OpenSpec root', async () => {

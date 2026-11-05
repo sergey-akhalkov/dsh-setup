@@ -26,6 +26,7 @@ import {
   purposeSection,
   readGitLog,
   readWorkspaceChangeRows,
+  requireSafeCliName,
   runOpenSpecJson,
   scanArchiveProducers,
   specsRoot,
@@ -243,6 +244,7 @@ function nestedTaskFiles(root: string, directory: string): string[] {
 
 /** The files the CLI counts for an active change, from `openspec status --change`. */
 async function activeTaskPaths(workspace: string, name: string): Promise<string[]> {
+  requireSafeCliName(name, 'change')
   const parsed = await runOpenSpecJson(
     workspace,
     ['status', '--change', name, '--json'],
@@ -353,6 +355,7 @@ function isOperation(value: unknown): value is DeltaOperation {
  * section. Every `RENAMED` entry becomes its own pair.
  */
 async function activeDeltas(workspace: string, name: string): Promise<Delta[]> {
+  requireSafeCliName(name, 'change')
   const parsed = await runOpenSpecJson(
     workspace,
     ['show', name, '--json', '--type', 'change'],
@@ -394,7 +397,6 @@ async function activeDeltas(workspace: string, name: string): Promise<Delta[]> {
 
 const DELTA_SECTION = /^##\s+(ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements\s*$/i
 const REQUIREMENT_HEADING = /^###\s+Requirement:\s*(.*)$/i
-const SCENARIO_HEADING = /^####\s+Scenario:\s*(.*)$/i
 const ANY_HEADING = /^#{1,6}\s/
 const RENAME_FROM = /^\s*[-*+]?\s*FROM:\s*`?###\s*Requirement:\s*(.+?)`?\s*$/i
 const RENAME_TO = /^\s*[-*+]?\s*TO:\s*`?###\s*Requirement:\s*(.+?)`?\s*$/i
@@ -425,7 +427,7 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
     | undefined
   let scenario: { readonly name: string; readonly rawText: string[] } | undefined
   let renameFrom: string | undefined
-  let fence: string | undefined
+  let fence: { readonly char: string; readonly length: number } | undefined
 
   const flushScenario = (): void => {
     if (scenario === undefined || requirement === undefined) return
@@ -446,25 +448,36 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
     requirement = undefined
   }
 
+  const append = (line: string): void => {
+    if (requirement === undefined || operation === 'RENAMED') return
+    if (scenario !== undefined) scenario.rawText.push(line)
+    else requirement.text.push(line)
+  }
+
   for (const line of lines) {
     const trimmed = line.trim()
-    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line)
-    if (fenceMatch !== null) {
-      const marker = (fenceMatch[1] ?? '`').slice(0, 1)
-      if (fence === undefined) fence = marker
-      else if (marker === fence) fence = undefined
-      if (requirement !== undefined && operation !== 'RENAMED') {
-        if (scenario !== undefined) scenario.rawText.push(line)
-        else requirement.text.push(line)
+    const fenceStart = /^\s*(`{3,}|~{3,})/.exec(line)
+    if (fence === undefined) {
+      if (fenceStart !== null) {
+        const run = fenceStart[1] ?? '```'
+        fence = { char: run.slice(0, 1), length: run.length }
+        append(line)
+        continue
       }
-      continue
-    }
-    if (fence !== undefined) {
-      // Headings inside a fenced example are content, not delta structure.
-      if (requirement !== undefined && operation !== 'RENAMED') {
-        if (scenario !== undefined) scenario.rawText.push(line)
-        else requirement.text.push(line)
+    } else {
+      // A shorter run inside the block (a nested example fence) never closes
+      // it; only a same-character run at least as long as the opener does.
+      const closer = /^\s*(`{3,}|~{3,})\s*$/.exec(line)
+      if (
+        closer !== null &&
+        (closer[1] ?? '').slice(0, 1) === fence.char &&
+        (closer[1] ?? '').length >= fence.length
+      ) {
+        fence = undefined
+        append(line)
+        continue
       }
+      append(line)
       continue
     }
     const sectionMatch = DELTA_SECTION.exec(trimmed)
@@ -510,19 +523,22 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
       requirement = { name: (requirementMatch[1] ?? '').trim(), text: [], scenarios: [] }
       continue
     }
-    const scenarioMatch = SCENARIO_HEADING.exec(trimmed)
-    if (scenarioMatch !== null && requirement !== undefined) {
+    const headingMatch = /^####\s+(.*)$/.exec(trimmed)
+    if (headingMatch !== null && requirement !== undefined) {
+      // The CLI treats every level-4 child of a requirement as a scenario;
+      // keeping its body here preserves the same content.
       flushScenario()
-      scenario = { name: (scenarioMatch[1] ?? '').trim(), rawText: [] }
+      const title = (headingMatch[1] ?? '').trim()
+      scenario = { name: title.replace(/^Scenario:\s*/i, ''), rawText: [] }
       continue
     }
+    // A stray `###` divider and level-5/6 headings are verbatim body text.
     if (ANY_HEADING.test(trimmed)) {
-      flushRequirement()
+      append(line)
       continue
     }
     if (requirement === undefined) continue
-    if (scenario !== undefined) scenario.rawText.push(line)
-    else requirement.text.push(line)
+    append(line)
   }
   flushRequirement()
   return deltas
@@ -673,7 +689,7 @@ async function capabilityRows(workspace: string): Promise<CapabilityRow[]> {
       return {
         id: capability.id,
         requirementCount: capability.requirementCount,
-        purpose: purposeSection(body) ?? '',
+        purpose: purposeSection(body) ?? (await capabilityOverview(workspace, capability.id)),
         modified,
         lastChange: history[0] ?? null,
         commit: commitFor(git, `openspec/specs/${capability.id}`),
@@ -681,6 +697,22 @@ async function capabilityRows(workspace: string): Promise<CapabilityRow[]> {
     }),
   )
   return rows
+}
+
+/** The CLI's normalized overview for a capability, or '' when it cannot be read. */
+async function capabilityOverview(workspace: string, id: string): Promise<string> {
+  try {
+    requireSafeCliName(id, 'capability')
+    const parsed = await runOpenSpecJson(
+      workspace,
+      ['show', id, '--json', '--type', 'spec'],
+      'show --type spec',
+    )
+    return typeof parsed.overview === 'string' ? parsed.overview.replace(/\s+/g, ' ').trim() : ''
+  } catch {
+    // The inventory row still renders without its one-line purpose.
+    return ''
+  }
 }
 
 /**
@@ -705,6 +737,7 @@ export async function readWorkspaceCapability(
   const inventory = await listWorkspaceCapabilities(workspace)
   const capability = inventory.find((entry) => entry.id === id)
   if (capability === undefined) throw new UnreportedItemError(unreportedCapabilityMessage(id))
+  requireSafeCliName(id, 'capability')
   const root = canonicalRoot(workspace)
   const file = join(containedItem(specsRoot(workspace), id), 'spec.md')
   const artifact = await readRequiredCapability(root, file)
