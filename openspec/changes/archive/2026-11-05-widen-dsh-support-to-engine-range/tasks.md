@@ -13,11 +13,12 @@
 
 ## 3. Integration — generated tree, full gate, release 0.26.1
 
-- [ ] 3.1 Run `pnpm gen`, `pnpm build`, `pnpm gen:check`, the full `pnpm validate` with `DSH_CLI` pinned to a supported CLI, and `pnpm dogfood`; commit; `pnpm release:prepare --version 0.26.1`, rebuild, re-validate, commit, tag `v0.26.1`, push main and the tag. Verify the release and validate workflows pass and the published index serves setup 0.26.1 on DSH 0.2.2-rc.1 as well as the floor.
+- [x] 3.1 Run `pnpm gen`, `pnpm build`, `pnpm gen:check`, the full `pnpm validate` with `DSH_CLI` pinned to a supported CLI, and `pnpm dogfood`; commit; `pnpm release:prepare --version 0.26.1`, rebuild, re-validate, commit, tag `v0.26.1`, push main and the tag. Verify the release and validate workflows pass and the published index serves setup 0.26.1 on DSH 0.2.2-rc.1 as well as the floor.
 
 ## Workflow follow-up
 
 - Owner smoke: run the published 0.26.1 installer from an external PowerShell on the updated desktop app; confirm it no longer refuses 0.2.2-rc.1 and that the OpenSpec panel still opens.
 - Archive after `pnpm reviews:check --change widen-dsh-support-to-engine-range` reports every checked task approved.
+
 
 

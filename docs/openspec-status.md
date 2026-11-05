@@ -215,6 +215,7 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-31-replace-rare-triggers-with-work-checkpoints` | 18/19          |
 | `2026-11-05-guarantee-work-gates`                        | 14/14          |
 | `2026-11-05-add-openspec-panel`                          | 18/18          |
+| `2026-11-05-widen-dsh-support-to-engine-range`           | 5/5            |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -583,3 +584,14 @@ throwaway rc.5 and rc.3 web Harnesses passed the Start card, change list, change
 `Ctrl+Alt+R` refresh; rc.5 also passed live updates, the exact Apply draft, and the 480 px layout, while
 rc.3 lacks the standard `useResource` hook so its live observation degrades to manual refresh as
 designed. Open owner follow-up: install the release and smoke the panel in the desktop app.
+The `2026-11-05-widen-dsh-support-to-engine-range` change (5/5 approvals) removed the manual DSH
+version list: `enginesDsh` is now the installer's only allowlist, `install.ps1` compares the
+installed version against the range with a Windows PowerShell 5.1-safe SemVer check, and both CI
+workflows resolve their matrix at run time (range floor, runtime, and the newest published matching
+version) with a tested and visibly reported fallback when the registry is unavailable. `validate:repo`
+keeps `install.ps1`'s embedded `$DshEngineRange` equal to `dsh.json`; `supportedVersions` no longer
+exists. The motivating case was the desktop app moving to DSH 0.2.2-rc.1: every plugin row and
+observable surface already worked there, but the exact list refused the install. v0.26.1 (tag
+`v0.26.1`, setup 0.26.1 pinned to `e9b4dd6`) validated 0.2.1-rc.3, 0.2.1-rc.5 and 0.2.2-rc.1 in one
+release run and published the index; an in-range DSH update now needs no `dsh.json` or `install.ps1`
+edit.
