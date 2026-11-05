@@ -1188,28 +1188,18 @@ window.__ModuleLoader__.load({
             list === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-summary", children: workspaceSummary(list.counts, capabilityTotal, t) })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-actions", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              import_dsh_client_ui_primitives.Button,
-              {
-                type: "button",
-                variant: "outline",
-                size: "sm",
-                icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBrowseOutlineRegular, { size: 14 }),
-                onClick: props.onExplore,
-                children: t("root.explore")
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-              import_dsh_client_ui_primitives.Button,
-              {
-                type: "button",
-                variant: "primary",
-                size: "sm",
-                icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconPlusOutlineRegular, { size: 14 }),
-                onClick: props.onPropose,
-                children: t("root.propose")
-              }
-            )
+            ActionCard({
+              icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBrowseOutlineRegular, { size: 14 }),
+              title: t("root.explore"),
+              body: t("root.exploreBody"),
+              onClick: props.onExplore
+            }),
+            ActionCard({
+              icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconPlusOutlineRegular, { size: 14 }),
+              title: t("root.propose"),
+              body: t("root.proposeBody"),
+              onClick: props.onPropose
+            })
           ] })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -1265,36 +1255,19 @@ window.__ModuleLoader__.load({
     }
     function changesEmpty(response, props) {
       const recent = sortArchived(response.archived).slice(0, 3);
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-section", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-summary", children: workspaceSummary(response.counts, response.counts.capabilities, props.t) }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-actions", children: [
-          ActionCard({
-            icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBrowseOutlineRegular, { size: 14 }),
-            title: props.t("root.explore"),
-            body: props.t("root.exploreBody"),
-            onClick: props.onExplore
-          }),
-          ActionCard({
-            icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconPlusOutlineRegular, { size: 14 }),
-            title: props.t("root.propose"),
-            body: props.t("root.proposeBody"),
-            onClick: props.onPropose
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-section", children: recent.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-openspec-section", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-group-label", children: props.t("group.recentlyArchived") }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: recent.map(
+          (row) => ChangeCard({
+            row,
+            t: props.t,
+            now: props.now,
+            archived: true,
+            onOpen: (name) => props.onOpenChange(name, true)
           })
-        ] }),
-        recent.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-openspec-section", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-group-label", children: props.t("group.recentlyArchived") }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: recent.map(
-            (row) => ChangeCard({
-              row,
-              t: props.t,
-              now: props.now,
-              archived: true,
-              onOpen: (name) => props.onOpenChange(name, true)
-            })
-          ) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onSeeArchive, children: props.t("actions.seeArchive") })
-        ] }) : null
-      ] });
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onSeeArchive, children: props.t("actions.seeArchive") })
+      ] }) : null });
     }
     function ActionCard(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", { type: "button", className: "dsh-openspec-action-card", onClick: props.onClick, children: [
@@ -1391,14 +1364,21 @@ window.__ModuleLoader__.load({
               archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.StateDot, { state: phaseDot(phase) }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(phase), children: archived ? archivedOn ?? props.t("phase.archived") : props.t(`phase.${phase}`) }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
-              props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.completedTasks)}/${String(props.row.totalTasks)}` }) : null
+              updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
             ] }),
             summaryText(props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.summary ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.summary }) }),
-            props.row.totalTasks > 0 ? ProgressBar({ done: props.row.completedTasks, total: props.row.totalTasks, t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
+            props.row.totalTasks > 0 ? ProgressBar({
+              done: props.row.completedTasks,
+              total: props.row.totalTasks,
+              t: props.t,
+              showLabel: false
+            }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(props.row.presence, props.t) }),
-              updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${props.t("change.updated")} ${updated}` }),
-              props.row.commit === void 0 || props.row.commit === null ? null : CommitFactView({ commit: props.row.commit })
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-tail", children: [
+                props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t("change.tasks")}` }) : null,
+                props.row.commit === void 0 || props.row.commit === null ? null : CommitFactView({ commit: props.row.commit })
+              ] })
             ] })
           ]
         }
@@ -1435,7 +1415,7 @@ window.__ModuleLoader__.load({
           "aria-valuenow": props.done,
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-track", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-fill", style: { width: `${String(ratio * 100)}%` } }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-label", children: `${String(props.done)}/${String(props.total)} ${props.t("change.tasks")}` })
+            props.showLabel === false ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-progress-label", children: `${String(props.done)}/${String(props.total)} ${props.t("change.tasks")}` })
           ]
         }
       );
@@ -1792,7 +1772,15 @@ window.__ModuleLoader__.load({
               {
                 className: `dsh-openspec-task${task.done ? " dsh-openspec-task-done" : ""}`,
                 children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.StateDot, { state: task.done ? "done" : "idle", appearance: "step", size: 14 }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    import_dsh_client_ui_primitives.StateDot,
+                    {
+                      state: task.done ? "done" : "idle",
+                      appearance: "step",
+                      size: 14,
+                      className: "dsh-openspec-task-dot"
+                    }
+                  ),
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: InlineText({ text: task.description }) })
                 ]
               },
@@ -1995,17 +1983,28 @@ window.__ModuleLoader__.load({
       color: var(--dsw-alias-label-tertiary);
       white-space: nowrap;
     }
+    .dsh-openspec-card-tail {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+      margin-left: auto;
+    }
+    .dsh-openspec-card-tail .dsh-openspec-card-count {
+      margin-left: 0;
+    }
     .dsh-openspec-purpose {
       margin: 0;
       font: var(--dsw-font-xs-13);
       color: var(--dsw-alias-label-secondary);
       overflow-wrap: anywhere;
     }
-    /* Cards clamp to two lines; detail headers keep the full purpose. */
+    /* Cards clamp to three lines; detail headers keep the full purpose. */
     .dsh-openspec-purpose-clamp {
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
+      -webkit-line-clamp: 3;
       overflow: hidden;
     }
     .dsh-openspec-purpose-one {
@@ -2035,9 +2034,11 @@ window.__ModuleLoader__.load({
     .dsh-openspec-progress {
       display: flex;
       flex-direction: column;
-      flex: 1 1 120px;
       gap: 4px;
       min-width: 0;
+    }
+    .dsh-openspec-progress-row .dsh-openspec-progress {
+      flex: 1 1 120px;
     }
     .dsh-openspec-progress-track {
       display: block;
@@ -2269,6 +2270,9 @@ window.__ModuleLoader__.load({
       gap: 6px;
       font: var(--dsw-font-xs-13);
       overflow-wrap: anywhere;
+    }
+    .dsh-openspec-task-dot {
+      margin-top: 2px;
     }
     .dsh-openspec-task-done {
       color: var(--dsw-alias-label-tertiary);

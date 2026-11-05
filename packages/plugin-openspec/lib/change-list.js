@@ -10,8 +10,8 @@ export const GIT_TIMEOUT_MS = 5_000;
 export const GIT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 /** Newest commits a list or detail read inspects. */
 export const GIT_LOG_LIMIT = 300;
-/** Longest change summary a row carries; the client clamps it to two lines. */
-export const SUMMARY_MAX_LENGTH = 240;
+/** Longest change summary a row carries; the client clamps it to three lines. */
+export const SUMMARY_MAX_LENGTH = 360;
 /** No OpenSpec root exists in the session workspace itself. */
 export const NO_LOCAL_ROOT_MESSAGE = 'No workspace-local OpenSpec root was found. Run `openspec init --tools none` in the workspace root first.';
 /** The documented CLI prerequisite is missing from PATH. */

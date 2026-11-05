@@ -1019,24 +1019,18 @@ export function RootView(props: RootViewProps): ReactNode {
           )}
         </div>
         <div className="dsh-openspec-actions">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            icon={<primitives.IconBrowseOutlineRegular size={14} />}
-            onClick={props.onExplore}
-          >
-            {t('root.explore')}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            icon={<primitives.IconPlusOutlineRegular size={14} />}
-            onClick={props.onPropose}
-          >
-            {t('root.propose')}
-          </Button>
+          {ActionCard({
+            icon: <primitives.IconBrowseOutlineRegular size={14} />,
+            title: t('root.explore'),
+            body: t('root.exploreBody'),
+            onClick: props.onExplore,
+          })}
+          {ActionCard({
+            icon: <primitives.IconPlusOutlineRegular size={14} />,
+            title: t('root.propose'),
+            body: t('root.proposeBody'),
+            onClick: props.onPropose,
+          })}
         </div>
       </header>
       <SegmentedControl
@@ -1107,28 +1101,11 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
   )
 }
 
-/** No open work: totals, both next steps, and the newest archived changes. */
+/** No open work: the newest archived changes; the root header carries the actions and totals. */
 function changesEmpty(response: ChangeListResponse, props: RootViewProps): ReactNode {
   const recent = sortArchived(response.archived).slice(0, 3)
   return (
     <div className="dsh-openspec-section">
-      <p className="dsh-openspec-summary">
-        {workspaceSummary(response.counts, response.counts.capabilities, props.t)}
-      </p>
-      <div className="dsh-openspec-actions">
-        {ActionCard({
-          icon: <primitives.IconBrowseOutlineRegular size={14} />,
-          title: props.t('root.explore'),
-          body: props.t('root.exploreBody'),
-          onClick: props.onExplore,
-        })}
-        {ActionCard({
-          icon: <primitives.IconPlusOutlineRegular size={14} />,
-          title: props.t('root.propose'),
-          body: props.t('root.proposeBody'),
-          onClick: props.onPropose,
-        })}
-      </div>
       {recent.length > 0 ? (
         <section className="dsh-openspec-section">
           <span className="dsh-openspec-group-label">{props.t('group.recentlyArchived')}</span>
@@ -1306,11 +1283,9 @@ function ChangeCard(props: {
           {archived ? (archivedOn ?? props.t('phase.archived')) : props.t(`phase.${phase}`)}
         </Tag>
         <span className="dsh-openspec-card-title">{props.row.name}</span>
-        {props.row.totalTasks > 0 ? (
-          <span className="dsh-openspec-card-count">
-            {`${String(props.row.completedTasks)}/${String(props.row.totalTasks)}`}
-          </span>
-        ) : null}
+        {updated === null ? null : (
+          <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
+        )}
       </span>
       {summaryText(props.row.summary) === null ? null : (
         <primitives.Tooltip label={props.row.summary ?? ''}>
@@ -1320,16 +1295,27 @@ function ChangeCard(props: {
         </primitives.Tooltip>
       )}
       {props.row.totalTasks > 0 ? (
-        ProgressBar({ done: props.row.completedTasks, total: props.row.totalTasks, t: props.t })
+        ProgressBar({
+          done: props.row.completedTasks,
+          total: props.row.totalTasks,
+          t: props.t,
+          showLabel: false,
+        })
       ) : (
         <span className="dsh-openspec-meta">{props.t('change.tasksNotWritten')}</span>
       )}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">{presenceFacts(props.row.presence, props.t)}</span>
-        {updated === null ? null : <span>{`${props.t('change.updated')} ${updated}`}</span>}
-        {props.row.commit === undefined || props.row.commit === null
-          ? null
-          : CommitFactView({ commit: props.row.commit })}
+        <span className="dsh-openspec-card-tail">
+          {props.row.totalTasks > 0 ? (
+            <span className="dsh-openspec-card-count">
+              {`${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t('change.tasks')}`}
+            </span>
+          ) : null}
+          {props.row.commit === undefined || props.row.commit === null
+            ? null
+            : CommitFactView({ commit: props.row.commit })}
+        </span>
       </span>
     </button>
   )
@@ -1372,11 +1358,12 @@ function CapabilityCard(props: {
   )
 }
 
-/** Task progress: the bar and the `4/12 tasks` text. */
+/** Task progress: the bar, and optionally the `4/12 tasks` text. */
 export function ProgressBar(props: {
   readonly done: number
   readonly total: number
   readonly t: Translate
+  readonly showLabel?: boolean
 }): ReactNode {
   const ratio = props.total <= 0 ? 0 : Math.min(1, props.done / props.total)
   return (
@@ -1390,9 +1377,11 @@ export function ProgressBar(props: {
       <span className="dsh-openspec-progress-track">
         <span className="dsh-openspec-progress-fill" style={{ width: `${String(ratio * 100)}%` }} />
       </span>
-      <span className="dsh-openspec-progress-label">
-        {`${String(props.done)}/${String(props.total)} ${props.t('change.tasks')}`}
-      </span>
+      {props.showLabel === false ? null : (
+        <span className="dsh-openspec-progress-label">
+          {`${String(props.done)}/${String(props.total)} ${props.t('change.tasks')}`}
+        </span>
+      )}
     </span>
   )
 }
@@ -1955,7 +1944,12 @@ export function TaskChecklist(props: TaskChecklistProps): ReactNode {
                   className={`dsh-openspec-task${task.done ? ' dsh-openspec-task-done' : ''}`}
                   key={`${task.description}-${String(taskIndex)}`}
                 >
-                  <StateDot state={task.done ? 'done' : 'idle'} appearance="step" size={14} />
+                  <StateDot
+                    state={task.done ? 'done' : 'idle'}
+                    appearance="step"
+                    size={14}
+                    className="dsh-openspec-task-dot"
+                  />
                   <span>{InlineText({ text: task.description })}</span>
                 </span>
               ))}
@@ -2210,17 +2204,28 @@ export const PANEL_CSS = `
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
 }
+.dsh-openspec-card-tail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+}
+.dsh-openspec-card-tail .dsh-openspec-card-count {
+  margin-left: 0;
+}
 .dsh-openspec-purpose {
   margin: 0;
   font: var(--dsw-font-xs-13);
   color: var(--dsw-alias-label-secondary);
   overflow-wrap: anywhere;
 }
-/* Cards clamp to two lines; detail headers keep the full purpose. */
+/* Cards clamp to three lines; detail headers keep the full purpose. */
 .dsh-openspec-purpose-clamp {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   overflow: hidden;
 }
 .dsh-openspec-purpose-one {
@@ -2250,9 +2255,11 @@ export const PANEL_CSS = `
 .dsh-openspec-progress {
   display: flex;
   flex-direction: column;
-  flex: 1 1 120px;
   gap: 4px;
   min-width: 0;
+}
+.dsh-openspec-progress-row .dsh-openspec-progress {
+  flex: 1 1 120px;
 }
 .dsh-openspec-progress-track {
   display: block;
@@ -2484,6 +2491,9 @@ export const PANEL_CSS = `
   gap: 6px;
   font: var(--dsw-font-xs-13);
   overflow-wrap: anywhere;
+}
+.dsh-openspec-task-dot {
+  margin-top: 2px;
 }
 .dsh-openspec-task-done {
   color: var(--dsw-alias-label-tertiary);

@@ -1717,8 +1717,8 @@ describe('OpenSpec root view', () => {
     expect(textOf(view)).toContain('2 changes · 19 specs · 34 archived')
     const options = segmented(view).props.options as Array<{ value: string; label: string }>
     expect(options.map((option) => option.label)).toEqual(['Changes 2', 'Specs 19', 'Archive 34'])
-    expect(buttonByText(view, 'Explore')).toBeDefined()
-    expect(buttonByText(view, 'Propose')).toBeDefined()
+    expect(actionCard(view, 'Explore')).toBeDefined()
+    expect(actionCard(view, 'Propose')).toBeDefined()
     body.destroy()
   })
 
@@ -1767,6 +1767,9 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('updated 2h ago')
     expect(text).toContain('7e87448')
     expect(text).toContain('2026-10-27')
+    const head = nodes(card).find((node) => node.props.className === 'dsh-openspec-card-head')
+    expect(textOf(head)).toContain('updated 2h ago')
+    expect(textOf(head)).not.toContain('4/12')
     const purpose = nodes(card).find((node) =>
       String(node.props.className ?? '').includes('dsh-openspec-purpose'),
     )
@@ -1921,6 +1924,7 @@ describe('OpenSpec root view', () => {
     )
     const text = textOf(tree)
     expect(text).toContain('0 changes · 19 specs · 4 archived')
+    expect(text.split('0 changes · 19 specs · 4 archived')).toHaveLength(2)
     expect(text).toContain('Recently archived')
     expect(text).toContain(ARCHIVED_ROW.name)
     expect(text).toContain('2026-08-01-third')
@@ -3480,7 +3484,7 @@ describe('OpenSpec panel visual contract', () => {
       expect(PANEL_CSS).toContain(token)
     }
     expect(PANEL_CSS).toContain('prefers-reduced-motion')
-    expect(PANEL_CSS).toContain('-webkit-line-clamp: 2')
+    expect(PANEL_CSS).toContain('-webkit-line-clamp: 3')
     expect(PANEL_CSS).toContain('flex-wrap: wrap')
     expect(PANEL_CSS).toContain('.dsh-openspec-tab-unavailable')
     expect(PANEL_CSS).toContain('opacity: 0.55')
