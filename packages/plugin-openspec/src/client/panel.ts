@@ -73,6 +73,8 @@ export interface ChangeRow {
   readonly summary?: string | null
   /** The whole proposal `Why` section, used by the card's hover/expand view. */
   readonly why?: string | null
+  /** Requirement headings across the change's delta spec files. */
+  readonly requirementCount?: number
   readonly modified?: string | null
   readonly commit?: CommitFact | null
 }
@@ -659,6 +661,9 @@ function decodeChangeRow(value: unknown): ChangeRow | undefined {
     ...(value.archivedAt === undefined ? {} : { archivedAt: stringOrNull(value.archivedAt) }),
     ...(value.summary === undefined ? {} : { summary: summaryText(value.summary) }),
     ...(value.why === undefined ? {} : { why: summaryText(value.why) }),
+    ...(value.requirementCount === undefined
+      ? {}
+      : { requirementCount: integer(value.requirementCount) ?? 0 }),
     ...(value.modified === undefined ? {} : { modified: stringOrNull(value.modified) }),
     ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
   }

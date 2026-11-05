@@ -1757,7 +1757,7 @@ describe('OpenSpec root view', () => {
       {
         proposal: true,
         design: true,
-        tasks: false,
+        tasks: true,
         specs: 2,
       },
       {
@@ -1765,6 +1765,7 @@ describe('OpenSpec root view', () => {
         modified: '2026-11-05T15:00:00',
         commit: COMMIT,
         phase: 'applying',
+        requirementCount: 10,
       },
     )
     const tree = RootView(
@@ -1779,6 +1780,7 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('applying')
     expect(text).toContain('add-auth')
     expect(text).toContain('4/12')
+    expect(text).toContain('10 req')
     expect(text).toContain('Add authentication to the product.')
     expect(text).toContain('proposal')
     expect(text).toContain('design')
@@ -1887,10 +1889,12 @@ describe('OpenSpec root view', () => {
         },
       }),
     )
-    const archivedTag = typed(archivedTree, 'Tag').find(
-      (tag) => tag.props.children === '2026-10-27',
-    )
+    const archivedTag = typed(archivedTree, 'Tag').find((tag) => tag.props.children === 'archived')
     expect(archivedTag?.props.tone).toBe('quiet')
+    const archivedCard = cardButtons(archivedTree)[0]
+    const archivedHeadTags = typed(archivedCard, 'Tag').map((tag) => tag.props.children)
+    expect(archivedHeadTags).toContain('archived')
+    expect(archivedHeadTags).not.toContain('2026-10-27')
     expect(cardButtons(archivedTree)[0]?.props.className).toContain('dsh-openspec-card-archived')
   })
 
@@ -1964,13 +1968,14 @@ describe('OpenSpec root view', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('capability card missing')
     const head = nodes(card).find((node) => node.props.className === 'dsh-openspec-card-head')
-    expect(textOf(head)).toContain('2026-10-27')
+    expect(textOf(head)).not.toContain('2026-10-27')
     expect(textOf(head)).toContain('admin-indicator')
     expect(textOf(head)).toContain('updated 2h ago')
-    expect(textOf(head)).not.toContain('10 req')
+    expect(textOf(card)).toContain('Accepted via 2026-10-27-add-admin-indicator')
     const text = textOf(card)
     expect(text).toContain('Accepted via 2026-10-27-add-admin-indicator')
     expect(text).toContain('10 req')
+    expect(text.indexOf('10 req')).toBeLessThan(text.indexOf('Accepted via'))
     expect(text).toContain('7e87448')
     expect(text).not.toContain('5/5')
     expect(typed(card, 'Tooltip')[0]?.props.label).toBe(

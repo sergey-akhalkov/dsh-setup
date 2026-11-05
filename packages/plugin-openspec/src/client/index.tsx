@@ -1253,7 +1253,6 @@ function ChangeCard(props: {
   const archived = props.archived === true || props.row.archived === true
   const phase = archived ? 'archived' : phaseOf(props.row)
   const updated = relativeLabel(props.row.modified, props.now)
-  const archivedOn = isoDate(props.row.archivedAt)
   return (
     <button
       type="button"
@@ -1266,9 +1265,7 @@ function ChangeCard(props: {
         ) : (
           <StateDot state={phaseDot(phase)} />
         )}
-        <Tag tone={phaseTone(phase)}>
-          {archived ? (archivedOn ?? props.t('phase.archived')) : props.t(`phase.${phase}`)}
-        </Tag>
+        <Tag tone={phaseTone(phase)}>{props.t(`phase.${phase}`)}</Tag>
         <span className="dsh-openspec-card-title">{props.row.name}</span>
         {updated === null ? null : (
           <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
@@ -1313,16 +1310,22 @@ function ChangeCard(props: {
       )}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">
-          {presenceFacts(props.row.presence, props.t, props.onOpenArtifact)}
+          {presenceFacts(
+            props.row.presence,
+            props.t,
+            {
+              requirements: props.row.requirementCount ?? 0,
+              done: props.row.completedTasks,
+              total: props.row.totalTasks,
+            },
+            props.onOpenArtifact,
+          )}
         </span>
-        {props.row.commit === undefined || props.row.commit === null
-          ? null
-          : CommitFactView({ commit: props.row.commit })}
-        {props.row.totalTasks > 0 ? (
-          <span className="dsh-openspec-card-count">
-            {`${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t('change.tasks')}`}
+        {props.row.commit === undefined || props.row.commit === null ? null : (
+          <span className="dsh-openspec-card-tail">
+            {CommitFactView({ commit: props.row.commit })}
           </span>
-        ) : null}
+        )}
       </span>
     </button>
   )
@@ -1337,12 +1340,10 @@ function CapabilityCard(props: {
 }): ReactNode {
   const provenance = props.row.lastChange
   const commit = props.row.commit ?? provenance?.commit ?? null
-  const accepted = provenance === undefined || provenance === null ? null : isoDate(provenance.date)
   const updated = relativeLabel(props.row.modified, props.now)
   return (
     <button type="button" className="dsh-openspec-card" onClick={() => props.onOpen(props.row.id)}>
       <span className="dsh-openspec-card-head">
-        {accepted === null ? null : <Tag tone="quiet">{accepted}</Tag>}
         <span className="dsh-openspec-card-title">{props.row.id}</span>
         {updated === null ? null : (
           <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
@@ -1376,17 +1377,17 @@ function CapabilityCard(props: {
         </span>
       )}
       <span className="dsh-openspec-meta">
+        <span className="dsh-openspec-artifact-count">
+          {`${String(props.row.requirementCount)} ${props.t('specs.req')}`}
+        </span>
         <span className="dsh-openspec-tags">
           {provenance === undefined || provenance === null ? null : (
             <span>{`${props.t('specs.acceptedVia')} ${provenance.name}`}</span>
           )}
         </span>
-        <span className="dsh-openspec-card-tail">
-          <span className="dsh-openspec-card-count">
-            {`${String(props.row.requirementCount)} ${props.t('specs.req')}`}
-          </span>
-          {commit === null ? null : CommitFactView({ commit })}
-        </span>
+        {commit === null ? null : (
+          <span className="dsh-openspec-card-tail">{CommitFactView({ commit })}</span>
+        )}
       </span>
     </button>
   )
@@ -1439,30 +1440,44 @@ function CommitFactView(props: {
   )
 }
 
-/** Quiet artifact facts for a change card. */
+/** Quiet artifact facts for a change card, with the spec and task counts. */
 function presenceFacts(
   presence: ChangePresence | undefined,
   t: Translate,
+  counts: { readonly requirements: number; readonly done: number; readonly total: number },
   onOpen?: (kind: ArtifactKind) => void,
 ): ReactNode[] {
   if (presence === undefined) return []
-  const facts: { readonly kind: ArtifactKind; readonly label: string }[] = []
+  const facts: { readonly kind: ArtifactKind; readonly label: string; readonly suffix?: string }[] =
+    []
   if (presence.proposal) facts.push({ kind: 'proposal', label: t('presence.proposal') })
   if (presence.design) facts.push({ kind: 'design', label: t('presence.design') })
   if (presence.specs > 0) {
     facts.push({
       kind: 'specs',
       label: presence.specs === 1 ? t('presence.spec') : t('presence.specs'),
+      ...(counts.requirements > 0
+        ? { suffix: `${String(counts.requirements)} ${t('specs.req')}` }
+        : {}),
     })
   }
-  if (presence.tasks) facts.push({ kind: 'tasks', label: t('presence.tasks') })
+  if (presence.tasks) {
+    facts.push({
+      kind: 'tasks',
+      label: t('presence.tasks'),
+      ...(counts.total > 0 ? { suffix: `${String(counts.done)}/${String(counts.total)}` } : {}),
+    })
+  }
   return facts.map((fact) => {
-    const tag = (
-      <Tag key={fact.kind} tone="quiet">
-        {fact.label}
-      </Tag>
+    const content = (
+      <>
+        <Tag tone="quiet">{fact.label}</Tag>
+        {fact.suffix === undefined ? null : (
+          <span className="dsh-openspec-artifact-count">{fact.suffix}</span>
+        )}
+      </>
     )
-    if (onOpen === undefined) return tag
+    if (onOpen === undefined) return <span key={fact.kind}>{content}</span>
     return (
       // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
       <span
@@ -1481,7 +1496,7 @@ function presenceFacts(
           onOpen(fact.kind)
         }}
       >
-        {tag}
+        {content}
       </span>
     )
   })
@@ -2302,15 +2317,22 @@ export const PANEL_CSS = `
 .dsh-openspec-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 10px;
   min-width: 0;
 }
 .dsh-openspec-artifact-link {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
   cursor: pointer;
 }
 .dsh-openspec-artifact-link:hover {
   filter: brightness(1.2);
+}
+.dsh-openspec-artifact-count {
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
 }
 .dsh-openspec-progress {
   display: flex;

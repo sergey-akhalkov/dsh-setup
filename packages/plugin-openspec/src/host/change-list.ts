@@ -51,6 +51,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
   readonly summary: string | null
   /** The whole proposal `Why` section, bounded for the card's hover/expand view. */
   readonly why?: string | null
+  /** Requirement headings across the change's delta spec files. */
+  readonly requirementCount: number
   readonly commit: CommitFact | null
   readonly presence: ChangePresence
 }
@@ -922,6 +924,8 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
     const facts = presence.proposal
       ? await proposalFactsAt(root, directory)
       : { summary: null, why: null }
+    const specFiles = presence.specs > 0 ? deltaSpecFiles(root, directory) : []
+    const requirementCount = await deltaRequirementCount(specFiles)
     return {
       ...row,
       archived,
@@ -929,6 +933,7 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
       archivedAt: archived ? archivedDate(row.name) : null,
       summary: facts.summary,
       why: facts.why,
+      requirementCount,
       commit: commitFor(git, path),
       presence,
     }
@@ -946,6 +951,33 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
       capabilities: capabilities.length,
     },
   }
+}
+
+/** Counts `### Requirement:` headings outside fenced code blocks. */
+function countDeltaRequirements(body: string): number {
+  let fenced = false
+  let count = 0
+  for (const line of body.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced
+      continue
+    }
+    if (!fenced && /^###\s+Requirement:\s*\S/.test(line)) count += 1
+  }
+  return count
+}
+
+/** Reads the delta requirement headings; an unreadable file contributes nothing. */
+async function deltaRequirementCount(files: readonly DeltaSpecFile[]): Promise<number> {
+  let count = 0
+  for (const file of files) {
+    try {
+      count += countDeltaRequirements(await readFile(file.file, 'utf8'))
+    } catch {
+      // A missing or unreadable delta file does not fail the whole list.
+    }
+  }
+  return count
 }
 
 /** Read one proposal's short summary and full Why, treating any read failure as absent. */

@@ -40,6 +40,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
     readonly summary: string | null;
     /** The whole proposal `Why` section, bounded for the card's hover/expand view. */
     readonly why?: string | null;
+    /** Requirement headings across the change's delta spec files. */
+    readonly requirementCount: number;
     readonly commit: CommitFact | null;
     readonly presence: ChangePresence;
 }

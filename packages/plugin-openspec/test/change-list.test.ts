@@ -198,7 +198,9 @@ describe('openspec change list', () => {
       proposal: '# Proposal\n\n## Why\n\nAdds authentication for\noperators.\n\n## What\n\n- x\n',
       design: '# Design\n',
       tasks: '- [x] one\n- [ ] two\n- [ ] three\n',
-      specs: { alpha: '# Delta\n' },
+      specs: {
+        alpha: '# Delta\n\n### Requirement: One\n\nText.\n\n### Requirement: Two\n\nText.\n',
+      },
     })
     writeChange(
       cwd,
@@ -259,6 +261,7 @@ describe('openspec change list', () => {
         archivedAt: null,
         summary: 'Adds authentication for operators.',
         why: 'Adds authentication for operators.',
+        requirementCount: 2,
         commit: {
           short: 'abc1234',
           at: '2026-11-01T10:00:00+03:00',
@@ -274,6 +277,7 @@ describe('openspec change list', () => {
       archivedAt: '2026-10-27',
       summary: 'Old work.',
       why: 'Old work.',
+      requirementCount: 0,
       presence: { proposal: true, design: false, tasks: false, specs: 1 },
       commit: { short: 'def5678' },
     })
