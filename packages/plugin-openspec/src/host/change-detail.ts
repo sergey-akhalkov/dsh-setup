@@ -1,4 +1,4 @@
-import { type Dirent, readdirSync } from 'node:fs'
+import { type Dirent, readdirSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import {
@@ -208,7 +208,15 @@ async function readRequiredCapability(root: string, path: string): Promise<ReadA
 
 /** The workspace-relative address of a resolved artifact path. */
 function workspaceRelative(workspace: string, path: string): string {
-  return relative(workspace, path).split(sep).join('/')
+  // Resolve both sides: a short-name or junction workspace (the CI temp path is
+  // often 8.3 while realpath gives the long name) would otherwise produce `..`.
+  let base = workspace
+  try {
+    base = realpathSync.native(workspace)
+  } catch {
+    // An unresolvable workspace keeps the lexical base.
+  }
+  return relative(base, path).split(sep).join('/')
 }
 
 /** The directory one change's artifacts live in, contained under its family root. */

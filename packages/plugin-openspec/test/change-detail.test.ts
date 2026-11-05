@@ -466,6 +466,35 @@ describe('active change detail', () => {
     ])
   })
 
+  it('returns workspace-relative task paths when the workspace is a junction', async () => {
+    const real = workspace()
+    const directory = writeChange(real, 'add-auth', {
+      proposal: '# Why\n\nJunction.\n',
+      tasks: '- [ ] one\n',
+    })
+    const link = join(temporaryDirectory('openspec-junction-'), 'ws')
+    directoryLink(real, link)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(link, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') return { stdout: changeShowOutput(link, []) }
+      if (command[0] === 'status') {
+        return { stdout: statusOutput(link, 'add-auth', [join(directory, 'tasks.md')]) }
+      }
+      return undefined
+    })
+    const change = await readWorkspaceChange(link, 'add-auth')
+    expect(change.taskFiles.map((file) => file.path)).toEqual([
+      'openspec/changes/add-auth/tasks.md',
+    ])
+  })
+
   it('opens a change without a proposal and skips the structured-delta read', async () => {
     const cwd = workspace()
     writeChange(cwd, 'scaffold', { tasks: '- [ ] one\n' })
