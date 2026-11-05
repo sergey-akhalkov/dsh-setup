@@ -1277,10 +1277,24 @@ function ChangeCard(props: {
           <span className="dsh-openspec-card-count">{`${props.t('change.updated')} ${updated}`}</span>
         )}
       </span>
-      {summaryText(props.row.summary) === null ? null : (
-        <primitives.Tooltip label={props.row.summary ?? ''}>
-          <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">
-            {props.row.summary}
+      {summaryText(props.row.why ?? props.row.summary) === null ? null : (
+        <primitives.Tooltip label={props.row.why ?? props.row.summary ?? ''}>
+          {/* biome-ignore lint/a11y/useSemanticElements: the card is already a button; a nested button is invalid. */}
+          <span
+            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-expand"
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation()
+              event.currentTarget.focus()
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+          >
+            {props.row.why ?? props.row.summary}
           </span>
         </primitives.Tooltip>
       )}
@@ -1332,9 +1346,25 @@ function CapabilityCard(props: {
         )}
       </span>
       {summaryText(props.row.purpose) === null ? null : (
-        <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one">
-          {props.row.purpose}
-        </span>
+        <primitives.Tooltip label={props.row.purpose ?? ''}>
+          {/* biome-ignore lint/a11y/useSemanticElements: the card is already a button; a nested button is invalid. */}
+          <span
+            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one dsh-openspec-purpose-expand"
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation()
+              event.currentTarget.focus()
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+          >
+            {props.row.purpose}
+          </span>
+        </primitives.Tooltip>
       )}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">
@@ -2238,6 +2268,14 @@ export const PANEL_CSS = `
 }
 .dsh-openspec-purpose-one {
   -webkit-line-clamp: 1;
+}
+.dsh-openspec-purpose-expand {
+  cursor: pointer;
+}
+.dsh-openspec-purpose-expand:focus {
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  cursor: auto;
 }
 .dsh-openspec-producer {
   max-width: 100%;

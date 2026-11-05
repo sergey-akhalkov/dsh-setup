@@ -71,6 +71,8 @@ export interface ChangeRow {
   readonly archived?: boolean
   readonly archivedAt?: string | null
   readonly summary?: string | null
+  /** The whole proposal `Why` section, used by the card's hover/expand view. */
+  readonly why?: string | null
   readonly modified?: string | null
   readonly commit?: CommitFact | null
 }
@@ -656,6 +658,7 @@ function decodeChangeRow(value: unknown): ChangeRow | undefined {
     ...(typeof value.archived === 'boolean' ? { archived: value.archived } : {}),
     ...(value.archivedAt === undefined ? {} : { archivedAt: stringOrNull(value.archivedAt) }),
     ...(value.summary === undefined ? {} : { summary: summaryText(value.summary) }),
+    ...(value.why === undefined ? {} : { why: summaryText(value.why) }),
     ...(value.modified === undefined ? {} : { modified: stringOrNull(value.modified) }),
     ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
   }

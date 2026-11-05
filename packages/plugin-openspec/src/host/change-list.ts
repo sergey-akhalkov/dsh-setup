@@ -49,6 +49,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
   readonly phase: ChangePhase
   readonly archivedAt: string | null
   readonly summary: string | null
+  /** The whole proposal `Why` section, bounded for the card's hover/expand view. */
+  readonly why?: string | null
   readonly commit: CommitFact | null
   readonly presence: ChangePresence
 }
@@ -96,6 +98,31 @@ export const GIT_LOG_LIMIT = 300
 
 /** Longest change summary a row carries; the client clamps it to three lines. */
 export const SUMMARY_MAX_LENGTH = 360
+
+/** Longest full-Why text a row carries for the card's hover and expand view. */
+export const WHY_MAX_LENGTH = 2000
+
+/**
+ * The whole `Why` section: every paragraph up to the next level-2 heading,
+ * whitespace-collapsed and bounded. Null when the proposal has no Why body.
+ */
+export function proposalWhy(proposal: string | null): string | null {
+  if (proposal === null) return null
+  const lines = proposal.split(/\r?\n/)
+  const parts: string[] = []
+  let inWhy = false
+  for (const line of lines) {
+    if (!inWhy) {
+      if (/^##\s+Why\s*$/i.test(line)) inWhy = true
+      continue
+    }
+    if (/^##\s+/.test(line)) break
+    parts.push(line)
+  }
+  const text = parts.join('\n').replace(/\s+/g, ' ').trim()
+  if (text === '') return null
+  return text.length > WHY_MAX_LENGTH ? `${text.slice(0, WHY_MAX_LENGTH - 1).trimEnd()}…` : text
+}
 
 /** No OpenSpec root exists in the session workspace itself. */
 export const NO_LOCAL_ROOT_MESSAGE =
@@ -892,12 +919,16 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
     const path = archived ? `openspec/changes/archive/${row.name}` : `openspec/changes/${row.name}`
     const directory = resolve(workspace, path)
     const presence = presenceAt(workspace, directory)
+    const facts = presence.proposal
+      ? await proposalFactsAt(root, directory)
+      : { summary: null, why: null }
     return {
       ...row,
       archived,
       phase: changePhase({ ...row, archived }),
       archivedAt: archived ? archivedDate(row.name) : null,
-      summary: presence.proposal ? await proposalSummaryAt(root, directory) : null,
+      summary: facts.summary,
+      why: facts.why,
       commit: commitFor(git, path),
       presence,
     }
@@ -917,13 +948,17 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
   }
 }
 
-/** Read one proposal's summary, treating any read failure as no summary. */
-async function proposalSummaryAt(root: string, directory: string): Promise<string | null> {
+/** Read one proposal's short summary and full Why, treating any read failure as absent. */
+async function proposalFactsAt(
+  root: string,
+  directory: string,
+): Promise<{ summary: string | null; why: string | null }> {
   const actual = containedArtifact(root, join(directory, 'proposal.md'), artifactReadMessage)
-  if (actual === null) return null
+  if (actual === null) return { summary: null, why: null }
   try {
-    return proposalSummary(await readFile(actual, 'utf8'))
+    const body = await readFile(actual, 'utf8')
+    return { summary: proposalSummary(body), why: proposalWhy(body) }
   } catch {
-    return null
+    return { summary: null, why: null }
   }
 }

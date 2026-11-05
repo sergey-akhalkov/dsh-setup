@@ -38,6 +38,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
     readonly phase: ChangePhase;
     readonly archivedAt: string | null;
     readonly summary: string | null;
+    /** The whole proposal `Why` section, bounded for the card's hover/expand view. */
+    readonly why?: string | null;
     readonly commit: CommitFact | null;
     readonly presence: ChangePresence;
 }
@@ -75,6 +77,13 @@ export declare const GIT_MAX_OUTPUT_BYTES: number;
 export declare const GIT_LOG_LIMIT = 300;
 /** Longest change summary a row carries; the client clamps it to three lines. */
 export declare const SUMMARY_MAX_LENGTH = 360;
+/** Longest full-Why text a row carries for the card's hover and expand view. */
+export declare const WHY_MAX_LENGTH = 2000;
+/**
+ * The whole `Why` section: every paragraph up to the next level-2 heading,
+ * whitespace-collapsed and bounded. Null when the proposal has no Why body.
+ */
+export declare function proposalWhy(proposal: string | null): string | null;
 /** No OpenSpec root exists in the session workspace itself. */
 export declare const NO_LOCAL_ROOT_MESSAGE = "No workspace-local OpenSpec root was found. Run `openspec init --tools none` in the workspace root first.";
 /** The documented CLI prerequisite is missing from PATH. */

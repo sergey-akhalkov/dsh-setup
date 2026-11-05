@@ -374,6 +374,7 @@ window.__ModuleLoader__.load({
         ...typeof value.archived === "boolean" ? { archived: value.archived } : {},
         ...value.archivedAt === void 0 ? {} : { archivedAt: stringOrNull(value.archivedAt) },
         ...value.summary === void 0 ? {} : { summary: summaryText(value.summary) },
+        ...value.why === void 0 ? {} : { why: summaryText(value.why) },
         ...value.modified === void 0 ? {} : { modified: stringOrNull(value.modified) },
         ...value.commit === void 0 ? {} : { commit: decodeCommit(value.commit) }
       };
@@ -1393,7 +1394,24 @@ window.__ModuleLoader__.load({
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
               updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
             ] }),
-            summaryText(props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.summary ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.summary }) }),
+            summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "span",
+              {
+                className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-expand",
+                role: "button",
+                tabIndex: 0,
+                onClick: (event) => {
+                  event.stopPropagation();
+                  event.currentTarget.focus();
+                },
+                onKeyDown: (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                },
+                children: props.row.why ?? props.row.summary
+              }
+            ) }),
             props.row.totalTasks > 0 ? ProgressBar({
               done: props.row.completedTasks,
               total: props.row.totalTasks,
@@ -1420,7 +1438,24 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.id }),
           updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
         ] }),
-        summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one", children: props.row.purpose }),
+        summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.purpose ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "span",
+          {
+            className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one dsh-openspec-purpose-expand",
+            role: "button",
+            tabIndex: 0,
+            onClick: (event) => {
+              event.stopPropagation();
+              event.currentTarget.focus();
+            },
+            onKeyDown: (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+            },
+            children: props.row.purpose
+          }
+        ) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: provenance === void 0 || provenance === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${props.t("specs.acceptedVia")} ${provenance.name}` }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-tail", children: [
@@ -2051,6 +2086,14 @@ window.__ModuleLoader__.load({
     }
     .dsh-openspec-purpose-one {
       -webkit-line-clamp: 1;
+    }
+    .dsh-openspec-purpose-expand {
+      cursor: pointer;
+    }
+    .dsh-openspec-purpose-expand:focus {
+      -webkit-line-clamp: unset;
+      overflow: visible;
+      cursor: auto;
     }
     .dsh-openspec-producer {
       max-width: 100%;

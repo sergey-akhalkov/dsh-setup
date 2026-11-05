@@ -1798,6 +1798,32 @@ describe('OpenSpec root view', () => {
     expect(typed(tree, 'Tooltip')[0]?.props.label).toBe('Add authentication to the product.')
   })
 
+  it('shows the whole Why in the card tooltip and expands it on focus', () => {
+    const why = 'Add authentication to the product.\n\nSecond paragraph.'
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 1, 2, undefined, {
+              summary: 'Add authentication',
+              why,
+            }),
+          ]),
+        },
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    expect(typed(card, 'Tooltip')[0]?.props.label).toBe(why)
+    const purpose = nodes(card).find((node) =>
+      String(node.props.className ?? '').includes('dsh-openspec-purpose'),
+    )
+    expect(purpose?.props.tabIndex).toBe(0)
+    expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-expand')
+    expect(PANEL_CSS).toContain('-webkit-line-clamp: unset')
+  })
+
   it('opens a change at the artifact whose card tag was clicked', () => {
     const onOpenArtifact = vi.fn()
     const tree = RootView(
@@ -1942,6 +1968,9 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('10 req')
     expect(text).toContain('7e87448')
     expect(text).not.toContain('5/5')
+    expect(typed(card, 'Tooltip')[0]?.props.label).toBe(
+      'Shows whether the running DSH Desktop has administrator rights.',
+    )
   })
 
   it('filters archived changes and states an empty match', () => {

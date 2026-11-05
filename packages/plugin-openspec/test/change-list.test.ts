@@ -13,6 +13,7 @@ import {
   MALFORMED_MESSAGE,
   MISSING_CLI_MESSAGE,
   NO_LOCAL_ROOT_MESSAGE,
+  proposalWhy,
   readGitLog,
   TIMEOUT_MESSAGE,
 } from '../src/host/change-list.ts'
@@ -257,6 +258,7 @@ describe('openspec change list', () => {
         phase: 'applying',
         archivedAt: null,
         summary: 'Adds authentication for operators.',
+        why: 'Adds authentication for operators.',
         commit: {
           short: 'abc1234',
           at: '2026-11-01T10:00:00+03:00',
@@ -271,6 +273,7 @@ describe('openspec change list', () => {
       archived: true,
       archivedAt: '2026-10-27',
       summary: 'Old work.',
+      why: 'Old work.',
       presence: { proposal: true, design: false, tasks: false, specs: 1 },
       commit: { short: 'def5678' },
     })
@@ -289,6 +292,16 @@ describe('openspec change list', () => {
     if (process.platform === 'win32') {
       expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ windowsVerbatimArguments: true })
     }
+  })
+
+  it('keeps the whole Why section for the card tooltip', () => {
+    expect(
+      proposalWhy(
+        '# Proposal\n\n## Why\n\nFirst paragraph.\n\nSecond paragraph.\n\n## What\n\n- x\n',
+      ),
+    ).toBe('First paragraph. Second paragraph.')
+    expect(proposalWhy('# Proposal\n\nNo Why heading here.')).toBeNull()
+    expect(proposalWhy('# Proposal\n\n## Why\n\n' + 'x'.repeat(3000))).toHaveLength(2000)
   })
 
   it('derives each phase from the counts and the archive flag', async () => {
