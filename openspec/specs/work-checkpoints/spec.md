@@ -530,14 +530,40 @@ an unknown `blockedBy`, an empty scope, or more than a bounded number of lanes.
 A `continue` checkpoint SHALL carry a bottleneck with an id, an owner, an action of
 `worker_start`, `lead_action`, or `user_decision`, the blocking lane ids, and, for `lead_action`,
 the target paths. The plugin MUST refuse the close until a later tool call matches the action: a
-successful worker start carrying the checkpoint id, a successful edit or write at a declared target,
-or a question to the user.
+successful worker start carrying the checkpoint id and the bottleneck id, a successful edit or write
+at a declared target for a lead-owned bottleneck, or a question to the user. When the bottleneck
+owner is not `lead`, the action MUST be `worker_start` or `user_decision`; `lead_action` MUST be
+refused. When no worker-start tool is visible, the owner rule MUST fail open and accept a
+`lead_action` with targets.
 
 #### Scenario: Worker start remedy
 
 - **WHEN** the checkpoint names `worker_start` and a later worker start that the plugin's classifier
-  counts carries the checkpoint id
+  counts carries both the checkpoint id and the bottleneck id
 - **THEN** the gate passes
+
+#### Scenario: Lead-owned lead action
+
+- **WHEN** the checkpoint names `lead_action` with owner `lead` and a later `edit` or `write`
+  completes successfully at a declared target
+- **THEN** the gate passes
+
+#### Scenario: Worker-owned lead action is refused
+
+- **WHEN** the checkpoint names `lead_action` with an owner other than `lead`
+- **THEN** the close is refused and the steer names `worker_start` or `user_decision`
+
+#### Scenario: Worker start without the bottleneck id
+
+- **WHEN** the checkpoint names `worker_start` and the later worker start carries only the
+  checkpoint id
+- **THEN** the gate does not pass
+
+#### Scenario: No worker tool
+
+- **WHEN** no worker-start tool is visible and the checkpoint names `lead_action` with a declared
+  target
+- **THEN** the owner rule does not block the targeted edit/write
 
 #### Scenario: User decision remedy
 
@@ -563,7 +589,7 @@ or a question to the user.
 
 #### Scenario: Unrelated worker
 
-- **WHEN** a worker starts without the checkpoint id
+- **WHEN** a worker starts without both the checkpoint id and the bottleneck id
 - **THEN** the gate does not pass
 
 #### Scenario: Done outcome

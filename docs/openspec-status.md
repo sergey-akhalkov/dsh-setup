@@ -213,6 +213,7 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-31-add-observability-outcomes`                  | 35/35          |
 | `2026-10-31-improve-observability-actionability`         | 15/15          |
 | `2026-10-31-replace-rare-triggers-with-work-checkpoints` | 18/19          |
+| `2026-11-05-guarantee-work-gates`                        | 14/14          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -484,3 +485,24 @@ published index returns HTTP 200 and lists all 18 packages at 0.23.0 pinned to `
 with the app closed) is what makes the bounded exporter the installed one and resumes the export;
 until then the live 0.22.0 keeps its lock, and the new sweep deletes the 51 archives the paused
 exporter left in `file_storage`.
+
+The `2026-11-05-guarantee-work-gates` change carries 14 tasks and 14/14 portable task approvals; it
+was implemented in one session by three parallel lane worktrees merged into `main`, with the lead
+integrating the generated setup tree. It makes the three advisory guarantees machine-checked: the
+shipped defaults gain the strict `lane-fanout` rule on `lane-assignment` (one tagged worker per
+unassigned multi-lane lane, or a per-lane serial note naming a shared hot file, generated output, or a
+serial gate); a `continue` checkpoint with a non-`lead` bottleneck must use `worker_start` or
+`user_decision`, a worker start must carry both the checkpoint id and the bottleneck id, and a
+checkpoint lane covering a worker-assigned task lane must be non-`lead`; and a portable task-review
+PASS is bound to the marker's reviewer (`reviewerProvider: codex-subagent` here), with a `--staged`
+archive audit and a tracked pre-commit hook backed by the existing pre-push and CI `--all` audits.
+The gate was green before archiving: `pnpm check` (93 files, 1678 tests), `pnpm gen:check` (324
+files), `validate:repo`, `validate:composition`, `validate:installer`,
+`openspec validate guarantee-work-gates --strict`, and `pnpm reviews:check --all`. Seven review
+rounds fixed P1 findings (user_decision remedy evidence, JSON-escaped id matching, completed-lane fire
+conditions, unreadable-marker fail-closed and reviewer-bound task selection, staged-audit deletions,
+rename sources and non-ASCII paths, and worker-lane path bases) with regression tests before their
+PASS. Open owner follow-ups: install the published release so the shipped rule and marker binding are
+live, then set `interventionAt` to the archive date and read the Observability process summary after
+at least 20 episodes on each side (record the association, not proof). The review-start queue, retro
+command, and all-tasks-checked policy remain separate decisions.
