@@ -19,7 +19,6 @@
 import type {
   MarkdownLabels,
   SegmentedControlOption,
-  SegmentedTab,
   TagTone,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
@@ -1014,9 +1013,6 @@ export function RootView(props: RootViewProps): ReactNode {
   return (
     <div className="dsh-openspec-panel">
       <header className="dsh-openspec-root-header">
-        <div className="dsh-openspec-title-row">
-          <h2 className="dsh-openspec-panel-title">{t('guide.title')}</h2>
-        </div>
         <div className="dsh-openspec-actions">
           {ActionCard({
             icon: <primitives.IconBrowseOutlineRegular size={14} />,
@@ -1513,27 +1509,16 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
   const phase: Phase = archived ? 'archived' : phaseOf(change)
   const deltas = change.deltas ?? []
   const baseId = `dsh-openspec-artifacts-${archived ? 'archived' : 'active'}-${encodeURIComponent(change.name)}`
-  const items: [SegmentedTab<ArtifactKind>, ...SegmentedTab<ArtifactKind>[]] = ARTIFACT_KINDS.map(
-    (kind) => {
-      const available = hasArtifact(change, kind)
-      const label = artifactLabel(kind, change, t)
-      return {
-        value: kind,
-        // The shipped tabs have no disabled option; an unavailable kind keeps
-        // its reason on the tab and its selection is refused below.
-        label: available ? (
-          label
-        ) : (
-          <span className="dsh-openspec-tab-unavailable" title={t('artifact.notWritten')}>
-            {label}
-            <span className="dsh-openspec-sr-only">{` (${t('artifact.notWritten')})`}</span>
-          </span>
-        ),
-        id: `${baseId}-${kind}`,
-        panelId: `${baseId}-${kind}-panel`,
-      }
-    },
-  ) as [SegmentedTab<ArtifactKind>, ...SegmentedTab<ArtifactKind>[]]
+  const options = ARTIFACT_KINDS.map((kind): SegmentedControlOption<ArtifactKind> => {
+    const available = hasArtifact(change, kind)
+    const label = artifactLabel(kind, change, t)
+    return {
+      value: kind,
+      label: available ? label : `${label} (${t('artifact.notWritten')})`,
+      disabled: !available,
+      ...(available ? {} : { title: t('artifact.notWritten') }),
+    }
+  })
   const updated = relativeLabel(change.modified, props.now)
   const archivedOn = isoDate(change.archivedAt)
   return (
@@ -1566,10 +1551,14 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
             : CommitFactView({ commit: change.commit })}
         </div>
       </header>
-      <primitives.SegmentedTabs
-        items={items}
+      <SegmentedControl
+        id={baseId}
         value={artifact}
-        onChange={props.onArtifact}
+        options={options}
+        onChange={(kind) => {
+          if (!hasArtifact(change, kind)) return
+          props.onArtifact(kind)
+        }}
         label={t('change.artifactLabel')}
       />
       <div
@@ -2038,22 +2027,13 @@ export function CapabilityView(props: CapabilityViewProps): ReactNode {
   )
   const producer = history[0]
   const accepted = isoDate(capability.modified)
-  const tabs: [
-    SegmentedTab<'requirements' | 'history'>,
-    ...SegmentedTab<'requirements' | 'history'>[],
-  ] = [
+  const baseId = `dsh-openspec-capability-${encodeURIComponent(capability.id)}`
+  const options: SegmentedControlOption<'requirements' | 'history'>[] = [
     {
       value: 'requirements',
       label: `${t('capability.requirementsTab')} (${String(requirementCount)})`,
-      id: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-requirements`,
-      panelId: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-requirements-panel`,
     },
-    {
-      value: 'history',
-      label: `${t('capability.historyTab')} (${String(history.length)})`,
-      id: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-history`,
-      panelId: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-history-panel`,
-    },
+    { value: 'history', label: `${t('capability.historyTab')} (${String(history.length)})` },
   ]
   return (
     <div className="dsh-openspec-panel">
@@ -2080,13 +2060,19 @@ export function CapabilityView(props: CapabilityViewProps): ReactNode {
             : CommitFactView({ commit: capability.commit })}
         </div>
       </header>
-      <primitives.SegmentedTabs
-        items={tabs}
+      <SegmentedControl
+        id={baseId}
         value={section}
+        options={options}
         onChange={props.onSection}
         label={t('capability.sections')}
       />
-      <div className="dsh-openspec-scroll">
+      <div
+        className="dsh-openspec-scroll"
+        id={`${baseId}-${section}-panel`}
+        role="tabpanel"
+        aria-labelledby={`${baseId}-${section}`}
+      >
         {section === 'history' ? (
           HistoryList({ history, t, onOpenArchived: props.onOpenArchived })
         ) : requirements.length > 0 ? (
@@ -2157,25 +2143,10 @@ export const PANEL_CSS = `
   gap: 8px;
   min-width: 0;
 }
-.dsh-openspec-title-row {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-.dsh-openspec-panel-title {
-  margin: 0;
-  font: var(--dsw-font-base-strong-16);
-}
 .dsh-openspec-detail-title {
   margin: 0;
   font: var(--dsw-font-m-18);
   overflow-wrap: anywhere;
-}
-.dsh-openspec-summary {
-  font: var(--dsw-font-xxs-12);
-  color: var(--dsw-alias-label-tertiary);
 }
 .dsh-openspec-actions {
   display: flex;
@@ -2513,23 +2484,6 @@ export const PANEL_CSS = `
 }
 .dsh-openspec-keyword {
   color: var(--dsw-alias-state-business-primary);
-}
-/* The shipped SegmentedTabs has no disabled option: dim the unavailable tab
-   and reveal its reason to assistive technology; the selection is refused. */
-.dsh-openspec-tab-unavailable {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.dsh-openspec-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 .dsh-openspec-code {
   font: var(--dsw-font-markdown-code);

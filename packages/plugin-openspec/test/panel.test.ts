@@ -635,9 +635,9 @@ function segmented(tree: unknown): Found {
 /** The artifact/capability tab control. */
 function tabControl(tree: unknown): Found {
   const found = nodes(tree).find(
-    (node) => Array.isArray(node.props.items) && typeof node.props.onChange === 'function',
+    (node) => Array.isArray(node.props.options) && typeof node.props.onChange === 'function',
   )
-  if (found === undefined) throw new Error('segmented tabs missing')
+  if (found === undefined) throw new Error('segmented control missing')
   return found
 }
 
@@ -2277,15 +2277,16 @@ describe('OpenSpec change view', () => {
       }),
     )
     const control = tabControl(tree)
-    const items = control.props.items as Array<Record<string, string>>
-    expect(items.map((item) => item.label)).toEqual(['Why', 'Design', 'Specs (2)', 'Tasks'])
-    expect(items.map((item) => item.value)).toEqual(['proposal', 'design', 'specs', 'tasks'])
-    expect(new Set(items.map((item) => item.id)).size).toBe(4)
-    expect(items.every((item) => String(item.panelId).endsWith('-panel'))).toBe(true)
-    const selected = items.find((item) => item.value === 'proposal')
+    const options = control.props.options as Array<{ value: string; label: string }>
+    expect(options.map((option) => option.label)).toEqual(['Why', 'Design', 'Specs (2)', 'Tasks'])
+    expect(options.map((option) => option.value)).toEqual(['proposal', 'design', 'specs', 'tasks'])
+    const base = String(control.props.id)
+    expect(base).toContain('-active-')
+    const selected = options.find((option) => option.value === 'proposal')
+    expect(selected).toBeDefined()
     const panel = nodes(tree).find((node) => node.props.role === 'tabpanel')
-    expect(panel?.props.id).toBe(selected?.panelId)
-    expect(panel?.props['aria-labelledby']).toBe(selected?.id)
+    expect(panel?.props.id).toBe(`${base}-proposal-panel`)
+    expect(panel?.props['aria-labelledby']).toBe(`${base}-proposal`)
     ;(control.props.onChange as (value: string) => void)('design')
     expect(chosen).toEqual(['design'])
     expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('# Why')
@@ -2311,29 +2312,33 @@ describe('OpenSpec change view', () => {
         onArtifact: (kind) => chosen.push(kind),
       }),
     )
-    const items = tabControl(tree).props.items as Array<{ value: string; label: unknown }>
-    const design = items.find((item) => item.value === 'design')
-    const unavailable = nodes(design?.label).find(
-      (node) => node.props.className === 'dsh-openspec-tab-unavailable',
-    )
-    expect(unavailable?.props.title).toBe('Not written yet.')
-    expect(textOf(design?.label)).toContain('Not written yet.')
-    // The shipped control moves focus and selection together; the view honours
-    // its change and the unavailable body carries the reason.
+    const options = tabControl(tree).props.options as Array<{
+      value: string
+      label: string
+      disabled?: boolean
+      title?: string
+    }>
+    const design = options.find((option) => option.value === 'design')
+    expect(design?.disabled).toBe(true)
+    expect(design?.title).toBe('Not written yet.')
+    expect(design?.label).toContain('Not written yet.')
+    // A disabled option cannot be selected; the view also refuses a keyboard
+    // change that lands on a missing artifact kind.
     ;(tabControl(tree).props.onChange as (value: string) => void)('design')
-    expect(chosen).toEqual(['design'])
+    expect(chosen).toEqual([])
   })
 
   it('namespaces tab and panel ids by the active/archive family', () => {
-    const idsOf = (tree: unknown): string[] =>
-      (tabControl(tree).props.items as Array<{ id: string; panelId: string }>).map(
-        (item) => `${item.id}|${item.panelId}`,
-      )
+    const idsOf = (tree: unknown): string => {
+      const base = String(tabControl(tree).props.id)
+      const panel = nodes(tree).find((node) => node.props.role === 'tabpanel')
+      return `${base}|${String(panel?.props.id)}|${String(panel?.props['aria-labelledby'])}`
+    }
     const active = idsOf(ChangeView(changeViewProps({ change: { ...FULL, name: 'same' } })))
     const archived = idsOf(ChangeView(changeViewProps({ change: { ...ARCHIVED, name: 'same' } })))
-    expect(active.some((id) => archived.includes(id))).toBe(false)
-    expect(active.every((id) => id.includes('-active-'))).toBe(true)
-    expect(archived.every((id) => id.includes('-archived-'))).toBe(true)
+    expect(active).not.toBe(archived)
+    expect(active).toContain('-active-')
+    expect(archived).toContain('-archived-')
   })
 
   it('switches between delta capabilities and maps operation tones', () => {
@@ -2506,8 +2511,8 @@ describe('OpenSpec capability view', () => {
     expect(text).toContain('via 2026-10-27-add-admin-indicator')
     expect(text).toContain('7e87448')
     expect(tabControl(tree).props.value).toBe('requirements')
-    const items = tabControl(tree).props.items as Array<Record<string, string>>
-    expect(items.map((item) => item.label)).toEqual(['Requirements (2)', 'History (2)'])
+    const options = tabControl(tree).props.options as Array<{ label: string }>
+    expect(options.map((option) => option.label)).toEqual(['Requirements (2)', 'History (2)'])
     expect(textOf(tree)).toContain('Sign-in')
     const purpose = nodes(tree).find((node) =>
       String(node.props.className ?? '').includes('dsh-openspec-purpose'),
@@ -3587,8 +3592,7 @@ describe('OpenSpec panel visual contract', () => {
     expect(PANEL_CSS).toContain('prefers-reduced-motion')
     expect(PANEL_CSS).toContain('-webkit-line-clamp: 3')
     expect(PANEL_CSS).toContain('flex-wrap: wrap')
-    expect(PANEL_CSS).toContain('.dsh-openspec-tab-unavailable')
-    expect(PANEL_CSS).toContain('opacity: 0.55')
-    expect(PANEL_CSS).toContain('.dsh-openspec-sr-only')
+    expect(PANEL_CSS).toContain('.dsh-openspec-purpose-toggle')
+    expect(PANEL_CSS).toContain(':focus-within')
   })
 })

@@ -1217,23 +1217,20 @@ window.__ModuleLoader__.load({
         );
       }
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-openspec-root-header", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-title-row", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "dsh-openspec-panel-title", children: t("guide.title") }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-actions", children: [
-            ActionCard({
-              icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBrowseOutlineRegular, { size: 14 }),
-              title: t("root.explore"),
-              body: t("root.exploreBody"),
-              onClick: props.onExplore
-            }),
-            ActionCard({
-              icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconPlusOutlineRegular, { size: 14 }),
-              title: t("root.propose"),
-              body: t("root.proposeBody"),
-              onClick: props.onPropose
-            })
-          ] })
-        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", { className: "dsh-openspec-root-header", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-actions", children: [
+          ActionCard({
+            icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBrowseOutlineRegular, { size: 14 }),
+            title: t("root.explore"),
+            body: t("root.exploreBody"),
+            onClick: props.onExplore
+          }),
+          ActionCard({
+            icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconPlusOutlineRegular, { size: 14 }),
+            title: t("root.propose"),
+            body: t("root.proposeBody"),
+            onClick: props.onPropose
+          })
+        ] }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           import_dsh_client_ui_primitives.SegmentedControl,
           {
@@ -1550,23 +1547,16 @@ window.__ModuleLoader__.load({
       const phase = archived ? "archived" : phaseOf(change);
       const deltas = change.deltas ?? [];
       const baseId = `dsh-openspec-artifacts-${archived ? "archived" : "active"}-${encodeURIComponent(change.name)}`;
-      const items = ARTIFACT_KINDS.map(
-        (kind) => {
-          const available = hasArtifact(change, kind);
-          const label = artifactLabel(kind, change, t);
-          return {
-            value: kind,
-            // The shipped tabs have no disabled option; an unavailable kind keeps
-            // its reason on the tab and its selection is refused below.
-            label: available ? label : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-tab-unavailable", title: t("artifact.notWritten"), children: [
-              label,
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-sr-only", children: ` (${t("artifact.notWritten")})` })
-            ] }),
-            id: `${baseId}-${kind}`,
-            panelId: `${baseId}-${kind}-panel`
-          };
-        }
-      );
+      const options = ARTIFACT_KINDS.map((kind) => {
+        const available = hasArtifact(change, kind);
+        const label = artifactLabel(kind, change, t);
+        return {
+          value: kind,
+          label: available ? label : `${label} (${t("artifact.notWritten")})`,
+          disabled: !available,
+          ...available ? {} : { title: t("artifact.notWritten") }
+        };
+      });
       const updated = relativeLabel(change.modified, props.now);
       const archivedOn = isoDate(change.archivedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
@@ -1587,11 +1577,15 @@ window.__ModuleLoader__.load({
           ] })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-          primitives2.SegmentedTabs,
+          import_dsh_client_ui_primitives.SegmentedControl,
           {
-            items,
+            id: baseId,
             value: artifact,
-            onChange: props.onArtifact,
+            options,
+            onChange: (kind) => {
+              if (!hasArtifact(change, kind)) return;
+              props.onArtifact(kind);
+            },
             label: t("change.artifactLabel")
           }
         ),
@@ -1888,19 +1882,13 @@ window.__ModuleLoader__.load({
       );
       const producer = history[0];
       const accepted = isoDate(capability.modified);
-      const tabs = [
+      const baseId = `dsh-openspec-capability-${encodeURIComponent(capability.id)}`;
+      const options = [
         {
           value: "requirements",
-          label: `${t("capability.requirementsTab")} (${String(requirementCount)})`,
-          id: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-requirements`,
-          panelId: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-requirements-panel`
+          label: `${t("capability.requirementsTab")} (${String(requirementCount)})`
         },
-        {
-          value: "history",
-          label: `${t("capability.historyTab")} (${String(history.length)})`,
-          id: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-history`,
-          panelId: `dsh-openspec-capability-${encodeURIComponent(capability.id)}-history-panel`
-        }
+        { value: "history", label: `${t("capability.historyTab")} (${String(history.length)})` }
       ];
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-openspec-detail-header", children: [
@@ -1915,20 +1903,30 @@ window.__ModuleLoader__.load({
           ] })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-          primitives2.SegmentedTabs,
+          import_dsh_client_ui_primitives.SegmentedControl,
           {
-            items: tabs,
+            id: baseId,
             value: section,
+            options,
             onChange: props.onSection,
             label: t("capability.sections")
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-scroll", children: section === "history" ? HistoryList({ history, t, onOpenArchived: props.onOpenArchived }) : requirements.length > 0 ? RequirementList({
-          requirements,
-          query: props.requirementQuery,
-          t,
-          onQuery: props.onRequirementQuery
-        }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-body", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.MarkdownText, { text: capability.body, labels }) }) })
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "div",
+          {
+            className: "dsh-openspec-scroll",
+            id: `${baseId}-${section}-panel`,
+            role: "tabpanel",
+            "aria-labelledby": `${baseId}-${section}`,
+            children: section === "history" ? HistoryList({ history, t, onOpenArchived: props.onOpenArchived }) : requirements.length > 0 ? RequirementList({
+              requirements,
+              query: props.requirementQuery,
+              t,
+              onQuery: props.onRequirementQuery
+            }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-body", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.MarkdownText, { text: capability.body, labels }) })
+          }
+        )
       ] });
     }
     function HistoryList(props) {
@@ -1971,25 +1969,10 @@ window.__ModuleLoader__.load({
       gap: 8px;
       min-width: 0;
     }
-    .dsh-openspec-title-row {
-      display: flex;
-      align-items: baseline;
-      flex-wrap: wrap;
-      gap: 8px;
-      min-width: 0;
-    }
-    .dsh-openspec-panel-title {
-      margin: 0;
-      font: var(--dsw-font-base-strong-16);
-    }
     .dsh-openspec-detail-title {
       margin: 0;
       font: var(--dsw-font-m-18);
       overflow-wrap: anywhere;
-    }
-    .dsh-openspec-summary {
-      font: var(--dsw-font-xxs-12);
-      color: var(--dsw-alias-label-tertiary);
     }
     .dsh-openspec-actions {
       display: flex;
@@ -2327,23 +2310,6 @@ window.__ModuleLoader__.load({
     }
     .dsh-openspec-keyword {
       color: var(--dsw-alias-state-business-primary);
-    }
-    /* The shipped SegmentedTabs has no disabled option: dim the unavailable tab
-       and reveal its reason to assistive technology; the selection is refused. */
-    .dsh-openspec-tab-unavailable {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-    .dsh-openspec-sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border: 0;
     }
     .dsh-openspec-code {
       font: var(--dsw-font-markdown-code);
