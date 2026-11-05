@@ -506,3 +506,14 @@ PASS. Open owner follow-ups: install the published release so the shipped rule a
 live, then set `interventionAt` to the archive date and read the Observability process summary after
 at least 20 episodes on each side (record the association, not proof). The review-start queue, retro
 command, and all-tasks-checked policy remain separate decisions.
+
+It shipped in v0.24.0 (tag on commit `36c356a`) after the release workflow passed DSH 0.2.1-rc.3 and
+0.2.1-rc.5, the one-command installer exercise, the publish job and the Pages deployment, and the
+validate workflow on `main` passed. The installer round-trip (`pnpm dogfood`) passed against a copy
+of the live desktop profile without touching the live profile or the running Harness. The published
+index returns HTTP 200, lists all 18 setup and plugin packages at 0.24.0 pinned to that commit, and
+retains the earlier versions. The owner installs the published 0.24.0 from the market (or re-runs the
+installer from an external PowerShell with the app closed); that install is what activates the shipped
+strict lane-fanout rule, the stricter checkpoint remedy, and the reviewer-bound approval audit. Until
+then the live desktop profile still runs the pre-change plugin, whose archive and completion gates
+cannot parse the new `reviewerProvider` marker field.
