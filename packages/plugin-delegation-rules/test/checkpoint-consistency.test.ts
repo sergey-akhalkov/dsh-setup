@@ -95,11 +95,16 @@ interface Setup {
 }
 
 /** Tick lane 1 and assign lane 2 to a tagged worker in the same turn. */
-async function tickedAndAssigned(before: string, after: string): Promise<Setup> {
+async function tickedAndAssigned(
+  before: string,
+  after: string,
+  nestedCwd?: string,
+): Promise<Setup> {
   const root = await workspace()
   const dir = await writeChange(root, 'change-a', FIGURE)
   await writeFile(join(dir, 'tasks.md'), before, 'utf8')
-  const harness = new Harness({ cwd: root, config: laneConfig(), agents: new FakeSubagents() })
+  const cwd = nestedCwd === undefined ? root : join(root, nestedCwd)
+  const harness = new Harness({ cwd, config: laneConfig(), agents: new FakeSubagents() })
   await harness.preStep(1)
   await harness.writeResult(join(dir, 'tasks.md'), before, after, harness.agent, 'edit')
   await writeFile(join(dir, 'tasks.md'), after, 'utf8')
@@ -201,6 +206,45 @@ describe('worker-assigned checkpoint consistency', () => {
         lanes: [{ id: 'docs', owner: 'lane-worker', scope: ['./docs/a.md'] }],
         action: 'lead_action',
         targets: ['docs/./a.md'],
+      }),
+      { text: 'checkpoint saved' },
+    )
+    expect(await steersOf(escaped)).toContain(
+      'lead_action bottleneck may not edit worker-assigned work',
+    )
+  })
+
+  it('resolves checkpoint paths against a nested session working directory', async () => {
+    const nested = (code: boolean): string =>
+      plan([
+        [
+          '1. Code (owns `packages/app/src/**`)',
+          [
+            ['1.1', 'First code', code],
+            ['1.2', 'Second code', false],
+          ],
+        ],
+        ['2. Docs (owns `packages/app/docs/**`)', [['2.1', 'Write docs', false]]],
+        ['3. Serial tail (owns `packages/setup/**`)', [['3.1', 'Run the gate', false]]],
+      ])
+
+    const covered = await tickedAndAssigned(nested(false), nested(true), 'packages/app')
+    await covered.harness.toolOutcome(
+      'work_checkpoint',
+      checkpointArgs({
+        lanes: [{ id: 'docs', owner: 'lane-worker', scope: ['docs/guide.md'] }],
+      }),
+      { text: 'checkpoint saved' },
+    )
+    expect(await steersOf(covered)).toBe('')
+
+    const escaped = await tickedAndAssigned(nested(false), nested(true), 'packages/app')
+    await escaped.harness.toolOutcome(
+      'work_checkpoint',
+      checkpointArgs({
+        lanes: [{ id: 'docs', owner: 'lane-worker', scope: ['docs/guide.md'] }],
+        action: 'lead_action',
+        targets: ['docs/guide.md'],
       }),
       { text: 'checkpoint saved' },
     )

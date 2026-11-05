@@ -4259,32 +4259,43 @@ function checkpointPlanOf(argumentsValue: unknown): CheckpointPlan | undefined {
 }
 
 /**
- * Normalize a plan path against the workspace: dot segments and a
- * relative/absolute spelling collapse to one comparable path, a trailing `/**`
- * names the directory it covers, and Windows compares case-insensitively.
+ * Normalize a plan path against one base: dot segments and a relative/absolute
+ * spelling collapse to one comparable path, a trailing `/**` names the
+ * directory it covers, and Windows compares case-insensitively.
  */
-function planPath(value: string, workspace: string): string {
+function planPath(value: string, base: string): string {
   const trimmed = value
     .trim()
     .replaceAll('\\', '/')
     .replace(/\/\*\*$/u, '')
     .replace(/\/+$/u, '')
   if (trimmed === '') return ''
-  const absolute = resolve(workspace, trimmed).replaceAll('\\', '/')
+  const absolute = resolve(base, trimmed).replaceAll('\\', '/')
   return process.platform === 'win32' ? absolute.toLowerCase() : absolute
 }
 
-/** Equal paths, or one path lies inside the other, after workspace resolution. */
-function pathsOverlap(left: string, right: string, workspace: string): boolean {
-  const a = planPath(left, workspace)
-  const b = planPath(right, workspace)
+/** Equal paths, or one path lies inside the other, each side against its own base. */
+function pathsOverlap(left: string, right: string, leftBase: string, rightBase: string): boolean {
+  const a = planPath(left, leftBase)
+  const b = planPath(right, rightBase)
   if (a === '' || b === '') return false
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 }
 
-/** A checkpoint lane covers a task lane when a scoped path touches an owned path. */
-function checkpointCovers(entry: CheckpointLane, lane: TaskLane, workspace: string): boolean {
-  return lane.owns.some((own) => entry.scope.some((scope) => pathsOverlap(own, scope, workspace)))
+/**
+ * A checkpoint lane covers a task lane when a scoped path touches an owned
+ * path. Task-owned paths are repository-relative; checkpoint scopes follow the
+ * goal-continuity contract and resolve against the session working directory.
+ */
+function checkpointCovers(
+  entry: CheckpointLane,
+  lane: TaskLane,
+  workspace: string,
+  cwd: string,
+): boolean {
+  return lane.owns.some((own) =>
+    entry.scope.some((scope) => pathsOverlap(own, scope, workspace, cwd)),
+  )
 }
 
 /** The worker-owner test the requirement uses; `lead` is the self-declared escape. */
@@ -4798,7 +4809,7 @@ async function evaluateGate(
             const planRoot = workspaceRoot ?? dirname(openspecRoot)
             for (const lane of assigned) {
               const covering = checkpointPlan.lanes.filter((entry) =>
-                checkpointCovers(entry, lane, planRoot),
+                checkpointCovers(entry, lane, planRoot, cwd),
               )
               if (covering.length === 0) {
                 problems.push(`lane "${lane.title}" has no matching checkpoint lane`)
@@ -4835,7 +4846,7 @@ async function evaluateGate(
               const hits: string[] = []
               for (const target of bottleneck.targets) {
                 for (const lane of assigned) {
-                  if (lane.owns.some((own) => pathsOverlap(target, own, planRoot))) {
+                  if (lane.owns.some((own) => pathsOverlap(own, target, planRoot, cwd))) {
                     hits.push(`target "${target}" in worker-assigned lane "${lane.title}"`)
                   }
                 }
