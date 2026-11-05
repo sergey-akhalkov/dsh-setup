@@ -22,8 +22,8 @@ profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead.
   the `desktop` profile the installer writes to.
 - PowerShell 5.1 or newer (PowerShell 7 recommended).
 - Network access to GitHub and the plugin registry.
-- A supported DSH version. The current window is recorded in [`dsh.json`](../dsh.json); the installer
-  refuses an unsupported version before changing anything.
+- A DSH version inside the supported `enginesDsh` range (`>=0.2.1-rc.3 <0.3.0` in
+  [`dsh.json`](../dsh.json)); the installer refuses anything outside it before changing anything.
 - `uv` on `PATH` for the local Hindsight runtime. When it is missing, the installer warns and skips
   only that phase; the setup does not install system tools.
 - A DeepSeek API key for Hindsight: `DEEPSEEK_API_KEY`, `%USERPROFILE%\.hindsight\deepseek.key`, an
@@ -61,7 +61,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/sergey-akhalkov/dsh-setup/ma
 
 The script:
 
-1. Reads the running CLI and DSH version and refuses an unsupported one.
+1. Reads the running CLI and DSH version and refuses one outside the supported `enginesDsh` range.
 2. Closes DeepSeek Harness (profile writes need the app fully quit) and saves copies of the profile
    manifest, patch, and composed root under `$DSH_HOME/.dsh-setup-backups/` before anything changes.
 3. Enables the shipped bundles the setup expects by appending their names to `dsh.profile.bundles` —
@@ -139,8 +139,8 @@ force-closes the remaining processes after a short grace, and starts the new ins
 
 ## Bundles the setup enables
 
-These are shipped optional bundles in DSH `0.2.1-rc.3` and `0.2.1-rc.5`. The installer selects them; the setup bundle
-does not duplicate their rows or add them itself.
+These are optional bundles shipped with DSH versions inside the supported `enginesDsh` range. The
+installer selects them; the setup bundle does not duplicate their rows or add them itself.
 
 - **Agent Teams** — `@deepseek-ai/dsh-experimental-agent-team-profile`
 - **Tool worktree** — `@deepseek-ai/dsh-experimental-tool-worktree`

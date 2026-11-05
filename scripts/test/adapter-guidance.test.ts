@@ -17,7 +17,6 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
 const VERSIONS: DshVersions = {
   runtime: '0.2.1-rc.3',
   enginesDsh: '>=0.2.1-rc.3 <0.3.0',
-  supportedVersions: ['0.2.1-rc.3'],
   repository: 'https://github.com/example/dsh-setup',
   installBundles: { shipped: [], registry: [] },
 }

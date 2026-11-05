@@ -22,15 +22,31 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Read the supported DSH versions
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.28.5
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The matrix follows dsh.json -> enginesDsh at run time: the range floor,
+      # the runtime, and the newest published DSH version inside the range.
+      - name: Resolve the DSH matrix from the engines range
         id: read
         run: |
-          versions=$(node -p "JSON.stringify(require('./dsh.json').supportedVersions)")
+          versions=$(node scripts/ci-versions.ts)
           echo "versions=$versions" >> "$GITHUB_OUTPUT"
 
-  # The release gate: the same full check runs against every supported DSH
-  # version. Publication depends on this job, so any failure leaves the
-  # previously deployed index in place.
+  # The release gate: the same full check runs against the matrix resolved
+  # from the engines range. Publication depends on this job, so any failure
+  # leaves the previously deployed index in place.
   validate:
     needs: versions
     runs-on: windows-latest

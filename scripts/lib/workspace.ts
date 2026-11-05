@@ -92,7 +92,6 @@ export interface InstallBundles {
 export interface DshVersions {
   runtime: string
   enginesDsh: string
-  supportedVersions: string[]
   repository: string
   installBundles: InstallBundles
 }

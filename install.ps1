@@ -144,7 +144,7 @@ $ErrorActionPreference = 'Stop'
 # BEGIN REPOSITORY METADATA
 # Kept in sync with dsh.json by scripts/validate-repo.ts. A standalone copy of
 # this script has no repository to read these from.
-$SupportedDshVersions = @('0.2.1-rc.3', '0.2.1-rc.5')
+$DshEngineRange = '>=0.2.1-rc.3 <0.3.0'
 $ShippedBundles = @(
   '@deepseek-ai/dsh-experimental-agent-team-profile',
   '@deepseek-ai/dsh-experimental-tool-worktree',
@@ -155,6 +155,96 @@ $ShippedBundles = @(
 )
 $RegistryBundles = @()
 # END REPOSITORY METADATA
+
+# The documented pipeline form also runs on Windows PowerShell 5.1, which has no
+# System.Management.Automation.SemanticVersion and no SemVer comparison, so the
+# engine range is compared here with plain regular expressions.
+function ConvertTo-DshVersion([string]$Value) {
+  $match = [regex]::Match(
+    $Value,
+    '^(?<major>[0-9]+)\.(?<minor>[0-9]+)\.(?<patch>[0-9]+)(?:-(?<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+(?<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$'
+  )
+  if (-not $match.Success) {
+    throw "Cannot read DSH version '$Value': expected major.minor.patch, optionally followed by -prerelease and +build."
+  }
+  $prerelease = @()
+  if ($match.Groups['pre'].Success) {
+    $prerelease = @($match.Groups['pre'].Value.Split('.'))
+  }
+  return @{
+    major = [long]$match.Groups['major'].Value
+    minor = [long]$match.Groups['minor'].Value
+    patch = [long]$match.Groups['patch'].Value
+    prerelease = $prerelease
+  }
+}
+
+# Returns -1, 0, or 1. Build metadata never participates, numeric prerelease
+# identifiers compare numerically and rank below alphanumeric ones, and a
+# release ranks above its prereleases.
+function Compare-DshVersion([string]$Left, [string]$Right) {
+  $a = ConvertTo-DshVersion $Left
+  $b = ConvertTo-DshVersion $Right
+  foreach ($key in 'major', 'minor', 'patch') {
+    if ($a[$key] -ne $b[$key]) {
+      if ($a[$key] -lt $b[$key]) { return -1 }
+      return 1
+    }
+  }
+  $aPre = @($a.prerelease)
+  $bPre = @($b.prerelease)
+  if ($aPre.Count -eq 0 -and $bPre.Count -eq 0) { return 0 }
+  if ($aPre.Count -eq 0) { return 1 }
+  if ($bPre.Count -eq 0) { return -1 }
+  $count = [Math]::Max($aPre.Count, $bPre.Count)
+  for ($index = 0; $index -lt $count; $index++) {
+    if ($index -ge $aPre.Count) { return -1 }
+    if ($index -ge $bPre.Count) { return 1 }
+    $leftIdentifier = [string]$aPre[$index]
+    $rightIdentifier = [string]$bPre[$index]
+    $leftNumeric = $leftIdentifier -match '^[0-9]+$'
+    $rightNumeric = $rightIdentifier -match '^[0-9]+$'
+    if ($leftNumeric -and $rightNumeric) {
+      if ([long]$leftIdentifier -ne [long]$rightIdentifier) {
+        if ([long]$leftIdentifier -lt [long]$rightIdentifier) { return -1 }
+        return 1
+      }
+    }
+    elseif ($leftNumeric) { return -1 }
+    elseif ($rightNumeric) { return 1 }
+    else {
+      $order = [string]::CompareOrdinal($leftIdentifier, $rightIdentifier)
+      if ($order -ne 0) { return [Math]::Sign($order) }
+    }
+  }
+  return 0
+}
+
+# True when Version satisfies every whitespace-separated clause of Range
+# (`>=`, `>`, `<=`, `<`, `=`), e.g. '>=0.2.1-rc.3 <0.3.0'.
+function Test-DshEngineRange([string]$Version, [string]$Range) {
+  $text = ([string]$Range).Trim()
+  if (-not $text) {
+    throw "The installer has no DSH engine range; cannot check DSH version '$Version'."
+  }
+  foreach ($clause in @($text -split '\s+')) {
+    $match = [regex]::Match($clause, '^(>=|>|<=|<|=)(.+)$')
+    if (-not $match.Success) {
+      throw "Cannot read the DSH engine range '$Range': clause '$clause' is not one of >=, >, <=, <, = followed by a version."
+    }
+    $operator = $match.Groups[1].Value
+    $target = $match.Groups[2].Value
+    $null = ConvertTo-DshVersion $target
+    $comparison = Compare-DshVersion $Version $target
+    $passes = if ($operator -eq '>=') { $comparison -ge 0 }
+    elseif ($operator -eq '>') { $comparison -gt 0 }
+    elseif ($operator -eq '<=') { $comparison -le 0 }
+    elseif ($operator -eq '<') { $comparison -lt 0 }
+    else { $comparison -eq 0 }
+    if (-not $passes) { return $false }
+  }
+  return $true
+}
 
 $SetupPackage = '@dsh-setup/setup'
 $SetupRowsMarker = 'dsh-setup-ponytail'
@@ -1788,8 +1878,8 @@ try {
   if (-not $dshVersion) { throw "The DSH CLI did not report a version: $DshCli --version" }
   Write-Ok "CLI $DshCli"
   Write-Ok "DSH $dshVersion"
-  if ($SupportedDshVersions -notcontains $dshVersion) {
-    throw "DSH $dshVersion is not supported by this installer (supported: $($SupportedDshVersions -join ', ')). Update DeepSeek Harness or use an older release's install.ps1."
+  if (-not (Test-DshEngineRange $dshVersion $DshEngineRange)) {
+    throw "DSH $dshVersion is not supported by this installer (requires $DshEngineRange). Update DeepSeek Harness or use an older release's install.ps1."
   }
 
   $profileDirectory = Join-Path $DshHome (Join-Path 'profiles' $Profile)

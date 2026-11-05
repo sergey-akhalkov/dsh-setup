@@ -30,7 +30,8 @@ the shipped-bundle selections a third-party bundle cannot do and installs the se
 workflow generates the static format-1 market index pinned to the tagged commit and deploys it to
 GitHub Pages.
 
-Supported DSH today: **0.2.1-rc.3 and 0.2.1-rc.5** (`dsh.json`). Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
+Supported DSH today: the `enginesDsh` range **>=0.2.1-rc.3 <0.3.0** (`dsh.json`); anything
+outside it is refused. Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
 Repo package version: one version for all packages; `pnpm release:prepare` sets it and
 `package.json` is authoritative.
 
@@ -113,10 +114,11 @@ repo. Detail: [docs/contributing.md](docs/contributing.md#change-owner-defaults)
 
 ## 7. Change DSH support
 
-Bump `dsh.json`, `install.ps1`'s version/bundle arrays, every plugin's `engines.dsh`, and the client
-devDependencies together, then `pnpm gen`, `pnpm check`, and release. The CI matrix derives from
-`dsh.json`; the installer gate is exact `supportedVersions` membership. Detail:
-[docs/contributing.md](docs/contributing.md#change-dsh-support).
+Bump `enginesDsh` in `dsh.json`, `install.ps1`'s `$DshEngineRange`, every plugin's `engines.dsh`, and
+the client devDependencies together, then `pnpm gen`, `pnpm check`, and release. The range is the
+installer's only allowlist; CI derives its matrix at run time (range floor + runtime + newest
+published matching version), so a DSH update inside the range needs no `dsh.json`/`install.ps1`
+edit. Detail: [docs/contributing.md](docs/contributing.md#change-dsh-support).
 
 ## 8. Release
 
@@ -135,11 +137,11 @@ output need `pnpm build` first. Detail: [docs/contributing.md](docs/contributing
 ## 10. CI gate
 
 `.github/workflows/validate.yml` runs on `windows-latest` (Node 24, pnpm 11.28.5, one matrix entry
-per `dsh.json` -> `supportedVersions`) in this order: `pnpm install --frozen-lockfile`, `pnpm build`,
-`git diff --exit-code`, `pnpm gen:check`, `pnpm typecheck`, `pnpm lint`, `pnpm test`,
-`pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer`. Any failing step blocks
-the merge; `release.yml` repeats the gate on tags. Detail and local reproduction:
-[docs/contributing.md](docs/contributing.md#ci-gate-what-blocks-a-merge).
+per version the `versions` job resolves from `dsh.json` -> `enginesDsh`) in this order:
+`pnpm install --frozen-lockfile`, `pnpm build`, `git diff --exit-code`, `pnpm gen:check`,
+`pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm validate:repo`, `pnpm validate:composition`,
+`pnpm validate:installer`. Any failing step blocks the merge; `release.yml` repeats the gate on tags.
+Detail and local reproduction: [docs/contributing.md](docs/contributing.md#ci-gate-what-blocks-a-merge).
 
 ## 11. Hard rules and gotchas
 
@@ -161,9 +163,9 @@ the merge; `release.yml` repeats the gate on tags. Detail and local reproduction
   it: pnpm would prune the tracked vendored `node_modules` tree.
 - **No install-time scripts** in any published manifest; prebuilt `lib/` ships so git installs and
   the market need no build approval.
-- **`engines.dsh` must be byte-identical to `dsh.json` -> `enginesDsh`**, and `dsh.json` and
-  `install.ps1` stay in sync (versions and both bundle lists); `validate:repo` enforces both. The
-  installer gate is exact `supportedVersions` membership.
+- **`engines.dsh` must be byte-identical to `dsh.json` -> `enginesDsh`**, and `install.ps1`'s
+  `$DshEngineRange` plus both bundle lists stay in sync with `dsh.json`; `validate:repo` enforces it.
+  The engines range is the installer's only version allowlist.
 - **Row ids are global**, match `^dsh-setup-...$`, and are unique. A fragment mounts only its own
   package's code, except the approved `@deepseek-ai/dsh-mcp-client` adapter row; Nuphus and Serena
   are guidance-only and both servers come from `dsh-setup-mcp-lazy`.

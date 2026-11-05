@@ -561,6 +561,103 @@ function main(): number {
       }
     })
 
+    // The installer's allowlist is the enginesDsh range itself: a prerelease
+    // newer than any version list is admitted, and versions outside the range
+    // are refused before the profile is read. The stub CLI supplies the
+    // reported version, so neither run needs a real package install.
+    step('the version gate admits an in-range prerelease that was never listed', () => {
+      const gateDir = mkdtempSync(join(tmpRoot, 'installer-gate-'))
+      try {
+        const stub = writeStubCli(gateDir)
+        const result = shell(
+          pwsh,
+          [
+            '-NoProfile',
+            '-File',
+            join(rootDir, 'install.ps1'),
+            '-Profile',
+            'ci',
+            '-DshHome',
+            home,
+            '-DshCli',
+            stub,
+            '-SetupSpec',
+            setupSpec,
+            '-DryRun',
+            '-NoHindsight',
+          ],
+          { ...env, STUB_DSH_VERSION: '0.2.2-rc.1' },
+          120_000,
+        )
+        if (result.status !== 0) throw fail(result)
+        for (const fragment of ['DSH 0.2.2-rc.1', 'Dry run: no changes were made']) {
+          if (!result.stdout.includes(fragment)) {
+            throw new Error(`the in-range run lacks "${fragment}"\n${result.stdout.trim()}`)
+          }
+        }
+      } finally {
+        cleanup(gateDir)
+      }
+    })
+
+    step('the version gate refuses versions outside the engine range before any change', () => {
+      const gateDir = mkdtempSync(join(tmpRoot, 'installer-gate-'))
+      try {
+        const stub = writeStubCli(gateDir)
+        const cases = [
+          { version: '0.2.1-rc.2', problems: [versions.enginesDsh, 'Update DeepSeek Harness'] },
+          { version: '0.3.0', problems: [versions.enginesDsh, 'Update DeepSeek Harness'] },
+          { version: 'not-a-version', problems: ['Cannot read DSH version'] },
+        ]
+        for (const gateCase of cases) {
+          const refusedHome = mkdtempSync(join(tmpRoot, 'installer-gate-refused-'))
+          try {
+            const result = shell(
+              pwsh,
+              [
+                '-NoProfile',
+                '-File',
+                join(rootDir, 'install.ps1'),
+                '-Profile',
+                'ci',
+                '-DshHome',
+                refusedHome,
+                '-DshCli',
+                stub,
+                '-DryRun',
+                '-NoHindsight',
+              ],
+              { ...env, DSH_HOME: refusedHome, STUB_DSH_VERSION: gateCase.version },
+              120_000,
+            )
+            const output = `${result.stdout}\n${result.stderr}`
+            if (result.status === 0) {
+              throw new Error(`the installer accepted DSH ${gateCase.version}\n${output.trim()}`)
+            }
+            for (const fragment of [gateCase.version, ...gateCase.problems]) {
+              if (!output.includes(fragment)) {
+                throw new Error(
+                  `the refusal for DSH ${gateCase.version} lacks "${fragment}"\n${output.trim()}`,
+                )
+              }
+            }
+            if (output.includes('==> Plan')) {
+              throw new Error(
+                `the refusal for DSH ${gateCase.version} reached the plan\n${output.trim()}`,
+              )
+            }
+            if (readdirSync(refusedHome).length > 0) {
+              throw new Error(`the refusal for DSH ${gateCase.version} changed the isolated home`)
+            }
+          } finally {
+            cleanup(refusedHome)
+          }
+        }
+      } finally {
+        cleanup(gateDir)
+      }
+    })
+
     // The documented one-line form executes the installer through
     // Invoke-Expression, so a failure must not terminate the calling process:
     // the wrapper prints a marker from its catch and a sentinel after the call,

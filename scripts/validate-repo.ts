@@ -64,12 +64,16 @@ function checkInstaller(problems: string[]): void {
   }
   const versions = readDshVersions()
   try {
-    compareInstallerList(
-      problems,
-      'SupportedDshVersions',
-      readInstallerArray(text, 'SupportedDshVersions'),
-      versions.supportedVersions,
-    )
+    const engineRange = /\$DshEngineRange\s*=\s*'([^']*)'/u.exec(text)?.[1]
+    if (engineRange === undefined) {
+      problems.push(
+        `install.ps1: $DshEngineRange is missing, expected '${versions.enginesDsh}' (dsh.json -> enginesDsh)`,
+      )
+    } else if (engineRange !== versions.enginesDsh) {
+      problems.push(
+        `install.ps1: $DshEngineRange is '${engineRange}', expected '${versions.enginesDsh}' (dsh.json -> enginesDsh)`,
+      )
+    }
     compareInstallerList(
       problems,
       'ShippedBundles',

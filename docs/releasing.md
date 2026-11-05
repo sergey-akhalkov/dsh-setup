@@ -12,8 +12,9 @@ is pinned to that commit. The release also publishes the one-command installer a
   write` are declared in the workflow).
 - The `github-pages` environment's deployment branch and tag rules allow tags matching `v*`. Without
   that rule the deploy step is rejected before it starts.
-- The release workflow validates every version in `dsh.json` → `supportedVersions`; the matrix is
-  generated from that file, not duplicated in the workflow.
+- The release workflow tests the boundaries of the `enginesDsh` range at run time: the range floor,
+  the runtime, and the newest published DSH version satisfying the range. `scripts/ci-versions.ts`
+  resolves the matrix, so the workflow does not duplicate the range.
 
 ## One set, one version
 
@@ -22,7 +23,7 @@ All plugin packages and the setup bundle share one version, and the tag must be 
 so a stale version cannot be published under a new tag.
 
 The installer resolves the newest version from the published index at run time, so it needs no
-per-release edit. Its standalone copy of the supported versions and bundle list is checked against
+per-release edit. Its standalone copy of the engines range and bundle list is checked against
 `dsh.json` by `pnpm validate:repo`; a release therefore cannot ship a stale installer.
 
 ## Procedure
@@ -55,11 +56,11 @@ per-release edit. Its standalone copy of the supported versions and bundle list 
    git push origin main vX.Y.Z
    ```
 
-6. Read the release workflow result. Validation runs for every supported DSH version, including the
-   installer exercise, before the publish job starts. The publish job fetches the previously
-   published index, merges the new version into it, generates the market directory, and deploys that
-   directory. The deployment step is last: any earlier failure leaves the previously published index
-   untouched.
+6. Read the release workflow result. Validation runs for the matrix resolved from the `enginesDsh`
+   range, including the installer exercise, before the publish job starts. The publish job fetches
+   the previously published index, merges the new version into it, generates the market directory,
+   and deploys that directory. The deployment step is last: any earlier failure leaves the
+   previously published index untouched.
 7. Verify the published index responds with a direct `200` over HTTPS, lists the setup bundle and
    the plugin bundles, and retains the previous versions:
 
@@ -124,16 +125,16 @@ from the Actions history to redeploy its artifact; do not move or reuse a tag fo
 
 ## When DSH changes
 
-1. Update `dsh.json`: `runtime`, `enginesDsh`, `supportedVersions`, and the `installBundles` lists
-   when the shipped optional bundles change.
-2. Update `install.ps1`'s standalone `SupportedDshVersions`, `ShippedBundles`, and `RegistryBundles`
-   arrays to match; `pnpm validate:repo` fails while they differ.
+1. Update `dsh.json`: `runtime`, `enginesDsh`, and the `installBundles` lists when the shipped
+   optional bundles change.
+2. Update `install.ps1`'s standalone `$DshEngineRange`, `$ShippedBundles`, and `$RegistryBundles`
+   values to match; `pnpm validate:repo` fails while they differ from `dsh.json`.
 3. Update the `engines.dsh` range in every plugin manifest; both must stay identical (repository
    validation enforces it).
 4. Fix any composition drift the validation reports, then release a new set version.
 
-The validate and release workflows derive their DSH matrix from `dsh.json`, so no workflow edit is
-needed for a supported version bump.
+The validate and release workflows derive their DSH matrix from the `enginesDsh` range at run time,
+so a DSH update inside the range needs no workflow, `dsh.json`, or `install.ps1` edit.
 
 Never patch an already-published tag to follow a DSH update: publish a new version. If a user pinned
 an older set, DSH refuses it on an incompatible runtime by design.

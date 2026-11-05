@@ -304,17 +304,18 @@ live `pg0` instance.
 
 Update all of these together:
 
-1. `dsh.json`: `runtime`, `enginesDsh`, `supportedVersions`, `installBundles` if the shipped set changed.
-2. `install.ps1`: the `$SupportedDshVersions`, `$ShippedBundles`, `$RegistryBundles` arrays.
+1. `dsh.json`: `runtime`, `enginesDsh`, `installBundles` if the shipped set changed.
+2. `install.ps1`: `$DshEngineRange`, `$ShippedBundles`, and `$RegistryBundles`.
    `pnpm validate:repo` fails while they differ from `dsh.json`.
 3. `engines.dsh` in **every** plugin manifest (and the generated setup manifest via `pnpm gen`).
 4. Client devDependencies pinned to the new DSH client packages; refresh `pnpm-lock.yaml`.
 5. Run `pnpm gen`, `pnpm check`, and the full validation; release a new set version.
    Never patch or reuse an already-published tag.
 
-The CI matrix is derived from `dsh.json` -> `supportedVersions`; no workflow edit is needed for a
-supported-version bump. The **installer gate is exact membership in `$SupportedDshVersions`**, not
-the `enginesDsh` semver range.
+The CI matrix follows `dsh.json` -> `enginesDsh` at run time: `scripts/ci-versions.ts` resolves the
+range floor, the runtime, and the newest published DSH version satisfying the range. A DSH update
+inside the range needs no workflow, `dsh.json`, or `install.ps1` edit. The **installer gate is the
+`enginesDsh` range**, not an exact-version list.
 
 ## Release
 
@@ -334,7 +335,7 @@ git push origin main vX.Y.Z
 Re-check `install.ps1` before tagging. It resolves the setup version from the market index or the
 newest `v*` tag at run time, so a normal release needs no version edit there; do not add a setup
 version constant. Include it in the release commit only when `dsh.json` changes (the
-`$SupportedDshVersions`, `$ShippedBundles`, `$RegistryBundles` arrays), when the installer behavior or
+`$DshEngineRange`, `$ShippedBundles`, `$RegistryBundles` values), when the installer behavior or
 options change, or when a new shipped/registry bundle enters the selection. `pnpm validate` already
 runs `validate:installer`; after the workflow is green, verify the live index (direct 200, every plugin
 at the new version, pinned to the tag commit) and install that version from the live index into a
@@ -372,11 +373,12 @@ fixtures compose them at runtime so `validate:repo` does not flag the test file.
 ## CI gate (what blocks a merge)
 
 `.github/workflows/validate.yml` (pull requests, pushes to `main`, manual) runs on `windows-latest`
-with Node 24, pnpm 11.28.5, and one matrix entry per `dsh.json` -> `supportedVersions` (installs the
-published DSH CLI once outside the repo and exports `DSH_CLI`). The pnpm version is pinned (not just
-ranged) because pnpm 11.9.0 can leave an install process alive after printing `Done in ...`
-([pnpm#13617](https://github.com/pnpm/pnpm/issues/13617)), which hung the installer exercise on CI;
-11.28.5 is also the version DSH `0.2.1-rc.3` bundles. Steps, in order:
+with Node 24, pnpm 11.28.5, and one matrix entry per version the `versions` job resolves from
+`dsh.json` -> `enginesDsh` at run time (range floor, runtime, newest published matching version;
+installs the published DSH CLI once outside the repo and exports `DSH_CLI`). The pnpm version is
+pinned (not just ranged) because pnpm 11.9.0 can leave an install process alive after printing
+`Done in ...` ([pnpm#13617](https://github.com/pnpm/pnpm/issues/13617)), which hung the installer
+exercise on CI; 11.28.5 is also the version DSH `0.2.1-rc.3` bundles. Steps, in order:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -450,8 +452,9 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 - **NodeNext + strict TypeScript.** `verbatimModuleSyntax`, `noUnusedLocals/Parameters`,
   `noUncheckedIndexedAccess`. Scripts import with `.ts` extensions; emitted packages do not get
   `allowImportingTsExtensions`.
-- **Keep `dsh.json` and `install.ps1` in sync** (versions and both bundle lists). `install.ps1` is
-  standalone by design and duplicates this metadata; `validate:repo` compares them.
+- **Keep `dsh.json` and `install.ps1` in sync** (the `$DshEngineRange` literal and both bundle
+  lists). `install.ps1` is standalone by design and duplicates this metadata; `validate:repo`
+  compares them.
 - **`install.ps1` also runs through `Invoke-Expression`.** The documented one-line command is
   `irm <install.ps1-url> | iex`; an `exit` statement there terminates the user's PowerShell process,
   so the script ends normally on success and throws on failure. `validate:repo` rejects a bare
@@ -484,7 +487,7 @@ network; the installer exercise needs Windows with PowerShell 7 as `pwsh`, or se
 | `validate:composition` fails on network/DSH CLI                | It defaults to `pnpm dlx @deepseek-ai/dsh@<dsh.json.runtime>`; set `DSH_CLI` to an installed CLI                                                                                                                                                                                                                                                                                                                                   |
 | `validate:installer` skipped                                   | It runs only on Windows; use CI or a Windows machine                                                                                                                                                                                                                                                                                                                                                                               |
 | Clean tree suddenly fails `gen:check`                          | Line endings: ensure LF (`.gitattributes`/`core.autocrlf`), regenerate if needed                                                                                                                                                                                                                                                                                                                                                   |
-| Installer reports unsupported DSH                              | The gate is exact `supportedVersions`; update `dsh.json` + `install.ps1` together and release                                                                                                                                                                                                                                                                                                                                      |
+| Installer reports unsupported DSH                              | The gate is the `enginesDsh` range; widen it in `dsh.json` + `install.ps1` together and release                                                                                                                                                                                                                                                                                                                                    |
 | Dogfood fails with `This turn failed ENOENT` on a session file | ENOENT means the session directory was removed while the app still pointed at it (the Harness has no deletion API; a clean-home/reset step or external removal did it). Never run a live `desktop` install from a shell hosted by the app either: the installer's stop/restart kills the runner under the turn. Use `pnpm dogfood`; install live only from an external PowerShell; `install.ps1` now refuses the hosted-shell case |
 | `pnpm dogfood` reports a changed owner row                     | The setup layer would override a profile-patch value; inspect the failing row in the composed dump and keep the owner value in `cordis.patch.yml`                                                                                                                                                                                                                                                                                  |
 | Market artifact looks wrong                                    | Regenerate with `pnpm generate:market`; never edit `market/` or trust a pre-existing local copy                                                                                                                                                                                                                                                                                                                                    |
