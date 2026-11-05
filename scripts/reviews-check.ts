@@ -3,10 +3,11 @@
  *
  * `--change <name>` audits one active change, `--all` audits the archived
  * changes against the marker cutoff and exception, `--push` audits the archived
- * changes a push adds (reading the pre-push refs from stdin), and
- * `--export --change <name>` copies existing local `.dsh` PASS records into the
- * change. Every mode fails closed: an unknown range or unreadable evidence is a
- * refusal that names the manual command.
+ * changes a push adds (reading the pre-push refs from stdin), `--staged` audits
+ * the archived changes the index stages, and `--export --change <name>` copies
+ * existing local `.dsh` PASS records into the change. Every mode fails closed:
+ * an unknown range or unreadable evidence is a refusal that names the manual
+ * command.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -38,6 +39,8 @@ import {
   portableTaskRecordPath,
   REVIEWS_DIRECTORY,
   type ReviewApprovalMarker,
+  type ReviewerBinding,
+  reviewerBindingOf,
   unparseableCheckedLines,
 } from '../packages/plugin-delegation-rules/src/shared/approval.ts'
 
@@ -127,6 +130,11 @@ export function approvalRuleOf(marker: MarkerRead): string {
   return marker.kind === 'marker' ? marker.marker.taskRule : 'task-review'
 }
 
+/** The reviewer binding the marker declares, if any. */
+function reviewerOf(marker: MarkerRead): ReviewerBinding | undefined {
+  return marker.kind === 'marker' ? reviewerBindingOf(marker.marker) : undefined
+}
+
 function inspectPortableRecord(changeDir: string, taskId: string): ApprovalRecordState {
   let raw: string
   try {
@@ -157,6 +165,7 @@ async function auditChange(
   displayDir: string,
   change: string,
   rule: string,
+  reviewer?: ReviewerBinding,
 ): Promise<ChangeAudit> {
   let markdown: string
   try {
@@ -167,6 +176,7 @@ async function auditChange(
   const coverage = await computeApprovalCoverage({
     change,
     rule,
+    ...(reviewer === undefined ? {} : { reviewer }),
     tasks: parseTasksText(markdown),
     unparseable: unparseableCheckedLines(markdown),
     recordPath: (taskId) => `${displayDir}/${REVIEWS_DIRECTORY}/${taskId}.json`,
@@ -227,6 +237,7 @@ async function auditTreeChange(
   displayDir: string,
   change: string,
   rule: string,
+  reviewer?: ReviewerBinding,
 ): Promise<ChangeAudit> {
   const markdown = treeFile(cwd, sha, `${displayDir}/tasks.md`)
   if (markdown === undefined) {
@@ -245,6 +256,7 @@ async function auditTreeChange(
   const coverage = await computeApprovalCoverage({
     change,
     rule,
+    ...(reviewer === undefined ? {} : { reviewer }),
     tasks: parseTasksText(markdown),
     unparseable: unparseableCheckedLines(markdown),
     recordPath: (taskId) => `${displayDir}/${REVIEWS_DIRECTORY}/${taskId}.json`,
@@ -283,7 +295,13 @@ export async function auditActive(cwd: string, change: string): Promise<AuditRes
   const marker = readMarker(openspecRoot)
   if (marker.kind === 'malformed') return invalidLocalAudit(marker.error)
   const rule = approvalRuleOf(marker)
-  const audit = await auditChange(changeDir, `openspec/changes/${change}`, change, rule)
+  const audit = await auditChange(
+    changeDir,
+    `openspec/changes/${change}`,
+    change,
+    rule,
+    reviewerOf(marker),
+  )
   return {
     ok: audit.ok,
     lines: [`review approval: change "${change}" (rule "${rule}")`, ...audit.lines],
@@ -416,7 +434,13 @@ export async function auditAll(cwd: string): Promise<AuditResult> {
       lines.push(`${displayDir}: ${classification.error}; ${MANUAL_AUDIT}`)
       continue
     }
-    const audit = await auditChange(join(archiveRoot, directory), displayDir, change, rule)
+    const audit = await auditChange(
+      join(archiveRoot, directory),
+      displayDir,
+      change,
+      rule,
+      reviewerOf(marker),
+    )
     if (audit.coverage === undefined) {
       ok = false
       lines.push(...audit.lines)
@@ -588,7 +612,14 @@ export async function auditPush(cwd: string, stdin: string): Promise<AuditResult
         )
         continue
       }
-      const audit = await auditTreeChange(cwd, tip, entry.displayDir, change, rule)
+      const audit = await auditTreeChange(
+        cwd,
+        tip,
+        entry.displayDir,
+        change,
+        rule,
+        reviewerOf(marker),
+      )
       const kind = classification.kind as ArchiveKind
       if (kind.kind !== 'normal') {
         lines.push(
@@ -610,6 +641,67 @@ export async function auditPush(cwd: string, stdin: string): Promise<AuditResult
     ok
       ? 'review approval: the pushed archived changes are approved'
       : 'review approval: refusing the push; fix the lines above',
+  )
+  return { ok, lines }
+}
+
+/** Archived change directories a staged name-status lists as added, modified, copied, or renamed. */
+function stagedArchives(nameStatus: string): string[] {
+  const directories = new Set<string>()
+  for (const row of nameStatus.split(/\r?\n/)) {
+    const fields = row.split('\t')
+    const status = fields[0] ?? ''
+    if (status === '') continue
+    // A deletion has no staged artifact left to approve; a rename names the
+    // destination last, which is the path the commit will contain.
+    if (status.startsWith('D')) continue
+    const directory = ARCHIVE_PATH.exec(fields[fields.length - 1] ?? '')?.[1]
+    if (directory !== undefined) directories.add(directory)
+  }
+  return [...directories].sort()
+}
+
+/** Audit every archived change a staged commit adds or modifies. */
+export async function auditStaged(cwd: string): Promise<AuditResult> {
+  let nameStatus: string
+  try {
+    nameStatus = git(cwd, ['diff', '--cached', '--name-status'])
+  } catch (error) {
+    return failClosed(`cannot read the staged changes (${message(error)})`)
+  }
+  const directories = stagedArchives(nameStatus)
+  if (directories.length === 0) {
+    return { ok: true, lines: ['review approval: no archived change is staged'] }
+  }
+  const openspecRoot = findOpenSpecRoot(cwd)
+  if (openspecRoot === undefined) {
+    return failClosed('no openspec/changes directory was found from the working directory')
+  }
+  const marker = readMarker(openspecRoot)
+  if (marker.kind === 'malformed') return failClosed(marker.error)
+  const rule = approvalRuleOf(marker)
+  const lines = [
+    `review approval: ${directories.length} staged archived change(s) (rule "${rule}")`,
+  ]
+  let ok = true
+  const archiveRoot = join(openspecRoot, 'changes', 'archive')
+  for (const directory of directories) {
+    const change = archivedChangeName(directory)
+    const displayDir = `openspec/changes/archive/${directory}`
+    const audit = await auditChange(
+      join(archiveRoot, directory),
+      displayDir,
+      change,
+      rule,
+      reviewerOf(marker),
+    )
+    if (!audit.ok) ok = false
+    lines.push(...audit.lines)
+  }
+  lines.push(
+    ok
+      ? 'review approval: the staged archived changes are approved'
+      : `review approval: refusing the commit; fix the lines above; ${MANUAL_AUDIT}`,
   )
   return { ok, lines }
 }
@@ -724,14 +816,15 @@ function readExistingRecord(path: string): PortableTaskReviewRecord | undefined 
   }
 }
 
-type CliMode = 'export' | 'change' | 'all' | 'push'
+type CliMode = 'export' | 'change' | 'all' | 'push' | 'staged'
 
 interface CliArguments {
   mode: CliMode
   change?: string
 }
 
-const USAGE = 'usage: reviews-check --export --change <name> | --change <name> | --all | --push'
+const USAGE =
+  'usage: reviews-check --export --change <name> | --change <name> | --all | --push | --staged'
 
 function flagValue(argv: readonly string[], flag: string): string | undefined {
   const index = argv.indexOf(flag)
@@ -749,6 +842,7 @@ function parseArguments(argv: readonly string[]): CliArguments | { error: string
   }
   if (argv.includes('--all')) return { mode: 'all' }
   if (argv.includes('--push')) return { mode: 'push' }
+  if (argv.includes('--staged')) return { mode: 'staged' }
   const change = flagValue(argv, '--change')
   if (argv.includes('--change')) {
     return change === undefined
@@ -771,6 +865,8 @@ async function main(argv: readonly string[]): Promise<number> {
     result = await auditActive(process.cwd(), parsed.change as string)
   } else if (parsed.mode === 'all') {
     result = await auditAll(process.cwd())
+  } else if (parsed.mode === 'staged') {
+    result = await auditStaged(process.cwd())
   } else if (process.stdin.isTTY === true) {
     result = failClosed('no pre-push refs were provided on stdin')
   } else {

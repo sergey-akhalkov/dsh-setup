@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   type ApprovalRecordState,
   approvalSummaryLine,
@@ -15,10 +16,28 @@ import {
   parseTaskLanes,
   parseTasksText,
   portableRecordFromLocal,
+  type ReviewerBinding,
   recognizeArchiveCommands,
+  reviewerBindingOf,
+  reviewerMatches,
   taskIdOf,
   unparseableCheckedLines,
 } from '../src/shared/approval.ts'
+import {
+  type BundleConfigLike,
+  FakeSubagents,
+  Harness,
+  makeWorkspace,
+  runIdFrom,
+  steerTexts,
+  writeChange,
+} from './helpers.js'
+
+const cleanups: Array<() => Promise<void>> = []
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup()
+})
 
 const DIGEST_A = 'a'.repeat(64)
 const DIGEST_B = 'b'.repeat(64)
@@ -211,10 +230,15 @@ describe('change-level coverage', () => {
     '- [x] 1.1 approved\n- [x] 1.2 failed\n- [x] 1.3 absent\n- [ ] 1.4 open follow-up\n',
   )
 
-  async function coverageOf(states: Record<string, ApprovalRecordState>, unparseable = false) {
+  async function coverageOf(
+    states: Record<string, ApprovalRecordState>,
+    unparseable = false,
+    reviewer?: ReviewerBinding,
+  ) {
     return computeApprovalCoverage({
       change: 'change-a',
       rule: 'task-review',
+      ...(reviewer === undefined ? {} : { reviewer }),
       tasks,
       unparseable: unparseable ? [{ line: 7, text: '- [x] stray' }] : [],
       recordPath: (taskId) => `openspec/changes/change-a/reviews/${taskId}.json`,
@@ -293,6 +317,115 @@ describe('change-level coverage', () => {
     expect(coverage.error).toBe(2)
     expect(coverage.archiveReady).toBe(false)
   })
+
+  it('approves a record whose provider matches the declared reviewer', async () => {
+    const coverage = await coverageOf(
+      {
+        [taskIdOf('approved')]: { kind: 'record', record: recordFor('approved') },
+        [taskIdOf('failed')]: { kind: 'record', record: recordFor('failed') },
+        [taskIdOf('absent')]: { kind: 'record', record: recordFor('absent') },
+      },
+      false,
+      { provider: 'codex-subagent' },
+    )
+    expect(coverage.pass).toBe(3)
+    expect(coverage.archiveReady).toBe(true)
+  })
+
+  it('rejects a record from another provider and names both in the detail', async () => {
+    const coverage = await coverageOf(
+      {
+        [taskIdOf('approved')]: {
+          kind: 'record',
+          record: recordFor('approved', { target: { provider: 'other-reviewer' } }),
+        },
+      },
+      false,
+      { provider: 'codex-subagent' },
+    )
+    expect(coverage.pass).toBe(0)
+    expect(coverage.error).toBe(1)
+    const gaps = formatApprovalGapLines(coverage).join('\n')
+    expect(gaps).toContain('target provider "other-reviewer" (marker reviewer "codex-subagent")')
+    expect(gaps).toContain('1.1 "approved"')
+  })
+
+  it('rejects a record whose model differs from a pinned reviewer model', async () => {
+    const pinned = await coverageOf(
+      {
+        [taskIdOf('approved')]: {
+          kind: 'record',
+          record: recordFor('approved', {
+            target: { provider: 'codex-subagent', model: 'model-a' },
+          }),
+        },
+      },
+      false,
+      { provider: 'codex-subagent', model: 'model-b' },
+    )
+    expect(pinned.pass).toBe(0)
+    expect(formatApprovalGapLines(pinned).join('\n')).toContain(
+      'target model "model-a" (marker reviewer model "model-b")',
+    )
+    const missingModel = await coverageOf(
+      {
+        [taskIdOf('approved')]: { kind: 'record', record: recordFor('approved') },
+      },
+      false,
+      { provider: 'codex-subagent', model: 'model-b' },
+    )
+    expect(missingModel.pass).toBe(0)
+    expect(formatApprovalGapLines(missingModel).join('\n')).toContain(
+      'target model "(none)" (marker reviewer model "model-b")',
+    )
+  })
+
+  it('keeps provider-agnostic behavior when the marker declares no reviewer', async () => {
+    const coverage = await coverageOf({
+      [taskIdOf('approved')]: {
+        kind: 'record',
+        record: recordFor('approved', { target: { provider: 'any-reviewer' } }),
+      },
+    })
+    expect(coverage.pass).toBe(1)
+    expect(coverage.error).toBe(0)
+  })
+})
+
+describe('reviewer binding helpers', () => {
+  it('returns a binding only when the marker declares one', () => {
+    expect(reviewerBindingOf(undefined)).toBeUndefined()
+    expect(
+      reviewerBindingOf({ version: 1, archiveGate: true, taskRule: 'task-review' }),
+    ).toBeUndefined()
+    expect(
+      reviewerBindingOf({
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: 'codex-subagent',
+      }),
+    ).toEqual({ provider: 'codex-subagent' })
+    expect(
+      reviewerBindingOf({
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: 'codex-subagent',
+        reviewerModel: 'gpt-6',
+      }),
+    ).toEqual({ provider: 'codex-subagent', model: 'gpt-6' })
+  })
+
+  it('matches provider and an optional model, and accepts any target without a binding', () => {
+    expect(reviewerMatches({ provider: 'a' }, undefined)).toBe(true)
+    expect(reviewerMatches({ provider: 'a' }, { provider: 'a' })).toBe(true)
+    expect(reviewerMatches({ provider: 'b' }, { provider: 'a' })).toBe(false)
+    expect(reviewerMatches({ provider: 'a', model: 'm1' }, { provider: 'a', model: 'm2' })).toBe(
+      false,
+    )
+    expect(reviewerMatches({ provider: 'a' }, { provider: 'a', model: 'm2' })).toBe(false)
+  })
 })
 
 describe('approval marker', () => {
@@ -314,6 +447,21 @@ describe('approval marker', () => {
     })
   })
 
+  it('parses an optional reviewer provider and model', () => {
+    const parsed = parseReviewApprovalMarker({
+      version: 1,
+      archiveGate: true,
+      taskRule: 'task-review',
+      reviewerProvider: 'codex-subagent',
+      reviewerModel: 'gpt-6-astra',
+    })
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.marker).toMatchObject({
+      reviewerProvider: 'codex-subagent',
+      reviewerModel: 'gpt-6-astra',
+    })
+  })
+
   it('accepts archiveGate false and rejects malformed markers', () => {
     expect(
       parseReviewApprovalMarker({ version: 1, archiveGate: false, taskRule: 'r' }).marker,
@@ -324,6 +472,14 @@ describe('approval marker', () => {
       { version: 1, archiveGate: true, taskRule: 'Task Review' },
       { version: 1, archiveGate: true, taskRule: 'task-review', extra: 1 },
       { version: 1, archiveGate: true, taskRule: 'task-review', cutoff: WINDOWS_TAG_PATH },
+      { version: 1, archiveGate: true, taskRule: 'task-review', reviewerProvider: '' },
+      { version: 1, archiveGate: true, taskRule: 'task-review', reviewerModel: 7 },
+      {
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: WINDOWS_MODEL_PATH,
+      },
       {
         version: 1,
         archiveGate: true,
@@ -507,5 +663,155 @@ describe('export validation', () => {
     expect(localTaskRecordPath(root, 'task-review', 'change-a', taskId)).toBe(
       join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
     )
+  })
+})
+
+describe('reviewer binding at the host surfaces', () => {
+  function hostConfig(): BundleConfigLike {
+    return {
+      targets: { codex: { provider: 'codex-subagent' } },
+      rules: [
+        {
+          id: 'task-review',
+          when: 'spec-task-ready',
+          to: 'codex',
+          contract: 'review',
+          scope: 'task',
+          gate: 'strict',
+          instruction: 'bundled:review-task',
+        },
+      ],
+    }
+  }
+
+  async function hostWorkspace(): Promise<string> {
+    const created = await makeWorkspace()
+    cleanups.push(created.cleanup)
+    return created.root
+  }
+
+  function registered(): FakeSubagents {
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.addProvider('other-reviewer')
+    return subagents
+  }
+
+  async function writeMarker(root: string, marker: Record<string, unknown>): Promise<void> {
+    await mkdir(join(root, 'openspec'), { recursive: true })
+    await writeFile(
+      join(root, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review', ...marker }),
+      'utf8',
+    )
+  }
+
+  function recordFields(taskId: string, provider: string): Record<string, unknown> {
+    return {
+      rule: 'task-review',
+      change: 'change-a',
+      scope: 'task',
+      taskId,
+      digest: DIGEST_A,
+      worktreeDigest: DIGEST_B,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider },
+      time: '2026-10-29T08:55:43.317Z',
+    }
+  }
+
+  function localPass(taskId: string, provider: string): Record<string, unknown> {
+    return { ...recordFields(taskId, provider), phase: 'task' }
+  }
+
+  async function writeLocalPass(root: string, taskId: string, provider: string): Promise<void> {
+    const path = join(
+      root,
+      '.dsh',
+      'delegation',
+      'task-review',
+      'change-a',
+      'tasks',
+      `${taskId}.json`,
+    )
+    await mkdir(join(path, '..'), { recursive: true })
+    await writeFile(path, JSON.stringify(localPass(taskId, provider)), 'utf8')
+  }
+
+  async function writePortablePass(root: string, taskId: string, provider: string): Promise<void> {
+    const path = join(root, 'openspec', 'changes', 'change-a', 'reviews', `${taskId}.json`)
+    await mkdir(join(path, '..'), { recursive: true })
+    await writeFile(path, JSON.stringify(recordFields(taskId, provider)), 'utf8')
+  }
+
+  it('starts a new review instead of reusing a cached PASS from another reviewer', async () => {
+    const root = await hostWorkspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Bound task', checked: true }])
+    await writeMarker(root, { reviewerProvider: 'codex-subagent' })
+    const subagents = registered()
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: subagents })
+    await writeLocalPass(root, taskIdOf('Bound task'), 'other-reviewer')
+
+    const started = await harness.toolText('delegate', { rule: 'task-review' })
+    expect(started).toContain('review started')
+    await harness.waitForRun(runIdFrom(started))
+    expect(subagents.startCalls).toBe(1)
+
+    const reused = await harness.toolText('delegate', { rule: 'task-review' })
+    expect(reused).toContain('reused record')
+    expect(reused).toContain('target: codex-subagent')
+    expect(subagents.startCalls).toBe(1)
+  })
+
+  it('refuses the live task gate for a local PASS from another reviewer', async () => {
+    const root = await hostWorkspace()
+    const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'Bound task' }])
+    await writeMarker(root, { reviewerProvider: 'codex-subagent' })
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: registered() })
+    const before = '# Tasks\n\n- [ ] 1.1 Bound task\n'
+    const after = '# Tasks\n\n- [x] 1.1 Bound task\n'
+    await writeFile(join(dir, 'tasks.md'), before, 'utf8')
+    await harness.preStep(1)
+    await harness.writeResult(join(dir, 'tasks.md'), before, after, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), after, 'utf8')
+    await writeLocalPass(root, taskIdOf('Bound task'), 'other-reviewer')
+    await writePortablePass(root, taskIdOf('Bound task'), 'codex-subagent')
+    await harness.turnStopping(1)
+    const message = steerTexts(harness.agent).join('\n')
+    expect(message).toContain('requires its task-scoped review')
+    expect(message).not.toContain('completion requires a portable')
+  })
+
+  it('accepts the live task gate when the local PASS matches the declared reviewer', async () => {
+    const root = await hostWorkspace()
+    const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'Bound task' }])
+    await writeMarker(root, { reviewerProvider: 'codex-subagent' })
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: registered() })
+    const before = '# Tasks\n\n- [ ] 1.1 Bound task\n'
+    const after = '# Tasks\n\n- [x] 1.1 Bound task\n'
+    await writeFile(join(dir, 'tasks.md'), before, 'utf8')
+    await harness.preStep(1)
+    await harness.writeResult(join(dir, 'tasks.md'), before, after, harness.agent, 'edit')
+    await writeFile(join(dir, 'tasks.md'), after, 'utf8')
+    await writeLocalPass(root, taskIdOf('Bound task'), 'codex-subagent')
+    await writePortablePass(root, taskIdOf('Bound task'), 'codex-subagent')
+    await harness.turnStopping(1)
+    const steers = steerTexts(harness.agent)
+    expect(steers, steers.join('\n')).toHaveLength(0)
+  })
+
+  it('reports a mismatched portable record as unapproved in delegation_status', async () => {
+    const root = await hostWorkspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Bound task', checked: true }])
+    await writeMarker(root, { reviewerProvider: 'codex-subagent', reviewerModel: 'gpt-6' })
+    const harness = new Harness({ cwd: root, config: hostConfig(), agents: registered() })
+    await writeLocalPass(root, taskIdOf('Bound task'), 'other-reviewer')
+    await writePortablePass(root, taskIdOf('Bound task'), 'other-reviewer')
+    const text = await harness.toolText('delegation_status', {})
+    expect(text).toContain('task-review: 0/1 checked task(s) with a PASS/ERROR record')
+    expect(text).toContain('task approval: task-review PASS 0/1, ERROR 1')
+    expect(text).toContain('target provider "other-reviewer" (marker reviewer "codex-subagent")')
+    expect(text).toContain('target model "(none)" (marker reviewer model "gpt-6")')
   })
 })

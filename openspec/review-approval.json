@@ -2,6 +2,7 @@
   "version": 1,
   "archiveGate": true,
   "taskRule": "task-review",
+  "reviewerProvider": "codex-subagent",
   "cutoff": "v0.12.0",
   "grandfathered": {
     "add-goal-block-review": "post-hoc integration review PASS after fixes on review-v0-12-0; no per-task review",

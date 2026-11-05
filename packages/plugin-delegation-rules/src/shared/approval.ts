@@ -139,6 +139,12 @@ export interface ReviewTarget {
   reasoningEffort?: string
 }
 
+/** The optional reviewer identity a repository marker pins every portable PASS to. */
+export interface ReviewerBinding {
+  provider?: string
+  model?: string
+}
+
 /** The sanitized, committed approval record for one checked task. */
 export interface PortableTaskReviewRecord {
   rule: string
@@ -317,6 +323,8 @@ export interface ApprovalCoverageInput {
   /** Repository-relative display path of the expected record for one task. */
   recordPath(taskId: string): string
   inspect(taskId: string): ApprovalRecordState | Promise<ApprovalRecordState>
+  /** Marker-declared reviewer; absent keeps provider-agnostic behavior. */
+  reviewer?: ReviewerBinding
 }
 
 /**
@@ -367,6 +375,19 @@ export async function computeApprovalCoverage(
       if (record.change !== input.change) mismatch.push(`change "${record.change}"`)
       if (record.taskId !== task.id) mismatch.push(`task id "${record.taskId}"`)
       if (record.verdict !== 'PASS') mismatch.push(`verdict ${record.verdict}`)
+      if (
+        input.reviewer?.provider !== undefined &&
+        record.target.provider !== input.reviewer.provider
+      ) {
+        mismatch.push(
+          `target provider "${record.target.provider}" (marker reviewer "${input.reviewer.provider}")`,
+        )
+      }
+      if (input.reviewer?.model !== undefined && record.target.model !== input.reviewer.model) {
+        mismatch.push(
+          `target model "${record.target.model ?? '(none)'}" (marker reviewer model "${input.reviewer.model}")`,
+        )
+      }
       if (mismatch.length === 0) {
         coverage.pass += 1
         report.state = 'pass'
@@ -412,11 +433,47 @@ export interface ReviewApprovalMarker {
   version: 1
   archiveGate: boolean
   taskRule: string
+  /** Pinned reviewer provider; when absent any record target counts. */
+  reviewerProvider?: string
+  /** Pinned reviewer model; only checked when declared. */
+  reviewerModel?: string
   cutoff?: string
   grandfathered?: Record<string, string>
 }
 
-const MARKER_KEYS = new Set(['version', 'archiveGate', 'taskRule', 'cutoff', 'grandfathered'])
+const MARKER_KEYS = new Set([
+  'version',
+  'archiveGate',
+  'taskRule',
+  'reviewerProvider',
+  'reviewerModel',
+  'cutoff',
+  'grandfathered',
+])
+
+/** The binding a parsed marker declares; undefined keeps provider-agnostic behavior. */
+export function reviewerBindingOf(
+  marker: ReviewApprovalMarker | undefined,
+): ReviewerBinding | undefined {
+  if (marker === undefined) return undefined
+  const { reviewerProvider, reviewerModel } = marker
+  if (reviewerProvider === undefined && reviewerModel === undefined) return undefined
+  return {
+    ...(reviewerProvider === undefined ? {} : { provider: reviewerProvider }),
+    ...(reviewerModel === undefined ? {} : { model: reviewerModel }),
+  }
+}
+
+/** Whether a record target satisfies the declared reviewer binding. */
+export function reviewerMatches(
+  target: { provider: string; model?: string },
+  binding: ReviewerBinding | undefined,
+): boolean {
+  if (binding === undefined) return true
+  if (binding.provider !== undefined && target.provider !== binding.provider) return false
+  if (binding.model !== undefined && target.model !== binding.model) return false
+  return true
+}
 
 export function parseReviewApprovalMarker(value: unknown): {
   marker?: ReviewApprovalMarker
@@ -433,6 +490,12 @@ export function parseReviewApprovalMarker(value: unknown): {
   }
   if (typeof value.taskRule !== 'string' || !RULE_ID_PATTERN.test(value.taskRule)) {
     return { error: 'marker taskRule must be a kebab-case rule id' }
+  }
+  if (value.reviewerProvider !== undefined && !isCleanString(value.reviewerProvider)) {
+    return { error: 'marker reviewerProvider must be a provider name' }
+  }
+  if (value.reviewerModel !== undefined && !isCleanString(value.reviewerModel)) {
+    return { error: 'marker reviewerModel must be a model name' }
   }
   if (value.cutoff !== undefined && !isCleanString(value.cutoff)) {
     return { error: 'marker cutoff must be a tag name' }
@@ -457,6 +520,8 @@ export function parseReviewApprovalMarker(value: unknown): {
       version: 1,
       archiveGate: value.archiveGate,
       taskRule: value.taskRule,
+      ...(value.reviewerProvider === undefined ? {} : { reviewerProvider: value.reviewerProvider }),
+      ...(value.reviewerModel === undefined ? {} : { reviewerModel: value.reviewerModel }),
       ...(value.cutoff === undefined ? {} : { cutoff: value.cutoff }),
       ...(value.grandfathered === undefined ? {} : { grandfathered }),
     },
