@@ -650,33 +650,30 @@ function workspaceRelative(workspace, path) {
 }
 /** Parse `git log --name-only` output; null when it is not the fixed format. */
 function parseGitLog(output) {
+    const text = output.replace(/[\r\n]+$/, '');
+    if (text === '')
+        return [];
     const entries = [];
-    let current;
-    for (const raw of output.split(/\r?\n/)) {
-        // Do not trim: an empty commit subject still ends its header with the
-        // subject tab, and cutting it turns the header into a bogus path line.
-        const line = raw;
-        if (line === '')
-            continue;
-        const header = /^([0-9a-f]{7,40})\t([^\t]+)\t(.*)$/.exec(line);
-        if (header !== null) {
-            const at = header[2] ?? '';
-            if (Number.isNaN(Date.parse(at)))
-                return null;
-            current = {
-                commit: { short: header[1] ?? '', at, subject: header[3] ?? '' },
-                paths: [],
-            };
-            entries.push(current);
-            continue;
-        }
-        // A path line never carries a tab (git quotes such paths); a tab here is a
-        // malformed section and must not inherit the preceding commit.
-        if (line.includes('\t'))
+    // git prints one blank-line-separated section per commit: its header, then
+    // the files it touched. A section whose first line is not a valid header is
+    // malformed output, not a path list to attach to the previous commit.
+    for (const block of text.split(/\r?\n\r?\n/)) {
+        const [headerLine = '', ...paths] = block.split(/\r?\n/);
+        const header = /^([0-9a-f]{7,40})\t([^\t]+)\t(.*)$/.exec(headerLine);
+        if (header === null)
             return null;
-        current?.paths.push(line.split('\\').join('/'));
+        const at = header[2] ?? '';
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(at)) {
+            return null;
+        }
+        if (paths.some((path) => path === '' || path.includes('\t')))
+            return null;
+        entries.push({
+            commit: { short: header[1] ?? '', at, subject: header[3] ?? '' },
+            paths: paths.map((path) => path.split('\\').join('/')),
+        });
     }
-    return entries.length === 0 && output.trim() !== '' ? null : entries;
+    return entries;
 }
 /** The newest commit that touched a file or any path under a directory. */
 export function commitFor(entries, target) {
@@ -689,6 +686,20 @@ export function commitFor(entries, target) {
         }
     }
     return null;
+}
+/** A CLI-reported item name that needs no shell quoting at all. */
+const SAFE_CLI_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+/**
+ * Refuse a CLI-reported item name that a Windows `cmd.exe` could re-parse as a
+ * command. Quoting alone does not stop `%VAR%` expansion, so a name carrying
+ * `%`, a quote, or any other punctuation outside OpenSpec's slug grammar is
+ * refused before it reaches the CLI. Nested capability ids keep their `/`.
+ * @throws the readable refusal for the name.
+ */
+export function requireSafeCliName(name, kind) {
+    if (!SAFE_CLI_NAME.test(name)) {
+        throw new Error(`The OpenSpec ${kind} "${name}" contains characters that cannot be passed to the CLI safely.`);
+    }
 }
 /** The real `git` executor: fixed arguments, no shell, bounded time and output. */
 function defaultGitRunner(args, cwd) {

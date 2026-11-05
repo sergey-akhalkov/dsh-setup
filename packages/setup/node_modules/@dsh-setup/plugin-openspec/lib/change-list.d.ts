@@ -200,6 +200,14 @@ export declare function readGitLog(workspace: string, paths: readonly string[], 
 /** The newest commit that touched a file or any path under a directory. */
 export declare function commitFor(entries: readonly GitLogEntry[] | null, target: string): CommitFact | null;
 /**
+ * Refuse a CLI-reported item name that a Windows `cmd.exe` could re-parse as a
+ * command. Quoting alone does not stop `%VAR%` expansion, so a name carrying
+ * `%`, a quote, or any other punctuation outside OpenSpec's slug grammar is
+ * refused before it reaches the CLI. Nested capability ids keep their `/`.
+ * @throws the readable refusal for the name.
+ */
+export declare function requireSafeCliName(name: string, kind: string): void;
+/**
  * List the workspace's changes with the file facts the panel renders.
  *
  * `changes` stays the active-only legacy list the apply picker reads; archived
