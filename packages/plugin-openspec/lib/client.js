@@ -1492,7 +1492,10 @@ window.__ModuleLoader__.load({
             value: kind,
             // The shipped tabs have no disabled option; an unavailable kind keeps
             // its reason on the tab and its selection is refused below.
-            label: available ? label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tab-unavailable", title: t("artifact.notWritten"), children: label }),
+            label: available ? label : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-tab-unavailable", title: t("artifact.notWritten"), children: [
+              label,
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-sr-only", children: ` (${t("artifact.notWritten")})` })
+            ] }),
             id: `${baseId}-${kind}`,
             panelId: `${baseId}-${kind}-panel`
           };
@@ -2202,6 +2205,23 @@ window.__ModuleLoader__.load({
     }
     .dsh-openspec-keyword {
       color: var(--dsw-alias-state-business-primary);
+    }
+    /* The shipped SegmentedTabs has no disabled option: dim the unavailable tab
+       and reveal its reason to assistive technology; the selection is refused. */
+    .dsh-openspec-tab-unavailable {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .dsh-openspec-sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }
     .dsh-openspec-code {
       font: var(--dsw-font-markdown-code);
