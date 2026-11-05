@@ -1519,7 +1519,16 @@ window.__ModuleLoader__.load({
             label: t("change.artifactLabel")
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-scroll", children: artifactBody(change, artifact, delta, deltas, t, labels, props) })
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "div",
+          {
+            className: "dsh-openspec-scroll",
+            id: `${baseId}-${artifact}-panel`,
+            role: "tabpanel",
+            "aria-labelledby": `${baseId}-${artifact}`,
+            children: artifactBody(change, artifact, delta, deltas, t, labels, props)
+          }
+        )
       ] });
     }
     function capabilityList(change) {
@@ -1577,10 +1586,23 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-group-label", children: `${String(capabilities.length)} ${props.t("change.deltas")}` }),
           capabilities.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Pill, { active: entry === current, onClick: () => props.onDelta(entry), children: entry }, entry))
         ] }) : null,
-        groups.length === 0 ? raw === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", children: props.t("artifact.notWritten") }) : (
-          // Archived unparsed-file fallback: the file body stays readable.
+        groups.length === 0 ? raw === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", children: props.t("artifact.notWritten") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-delta-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: current }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              import_dsh_client_ui_primitives.Button,
+              {
+                type: "button",
+                variant: "outline",
+                size: "sm",
+                icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconRightUpOutlineRegular, { size: 14 }),
+                onClick: () => props.onOpenCapability(current),
+                children: props.t("capability.openAccepted")
+              }
+            )
+          ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-body", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.MarkdownText, { text: raw.body, labels: props.labels }) })
-        ) : groups.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-section", children: [
+        ] }) : groups.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-section", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-delta-head", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: operationTone(entry.operation), children: entry.operation }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: entry.capability }),
