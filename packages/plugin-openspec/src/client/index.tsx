@@ -1310,7 +1310,9 @@ function ChangeCard(props: {
       </span>
       {summaryText(props.row.summary) === null ? null : (
         <primitives.Tooltip label={props.row.summary ?? ''}>
-          <span className="dsh-openspec-purpose">{props.row.summary}</span>
+          <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">
+            {props.row.summary}
+          </span>
         </primitives.Tooltip>
       )}
       {props.row.totalTasks > 0 ? (
@@ -1346,7 +1348,9 @@ function CapabilityCard(props: {
         </span>
       </span>
       {summaryText(props.row.purpose) === null ? null : (
-        <span className="dsh-openspec-purpose dsh-openspec-purpose-one">{props.row.purpose}</span>
+        <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one">
+          {props.row.purpose}
+        </span>
       )}
       <span className="dsh-openspec-meta">
         {provenance === undefined || provenance === null ? (
@@ -1980,7 +1984,9 @@ export function CapabilityView(props: CapabilityViewProps): ReactNode {
             <Tag tone="quiet">{`${t('capability.accepted')} ${accepted}`}</Tag>
           )}
           {producer === undefined ? null : (
-            <Tag tone="quiet">{`${t('capability.via')} ${producer.name}`}</Tag>
+            <Tag tone="quiet" className="dsh-openspec-producer">
+              {`${t('capability.via')} ${producer.name}`}
+            </Tag>
           )}
           {capability.commit === undefined || capability.commit === null
             ? null
@@ -2163,17 +2169,26 @@ export const PANEL_CSS = `
   white-space: nowrap;
 }
 .dsh-openspec-purpose {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
   margin: 0;
   font: var(--dsw-font-xs-13);
   color: var(--dsw-alias-label-secondary);
   overflow-wrap: anywhere;
 }
+/* Cards clamp to two lines; detail headers keep the full purpose. */
+.dsh-openspec-purpose-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
 .dsh-openspec-purpose-one {
   -webkit-line-clamp: 1;
+}
+.dsh-openspec-producer {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .dsh-openspec-meta {
   display: flex;

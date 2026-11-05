@@ -927,6 +927,37 @@ describe('archived change detail', () => {
     expect(deltas[0]?.requirements.map((req) => req.name)).toEqual(['Real'])
   })
 
+  it('recognizes a bullet-form requirement header in a REMOVED section', () => {
+    const alone = parseArchivedDeltas(
+      'alpha',
+      '## REMOVED Requirements\n\n- ### Requirement: Old behavior\n',
+    )
+    expect(alone).toEqual([
+      {
+        capability: 'alpha',
+        operation: 'REMOVED',
+        requirements: [{ name: 'Old behavior', text: '', scenarios: [] }],
+      },
+    ])
+    const mixed = parseArchivedDeltas(
+      'alpha',
+      [
+        '## ADDED Requirements',
+        '',
+        '### Requirement: New behavior',
+        '',
+        'New text.',
+        '',
+        '## REMOVED Requirements',
+        '',
+        '* ### Requirement: Old behavior',
+        '',
+      ].join('\n'),
+    )
+    expect(mixed.map((delta) => delta.operation)).toEqual(['ADDED', 'REMOVED'])
+    expect(mixed[1]?.requirements.map((req) => req.name)).toEqual(['Old behavior'])
+  })
+
   it('keeps several requirements and one without scenarios', () => {
     const deltas = parseArchivedDeltas(
       'alpha',

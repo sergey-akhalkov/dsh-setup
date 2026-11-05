@@ -1756,6 +1756,10 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('updated 2h ago')
     expect(text).toContain('7e87448')
     expect(text).toContain('2026-10-27')
+    const purpose = nodes(card).find((node) =>
+      String(node.props.className ?? '').includes('dsh-openspec-purpose'),
+    )
+    expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-clamp')
     const phaseTag = typed(tree, 'Tag').find((tag) => tag.props.children === 'applying')
     expect(phaseTag?.props.tone).toBe('info')
     expect(typed(tree, 'StateDot')[0]?.props.state).toBe('ongoing')
@@ -2118,6 +2122,10 @@ describe('OpenSpec change view', () => {
     expect(chosen).toEqual(['design'])
     expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('# Why')
     expect(typed(tree, 'MarkdownText')[0]?.props.labels).toBe(LABELS)
+    const purpose = nodes(tree).find((node) =>
+      String(node.props.className ?? '').includes('dsh-openspec-purpose'),
+    )
+    expect(String(purpose?.props.className)).not.toContain('purpose-clamp')
   })
 
   it('shows a missing artifact as unavailable with its reason', () => {
@@ -2299,6 +2307,14 @@ describe('OpenSpec capability view', () => {
     const items = tabControl(tree).props.items as Array<Record<string, string>>
     expect(items.map((item) => item.label)).toEqual(['Requirements (2)', 'History (2)'])
     expect(textOf(tree)).toContain('Sign-in')
+    const purpose = nodes(tree).find((node) =>
+      String(node.props.className ?? '').includes('dsh-openspec-purpose'),
+    )
+    expect(String(purpose?.props.className)).not.toContain('purpose-clamp')
+    const producer = typed(tree, 'Tag').find((tag) =>
+      String(tag.props.children).includes('via 2026-10-27-add-admin-indicator'),
+    )
+    expect(producer?.props.className).toBe('dsh-openspec-producer')
   })
 
   it('renders the commit date even when it differs from the modification date', () => {

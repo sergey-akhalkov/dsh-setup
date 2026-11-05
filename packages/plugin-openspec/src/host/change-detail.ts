@@ -396,7 +396,10 @@ async function activeDeltas(workspace: string, name: string): Promise<Delta[]> {
 }
 
 const DELTA_SECTION = /^##\s+(ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements\s*$/i
-const REQUIREMENT_HEADING = /^###\s+Requirement:\s*(.*)$/i
+const REQUIREMENT_HEADING = /^`?###\s*Requirement:\s*(.+?)`?\s*$/i
+// The CLI also accepts a bullet carrying the header, but only as a REMOVED
+// entry name (the bullet form a removal list is often written in).
+const BULLET_REQUIREMENT_HEADING = /^[-*+]\s+`?###\s*Requirement:\s*(.+?)`?\s*$/i
 const ANY_HEADING = /^#{1,6}\s/
 const RENAME_FROM = /^\s*[-*+]?\s*FROM:\s*`?###\s*Requirement:\s*(.+?)`?\s*$/i
 const RENAME_TO = /^\s*[-*+]?\s*TO:\s*`?###\s*Requirement:\s*(.+?)`?\s*$/i
@@ -517,7 +520,9 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
       continue
     }
     if (requirements === undefined) continue
-    const requirementMatch = REQUIREMENT_HEADING.exec(trimmed)
+    const requirementMatch =
+      REQUIREMENT_HEADING.exec(trimmed) ??
+      (operation === 'REMOVED' ? BULLET_REQUIREMENT_HEADING.exec(trimmed) : null)
     if (requirementMatch !== null) {
       flushRequirement()
       requirement = { name: (requirementMatch[1] ?? '').trim(), text: [], scenarios: [] }
