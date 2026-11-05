@@ -1,7 +1,36 @@
-import { type Dirent, readdirSync, realpathSync, statSync } from 'node:fs'
+import { type Dirent, readdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join, resolve, sep } from 'node:path'
-import { listWorkspaceChanges, runOpenSpecJson, type WorkspaceChange } from './change-list.js'
+import { join, relative, resolve, sep } from 'node:path'
+import {
+  type ArchiveProducer,
+  archivedDate,
+  artifactPresent,
+  artifactReadMessage,
+  type CapabilitySummary,
+  type ChangePhase,
+  type ChangePresence,
+  type CommitFact,
+  canonicalRoot,
+  capabilityReadMessage,
+  changePhase,
+  commitFor,
+  containedArtifact,
+  containedItem,
+  deltaSpecFiles,
+  type GitLogEntry,
+  isoMtime,
+  listWorkspaceCapabilities,
+  newestModified,
+  planningRoot,
+  proposalSummary,
+  purposeSection,
+  readGitLog,
+  readWorkspaceChangeRows,
+  runOpenSpecJson,
+  scanArchiveProducers,
+  specsRoot,
+  type WorkspaceChangeRow,
+} from './change-list.js'
 
 /**
  * Read one change's planning artifacts and the workspace's capability specs.
@@ -9,19 +38,11 @@ import { listWorkspaceChanges, runOpenSpecJson, type WorkspaceChange } from './c
  * Lists and counts come from the documented CLI; artifact bodies come from
  * files, because no CLI command returns them. Every path is built by joining
  * under the session workspace's own `openspec/` root and checked after
- * resolution, and the item name must first appear in the CLI's list, so a
- * request never contributes a filesystem path. Reads then canonicalize the
- * real path and refuse anything outside the workspace's own OpenSpec root, so a
- * symlink or junction cannot serve a file from elsewhere.
+ * resolution, and the item name must first appear in the CLI's list for the
+ * matching family, so a request never contributes a filesystem path. Reads then
+ * canonicalize the real path and refuse anything outside the workspace's own
+ * OpenSpec root, so a symlink or junction cannot serve a file from elsewhere.
  */
-
-/** Artifact kinds one change already carries; `specs` counts delta spec files. */
-export interface ChangePresence {
-  readonly proposal: boolean
-  readonly design: boolean
-  readonly tasks: boolean
-  readonly specs: number
-}
 
 /** One delta spec of a change, with that file's ISO last-modified time. */
 export interface DeltaSpec {
@@ -30,32 +51,75 @@ export interface DeltaSpec {
   readonly modified: string
 }
 
+/** The operation a delta section declares. */
+export type DeltaOperation = 'ADDED' | 'MODIFIED' | 'REMOVED' | 'RENAMED'
+
+/** One requirement with its scenarios, as the CLI reports it. */
+export interface Requirement {
+  readonly name: string
+  readonly text: string
+  readonly scenarios: ReadonlyArray<{ readonly name: string; readonly rawText: string }>
+}
+
+/** One parsed delta section; `RENAMED` carries a pair and no requirements. */
+export interface Delta {
+  readonly capability: string
+  readonly operation: DeltaOperation
+  readonly requirements: readonly Requirement[]
+  readonly rename?: { readonly from: string; readonly to: string }
+}
+
+/** One task file the checklist parses, addressed workspace-relative. */
+export interface TaskFile {
+  readonly path: string
+  readonly body: string
+}
+
 /** Everything the change view renders for one CLI-reported change. */
 export interface WorkspaceChangeDetail {
   readonly name: string
-  readonly status: WorkspaceChange['status']
+  readonly status: WorkspaceChangeRow['status']
+  readonly phase: ChangePhase
   readonly completedTasks: number
   readonly totalTasks: number
-  readonly presence: ChangePresence
+  readonly archived: boolean
+  readonly archivedAt: string | null
+  readonly summary: string | null
   readonly modified: string | null
+  readonly commit: CommitFact | null
+  readonly presence: ChangePresence
   readonly artifacts: {
     readonly proposal: string | null
     readonly design: string | null
     readonly tasks: string | null
   }
   readonly specs: DeltaSpec[]
+  readonly deltas: Delta[]
+  readonly taskFiles: TaskFile[]
 }
 
-/** One row of the workspace's capability inventory. */
-export interface CapabilitySummary {
-  readonly id: string
-  readonly requirementCount: number
+/** One archived change that produced a capability, with its commit facts. */
+export interface CapabilityHistoryEntry {
+  readonly name: string
+  readonly date: string
+  readonly completedTasks: number
+  readonly totalTasks: number
+  readonly commit: CommitFact | null
 }
 
-/** One capability's accepted spec body and file last-modified time. */
-export interface CapabilityDetail extends CapabilitySummary {
+/** One row of the capability inventory the panel renders. */
+export interface CapabilityRow extends CapabilitySummary {
+  readonly purpose: string
+  readonly modified: string | null
+  readonly lastChange: CapabilityHistoryEntry | null
+  readonly commit: CommitFact | null
+}
+
+/** One capability's accepted spec, its structured requirements and its history. */
+export interface CapabilityDetail extends CapabilityRow {
   readonly body: string
-  readonly modified: string
+  readonly requirements: readonly Requirement[]
+  readonly history: readonly CapabilityHistoryEntry[]
 }
 
 /** The requested change or capability is not in the CLI's list for the workspace. */
@@ -66,28 +130,19 @@ export function unreportedChangeMessage(name: string): string {
   return `The OpenSpec change "${name}" is not reported for this workspace.`
 }
 
+/** The requested archived change is not in the CLI's archived list for this workspace. */
+export function unreportedArchivedChangeMessage(name: string): string {
+  return `The archived OpenSpec change "${name}" is not reported for this workspace.`
+}
+
 /** The requested capability is not in the CLI's inventory for this workspace. */
 export function unreportedCapabilityMessage(id: string): string {
   return `The OpenSpec capability "${id}" is not reported for this workspace.`
 }
 
-/** A request-named item resolves outside the workspace's own OpenSpec root. */
-export const OUTSIDE_ROOT_MESSAGE =
-  'The requested OpenSpec item resolves outside the workspace OpenSpec root.'
-
-/** A change artifact could not be read. */
-export function artifactReadMessage(path: string, cause: string): string {
-  return `Could not read the OpenSpec artifact ${path}: ${cause}`
-}
-
-/** A capability spec file could not be read. */
-export function capabilityReadMessage(path: string, cause: string): string {
-  return `Could not read the OpenSpec capability spec ${path}: ${cause}`
-}
-
-/** The CLI's `list --specs --json` output is not the documented shape. */
-export const CAPABILITIES_MALFORMED_MESSAGE =
-  '`openspec list --specs --json` returned output that could not be read.'
+/** The CLI's structured requirement output is not the documented shape. */
+export const REQUIREMENTS_MALFORMED_MESSAGE =
+  '`openspec show --json` returned requirement data that could not be read.'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -100,129 +155,6 @@ function isMissing(error: unknown): boolean {
 
 function causeOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-/** The workspace's change directory root, resolved once per read. */
-function changesRoot(workspace: string): string {
-  return resolve(workspace, 'openspec', 'changes')
-}
-
-/** The workspace's accepted-capability root, resolved once per read. */
-function specsRoot(workspace: string): string {
-  return resolve(workspace, 'openspec', 'specs')
-}
-
-/** Whether a resolved path is strictly under a directory; case-insensitive on Windows. */
-function insidePath(base: string, target: string): boolean {
-  const boundary = `${base}${sep}`
-  return process.platform === 'win32'
-    ? target.toLowerCase().startsWith(boundary.toLowerCase())
-    : target.startsWith(boundary)
-}
-
-/** Resolve one request-named item under an OpenSpec root, refusing a lexical escape. */
-function containedItem(root: string, item: string): string {
-  const base = resolve(root)
-  const target = resolve(base, item)
-  if (!insidePath(base, target)) throw new Error(OUTSIDE_ROOT_MESSAGE)
-  return target
-}
-
-/** Canonical real path of the workspace's own `openspec/` root. */
-function canonicalRoot(workspace: string): string {
-  const root = resolve(workspace, 'openspec')
-  try {
-    return realpathSync.native(root)
-  } catch (error) {
-    if (isMissing(error)) return root
-    throw new Error(`Could not resolve the OpenSpec root ${root}: ${causeOf(error)}`)
-  }
-}
-
-/** Refuse a canonical path that escaped the canonical OpenSpec root. */
-function requireInsideRoot(root: string, actual: string): void {
-  if (!insidePath(root, actual)) throw new Error(OUTSIDE_ROOT_MESSAGE)
-}
-
-/** Builds one readable artifact failure message. */
-type ArtifactMessage = (path: string, cause: string) => string
-
-/** Realpath one artifact path; null when absent, a readable error otherwise. */
-function realArtifactPath(path: string, message: ArtifactMessage): string | null {
-  try {
-    return realpathSync.native(path)
-  } catch (error) {
-    if (isMissing(error)) return null
-    throw new Error(message(path, causeOf(error)))
-  }
-}
-
-/** Contain one existing artifact path under the canonical root; null stays absent. */
-function containedArtifact(root: string, path: string, message: ArtifactMessage): string | null {
-  const actual = realArtifactPath(path, message)
-  if (actual !== null) requireInsideRoot(root, actual)
-  return actual
-}
-
-/** ISO mtime of a contained artifact; null when it disappeared, readable error otherwise. */
-function isoMtime(actual: string, path: string, message: ArtifactMessage): string | null {
-  try {
-    return new Date(statSync(actual).mtimeMs).toISOString()
-  } catch (error) {
-    if (isMissing(error)) return null
-    throw new Error(message(path, causeOf(error)))
-  }
-}
-
-/** The newest ISO timestamp among the given ones, or null when there are none. */
-function newestModified(times: readonly string[]): string | null {
-  let newest: string | null = null
-  for (const time of times) {
-    if (newest === null || Date.parse(time) > Date.parse(newest)) newest = time
-  }
-  return newest
-}
-
-/** One `specs/<capability>/spec.md` file of a change. */
-interface DeltaSpecFile {
-  readonly capability: string
-  readonly file: string
-}
-
-/** The delta spec files under one change directory, sorted by capability. */
-function deltaSpecFiles(root: string, changeDirectory: string): DeltaSpecFile[] {
-  const directory = join(changeDirectory, 'specs')
-  let entries: Dirent[]
-  try {
-    entries = readdirSync(directory, { withFileTypes: true })
-  } catch (error) {
-    if (isMissing(error)) return []
-    throw new Error(
-      `Could not read the OpenSpec delta specs directory ${directory}: ${causeOf(error)}`,
-    )
-  }
-  const files: DeltaSpecFile[] = []
-  for (const entry of entries) {
-    const file = join(directory, entry.name, 'spec.md')
-    const actual = realArtifactPath(file, artifactReadMessage)
-    if (actual === null) continue
-    requireInsideRoot(root, actual)
-    let present = false
-    try {
-      present = statSync(actual).isFile()
-    } catch (error) {
-      if (isMissing(error)) continue
-      throw new Error(artifactReadMessage(file, causeOf(error)))
-    }
-    if (!present) continue
-    files.push({ capability: entry.name, file })
-  }
-  return files.sort((left, right) => left.capability.localeCompare(right.capability))
-}
-
-/** Whether one artifact path canonically exists under the OpenSpec root. */
-function artifactPresent(root: string, path: string): boolean {
-  return containedArtifact(root, path, artifactReadMessage) !== null
 }
 
 /** One read artifact: its body and ISO last-modified time. */
@@ -259,39 +191,368 @@ async function readRequiredArtifact(root: string, path: string): Promise<ReadArt
   }
 }
 
-/**
- * The artifacts one CLI-reported change already carries.
- * @param workspace - absolute session working directory.
- * @param name - a change name; the changes route passes CLI rows only.
- */
-export function changePresence(workspace: string, name: string): ChangePresence {
-  const root = canonicalRoot(workspace)
-  const directory = containedItem(changesRoot(workspace), name)
-  if (containedArtifact(root, directory, artifactReadMessage) === null) {
-    return { proposal: false, design: false, tasks: false, specs: 0 }
+/** Read a capability spec the CLI reported; a failure names the capability file. */
+async function readRequiredCapability(root: string, path: string): Promise<ReadArtifact> {
+  const actual = containedArtifact(root, path, capabilityReadMessage)
+  const modified = actual === null ? null : isoMtime(actual, path, capabilityReadMessage)
+  if (actual === null || modified === null) {
+    throw new Error(capabilityReadMessage(path, 'the file is missing'))
   }
-  return {
-    proposal: artifactPresent(root, join(directory, 'proposal.md')),
-    design: artifactPresent(root, join(directory, 'design.md')),
-    tasks: artifactPresent(root, join(directory, 'tasks.md')),
-    specs: deltaSpecFiles(root, directory).length,
+  try {
+    return { body: await readFile(actual, 'utf8'), modified }
+  } catch (error) {
+    throw new Error(capabilityReadMessage(path, causeOf(error)))
   }
 }
 
+/** The workspace-relative address of a resolved artifact path. */
+function workspaceRelative(workspace: string, path: string): string {
+  return relative(workspace, path).split(sep).join('/')
+}
+
+/** The directory one change's artifacts live in, contained under its family root. */
+function changeDirectory(workspace: string, name: string, archived: boolean): string {
+  const changes = resolve(workspace, 'openspec', 'changes')
+  return containedItem(archived ? join(changes, 'archive') : changes, name)
+}
+
+/** Every markdown file under a change's `tasks/` directory, recursively, sorted. */
+function nestedTaskFiles(root: string, directory: string): string[] {
+  const files: string[] = []
+  const pending = [join(directory, 'tasks')]
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (current === undefined) continue
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) continue
+      throw new Error(artifactReadMessage(current, causeOf(error)))
+    }
+    for (const entry of entries) {
+      const path = join(current, entry.name)
+      if (entry.isDirectory()) pending.push(path)
+      else if (entry.isFile() && entry.name.endsWith('.md') && artifactPresent(root, path)) {
+        files.push(path)
+      }
+    }
+  }
+  return files.sort((left, right) => left.localeCompare(right))
+}
+
+/** The files the CLI counts for an active change, from `openspec status --change`. */
+async function activeTaskPaths(workspace: string, name: string): Promise<string[]> {
+  const parsed = await runOpenSpecJson(
+    workspace,
+    ['status', '--change', name, '--json'],
+    'status --change',
+    planningRoot,
+  )
+  const paths: string[] = []
+  const artifacts = isRecord(parsed.artifactPaths) ? parsed.artifactPaths : undefined
+  const tasks = isRecord(artifacts?.tasks) ? artifacts.tasks : undefined
+  if (Array.isArray(tasks?.existingOutputPaths)) {
+    for (const entry of tasks.existingOutputPaths) {
+      if (typeof entry === 'string' && entry.trim() !== '') paths.push(entry)
+    }
+  }
+  return paths
+}
+
+/** Read every task file the checklist must parse, active or archived. */
+async function readTaskFiles(
+  workspace: string,
+  root: string,
+  directory: string,
+  name: string,
+  archived: boolean,
+): Promise<TaskFile[]> {
+  let paths: string[]
+  if (archived) {
+    paths = nestedTaskFiles(root, directory)
+    if (artifactPresent(root, join(directory, 'tasks.md')))
+      paths.unshift(join(directory, 'tasks.md'))
+  } else {
+    let statusRead = true
+    try {
+      paths = await activeTaskPaths(workspace, name)
+    } catch {
+      // The status read is an optimization for custom schemas; the default
+      // artifact still answers when it is unavailable.
+      paths = []
+      statusRead = false
+    }
+    if (!statusRead && artifactPresent(root, join(directory, 'tasks.md'))) {
+      paths.push(join(directory, 'tasks.md'))
+    }
+  }
+  const files: TaskFile[] = []
+  for (const path of paths) {
+    const actual = containedArtifact(root, path, artifactReadMessage)
+    if (actual === null) continue
+    try {
+      files.push({
+        path: workspaceRelative(workspace, actual),
+        body: await readFile(actual, 'utf8'),
+      })
+    } catch (error) {
+      if (isMissing(error)) continue
+      throw new Error(artifactReadMessage(path, causeOf(error)))
+    }
+  }
+  return files
+}
+
+/** One requirement the CLI reports, validated field by field. */
+function parseRequirement(value: unknown): Requirement {
+  if (
+    !isRecord(value) ||
+    typeof value.name !== 'string' ||
+    typeof value.text !== 'string' ||
+    !Array.isArray(value.scenarios)
+  ) {
+    throw new Error(REQUIREMENTS_MALFORMED_MESSAGE)
+  }
+  const scenarios = value.scenarios.map((scenario: unknown) => {
+    if (
+      !isRecord(scenario) ||
+      typeof scenario.name !== 'string' ||
+      typeof scenario.rawText !== 'string'
+    ) {
+      throw new Error(REQUIREMENTS_MALFORMED_MESSAGE)
+    }
+    return { name: scenario.name, rawText: scenario.rawText }
+  })
+  return { name: value.name, text: value.text, scenarios }
+}
+
+/** One structured requirement list the CLI reports. */
+function parseRequirementList(value: unknown): Requirement[] {
+  if (!Array.isArray(value)) throw new Error(REQUIREMENTS_MALFORMED_MESSAGE)
+  return value.map(parseRequirement)
+}
+
+/** One rename pair the CLI reports. */
+function parseRename(value: unknown): { from: string; to: string } {
+  if (!isRecord(value) || typeof value.from !== 'string' || typeof value.to !== 'string') {
+    throw new Error(REQUIREMENTS_MALFORMED_MESSAGE)
+  }
+  return { from: value.from, to: value.to }
+}
+
+function isOperation(value: unknown): value is DeltaOperation {
+  return value === 'ADDED' || value === 'MODIFIED' || value === 'REMOVED' || value === 'RENAMED'
+}
+
 /**
- * Read one change's artifact bodies and progress.
+ * The structured deltas of an active change, from the CLI.
+ *
+ * The CLI emits one entry per requirement; consecutive entries for the same
+ * capability and operation join into one delta so the view renders one card per
+ * section. Every `RENAMED` entry becomes its own pair.
+ */
+async function activeDeltas(workspace: string, name: string): Promise<Delta[]> {
+  const parsed = await runOpenSpecJson(
+    workspace,
+    ['show', name, '--json', '--type', 'change'],
+    'show --type change',
+  )
+  if (!Array.isArray(parsed.deltas)) throw new Error(REQUIREMENTS_MALFORMED_MESSAGE)
+  const deltas: Delta[] = []
+  for (const entry of parsed.deltas) {
+    if (!isRecord(entry) || typeof entry.spec !== 'string' || !isOperation(entry.operation)) {
+      throw new Error(REQUIREMENTS_MALFORMED_MESSAGE)
+    }
+    if (entry.operation === 'RENAMED') {
+      deltas.push({
+        capability: entry.spec,
+        operation: 'RENAMED',
+        requirements: [],
+        rename: parseRename(entry.rename),
+      })
+      continue
+    }
+    const requirements = parseRequirementList(entry.requirements)
+    const last = deltas.at(-1)
+    if (
+      last !== undefined &&
+      last.capability === entry.spec &&
+      last.operation === entry.operation
+    ) {
+      requirements.unshift(...last.requirements)
+      deltas[deltas.length - 1] = { ...last, requirements }
+    } else {
+      deltas.push({ capability: entry.spec, operation: entry.operation, requirements })
+    }
+  }
+  return deltas
+}
+
+const DELTA_SECTION = /^##\s+(ADDED|MODIFIED|REMOVED|RENAMED)\s+Requirements\s*$/i
+const REQUIREMENT_HEADING = /^###\s+Requirement:\s*(.*)$/i
+const SCENARIO_HEADING = /^####\s+Scenario:\s*(.*)$/i
+const ANY_HEADING = /^#{1,6}\s/
+const RENAME_FROM = /^\s*[-*+]?\s*FROM:\s*`?###\s*Requirement:\s*(.+?)`?\s*$/i
+const RENAME_TO = /^\s*[-*+]?\s*TO:\s*`?###\s*Requirement:\s*(.+?)`?\s*$/i
+
+/**
+ * Parse one archived delta spec file, line by line.
+ *
+ * The sections and headers are the delta grammar the CLI itself accepts; text
+ * is preserved verbatim. A file with no delta section yields nothing, so the
+ * view falls back to the raw Markdown body it already carries.
+ * @param capability - the capability the delta file belongs to.
+ * @param body - the delta spec Markdown.
+ */
+export function parseArchivedDeltas(capability: string, body: string): Delta[] {
+  const lines = body
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+  const deltas: Delta[] = []
+  let operation: DeltaOperation | undefined
+  let requirements: Requirement[] | undefined
+  let requirement:
+    | {
+        readonly name: string
+        readonly text: string[]
+        readonly scenarios: { name: string; rawText: string }[]
+      }
+    | undefined
+  let scenario: { readonly name: string; readonly rawText: string[] } | undefined
+  let renameFrom: string | undefined
+
+  const flushScenario = (): void => {
+    if (scenario === undefined || requirement === undefined) return
+    requirement.scenarios.push({
+      name: scenario.name,
+      rawText: scenario.rawText.join('\n').trim(),
+    })
+    scenario = undefined
+  }
+  const flushRequirement = (): void => {
+    flushScenario()
+    if (requirement === undefined || requirements === undefined) return
+    requirements.push({
+      name: requirement.name,
+      text: requirement.text.join('\n').trim(),
+      scenarios: requirement.scenarios,
+    })
+    requirement = undefined
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const sectionMatch = DELTA_SECTION.exec(trimmed)
+    if (sectionMatch !== null) {
+      flushRequirement()
+      operation = (sectionMatch[1] ?? '').toUpperCase() as DeltaOperation
+      requirements = []
+      renameFrom = undefined
+      if (operation !== 'RENAMED') deltas.push({ capability, operation, requirements })
+      continue
+    }
+    if (operation === 'RENAMED') {
+      const to = RENAME_TO.exec(line)
+      if (to !== null) {
+        if (renameFrom !== undefined) {
+          deltas.push({
+            capability,
+            operation: 'RENAMED',
+            requirements: [],
+            rename: { from: renameFrom, to: (to[1] ?? '').trim() },
+          })
+        }
+        renameFrom = undefined
+        continue
+      }
+      const from = RENAME_FROM.exec(line)
+      if (from !== null) renameFrom = (from[1] ?? '').trim()
+      continue
+    }
+    if (requirements === undefined) continue
+    const requirementMatch = REQUIREMENT_HEADING.exec(trimmed)
+    if (requirementMatch !== null) {
+      flushRequirement()
+      requirement = { name: (requirementMatch[1] ?? '').trim(), text: [], scenarios: [] }
+      continue
+    }
+    const scenarioMatch = SCENARIO_HEADING.exec(trimmed)
+    if (scenarioMatch !== null && requirement !== undefined) {
+      flushScenario()
+      scenario = { name: (scenarioMatch[1] ?? '').trim(), rawText: [] }
+      continue
+    }
+    if (ANY_HEADING.test(trimmed)) {
+      flushRequirement()
+      continue
+    }
+    if (requirement === undefined) continue
+    if (scenario !== undefined) scenario.rawText.push(line)
+    else requirement.text.push(line)
+  }
+  flushRequirement()
+  return deltas
+}
+
+/** One archived change's delta specs, parsed into deltas and raw bodies. */
+function archivedDeltas(
+  files: readonly { readonly capability: string; readonly file: string }[],
+  bodies: ReadonlyMap<string, string>,
+): Delta[] {
+  const deltas: Delta[] = []
+  for (const spec of files) {
+    const body = bodies.get(spec.capability)
+    if (body === undefined) continue
+    deltas.push(...parseArchivedDeltas(spec.capability, body))
+  }
+  return deltas
+}
+
+/** Join archived producers with the CLI row counts and the batched commit facts. */
+function historyEntries(
+  producers: readonly ArchiveProducer[],
+  archivedRows: ReadonlyMap<string, WorkspaceChangeRow>,
+  git: readonly GitLogEntry[] | null,
+): CapabilityHistoryEntry[] {
+  const entries: CapabilityHistoryEntry[] = []
+  for (const producer of producers) {
+    const row = archivedRows.get(producer.name)
+    if (row === undefined) continue
+    entries.push({
+      name: producer.name,
+      date: producer.date ?? '',
+      completedTasks: row.completedTasks,
+      totalTasks: row.totalTasks,
+      commit: commitFor(git, `openspec/changes/archive/${producer.name}`),
+    })
+  }
+  return entries
+}
+
+/**
+ * Read one change's artifact bodies, deltas, task files and progress.
  * @param workspace - absolute session working directory.
- * @param name - a change name the CLI reports for this workspace.
+ * @param name - a change name the CLI reports for the matching family.
+ * @param archived - resolve the name against the archived list only.
  * @throws a readable error when the change is unreported, escapes the root, or an artifact is unreadable.
  */
 export async function readWorkspaceChange(
   workspace: string,
   name: string,
+  archived = false,
 ): Promise<WorkspaceChangeDetail> {
-  const row = (await listWorkspaceChanges(workspace)).find((change) => change.name === name)
-  if (row === undefined) throw new UnreportedItemError(unreportedChangeMessage(name))
+  const rows = await readWorkspaceChangeRows(workspace)
+  const family = archived ? rows.archived : rows.changes
+  const row = family.find((change) => change.name === name)
+  if (row === undefined) {
+    throw new UnreportedItemError(
+      archived ? unreportedArchivedChangeMessage(name) : unreportedChangeMessage(name),
+    )
+  }
   const root = canonicalRoot(workspace)
-  const directory = containedItem(changesRoot(workspace), name)
+  const directory = changeDirectory(workspace, name, archived)
   if (containedArtifact(root, directory, artifactReadMessage) === null) {
     throw new Error(artifactReadMessage(directory, 'the change directory is missing'))
   }
@@ -300,89 +561,145 @@ export async function readWorkspaceChange(
     readOptionalArtifact(root, join(directory, 'design.md')),
     readOptionalArtifact(root, join(directory, 'tasks.md')),
   ])
+  const specFiles = deltaSpecFiles(root, directory)
   const specs = await Promise.all(
-    deltaSpecFiles(root, directory).map(async ({ capability, file }) => ({
+    specFiles.map(async ({ capability, file }) => ({
       capability,
       ...(await readRequiredArtifact(root, file)),
     })),
   )
+  const specBodies = new Map(specs.map((spec) => [spec.capability, spec.body]))
+  const deltas = archived
+    ? archivedDeltas(specFiles, specBodies)
+    : await activeDeltas(workspace, name)
+  const taskFiles = await readTaskFiles(workspace, root, directory, name, archived)
+  const path = archived ? `openspec/changes/archive/${name}` : `openspec/changes/${name}`
+  const git = await readGitLog(workspace, [path])
   return {
     name: row.name,
     status: row.status,
+    phase: changePhase({ ...row, archived }),
     completedTasks: row.completedTasks,
     totalTasks: row.totalTasks,
-    presence: {
-      proposal: proposal !== null,
-      design: design !== null,
-      tasks: tasks !== null,
-      specs: specs.length,
-    },
+    archived,
+    archivedAt: archived ? archivedDate(name) : null,
+    summary: proposalSummary(proposal?.body ?? null),
     modified: newestModified([
       ...(proposal === null ? [] : [proposal.modified]),
       ...(design === null ? [] : [design.modified]),
       ...(tasks === null ? [] : [tasks.modified]),
       ...specs.map((spec) => spec.modified),
     ]),
+    commit: commitFor(git, path),
+    presence: {
+      proposal: proposal !== null,
+      design: design !== null,
+      tasks: tasks !== null,
+      specs: specs.length,
+    },
     artifacts: {
       proposal: proposal?.body ?? null,
       design: design?.body ?? null,
       tasks: tasks?.body ?? null,
     },
     specs,
+    deltas,
+    taskFiles,
   }
 }
 
-/**
- * List the capability specs of the workspace's own OpenSpec root.
- * @param workspace - absolute session working directory.
- * @returns the `{id, requirementCount}` rows `openspec list --specs --json` reports.
- * @throws a readable error for a missing CLI, no local root, a timeout, or malformed output.
- */
-export async function listWorkspaceCapabilities(workspace: string): Promise<CapabilitySummary[]> {
-  const parsed = await runOpenSpecJson(workspace, ['list', '--specs', '--json'], 'list --specs')
-  if (!Array.isArray(parsed.specs)) throw new Error(CAPABILITIES_MALFORMED_MESSAGE)
-  return parsed.specs.map((entry: unknown) => {
-    if (
-      !isRecord(entry) ||
-      typeof entry.id !== 'string' ||
-      entry.id.trim() === '' ||
-      typeof entry.requirementCount !== 'number' ||
-      !Number.isInteger(entry.requirementCount) ||
-      entry.requirementCount < 0
-    ) {
-      throw new Error(CAPABILITIES_MALFORMED_MESSAGE)
-    }
-    return { id: entry.id, requirementCount: entry.requirementCount }
-  })
+/** The capability rows for the Specs segment, with purpose and provenance. */
+async function capabilityRows(workspace: string): Promise<CapabilityRow[]> {
+  const [inventory, changes, producers] = await Promise.all([
+    listWorkspaceCapabilities(workspace),
+    readWorkspaceChangeRows(workspace),
+    Promise.resolve().then(() => scanArchiveProducers(workspace)),
+  ])
+  const archivedRows = new Map(changes.archived.map((row) => [row.name, row]))
+  const git = await readGitLog(workspace, ['openspec/specs', 'openspec/changes/archive'])
+  const root = canonicalRoot(workspace)
+  const rows = await Promise.all(
+    inventory.map(async (capability): Promise<CapabilityRow> => {
+      const file = join(specsRoot(workspace), capability.id, 'spec.md')
+      const actual = containedArtifact(root, file, capabilityReadMessage)
+      let body = ''
+      let modified: string | null = null
+      if (actual !== null) {
+        modified = isoMtime(actual, file, capabilityReadMessage)
+        if (modified !== null) {
+          try {
+            body = await readFile(actual, 'utf8')
+          } catch (error) {
+            if (!isMissing(error)) throw new Error(capabilityReadMessage(file, causeOf(error)))
+            modified = null
+          }
+        }
+      }
+      const history = historyEntries(producers.get(capability.id) ?? [], archivedRows, git)
+      return {
+        id: capability.id,
+        requirementCount: capability.requirementCount,
+        purpose: purposeSection(body) ?? '',
+        modified,
+        lastChange: history[0] ?? null,
+        commit: commitFor(git, `openspec/specs/${capability.id}`),
+      }
+    }),
+  )
+  return rows
 }
 
 /**
- * Read one capability's accepted spec body.
+ * List the capability inventory with purpose, last modification and provenance.
+ * @param workspace - absolute session working directory.
+ * @throws a readable error for a missing CLI, no local root, a timeout, or malformed output.
+ */
+export async function listWorkspaceCapabilityRows(workspace: string): Promise<CapabilityRow[]> {
+  return capabilityRows(workspace)
+}
+
+/**
+ * Read one capability's accepted spec, structured requirements and history.
  * @param workspace - absolute session working directory.
  * @param id - a capability id the CLI reports for this workspace.
- * @throws a readable error when the capability is unreported, escapes the root, or its spec is unreadable.
+ * @throws a readable error when the capability is unreported, escapes the root, or an artifact is unreadable.
  */
 export async function readWorkspaceCapability(
   workspace: string,
   id: string,
 ): Promise<CapabilityDetail> {
-  const capability = (await listWorkspaceCapabilities(workspace)).find((entry) => entry.id === id)
+  const inventory = await listWorkspaceCapabilities(workspace)
+  const capability = inventory.find((entry) => entry.id === id)
   if (capability === undefined) throw new UnreportedItemError(unreportedCapabilityMessage(id))
   const root = canonicalRoot(workspace)
   const file = join(containedItem(specsRoot(workspace), id), 'spec.md')
-  const actual = containedArtifact(root, file, capabilityReadMessage)
-  const modified = actual === null ? null : isoMtime(actual, file, capabilityReadMessage)
-  if (actual === null || modified === null) {
-    throw new Error(capabilityReadMessage(file, 'the file is missing'))
-  }
-  try {
-    return {
-      id: capability.id,
-      requirementCount: capability.requirementCount,
-      body: await readFile(actual, 'utf8'),
-      modified,
-    }
-  } catch (error) {
-    throw new Error(capabilityReadMessage(file, causeOf(error)))
+  const artifact = await readRequiredCapability(root, file)
+  const parsed = await runOpenSpecJson(
+    workspace,
+    ['show', id, '--json', '--type', 'spec'],
+    'show --type spec',
+  )
+  const requirements = parseRequirementList(parsed.requirements)
+  const overview = typeof parsed.overview === 'string' ? parsed.overview : null
+  const changes = await readWorkspaceChangeRows(workspace)
+  const archivedRows = new Map(changes.archived.map((row) => [row.name, row]))
+  const producers = scanArchiveProducers(workspace).get(id) ?? []
+  const git = await readGitLog(workspace, [
+    `openspec/specs/${id}`,
+    ...producers.map((producer) => `openspec/changes/archive/${producer.name}`),
+  ])
+  const history = historyEntries(producers, archivedRows, git)
+  return {
+    id: capability.id,
+    requirementCount: capability.requirementCount,
+    purpose:
+      purposeSection(artifact.body) ??
+      (overview === null ? '' : overview.replace(/\s+/g, ' ').trim()),
+    modified: artifact.modified,
+    lastChange: history[0] ?? null,
+    commit: commitFor(git, `openspec/specs/${id}`),
+    body: artifact.body,
+    requirements,
+    history,
   }
 }

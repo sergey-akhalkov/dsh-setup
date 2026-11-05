@@ -4,16 +4,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  artifactReadMessage,
-  CAPABILITIES_MALFORMED_MESSAGE,
-  listWorkspaceCapabilities,
-  OUTSIDE_ROOT_MESSAGE,
+  listWorkspaceCapabilityRows,
+  parseArchivedDeltas,
+  REQUIREMENTS_MALFORMED_MESSAGE,
   readWorkspaceCapability,
   readWorkspaceChange,
+  unreportedArchivedChangeMessage,
   unreportedCapabilityMessage,
   unreportedChangeMessage,
 } from '../src/host/change-detail.ts'
-import { NO_LOCAL_ROOT_MESSAGE } from '../src/host/change-list.ts'
+import {
+  artifactReadMessage,
+  CAPABILITIES_MALFORMED_MESSAGE,
+  listWorkspaceCapabilities,
+  NO_LOCAL_ROOT_MESSAGE,
+  OUTSIDE_ROOT_MESSAGE,
+} from '../src/host/change-list.ts'
 import {
   CHANGE_DETAIL_ROUTE,
   CHANGES_ROUTE,
@@ -59,16 +65,135 @@ function cliPath(): string {
   return directory
 }
 
+interface CliRow {
+  readonly name: string
+  readonly completedTasks: number
+  readonly totalTasks: number
+  readonly status: 'no-tasks' | 'complete' | 'in-progress'
+  readonly archived?: boolean
+}
+
+function listOutput(root: string, rows: readonly CliRow[]): string {
+  return JSON.stringify({
+    changes: rows.map((entry) => ({
+      name: entry.name,
+      completedTasks: entry.completedTasks,
+      totalTasks: entry.totalTasks,
+      status: entry.status,
+      lastModified: '2026-11-05T00:00:00.000Z',
+      archived: entry.archived ?? false,
+    })),
+    root: { path: root, source: 'nearest' },
+  })
+}
+
+function specsOutput(
+  root: string,
+  specs: readonly { id: string; requirementCount: number }[],
+): string {
+  return JSON.stringify({ specs, root: { path: root, source: 'nearest' } })
+}
+
+function changeShowOutput(root: string, deltas: readonly unknown[]): string {
+  return JSON.stringify({
+    id: 'change',
+    deltas,
+    root: { path: root, source: 'nearest' },
+  })
+}
+
+function specShowOutput(
+  root: string,
+  id: string,
+  overview: string,
+  requirements: readonly unknown[],
+): string {
+  return JSON.stringify({
+    id,
+    overview,
+    requirementCount: requirements.length,
+    requirements,
+    root: { path: root, source: 'nearest' },
+  })
+}
+
+function statusOutput(root: string, name: string, taskPaths: readonly string[]): string {
+  return JSON.stringify({
+    changeName: name,
+    planningHome: { root },
+    artifactPaths: {
+      tasks: { resolvedOutputPath: taskPaths[0] ?? '', existingOutputPaths: taskPaths },
+    },
+  })
+}
+
+interface RequirementFixture {
+  readonly name: string
+  readonly text: string
+  readonly scenarios?: readonly { name: string; rawText: string }[]
+}
+
+function requirement(fixture: RequirementFixture): Record<string, unknown> {
+  return {
+    name: fixture.name,
+    text: fixture.text,
+    scenarios: fixture.scenarios ?? [],
+  }
+}
+
+/** The CLI answer recorded per command, sorted by the first two words. */
+type CliAnswer = { stdout: string; code?: number; stderr?: string } | undefined
+
+/** Answer every spawned CLI call from a handler; runs after the spawn call returns. */
+function autoCli(handler: (args: readonly string[]) => CliAnswer): void {
+  spawnMock.mockImplementation((_file: string, args: readonly string[]) => {
+    const child = new FakeChild()
+    queueMicrotask(() => {
+      const answer = handler(args)
+      if (answer === undefined) {
+        complete(child, 1, '', `unexpected openspec call: ${args.join(' ')}`)
+        return
+      }
+      complete(child, answer.code ?? 0, answer.stdout, answer.stderr ?? '')
+    })
+    return child
+  })
+}
+
+/** The CLI arguments after the `openspec` token, on either platform branch. */
+function commandOf(args: readonly string[]): string[] {
+  const index = args.indexOf('openspec')
+  return args.slice(index + 1)
+}
+
+function complete(child: FakeChild, code: number | null, stdout = '', stderr = ''): void {
+  if (stdout !== '') child.stdout.emit('data', stdout)
+  if (stderr !== '') child.stderr.emit('data', stderr)
+  child.emit('close', code)
+}
+
 interface ChangeFixture {
   readonly proposal?: string
   readonly design?: string
   readonly tasks?: string
   readonly specs?: Readonly<Record<string, string>>
+  readonly nestedTasks?: Readonly<Record<string, string>>
 }
 
-/** Write one change's artifacts under the workspace's own OpenSpec root. */
-function writeChange(directory: string, name: string, fixture: ChangeFixture): string {
-  const changeDirectory = join(directory, 'openspec', 'changes', name)
+/** Write one active or archived change under the workspace's own OpenSpec root. */
+function writeChange(
+  directory: string,
+  name: string,
+  fixture: ChangeFixture,
+  archived = false,
+): string {
+  const changeDirectory = join(
+    directory,
+    'openspec',
+    'changes',
+    ...(archived ? ['archive'] : []),
+    name,
+  )
   mkdirSync(changeDirectory, { recursive: true })
   for (const artifact of ['proposal', 'design', 'tasks'] as const) {
     const body = fixture[artifact]
@@ -78,7 +203,21 @@ function writeChange(directory: string, name: string, fixture: ChangeFixture): s
     mkdirSync(join(changeDirectory, 'specs', capability), { recursive: true })
     writeFileSync(join(changeDirectory, 'specs', capability, 'spec.md'), body)
   }
+  for (const [path, body] of Object.entries(fixture.nestedTasks ?? {})) {
+    const file = join(changeDirectory, 'tasks', path)
+    mkdirSync(join(changeDirectory, 'tasks'), { recursive: true })
+    writeFileSync(file, body)
+  }
   return changeDirectory
+}
+
+/** Write one accepted capability spec under the workspace's own OpenSpec root. */
+function writeSpec(directory: string, id: string, body: string): string {
+  const capabilityDirectory = join(directory, 'openspec', 'specs', id)
+  mkdirSync(capabilityDirectory, { recursive: true })
+  const file = join(capabilityDirectory, 'spec.md')
+  writeFileSync(file, body)
+  return file
 }
 
 /** Link one directory portably; a Windows junction needs no admin privilege. */
@@ -99,51 +238,37 @@ function setModified(path: string, iso: string): void {
   utimesSync(path, time, time)
 }
 
-interface CliRow {
-  readonly name: string
-  readonly completedTasks: number
-  readonly totalTasks: number
-  readonly status: 'no-tasks' | 'complete' | 'in-progress'
+function gitOutput(commits: readonly { short: string; paths: readonly string[] }[]): string {
+  return commits
+    .map(
+      (commit) =>
+        `${commit.short}\t2026-11-01T10:00:00+03:00\tcommit ${commit.short}\n${commit.paths.join('\n')}\n`,
+    )
+    .join('\n')
 }
 
-function row(name: string): CliRow {
-  return { name, completedTasks: 1, totalTasks: 2, status: 'in-progress' }
-}
-
-function changeListOutput(root: string, rows: readonly CliRow[]): string {
-  return JSON.stringify({
-    changes: rows.map((entry) => ({ ...entry, lastModified: '2026-11-05T00:00:00.000Z' })),
-    root: { path: root, source: 'nearest' },
-  })
-}
-
-function specsOutput(root: string, specs: unknown): string {
-  return JSON.stringify({ specs, root: { path: root, source: 'nearest' } })
-}
-
-function spawnChild(): FakeChild {
-  const child = new FakeChild()
-  spawnMock.mockReturnValue(child)
-  return child
-}
-
-function complete(child: FakeChild, code: number | null, stdout = '', stderr = ''): void {
-  if (stdout !== '') child.stdout.emit('data', stdout)
-  if (stderr !== '') child.stderr.emit('data', stderr)
-  child.emit('close', code)
-}
-
-/** Answer the most recently spawned CLI call. */
-function answer(stdout: string, code = 0, stderr = ''): void {
-  const child = spawnMock.mock.results.at(-1)?.value as FakeChild | undefined
-  if (child === undefined) throw new Error('the CLI was not spawned')
-  complete(child, code, stdout, stderr)
+function serveGit(output: string): void {
+  execFileMock.mockImplementation(
+    (
+      _file: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: null, stdout: string) => void,
+    ) => {
+      callback(null, output)
+    },
+  )
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('PATH', cliPath())
   vi.stubEnv('PATHEXT', '.CMD')
+  execFileMock.mockImplementation(
+    (_file: string, _args: string[], _options: unknown, callback: (error: Error) => void) => {
+      callback(new Error('not a git repository'))
+    },
+  )
 })
 
 afterEach(() => {
@@ -151,13 +276,13 @@ afterEach(() => {
   for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
-describe('openspec change detail', () => {
-  it('reads every artifact, both delta specs and the CLI progress', async () => {
+describe('active change detail', () => {
+  it('reads every artifact, structured deltas, task files and progress', async () => {
     const cwd = workspace()
     const directory = writeChange(cwd, 'add-auth', {
-      proposal: '# Why\n',
+      proposal: '# Proposal\n\n## Why\n\nAdds authentication for operators.\n',
       design: '# Design\n',
-      tasks: '- [x] one\n',
+      tasks: '- [x] one\n- [ ] two\n',
       specs: { zeta: '# Zeta\n', alpha: '# Alpha\n' },
     })
     setModified(join(directory, 'proposal.md'), AT_10)
@@ -165,72 +290,242 @@ describe('openspec change detail', () => {
     setModified(join(directory, 'tasks.md'), AT_12)
     setModified(join(directory, 'specs', 'alpha', 'spec.md'), AT_13)
     setModified(join(directory, 'specs', 'zeta', 'spec.md'), AT_14)
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    await expect(pending).resolves.toEqual({
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--all') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 1, totalTasks: 2, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        expect(command).toEqual(['show', 'add-auth', '--json', '--type', 'change'])
+        return {
+          stdout: changeShowOutput(cwd, [
+            {
+              spec: 'alpha',
+              operation: 'ADDED',
+              description: 'Add requirement',
+              requirements: [
+                requirement({
+                  name: 'One',
+                  text: 'The system SHALL do one thing.',
+                  scenarios: [{ name: 'Works', rawText: '- **WHEN** x\n- **THEN** y' }],
+                }),
+              ],
+            },
+            {
+              spec: 'zeta',
+              operation: 'MODIFIED',
+              description: 'Modify requirement',
+              requirements: [requirement({ name: 'Two', text: 'The system MUST do two.' })],
+            },
+          ]),
+        }
+      }
+      if (command[0] === 'status') {
+        return { stdout: statusOutput(cwd, 'add-auth', [join(directory, 'tasks.md')]) }
+      }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, 'add-auth')
+    expect(change).toMatchObject({
       name: 'add-auth',
       status: 'in-progress',
+      phase: 'applying',
       completedTasks: 1,
       totalTasks: 2,
-      presence: { proposal: true, design: true, tasks: true, specs: 2 },
+      archived: false,
+      archivedAt: null,
+      summary: 'Adds authentication for operators.',
       modified: AT_14,
-      artifacts: { proposal: '# Why\n', design: '# Design\n', tasks: '- [x] one\n' },
-      specs: [
-        { capability: 'alpha', body: '# Alpha\n', modified: AT_13 },
-        { capability: 'zeta', body: '# Zeta\n', modified: AT_14 },
-      ],
+      presence: { proposal: true, design: true, tasks: true, specs: 2 },
+      artifacts: { proposal: '# Proposal\n\n## Why\n\nAdds authentication for operators.\n' },
     })
-    expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ cwd })
+    expect(change.specs.map((spec) => spec.capability)).toEqual(['alpha', 'zeta'])
+    expect(change.deltas).toEqual([
+      {
+        capability: 'alpha',
+        operation: 'ADDED',
+        requirements: [
+          {
+            name: 'One',
+            text: 'The system SHALL do one thing.',
+            scenarios: [{ name: 'Works', rawText: '- **WHEN** x\n- **THEN** y' }],
+          },
+        ],
+      },
+      {
+        capability: 'zeta',
+        operation: 'MODIFIED',
+        requirements: [{ name: 'Two', text: 'The system MUST do two.', scenarios: [] }],
+      },
+    ])
+    expect(change.taskFiles).toEqual([
+      { path: 'openspec/changes/add-auth/tasks.md', body: '- [x] one\n- [ ] two\n' },
+    ])
+    expect(change.commit).toBeNull()
   })
 
-  it('reports a change without a design as null, not an empty document', async () => {
+  it('groups consecutive CLI requirements for one capability and operation', async () => {
     const cwd = workspace()
-    const directory = writeChange(cwd, 'add-auth', { proposal: '# Why\n', tasks: '- [ ] one\n' })
-    setModified(join(directory, 'proposal.md'), AT_10)
-    setModified(join(directory, 'tasks.md'), AT_12)
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    await expect(pending).resolves.toMatchObject({
-      presence: { proposal: true, design: false, tasks: true, specs: 0 },
-      modified: AT_12,
-      artifacts: { proposal: '# Why\n', design: null, tasks: '- [ ] one\n' },
-      specs: [],
+    const directory = writeChange(cwd, 'add-auth', { tasks: '- [ ] one\n' })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        return {
+          stdout: changeShowOutput(cwd, [
+            {
+              spec: 'alpha',
+              operation: 'ADDED',
+              requirements: [requirement({ name: 'One', text: 'A' })],
+            },
+            {
+              spec: 'alpha',
+              operation: 'ADDED',
+              requirements: [requirement({ name: 'Two', text: 'B' })],
+            },
+            {
+              spec: 'alpha',
+              operation: 'RENAMED',
+              description: 'Rename',
+              rename: { from: 'Old', to: 'New' },
+            },
+          ]),
+        }
+      }
+      if (command[0] === 'status') {
+        return { stdout: statusOutput(cwd, 'add-auth', [join(directory, 'tasks.md')]) }
+      }
+      return undefined
     })
+    const change = await readWorkspaceChange(cwd, 'add-auth')
+    expect(change.deltas).toEqual([
+      {
+        capability: 'alpha',
+        operation: 'ADDED',
+        requirements: [
+          { name: 'One', text: 'A', scenarios: [] },
+          { name: 'Two', text: 'B', scenarios: [] },
+        ],
+      },
+      {
+        capability: 'alpha',
+        operation: 'RENAMED',
+        requirements: [],
+        rename: { from: 'Old', to: 'New' },
+      },
+    ])
   })
 
-  it('reports a null modified time when the change carries no artifact files', async () => {
+  it('reads a nested task file the status command reports', async () => {
     const cwd = workspace()
-    writeChange(cwd, 'add-auth', {})
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    await expect(pending).resolves.toMatchObject({
-      presence: { proposal: false, design: false, tasks: false, specs: 0 },
-      modified: null,
-      artifacts: { proposal: null, design: null, tasks: null },
-      specs: [],
+    const directory = writeChange(cwd, 'add-auth', {
+      tasks: '- [ ] one\n',
+      nestedTasks: { '1.md': '- [x] nested\n' },
     })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 2, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') return { stdout: changeShowOutput(cwd, []) }
+      if (command[0] === 'status') {
+        return {
+          stdout: statusOutput(cwd, 'add-auth', [
+            join(directory, 'tasks.md'),
+            join(directory, 'tasks', '1.md'),
+          ]),
+        }
+      }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, 'add-auth')
+    expect(change.taskFiles.map((file) => file.path)).toEqual([
+      'openspec/changes/add-auth/tasks.md',
+      'openspec/changes/add-auth/tasks/1.md',
+    ])
   })
 
-  it('refuses a change the CLI does not report without reading its files', async () => {
+  it('passes the explicit --type change so a name shared with a capability is unambiguous', async () => {
     const cwd = workspace()
-    // A directory where proposal.md would be: reading it would raise EISDIR.
-    mkdirSync(join(cwd, 'openspec', 'changes', 'add-auth', 'proposal.md'), { recursive: true })
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('other-change')]))
-    await expect(pending).rejects.toThrow(unreportedChangeMessage('add-auth'))
-    expect(spawnMock).toHaveBeenCalledTimes(1)
+    writeSpec(cwd, 'same', '# Same\n\n## Purpose\n\nCapability.\n')
+    writeChange(cwd, 'same', { tasks: '- [ ] one\n' })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'same', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') return { stdout: changeShowOutput(cwd, []) }
+      if (command[0] === 'status') return { stdout: statusOutput(cwd, 'same', []) }
+      return undefined
+    })
+    await readWorkspaceChange(cwd, 'same')
+    const showCall = spawnMock.mock.calls.find((call) => commandOf(call[1]).at(0) === 'show')
+    expect(showCall).toBeDefined()
+    expect(commandOf(showCall?.[1] as string[])).toEqual([
+      'show',
+      'same',
+      '--json',
+      '--type',
+      'change',
+    ])
+  })
+
+  it('refuses an active name that only the archived list reports', async () => {
+    const cwd = workspace()
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-27-add-auth',
+              completedTasks: 1,
+              totalTasks: 1,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceChange(cwd, '2026-10-27-add-auth')).rejects.toThrow(
+      unreportedChangeMessage('2026-10-27-add-auth'),
+    )
   })
 
   it('refuses a traversal-shaped name even when the CLI reports it', async () => {
     const cwd = workspace()
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, '../add-auth')
-    answer(changeListOutput(cwd, [row('../add-auth')]))
-    await expect(pending).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: '../add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+          ]),
+        }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceChange(cwd, '../add-auth')).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
   })
 
   it('refuses a change directory that links outside the OpenSpec root', async () => {
@@ -239,21 +534,18 @@ describe('openspec change detail', () => {
     writeFileSync(join(outside, 'proposal.md'), '# Outside\n')
     mkdirSync(join(cwd, 'openspec', 'changes'), { recursive: true })
     directoryLink(outside, join(cwd, 'openspec', 'changes', 'add-auth'))
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    await expect(pending).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
-  })
-
-  it('refuses an artifact that links outside the OpenSpec root', async () => {
-    const cwd = workspace()
-    const outside = temporaryDirectory('openspec-outside-')
-    const changeDirectory = writeChange(cwd, 'add-auth', { tasks: '- [ ] one\n' })
-    directoryLink(outside, join(changeDirectory, 'proposal.md'))
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    await expect(pending).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+          ]),
+        }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceChange(cwd, 'add-auth')).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
   })
 
   it('refuses a delta spec that links outside the OpenSpec root', async () => {
@@ -263,10 +555,18 @@ describe('openspec change detail', () => {
     const changeDirectory = writeChange(cwd, 'add-auth', { proposal: '# Why\n' })
     mkdirSync(join(changeDirectory, 'specs'), { recursive: true })
     directoryLink(outside, join(changeDirectory, 'specs', 'alpha'))
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    await expect(pending).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+          ]),
+        }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceChange(cwd, 'add-auth')).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
   })
 
   it('reports an unreadable artifact with its path and cause', async () => {
@@ -274,65 +574,620 @@ describe('openspec change detail', () => {
     const directory = join(cwd, 'openspec', 'changes', 'add-auth')
     mkdirSync(join(directory, 'proposal.md'), { recursive: true })
     writeFileSync(join(directory, 'tasks.md'), '- [ ] one\n')
-    spawnChild()
-    const pending = readWorkspaceChange(cwd, 'add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const error = await pending.catch((reason: unknown) => reason)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      return undefined
+    })
+    const error = await readWorkspaceChange(cwd, 'add-auth').catch((reason: unknown) => reason)
     expect(error).toBeInstanceOf(Error)
     const message = (error as Error).message
     expect(message).toContain(artifactReadMessage(join(directory, 'proposal.md'), 'EISDIR'))
     expect(message).toContain('proposal.md')
   })
+
+  it('resolves a same-named pair by the archived flag only', async () => {
+    const cwd = workspace()
+    writeChange(cwd, 'add-auth', {
+      proposal: '# Why\n\nActive work.\n',
+      specs: { alpha: '## ADDED Requirements\n\n### Requirement: Active\n\nActive text.\n' },
+    })
+    writeChange(
+      cwd,
+      'add-auth',
+      {
+        proposal: '# Why\n\nArchived work.\n',
+        specs: { alpha: '## ADDED Requirements\n\n### Requirement: Archived\n\nArchived text.\n' },
+      },
+      true,
+    )
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+            {
+              name: 'add-auth',
+              completedTasks: 4,
+              totalTasks: 4,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        return {
+          stdout: changeShowOutput(cwd, [
+            {
+              spec: 'alpha',
+              operation: 'ADDED',
+              requirements: [requirement({ name: 'Active', text: 'Active text.' })],
+            },
+          ]),
+        }
+      }
+      if (command[0] === 'status') return { stdout: statusOutput(cwd, 'add-auth', []) }
+      return undefined
+    })
+    const active = await readWorkspaceChange(cwd, 'add-auth')
+    expect(active.archived).toBe(false)
+    expect(active.summary).toBe('Active work.')
+    expect(active.deltas[0]?.requirements[0]?.name).toBe('Active')
+    const archived = await readWorkspaceChange(cwd, 'add-auth', true)
+    expect(archived.archived).toBe(true)
+    expect(archived.summary).toBe('Archived work.')
+    expect(archived.deltas[0]?.requirements[0]?.name).toBe('Archived')
+  })
 })
 
-describe('openspec capability reads', () => {
-  it('lists the capability inventory the CLI reports', async () => {
+describe('archived change detail', () => {
+  it('reads an archived change with parsed deltas, its date and nested task files', async () => {
     const cwd = workspace()
-    spawnChild()
-    const pending = listWorkspaceCapabilities(cwd)
-    answer(
-      specsOutput(cwd, [
-        { id: 'openspec-panel', requirementCount: 4 },
-        { id: 'alpha', requirementCount: 0 },
-      ]),
+    const directory = writeChange(
+      cwd,
+      '2026-10-27-add-admin',
+      {
+        proposal: '# Proposal\n\n## Why\n\nAdds the admin indicator.\n',
+        design: '# Design\n',
+        tasks: '- [x] one\n',
+        nestedTasks: { '2.md': '- [ ] two\n' },
+        specs: {
+          admin: [
+            '# Spec Delta',
+            '',
+            '## ADDED Requirements',
+            '',
+            '### Requirement: Admin status',
+            '',
+            'The system SHALL report status.',
+            '',
+            '#### Scenario: Elevated',
+            '',
+            '- **WHEN** token is high',
+            '- **THEN** status is administrator',
+            '',
+            '## RENAMED Requirements',
+            '',
+            '- FROM: ### Requirement: Old name',
+            '- TO: ### Requirement: New name',
+            '',
+          ].join('\n'),
+        },
+      },
+      true,
     )
-    await expect(pending).resolves.toEqual([
-      { id: 'openspec-panel', requirementCount: 4 },
-      { id: 'alpha', requirementCount: 0 },
+    setModified(join(directory, 'proposal.md'), AT_10)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-27-add-admin',
+              completedTasks: 5,
+              totalTasks: 5,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, '2026-10-27-add-admin', true)
+    expect(change).toMatchObject({
+      name: '2026-10-27-add-admin',
+      phase: 'archived',
+      archived: true,
+      archivedAt: '2026-10-27',
+      completedTasks: 5,
+      totalTasks: 5,
+      summary: 'Adds the admin indicator.',
+    })
+    expect(change.deltas).toEqual([
+      {
+        capability: 'admin',
+        operation: 'ADDED',
+        requirements: [
+          {
+            name: 'Admin status',
+            text: 'The system SHALL report status.',
+            scenarios: [
+              {
+                name: 'Elevated',
+                rawText: '- **WHEN** token is high\n- **THEN** status is administrator',
+              },
+            ],
+          },
+        ],
+      },
+      {
+        capability: 'admin',
+        operation: 'RENAMED',
+        requirements: [],
+        rename: { from: 'Old name', to: 'New name' },
+      },
     ])
-    expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ cwd })
-    expect(spawnMock.mock.calls[0]?.[1]).toEqual(
-      process.platform === 'win32'
-        ? ['/d', '/s', '/c', 'openspec', 'list', '--specs', '--json']
-        : ['list', '--specs', '--json'],
+    expect(change.taskFiles.map((file) => file.path)).toEqual([
+      'openspec/changes/archive/2026-10-27-add-admin/tasks.md',
+      'openspec/changes/archive/2026-10-27-add-admin/tasks/2.md',
+    ])
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('parses a RENAMED delta in a file that also has added requirements', () => {
+    const deltas = parseArchivedDeltas(
+      'alpha',
+      [
+        '## ADDED Requirements',
+        '',
+        '### Requirement: New behavior',
+        '',
+        'The system SHALL work.',
+        '',
+        '#### Scenario: Works',
+        '',
+        '- **WHEN** x',
+        '- **THEN** y',
+        '',
+        '## RENAMED Requirements',
+        '',
+        '* FROM: ### Requirement: Old name',
+        '* TO: ### Requirement: New name',
+        '',
+      ].join('\n'),
+    )
+    expect(deltas[0]).toEqual({
+      capability: 'alpha',
+      operation: 'ADDED',
+      requirements: [
+        {
+          name: 'New behavior',
+          text: 'The system SHALL work.',
+          scenarios: [{ name: 'Works', rawText: '- **WHEN** x\n- **THEN** y' }],
+        },
+      ],
+    })
+    expect(deltas[1]).toEqual({
+      capability: 'alpha',
+      operation: 'RENAMED',
+      requirements: [],
+      rename: { from: 'Old name', to: 'New name' },
+    })
+  })
+
+  it('keeps several requirements and one without scenarios', () => {
+    const deltas = parseArchivedDeltas(
+      'alpha',
+      [
+        '## MODIFIED Requirements',
+        '',
+        '### Requirement: First',
+        '',
+        'First text.',
+        '',
+        '#### Scenario: One',
+        '',
+        '- **WHEN** x',
+        '- **THEN** y',
+        '',
+        '### Requirement: Second',
+        '',
+        'Second text MUST hold.',
+        '',
+      ].join('\n'),
+    )
+    expect(deltas).toHaveLength(1)
+    expect(deltas[0]?.requirements.map((req) => req.name)).toEqual(['First', 'Second'])
+    expect(deltas[0]?.requirements[1]?.scenarios).toEqual([])
+  })
+
+  it('falls back to the raw Markdown body when no section parses', async () => {
+    const cwd = workspace()
+    const body = '# Delta\n\nPlain prose, no delta section.\n'
+    writeChange(cwd, '2026-10-27-plain', { specs: { alpha: body } }, true)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-27-plain',
+              completedTasks: 1,
+              totalTasks: 1,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, '2026-10-27-plain', true)
+    expect(change.deltas).toEqual([])
+    expect(change.specs).toEqual([expect.objectContaining({ capability: 'alpha', body })])
+  })
+
+  it('reports a missing archive directory', async () => {
+    const cwd = workspace()
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-27-missing',
+              completedTasks: 0,
+              totalTasks: 0,
+              status: 'no-tasks',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceChange(cwd, '2026-10-27-missing', true)).rejects.toThrow(
+      'the change directory is missing',
     )
   })
 
-  it('reads one capability spec body', async () => {
+  it('refuses a name the archived list does not report', async () => {
     const cwd = workspace()
-    mkdirSync(join(cwd, 'openspec', 'specs', 'openspec-panel'), { recursive: true })
-    const file = join(cwd, 'openspec', 'specs', 'openspec-panel', 'spec.md')
-    writeFileSync(file, '# Panel\n')
-    setModified(file, AT_13)
-    spawnChild()
-    const pending = readWorkspaceCapability(cwd, 'openspec-panel')
-    answer(specsOutput(cwd, [{ id: 'openspec-panel', requirementCount: 2 }]))
-    await expect(pending).resolves.toEqual({
-      id: 'openspec-panel',
-      requirementCount: 2,
-      body: '# Panel\n',
-      modified: AT_13,
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive.\n' })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+          ]),
+        }
+      }
+      return undefined
     })
+    await expect(readWorkspaceChange(cwd, 'add-auth', true)).rejects.toThrow(
+      unreportedArchivedChangeMessage('add-auth'),
+    )
+  })
+
+  it('refuses a traversal-shaped archived name even when reported', async () => {
+    const cwd = workspace()
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '../escape',
+              completedTasks: 0,
+              totalTasks: 0,
+              status: 'no-tasks',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceChange(cwd, '../escape', true)).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
+  })
+
+  it('returns no task files when the archived change has none', async () => {
+    const cwd = workspace()
+    writeChange(cwd, '2026-10-27-no-tasks', { proposal: '# Why\n\nNothing.\n' }, true)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-27-no-tasks',
+              completedTasks: 0,
+              totalTasks: 0,
+              status: 'no-tasks',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, '2026-10-27-no-tasks', true)
+    expect(change.taskFiles).toEqual([])
+  })
+})
+
+describe('openspec capability reads', () => {
+  it('lists capability rows with purpose, modification and provenance', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nShows the admin state.\n')
+    writeSpec(cwd, 'beta', '# Beta\n\nNo purpose section.\n')
+    const producer = writeChange(
+      cwd,
+      '2026-10-27-add-alpha',
+      { specs: { alpha: '## ADDED Requirements\n\n### Requirement: A\n\nText.\n' } },
+      true,
+    )
+    setModified(join(producer, 'specs', 'alpha', 'spec.md'), AT_12)
+    serveGit(
+      gitOutput([
+        {
+          short: 'abc1234',
+          paths: [
+            'openspec/specs/alpha/spec.md',
+            'openspec/changes/archive/2026-10-27-add-alpha/specs/alpha/spec.md',
+          ],
+        },
+      ]),
+    )
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return {
+          stdout: specsOutput(cwd, [
+            { id: 'alpha', requirementCount: 4 },
+            { id: 'beta', requirementCount: 1 },
+          ]),
+        }
+      }
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-27-add-alpha',
+              completedTasks: 5,
+              totalTasks: 5,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      return undefined
+    })
+    const rows = await listWorkspaceCapabilityRows(cwd)
+    const alpha = rows.find((row) => row.id === 'alpha')
+    expect(alpha).toMatchObject({
+      id: 'alpha',
+      requirementCount: 4,
+      purpose: 'Shows the admin state.',
+      lastChange: {
+        name: '2026-10-27-add-alpha',
+        date: '2026-10-27',
+        completedTasks: 5,
+        totalTasks: 5,
+        commit: { short: 'abc1234' },
+      },
+      commit: { short: 'abc1234' },
+    })
+    const beta = rows.find((row) => row.id === 'beta')
+    expect(beta).toMatchObject({ purpose: '', lastChange: null })
+  })
+
+  it('reads a capability with structured requirements, its file purpose and newest-first history', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nThe file purpose.\n')
+    writeChange(cwd, '2026-10-01-add-alpha', { specs: { alpha: '## ADDED Requirements\n' } }, true)
+    writeChange(
+      cwd,
+      '2026-10-20-update-alpha',
+      { specs: { alpha: '## MODIFIED Requirements\n' } },
+      true,
+    )
+    writeChange(
+      cwd,
+      '2026-11-01-refine-alpha',
+      { specs: { alpha: '## MODIFIED Requirements\n' } },
+      true,
+    )
+    const longText = `The system SHALL ${'x'.repeat(600)}`
+    serveGit(
+      gitOutput([
+        {
+          short: 'fff1111',
+          paths: ['openspec/specs/alpha/spec.md'],
+        },
+        {
+          short: 'bbb2222',
+          paths: ['openspec/changes/archive/2026-11-01-refine-alpha/specs/alpha/spec.md'],
+        },
+        {
+          short: 'aaa3333',
+          paths: ['openspec/changes/archive/2026-10-20-update-alpha/specs/alpha/spec.md'],
+        },
+        {
+          short: 'ccc4444',
+          paths: ['openspec/changes/archive/2026-10-01-add-alpha/specs/alpha/spec.md'],
+        },
+      ]),
+    )
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 2 }]) }
+      }
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-10-01-add-alpha',
+              completedTasks: 6,
+              totalTasks: 6,
+              status: 'complete',
+              archived: true,
+            },
+            {
+              name: '2026-10-20-update-alpha',
+              completedTasks: 3,
+              totalTasks: 4,
+              status: 'complete',
+              archived: true,
+            },
+            {
+              name: '2026-11-01-refine-alpha',
+              completedTasks: 2,
+              totalTasks: 2,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        expect(command).toEqual(['show', 'alpha', '--json', '--type', 'spec'])
+        return {
+          stdout: specShowOutput(cwd, 'alpha', 'The CLI overview.', [
+            requirement({ name: 'Long', text: longText }),
+            requirement({ name: 'Short', text: 'The system MUST work.' }),
+          ]),
+        }
+      }
+      return undefined
+    })
+    const capability = await readWorkspaceCapability(cwd, 'alpha')
+    expect(capability).toMatchObject({
+      id: 'alpha',
+      requirementCount: 2,
+      purpose: 'The file purpose.',
+      lastChange: { name: '2026-11-01-refine-alpha' },
+    })
+    expect(capability.requirements.map((req) => req.name)).toEqual(['Long', 'Short'])
+    expect(capability.requirements[0]?.text).toHaveLength(617)
+    expect(capability.history.map((entry) => entry.name)).toEqual([
+      '2026-11-01-refine-alpha',
+      '2026-10-20-update-alpha',
+      '2026-10-01-add-alpha',
+    ])
+    expect(capability.history.map((entry) => entry.commit?.short)).toEqual([
+      'bbb2222',
+      'aaa3333',
+      'ccc4444',
+    ])
+    expect(capability.commit).toEqual(expect.objectContaining({ short: 'fff1111' }))
+    expect(execFileMock).toHaveBeenCalledTimes(1)
+    const args = execFileMock.mock.calls[0]?.[1] as string[]
+    expect(args).toEqual(
+      expect.arrayContaining([
+        'openspec/specs/alpha',
+        'openspec/changes/archive/2026-11-01-refine-alpha',
+        'openspec/changes/archive/2026-10-20-update-alpha',
+        'openspec/changes/archive/2026-10-01-add-alpha',
+      ]),
+    )
+  })
+
+  it('falls back to the CLI overview when the spec has no Purpose section', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\nNo purpose here.\n')
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 0 }]) }
+      }
+      if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
+      if (command[0] === 'show') {
+        return { stdout: specShowOutput(cwd, 'alpha', 'The CLI overview.', []) }
+      }
+      return undefined
+    })
+    const capability = await readWorkspaceCapability(cwd, 'alpha')
+    expect(capability.purpose).toBe('The CLI overview.')
+  })
+
+  it('reports no history for a synced-only capability', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nOnly synced.\n')
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 1 }]) }
+      }
+      if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
+      if (command[0] === 'show') {
+        return { stdout: specShowOutput(cwd, 'alpha', 'Overview.', []) }
+      }
+      return undefined
+    })
+    const capability = await readWorkspaceCapability(cwd, 'alpha')
+    expect(capability.history).toEqual([])
+    expect(capability.lastChange).toBeNull()
   })
 
   it('refuses an id the CLI does not report without reading its spec', async () => {
     const cwd = workspace()
-    // A directory where spec.md would be: reading it would raise EISDIR.
     mkdirSync(join(cwd, 'openspec', 'specs', 'wanted', 'spec.md'), { recursive: true })
-    spawnChild()
-    const pending = readWorkspaceCapability(cwd, 'wanted')
-    answer(specsOutput(cwd, [{ id: 'other', requirementCount: 1 }]))
-    await expect(pending).rejects.toThrow(unreportedCapabilityMessage('wanted'))
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'other', requirementCount: 1 }]) }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceCapability(cwd, 'wanted')).rejects.toThrow(
+      unreportedCapabilityMessage('wanted'),
+    )
+  })
+
+  it('passes the explicit --type spec so a name shared with a change is unambiguous', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'same', '# Same\n\n## Purpose\n\nShared name.\n')
+    writeChange(cwd, 'same', { tasks: '- [ ] one\n' })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'same', requirementCount: 0 }]) }
+      }
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'same', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        return { stdout: specShowOutput(cwd, 'same', 'Overview.', []) }
+      }
+      return undefined
+    })
+    await readWorkspaceCapability(cwd, 'same')
+    const showCall = spawnMock.mock.calls.find((call) => commandOf(call[1]).at(0) === 'show')
+    expect(showCall).toBeDefined()
+    expect(commandOf(showCall?.[1] as string[])).toEqual([
+      'show',
+      'same',
+      '--json',
+      '--type',
+      'spec',
+    ])
   })
 
   it('refuses a capability spec that links outside the OpenSpec root', async () => {
@@ -340,28 +1195,23 @@ describe('openspec capability reads', () => {
     const outside = temporaryDirectory('openspec-outside-')
     writeFileSync(join(outside, 'spec.md'), '# Outside\n')
     mkdirSync(join(cwd, 'openspec', 'specs'), { recursive: true })
-    directoryLink(outside, join(cwd, 'openspec', 'specs', 'openspec-panel'))
-    spawnChild()
-    const pending = readWorkspaceCapability(cwd, 'openspec-panel')
-    answer(specsOutput(cwd, [{ id: 'openspec-panel', requirementCount: 1 }]))
-    await expect(pending).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
+    directoryLink(outside, join(cwd, 'openspec', 'specs', 'alpha'))
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 1 }]) }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceCapability(cwd, 'alpha')).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
   })
 
   it('refuses a workspace without a local root before running the CLI', async () => {
     await expect(listWorkspaceCapabilities(workspace(false))).rejects.toThrow(NO_LOCAL_ROOT_MESSAGE)
-    await expect(readWorkspaceCapability(workspace(false), 'openspec-panel')).rejects.toThrow(
+    await expect(readWorkspaceCapability(workspace(false), 'alpha')).rejects.toThrow(
       NO_LOCAL_ROOT_MESSAGE,
     )
     expect(spawnMock).not.toHaveBeenCalled()
-  })
-
-  it('refuses an ancestor root the CLI reports', async () => {
-    const cwd = workspace()
-    const ancestor = temporaryDirectory('openspec-ancestor-')
-    spawnChild()
-    const pending = listWorkspaceCapabilities(cwd)
-    answer(specsOutput(ancestor, []))
-    await expect(pending).rejects.toThrow(NO_LOCAL_ROOT_MESSAGE)
   })
 
   it('refuses malformed inventory output', async () => {
@@ -374,23 +1224,46 @@ describe('openspec capability reads', () => {
       [{ id: 'x', requirementCount: 1.5 }],
     ]
     for (const specs of malformed) {
-      spawnChild()
-      const pending = listWorkspaceCapabilities(cwd)
-      answer(specsOutput(cwd, specs))
-      await expect(pending).rejects.toThrow(CAPABILITIES_MALFORMED_MESSAGE)
+      autoCli(() => ({
+        stdout: specsOutput(cwd, specs as { id: string; requirementCount: number }[]),
+      }))
+      await expect(listWorkspaceCapabilities(cwd)).rejects.toThrow(CAPABILITIES_MALFORMED_MESSAGE)
     }
   })
 
   it('reports a reported capability whose spec file cannot be read', async () => {
     const cwd = workspace()
-    spawnChild()
-    const pending = readWorkspaceCapability(cwd, 'ghost')
-    answer(specsOutput(cwd, [{ id: 'ghost', requirementCount: 1 }]))
-    const error = await pending.catch((reason: unknown) => reason)
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'ghost', requirementCount: 1 }]) }
+      }
+      return undefined
+    })
+    const error = await readWorkspaceCapability(cwd, 'ghost').catch((reason: unknown) => reason)
     expect(error).toBeInstanceOf(Error)
     const message = (error as Error).message
     expect(message).toContain('Could not read the OpenSpec capability spec')
     expect(message).toContain(join(cwd, 'openspec', 'specs', 'ghost', 'spec.md'))
+  })
+
+  it('rejects malformed structured requirement output', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nP.\n')
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 1 }]) }
+      }
+      if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
+      if (command[0] === 'show') {
+        return { stdout: specShowOutput(cwd, 'alpha', 'Overview.', [{ name: 'x' }]) }
+      }
+      return undefined
+    })
+    await expect(readWorkspaceCapability(cwd, 'alpha')).rejects.toThrow(
+      REQUIREMENTS_MALFORMED_MESSAGE,
+    )
   })
 })
 
@@ -456,6 +1329,46 @@ function routeHarness(workspaces: ReadonlyMap<string, string>): RouteHarness {
   }
 }
 
+/** The CLI answers every detail read needs, keyed by command. */
+function serveDetail(
+  cwd: string,
+  options: {
+    readonly rows: readonly CliRow[]
+    readonly deltas?: readonly unknown[]
+    readonly taskPaths?: readonly string[]
+    readonly capabilities?: readonly { id: string; requirementCount: number }[]
+    readonly spec?: { overview: string; requirements: readonly unknown[] }
+  },
+): void {
+  autoCli((args) => {
+    const command = commandOf(args)
+    if (command[0] === 'list' && command[1] === '--all') {
+      return { stdout: listOutput(cwd, options.rows) }
+    }
+    if (command[0] === 'list' && command[1] === '--specs') {
+      return { stdout: specsOutput(cwd, options.capabilities ?? []) }
+    }
+    if (command[0] === 'show') {
+      const type = command[command.indexOf('--type') + 1]
+      if (type === 'change') return { stdout: changeShowOutput(cwd, options.deltas ?? []) }
+      if (type === 'spec') {
+        return {
+          stdout: specShowOutput(
+            cwd,
+            command[1] ?? '',
+            options.spec?.overview ?? '',
+            options.spec?.requirements ?? [],
+          ),
+        }
+      }
+    }
+    if (command[0] === 'status') {
+      return { stdout: statusOutput(cwd, command[2] ?? '', options.taskPaths ?? []) }
+    }
+    return undefined
+  })
+}
+
 describe('openspec read routes', () => {
   it('registers the three exact GET routes on the desktop shell carrier', () => {
     const harness = routeHarness(new Map())
@@ -465,132 +1378,164 @@ describe('openspec read routes', () => {
     }
   })
 
-  it('extends the change list with each row artifact presence', async () => {
+  it('serves the extended change list with archived rows and all three counts', async () => {
     const cwd = workspace()
-    writeChange(cwd, 'add-auth', { proposal: '# Why\n', specs: { 'openspec-panel': '# Panel\n' } })
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive.\n' })
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const pending = harness.request(CHANGES_ROUTE, '?session=s1')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const response = await pending
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      changes: [
+    serveDetail(cwd, {
+      rows: [
+        { name: 'add-auth', completedTasks: 1, totalTasks: 2, status: 'in-progress' },
         {
-          name: 'add-auth',
+          name: '2026-10-27-old',
           completedTasks: 1,
-          totalTasks: 2,
-          status: 'in-progress',
-          presence: { proposal: true, design: false, tasks: false, specs: 1 },
+          totalTasks: 1,
+          status: 'complete',
+          archived: true,
+        },
+      ],
+      capabilities: [{ id: 'alpha', requirementCount: 4 }],
+    })
+    const response = await harness.request(CHANGES_ROUTE, '?session=s1')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      changes: Array<{ name: string; presence: unknown; phase: string }>
+      archived: Array<{ name: string }>
+      counts: unknown
+    }
+    expect(body.changes).toHaveLength(1)
+    expect(body.changes[0]).toMatchObject({
+      name: 'add-auth',
+      phase: 'applying',
+      presence: { proposal: true, design: false, tasks: false, specs: 0 },
+    })
+    expect(body.archived.map((row) => row.name)).toEqual(['2026-10-27-old'])
+    expect(body.counts).toEqual({ active: 1, archived: 1, capabilities: 1 })
+  })
+
+  it('serves one active change with its deltas and task files', async () => {
+    const cwd = workspace()
+    const directory = writeChange(cwd, 'add-auth', {
+      proposal: '# Why\n\nActive.\n',
+      tasks: '- [ ] one\n',
+      specs: { alpha: '# Delta\n' },
+    })
+    const harness = routeHarness(new Map([['s1', cwd]]))
+    serveDetail(cwd, {
+      rows: [{ name: 'add-auth', completedTasks: 0, totalTasks: 1, status: 'in-progress' }],
+      deltas: [
+        {
+          spec: 'alpha',
+          operation: 'ADDED',
+          requirements: [requirement({ name: 'A', text: 'The system SHALL work.' })],
+        },
+      ],
+      taskPaths: [join(directory, 'tasks.md')],
+    })
+    const response = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      change: { deltas: unknown[]; taskFiles: unknown[]; archived: boolean }
+    }
+    expect(body.change.deltas).toEqual([
+      {
+        capability: 'alpha',
+        operation: 'ADDED',
+        requirements: [{ name: 'A', text: 'The system SHALL work.', scenarios: [] }],
+      },
+    ])
+    expect(body.change.taskFiles).toHaveLength(1)
+    expect(body.change.archived).toBe(false)
+  })
+
+  it('serves an archived change and hides it from the active family', async () => {
+    const cwd = workspace()
+    writeChange(
+      cwd,
+      '2026-10-27-old',
+      {
+        proposal: '# Why\n\nOld.\n',
+        specs: { alpha: '## ADDED Requirements\n\n### Requirement: Old\n\nOld text.\n' },
+      },
+      true,
+    )
+    const harness = routeHarness(new Map([['s1', cwd]]))
+    serveDetail(cwd, {
+      rows: [
+        {
+          name: '2026-10-27-old',
+          completedTasks: 1,
+          totalTasks: 1,
+          status: 'complete',
+          archived: true,
         },
       ],
     })
+    const archived = await harness.request(
+      CHANGE_DETAIL_ROUTE,
+      '?session=s1&archived=1&name=2026-10-27-old',
+    )
+    expect(archived.status).toBe(200)
+    const archivedBody = (await archived.json()) as {
+      change: { archived: boolean; archivedAt: string }
+    }
+    expect(archivedBody.change).toMatchObject({ archived: true, archivedAt: '2026-10-27' })
+
+    const active = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=2026-10-27-old')
+    expect(active.status).toBe(400)
+    await expect(active.json()).resolves.toEqual({
+      error: unreportedChangeMessage('2026-10-27-old'),
+    })
+
+    const missingArchived = await harness.request(
+      CHANGE_DETAIL_ROUTE,
+      '?session=s1&archived=1&name=add-auth',
+    )
+    expect(missingArchived.status).toBe(400)
+    await expect(missingArchived.json()).resolves.toEqual({
+      error: unreportedArchivedChangeMessage('add-auth'),
+    })
   })
 
-  it('serves one change with every artifact body and its delta specs', async () => {
+  it('serves the capability inventory with purpose and provenance', async () => {
     const cwd = workspace()
-    const directory = writeChange(cwd, 'add-auth', {
-      proposal: '# Why\n',
-      specs: { alpha: '# Alpha\n' },
-    })
-    setModified(join(directory, 'proposal.md'), AT_10)
-    setModified(join(directory, 'specs', 'alpha', 'spec.md'), AT_13)
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nShows it.\n')
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const pending = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const response = await pending
+    serveDetail(cwd, {
+      rows: [],
+      capabilities: [{ id: 'alpha', requirementCount: 2 }],
+    })
+    const response = await harness.request(SPECS_ROUTE, '?session=s1')
     expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      change: {
-        name: 'add-auth',
-        status: 'in-progress',
-        completedTasks: 1,
-        totalTasks: 2,
-        presence: { proposal: true, design: false, tasks: false, specs: 1 },
-        modified: AT_13,
-        artifacts: { proposal: '# Why\n', design: null, tasks: null },
-        specs: [{ capability: 'alpha', body: '# Alpha\n', modified: AT_13 }],
-      },
-    })
-  })
-
-  it('serves an edited artifact body and its newer winning modified time on a re-read', async () => {
-    const cwd = workspace()
-    const directory = writeChange(cwd, 'add-auth', {
-      proposal: '# First\n',
-      specs: { alpha: '# Alpha\n' },
-    })
-    const proposalFile = join(directory, 'proposal.md')
-    setModified(proposalFile, AT_10)
-    setModified(join(directory, 'specs', 'alpha', 'spec.md'), AT_13)
-    const harness = routeHarness(new Map([['s1', cwd]]))
-
-    spawnChild()
-    const firstPending = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const firstResponse = await firstPending
-    expect(firstResponse.status).toBe(200)
-    const first = (await firstResponse.json()) as {
-      change: { modified: string; artifacts: { proposal: string | null } }
+    const body = (await response.json()) as {
+      capabilities: Array<{ id: string; purpose: string; lastChange: unknown }>
     }
-    expect(first.change.artifacts.proposal).toBe('# First\n')
-    expect(first.change.modified).toBe(AT_13)
-
-    writeFileSync(proposalFile, '# Second\n')
-    setModified(proposalFile, AT_14)
-    spawnChild()
-    const secondPending = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const secondResponse = await secondPending
-    expect(secondResponse.status).toBe(200)
-    const second = (await secondResponse.json()) as {
-      change: {
-        modified: string
-        artifacts: { proposal: string | null }
-        specs: { capability: string; body: string; modified: string }[]
-      }
-    }
-    expect(second.change.artifacts.proposal).toBe('# Second\n')
-    expect(second.change.modified).toBe(AT_14)
-    expect(second.change.specs).toEqual([
-      { capability: 'alpha', body: '# Alpha\n', modified: AT_13 },
+    expect(body.capabilities).toEqual([
+      expect.objectContaining({ id: 'alpha', purpose: 'Shows it.', lastChange: null }),
     ])
   })
 
-  it('serves the capability inventory when no id is given', async () => {
+  it('serves one capability with structured requirements and history', async () => {
     const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nShows it.\n')
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const pending = harness.request(SPECS_ROUTE, '?session=s1')
-    answer(specsOutput(cwd, [{ id: 'openspec-panel', requirementCount: 4 }]))
-    const response = await pending
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      capabilities: [{ id: 'openspec-panel', requirementCount: 4 }],
-    })
-  })
-
-  it('serves one capability spec when an id is given', async () => {
-    const cwd = workspace()
-    mkdirSync(join(cwd, 'openspec', 'specs', 'openspec-panel'), { recursive: true })
-    const file = join(cwd, 'openspec', 'specs', 'openspec-panel', 'spec.md')
-    writeFileSync(file, '# Panel\n')
-    setModified(file, AT_11)
-    const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const pending = harness.request(SPECS_ROUTE, '?session=s1&id=openspec-panel')
-    answer(specsOutput(cwd, [{ id: 'openspec-panel', requirementCount: 2 }]))
-    const response = await pending
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({
-      capability: {
-        id: 'openspec-panel',
-        requirementCount: 2,
-        body: '# Panel\n',
-        modified: AT_11,
+    serveDetail(cwd, {
+      rows: [],
+      capabilities: [{ id: 'alpha', requirementCount: 1 }],
+      spec: {
+        overview: 'Overview.',
+        requirements: [requirement({ name: 'A', text: 'The system SHALL work.' })],
       },
     })
+    const response = await harness.request(SPECS_ROUTE, '?session=s1&id=alpha')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      capability: { purpose: string; requirements: unknown[]; history: unknown[] }
+    }
+    expect(body.capability.purpose).toBe('Shows it.')
+    expect(body.capability.requirements).toEqual([
+      { name: 'A', text: 'The system SHALL work.', scenarios: [] },
+    ])
+    expect(body.capability.history).toEqual([])
   })
 
   it('requires a live session on every route without running the CLI', async () => {
@@ -623,17 +1568,12 @@ describe('openspec read routes', () => {
   it('returns 400 for an item the CLI does not report', async () => {
     const cwd = workspace()
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const changePending = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer(changeListOutput(cwd, [row('other-change')]))
-    const change = await changePending
+    serveDetail(cwd, { rows: [], capabilities: [] })
+    const change = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
     expect(change.status).toBe(400)
     await expect(change.json()).resolves.toEqual({ error: unreportedChangeMessage('add-auth') })
 
-    spawnChild()
-    const capabilityPending = harness.request(SPECS_ROUTE, '?session=s1&id=missing')
-    answer(specsOutput(cwd, []))
-    const capability = await capabilityPending
+    const capability = await harness.request(SPECS_ROUTE, '?session=s1&id=missing')
     expect(capability.status).toBe(400)
     await expect(capability.json()).resolves.toEqual({
       error: unreportedCapabilityMessage('missing'),
@@ -643,19 +1583,20 @@ describe('openspec read routes', () => {
   it('returns the CLI failure as a readable 500 cause', async () => {
     const cwd = workspace()
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const changePending = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer('', 1, 'not a valid workspace')
-    const change = await changePending
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--all') {
+        return { stdout: '', code: 1, stderr: 'not a valid workspace' }
+      }
+      return { stdout: '', code: 1, stderr: 'inventory unavailable' }
+    })
+    const change = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
     expect(change.status).toBe(500)
     await expect(change.json()).resolves.toEqual({
-      error: '`openspec list` failed: not a valid workspace',
+      error: '`openspec list --all` failed: not a valid workspace',
     })
 
-    spawnChild()
-    const inventoryPending = harness.request(SPECS_ROUTE, '?session=s1')
-    answer('', 1, 'inventory unavailable')
-    const inventory = await inventoryPending
+    const inventory = await harness.request(SPECS_ROUTE, '?session=s1')
     expect(inventory.status).toBe(500)
     await expect(inventory.json()).resolves.toEqual({
       error: '`openspec list --specs` failed: inventory unavailable',
@@ -667,14 +1608,27 @@ describe('openspec read routes', () => {
     const directory = join(cwd, 'openspec', 'changes', 'add-auth')
     mkdirSync(join(directory, 'proposal.md'), { recursive: true })
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const pending = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const response = await pending
+    serveDetail(cwd, {
+      rows: [{ name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' }],
+    })
+    const response = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
     expect(response.status).toBe(500)
     const body = (await response.json()) as { error: string }
     expect(body.error).toContain('Could not read the OpenSpec artifact')
     expect(body.error).toContain('proposal.md')
+  })
+
+  it('keeps every view working when git is unavailable', async () => {
+    const cwd = workspace()
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive.\n' })
+    const harness = routeHarness(new Map([['s1', cwd]]))
+    serveDetail(cwd, {
+      rows: [{ name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' }],
+    })
+    const response = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { change: { commit: unknown } }
+    expect(body.change.commit).toBeNull()
   })
 
   it('reports a missing local root on the specs route without running the CLI', async () => {
@@ -686,53 +1640,17 @@ describe('openspec read routes', () => {
     expect(spawnMock).not.toHaveBeenCalled()
   })
 
-  it('scopes each session to its own workspace', async () => {
-    const first = workspace()
-    writeChange(first, 'add-auth', { proposal: '# First\n' })
-    const second = workspace()
-    writeChange(second, 'add-auth', { proposal: '# Second\n' })
-    const harness = routeHarness(
-      new Map([
-        ['s1', first],
-        ['s2', second],
-      ]),
-    )
-    spawnChild()
-    const one = harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
-    answer(changeListOutput(first, [row('add-auth')]))
-    const firstResponse = await one
-    expect(firstResponse.status).toBe(200)
-    const firstBody = (await firstResponse.json()) as {
-      change: { artifacts: { proposal: string } }
-    }
-    expect(firstBody.change.artifacts.proposal).toBe('# First\n')
-
-    spawnChild()
-    const two = harness.request(CHANGE_DETAIL_ROUTE, '?session=s2&name=add-auth')
-    answer(changeListOutput(second, [row('add-auth')]))
-    const secondResponse = await two
-    expect(secondResponse.status).toBe(200)
-    const secondBody = (await secondResponse.json()) as {
-      change: { artifacts: { proposal: string } }
-    }
-    expect(secondBody.change.artifacts.proposal).toBe('# Second\n')
-    expect(spawnMock.mock.calls.map((call) => call[2])).toMatchObject([
-      { cwd: first },
-      { cwd: second },
-    ])
-  })
-
   it('ignores request text other than the session and the item name', async () => {
     const cwd = workspace()
-    writeChange(cwd, 'add-auth', { proposal: '# Why\n' })
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive.\n' })
     const harness = routeHarness(new Map([['s1', cwd]]))
-    spawnChild()
-    const pending = harness.request(
+    serveDetail(cwd, {
+      rows: [{ name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' }],
+    })
+    const response = await harness.request(
       CHANGE_DETAIL_ROUTE,
       '?session=s1&name=add-auth&path=/etc/passwd&name=../evil',
     )
-    answer(changeListOutput(cwd, [row('add-auth')]))
-    const response = await pending
     expect(response.status).toBe(200)
     expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ cwd })
   })

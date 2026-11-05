@@ -5,8 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SkillCandidate, SkillProvider } from '@deepseek-ai/dsh-skill'
 import {
-  changePresence,
-  listWorkspaceCapabilities,
+  listWorkspaceCapabilityRows,
   readWorkspaceCapability,
   readWorkspaceChange,
   UnreportedItemError,
@@ -327,11 +326,7 @@ function registerRoutes(ctx: Context): void {
         const resolved = sessionWorkspace(services, request)
         if ('response' in resolved) return resolved.response
         try {
-          const changes = (await listWorkspaceChanges(resolved.workspace)).map((change) => ({
-            ...change,
-            presence: changePresence(resolved.workspace, change.name),
-          }))
-          return jsonResponse(200, { changes })
+          return jsonResponse(200, await listWorkspaceChanges(resolved.workspace))
         } catch (error) {
           return errorResponse(error, 'The change list could not be read.')
         }
@@ -348,8 +343,9 @@ function registerRoutes(ctx: Context): void {
         if (name === null || name === '') {
           return jsonResponse(400, { error: 'A change name is required.' })
         }
+        const archived = new URL(request.url).searchParams.get('archived') === '1'
         try {
-          const change = await readWorkspaceChange(resolved.workspace, name)
+          const change = await readWorkspaceChange(resolved.workspace, name, archived)
           return jsonResponse(200, { change })
         } catch (error) {
           return readErrorResponse(error, 'The change could not be read.')
@@ -369,7 +365,7 @@ function registerRoutes(ctx: Context): void {
         }
         try {
           if (id === null) {
-            const capabilities = await listWorkspaceCapabilities(resolved.workspace)
+            const capabilities = await listWorkspaceCapabilityRows(resolved.workspace)
             return jsonResponse(200, { capabilities })
           }
           const capability = await readWorkspaceCapability(resolved.workspace, id)
