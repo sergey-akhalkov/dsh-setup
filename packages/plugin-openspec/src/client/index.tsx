@@ -1486,6 +1486,7 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
         ) : (
           <span className="dsh-openspec-tab-unavailable" title={t('artifact.notWritten')}>
             {label}
+            <span className="dsh-openspec-sr-only">{` (${t('artifact.notWritten')})`}</span>
           </span>
         ),
         id: `${baseId}-${kind}`,
@@ -2419,6 +2420,23 @@ export const PANEL_CSS = `
 }
 .dsh-openspec-keyword {
   color: var(--dsw-alias-state-business-primary);
+}
+/* The shipped SegmentedTabs has no disabled option: dim the unavailable tab
+   and reveal its reason to assistive technology; the selection is refused. */
+.dsh-openspec-tab-unavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.dsh-openspec-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .dsh-openspec-code {
   font: var(--dsw-font-markdown-code);

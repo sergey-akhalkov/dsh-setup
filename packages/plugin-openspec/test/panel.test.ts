@@ -2191,23 +2191,28 @@ describe('OpenSpec change view', () => {
     expect(String(purpose?.props.className)).not.toContain('purpose-clamp')
   })
 
-  it('shows a missing artifact as unavailable with its reason', () => {
+  it('shows a missing artifact body as unavailable with its reason', () => {
+    const tree = ChangeView(changeViewProps({ change: NO_DESIGN, artifact: 'design' }))
+    expect(textOf(tree)).toContain('Not written yet.')
+    expect(typed(tree, 'MarkdownText')).toHaveLength(0)
+  })
+
+  it('marks the missing Design tab unavailable while a written artifact is selected', () => {
     const chosen: string[] = []
     const tree = ChangeView(
       changeViewProps({
         change: NO_DESIGN,
-        artifact: 'design',
+        artifact: 'proposal',
         onArtifact: (kind) => chosen.push(kind),
       }),
     )
-    expect(textOf(tree)).toContain('Not written yet.')
-    expect(typed(tree, 'MarkdownText')).toHaveLength(0)
     const items = tabControl(tree).props.items as Array<{ value: string; label: unknown }>
     const design = items.find((item) => item.value === 'design')
     const unavailable = nodes(design?.label).find(
       (node) => node.props.className === 'dsh-openspec-tab-unavailable',
     )
     expect(unavailable?.props.title).toBe('Not written yet.')
+    expect(textOf(design?.label)).toContain('Not written yet.')
     ;(tabControl(tree).props.onChange as (value: string) => void)('design')
     expect(chosen).toEqual([])
     ;(tabControl(tree).props.onChange as (value: string) => void)('proposal')
@@ -3477,5 +3482,8 @@ describe('OpenSpec panel visual contract', () => {
     expect(PANEL_CSS).toContain('prefers-reduced-motion')
     expect(PANEL_CSS).toContain('-webkit-line-clamp: 2')
     expect(PANEL_CSS).toContain('flex-wrap: wrap')
+    expect(PANEL_CSS).toContain('.dsh-openspec-tab-unavailable')
+    expect(PANEL_CSS).toContain('opacity: 0.55')
+    expect(PANEL_CSS).toContain('.dsh-openspec-sr-only')
   })
 })
