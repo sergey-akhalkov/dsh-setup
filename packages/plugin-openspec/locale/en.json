@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "OpenSpec",
-    "description": "Six on-demand OpenSpec core skills packaged from OpenSpec 1.15.0 (MIT, Fission-AI/OpenSpec) plus a read-only right-sidebar panel for changes and capability specs; requires the openspec CLI on PATH (npm install -g @fission-ai/openspec@1.15.0); specs stay in each workspace's own openspec/ root"
+    "description": "Six on-demand OpenSpec core skills packaged from OpenSpec 1.15.0 (MIT, Fission-AI/OpenSpec) plus a read-only right-sidebar panel: a workspace header with Explore and Propose composer drafts, counted Changes, Specs and Archive segments, change cards with derived status, progress, purpose, update time and git commit, structured requirement and scenario cards, a spec History timeline of producing archived changes, a searchable archive, and read-only change tabs; requires the openspec CLI on PATH (npm install -g @fission-ai/openspec@1.15.0); specs stay in each workspace's own openspec/ root"
   }
 }

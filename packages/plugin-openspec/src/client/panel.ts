@@ -1,8 +1,14 @@
 /**
- * OpenSpec panel data: the one canonical address per view, the wire shapes the
- * Host routes return, and the read-only requests the right-sidebar tab makes.
- * No React here; the tab body lives in index.tsx.
+ * OpenSpec panel data: the one canonical address per view, the additive wire
+ * shapes the Host routes return, defensive decoders, and the read-only requests
+ * the right-sidebar tab makes. No React here; the tab body lives in index.tsx.
  */
+
+import type { RelativeTimeUnit, TagTone } from '@deepseek-ai/dsh-client-ui-primitives'
+import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
+
+/** Document-relative Host route for the change list (active rows + archive). */
+export const CHANGES_PATH = 'api/plugins/dsh-setup-openspec/changes'
 
 /** Document-relative Host route for one change's artifacts and progress. */
 export const CHANGE_PATH = 'api/plugins/dsh-setup-openspec/change'
@@ -22,6 +28,9 @@ export const ROOT_ADDRESS = 'sidebar://openspec'
 /** The root's Specs segment as a restorable resource address. */
 export const SPECS_ADDRESS = 'dsh-resource://openspec/specs'
 
+/** Composer draft for exploring a change; the user sends it. */
+export const EXPLORE_DRAFT = '/openspec-explore '
+
 /** Composer draft for starting a proposal; the user sends it. */
 export const PROPOSE_DRAFT = '/openspec-propose '
 
@@ -38,20 +47,92 @@ export interface ChangePresence {
   readonly specs: number
 }
 
-/** One row of the change list route. */
+/** Derived change status the redesigned cards render. */
+export type Phase = 'planning' | 'ready-to-apply' | 'applying' | 'complete' | 'archived'
+
+/** Legacy CLI status the picker reads; kept for an already-loaded older client. */
+export type CliStatus = 'no-tasks' | 'complete' | 'in-progress'
+
+/** Read-only git fact attached to a row or detail when git is available. */
+export interface CommitFact {
+  readonly short: string
+  readonly at: string
+  readonly subject: string
+}
+
+/** One row of the change-list route; every post-redesign field is optional. */
 export interface ChangeRow {
   readonly name: string
   readonly completedTasks: number
   readonly totalTasks: number
   readonly status: string
   readonly presence: ChangePresence
+  readonly phase?: Phase
+  readonly archived?: boolean
+  readonly archivedAt?: string | null
+  readonly summary?: string | null
+  readonly modified?: string | null
+  readonly commit?: CommitFact | null
 }
 
-/** One delta spec inside a change. */
+/** Totals for the root header, carried by the first change-list response. */
+export interface WorkspaceCounts {
+  readonly active: number
+  readonly archived: number
+  readonly capabilities: number
+}
+
+/** The additive change-list response; older hosts return only `changes`. */
+export interface ChangeListResponse {
+  readonly changes: readonly ChangeRow[]
+  readonly archived: readonly ChangeRow[]
+  readonly counts: WorkspaceCounts
+}
+
+/** One delta spec body as the legacy change route returns it. */
 export interface DeltaSpec {
   readonly capability: string
   readonly body: string
   readonly modified: string
+}
+
+/** One structured requirement from the CLI's `show --json` output. */
+export interface Requirement {
+  readonly name: string
+  readonly text: string
+  readonly scenarios: readonly RequirementScenario[]
+}
+
+/** One scenario: its name and the WHEN/THEN bullet lines verbatim. */
+export interface RequirementScenario {
+  readonly name: string
+  readonly rawText: string
+}
+
+/** The operation a delta spec applies to its capability spec. */
+export type DeltaOperation = 'ADDED' | 'MODIFIED' | 'REMOVED' | 'RENAMED'
+
+/** One capability delta inside a change. */
+export interface Delta {
+  readonly capability: string
+  readonly operation: DeltaOperation
+  readonly requirements: readonly Requirement[]
+  readonly rename?: { readonly from: string; readonly to: string }
+}
+
+/** One archived change that produced an accepted capability. */
+export interface HistoryEntry {
+  readonly name: string
+  readonly date: string
+  readonly completedTasks: number
+  readonly totalTasks: number
+  readonly commit: CommitFact | null
+}
+
+/** One task file the checklist parses, workspace-relative POSIX path. */
+export interface TaskFile {
+  readonly path: string
+  readonly body: string
 }
 
 /** One change's artifact bodies, delta specs, and progress. */
@@ -67,12 +148,24 @@ export interface ChangeDetail {
   }
   readonly specs: readonly DeltaSpec[]
   readonly modified: string | null
+  readonly presence?: ChangePresence
+  readonly phase?: Phase
+  readonly archived?: boolean
+  readonly archivedAt?: string | null
+  readonly summary?: string | null
+  readonly commit?: CommitFact | null
+  readonly deltas?: readonly Delta[]
+  readonly taskFiles?: readonly TaskFile[]
 }
 
 /** One row of the capability inventory. */
 export interface CapabilitySummary {
   readonly id: string
   readonly requirementCount: number
+  readonly purpose?: string
+  readonly modified?: string | null
+  readonly lastChange?: HistoryEntry | null
+  readonly commit?: CommitFact | null
 }
 
 /** One accepted capability spec. */
@@ -81,20 +174,30 @@ export interface CapabilityDetail {
   readonly requirementCount: number
   readonly body: string
   readonly modified: string
+  readonly purpose?: string
+  readonly requirements?: readonly Requirement[]
+  readonly history?: readonly HistoryEntry[]
+  readonly commit?: CommitFact | null
 }
 
 /** Where one address points; exactly four shapes exist. */
 export type OpenSpecTarget =
   | { readonly view: 'root'; readonly segment: 'changes' | 'specs' }
-  | { readonly view: 'change'; readonly name: string }
+  | { readonly view: 'change'; readonly name: string; readonly archived?: true }
   | { readonly view: 'capability'; readonly id: string }
 
 const CHANGE_SEGMENT = 'dsh-resource://openspec/change/'
+const ARCHIVED_CHANGE_SEGMENT = 'dsh-resource://openspec/archive-change/'
 const CAPABILITY_SEGMENT = 'dsh-resource://openspec/spec/'
 
-/** The one canonical address for a change; artifact selection is tab state. */
+/** The one canonical address for an active change; artifact selection is tab state. */
 export function changeAddress(name: string): string {
   return `${CHANGE_SEGMENT}${encodeURIComponent(name)}`
+}
+
+/** The one canonical address for an archived change; never the active address. */
+export function archivedChangeAddress(name: string): string {
+  return `${ARCHIVED_CHANGE_SEGMENT}${encodeURIComponent(name)}`
 }
 
 /** The one canonical address for a capability. */
@@ -116,10 +219,12 @@ function singleSegment(address: string, prefix: string): string | undefined {
   }
 }
 
-/** Parse exactly the four documented shapes; reject everything else. */
+/** Parse exactly the documented shapes; reject everything else. */
 export function openSpecTarget(address: string): OpenSpecTarget | undefined {
   if (address === ROOT_ADDRESS) return { view: 'root', segment: 'changes' }
   if (address === SPECS_ADDRESS) return { view: 'root', segment: 'specs' }
+  const archivedName = singleSegment(address, ARCHIVED_CHANGE_SEGMENT)
+  if (archivedName !== undefined) return { view: 'change', name: archivedName, archived: true }
   const name = singleSegment(address, CHANGE_SEGMENT)
   if (name !== undefined) return { view: 'change', name }
   const id = singleSegment(address, CAPABILITY_SEGMENT)
@@ -179,25 +284,92 @@ export function changeWatchPaths(name: string, capabilities: readonly string[]):
   ]
 }
 
-/**
- * "Updated HH:MM" today and "Updated YYYY-MM-DD HH:MM" otherwise, in local
- * time. A missing or unreadable timestamp renders nothing.
- */
-export function updatedLabel(modified: string | null, now: Date = new Date()): string | null {
-  if (modified === null) return null
-  const date = new Date(modified)
+/** Derived status of one row; an explicit host `phase` wins. */
+export function derivePhase(row: {
+  readonly status?: string
+  readonly completedTasks?: number
+  readonly totalTasks?: number
+  readonly archived?: boolean
+}): Phase {
+  if (row.archived === true) return 'archived'
+  if (row.status === 'no-tasks') return 'planning'
+  if (row.status === 'complete') return 'complete'
+  const total = row.totalTasks ?? 0
+  if (total <= 0) return 'planning'
+  const done = Math.min(Math.max(row.completedTasks ?? 0, 0), total)
+  if (done >= total) return 'complete'
+  if (done === 0) return 'ready-to-apply'
+  return 'applying'
+}
+
+/** The phase a row renders: the host's field when present, otherwise derived. */
+export function phaseOf(row: ChangeRow | ChangeDetail): Phase {
+  return row.phase ?? derivePhase(row)
+}
+
+/** The semantic tag tone for one phase; the same status always gets the same tone. */
+export function phaseTone(phase: Phase): TagTone {
+  if (phase === 'planning') return 'warning'
+  if (phase === 'complete') return 'success'
+  if (phase === 'archived') return 'quiet'
+  return 'info'
+}
+
+/** The state dot paired with a phase tag. */
+export function phaseDot(phase: Phase): 'done' | 'warning' | 'ongoing' | 'idle' {
+  if (phase === 'planning') return 'warning'
+  if (phase === 'complete') return 'done'
+  if (phase === 'archived') return 'idle'
+  return 'ongoing'
+}
+
+/** Relative-time wording of a last-modified fact, e.g. `2h ago`. */
+export function relativeLabel(
+  modified: string | null | undefined,
+  now: Date = new Date(),
+): string | null {
+  if (modified === null || modified === undefined) return null
+  const at = new Date(modified).getTime()
+  if (Number.isNaN(at)) return null
+  const { unit, n } = primitives.relativeTime(at, now.getTime())
+  if (unit === 'now') return 'just now'
+  const suffix: Record<Exclude<RelativeTimeUnit, 'now'>, string> = {
+    minutes: 'm',
+    hours: 'h',
+    days: 'd',
+    months: 'mo',
+    years: 'y',
+  }
+  return `${String(n)}${suffix[unit]} ago`
+}
+
+/** The `YYYY-MM-DD` date of an ISO timestamp or archive-date prefix, or null. */
+export function isoDate(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const direct = /^(\d{4}-\d{2}-\d{2})/.exec(value)
+  if (direct?.[1] !== undefined) return direct[1]
+  const date = new Date(value)
   if (Number.isNaN(date.getTime())) return null
-  const time = `${two(date.getHours())}:${two(date.getMinutes())}`
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  if (sameDay) return `Updated ${time}`
-  return `Updated ${String(date.getFullYear())}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${time}`
+  return `${String(date.getFullYear())}-${two(date.getMonth() + 1)}-${two(date.getDate())}`
 }
 
 function two(value: number): string {
   return String(value).padStart(2, '0')
+}
+
+/** Trim a summary; an absent or blank value renders nothing. */
+export function summaryText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+/** Case-insensitive in-memory search across the given values; blank matches all. */
+export function matchesQuery(
+  query: string,
+  ...values: readonly (string | null | undefined)[]
+): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return true
+  return values.some((value) => typeof value === 'string' && value.toLowerCase().includes(needle))
 }
 
 /** Unfinished changes first, stable within each group. */
@@ -205,6 +377,147 @@ export function sortChanges(rows: readonly ChangeRow[]): ChangeRow[] {
   return [...rows].sort(
     (left, right) => Number(left.status === 'complete') - Number(right.status === 'complete'),
   )
+}
+
+/** Archived changes newest first by archive date, stable for missing dates. */
+export function sortArchived(rows: readonly ChangeRow[]): ChangeRow[] {
+  return [...rows].sort((left, right) =>
+    (right.archivedAt ?? '').localeCompare(left.archivedAt ?? ''),
+  )
+}
+
+/** History newest first by archive date, stable for missing dates. */
+export function sortHistory(entries: readonly HistoryEntry[]): HistoryEntry[] {
+  return [...entries].sort((left, right) => right.date.localeCompare(left.date))
+}
+
+/** One parsed task line: its checkbox state and verbatim description. */
+export interface TaskLine {
+  readonly done: boolean
+  readonly description: string
+}
+
+/**
+ * The pinned OpenSpec CLI's exact task-line grammar, ported verbatim from
+ * `@fission-ai/openspec@1.15.0` `dist/utils/task-progress.js`: any CommonMark
+ * list marker, optional leading whitespace, a one-token checkbox whose marker
+ * may be blank (`[]`, `[~]`, `[ x ]`), only `x`/`X` counts done, and a
+ * single-token label followed by `(` or `[` is a link bullet, not a task.
+ */
+export const TASK_LINE_PATTERN =
+  /^\s*(?:[-*+]|\d{1,9}[.)])\s*\[(?:\s*([^\]\s]?)\s*\](?![([])|\s+\])\s*(.*)/
+
+/** Parse every task line in document order. */
+export function parseTaskLines(content: string): TaskLine[] {
+  const tasks: TaskLine[] = []
+  for (const line of content.split('\n')) {
+    const match = TASK_LINE_PATTERN.exec(line)
+    if (match === null) continue
+    tasks.push({
+      done: (match[1] ?? '').toLowerCase() === 'x',
+      description: (match[2] ?? '').trim(),
+    })
+  }
+  return tasks
+}
+
+/** Tasks grouped by the file's `##` headings. */
+export interface TaskGroup {
+  readonly title: string
+  readonly tasks: readonly TaskLine[]
+}
+
+/** Split a tasks file into its `##` sections; lines before one form an untitled group. */
+export function parseTaskGroups(content: string): TaskGroup[] {
+  const groups: Array<{ title: string; tasks: TaskLine[] }> = []
+  let current: { title: string; tasks: TaskLine[] } | undefined
+  const open = (title: string): { title: string; tasks: TaskLine[] } => {
+    const group = { title, tasks: [] }
+    groups.push(group)
+    return group
+  }
+  for (const line of content.split('\n')) {
+    const heading = /^##\s+(.+)$/.exec(line)
+    if (heading !== null) {
+      current = open((heading[1] ?? '').trim())
+      continue
+    }
+    const match = TASK_LINE_PATTERN.exec(line)
+    if (match === null) continue
+    if (current === undefined) current = open('')
+    current.tasks.push({
+      done: (match[1] ?? '').toLowerCase() === 'x',
+      description: (match[2] ?? '').trim(),
+    })
+  }
+  return groups
+}
+
+/** The root's three segments, in display order. */
+export type RootSegment = 'changes' | 'specs' | 'archive'
+
+/** Segment order in the root view. */
+export const ROOT_SEGMENTS: readonly RootSegment[] = ['changes', 'specs', 'archive']
+
+/** Storage the remembered segment needs; `sessionStorage` satisfies it. */
+export interface SegmentStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+/** Namespaced, session-scoped key of the remembered root segment. */
+export function segmentStorageKey(sessionId: string): string {
+  return `dsh-setup-openspec-panel.root-segment.${sessionId}`
+}
+
+/** Whether a stored value is a known segment. */
+export function isRootSegment(value: unknown): value is RootSegment {
+  return value === 'changes' || value === 'specs' || value === 'archive'
+}
+
+/** Read the remembered segment; an absent, unknown, or unreadable value is undefined. */
+export function readSegment(
+  storage: SegmentStorage | undefined,
+  sessionId: string,
+): RootSegment | undefined {
+  if (storage === undefined) return undefined
+  try {
+    const value = storage.getItem(segmentStorageKey(sessionId))
+    return isRootSegment(value) ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Remember a segment for this session; storage failures are silent. */
+export function writeSegment(
+  storage: SegmentStorage | undefined,
+  sessionId: string,
+  segment: RootSegment,
+): void {
+  if (storage === undefined) return
+  try {
+    storage.setItem(segmentStorageKey(sessionId), segment)
+  } catch {
+    // Private modes and blocked storage forget the segment; the address wins.
+  }
+}
+
+/** The segment a root body mounts on: explicit Specs wins, else remembered, else Changes. */
+export function initialRootSegment(
+  explicit: 'changes' | 'specs',
+  stored: RootSegment | undefined,
+): RootSegment {
+  return explicit === 'specs' ? 'specs' : (stored ?? 'changes')
+}
+
+/** The browser's sessionStorage, or undefined when the host blocks it. */
+export function defaultSegmentStorage(): SegmentStorage | undefined {
+  try {
+    return typeof globalThis.sessionStorage === 'undefined' ? undefined : globalThis.sessionStorage
+  } catch {
+    return undefined
+  }
 }
 
 /** One artifact segment in a change tab. */
@@ -215,7 +528,16 @@ export const ARTIFACT_KINDS: readonly ArtifactKind[] = ['proposal', 'design', 's
 
 /** Whether the change carries this artifact kind. */
 export function hasArtifact(change: ChangeDetail, kind: ArtifactKind): boolean {
-  return kind === 'specs' ? change.specs.length > 0 : change.artifacts[kind] !== null
+  if (kind === 'specs') return (change.deltas?.length ?? 0) > 0 || change.specs.length > 0
+  // Archived changes may carry only nested tasks/**/*.md files.
+  if (kind === 'tasks')
+    return change.artifacts.tasks !== null || (change.taskFiles?.length ?? 0) > 0
+  return change.artifacts[kind] !== null
+}
+
+/** Distinct capabilities a delta list touches, in order. */
+export function deltaCapabilities(deltas: readonly Delta[]): string[] {
+  return [...new Set(deltas.map((delta) => delta.capability))]
 }
 
 /** The first artifact the change carries; proposal when it carries none. */
@@ -234,6 +556,300 @@ export const LOADING = { phase: 'loading' } as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function integer(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function decodePresence(value: unknown): ChangePresence {
+  if (!isRecord(value)) return { proposal: false, design: false, tasks: false, specs: 0 }
+  return {
+    proposal: value.proposal === true,
+    design: value.design === true,
+    tasks: value.tasks === true,
+    specs: integer(value.specs) ?? 0,
+  }
+}
+
+function decodeCommit(value: unknown): CommitFact | null {
+  if (!isRecord(value) || typeof value.short !== 'string' || value.short.trim() === '') return null
+  return {
+    short: value.short,
+    at: typeof value.at === 'string' ? value.at : '',
+    subject: typeof value.subject === 'string' ? value.subject : '',
+  }
+}
+
+function decodePhase(value: unknown): Phase | undefined {
+  return value === 'planning' ||
+    value === 'ready-to-apply' ||
+    value === 'applying' ||
+    value === 'complete' ||
+    value === 'archived'
+    ? value
+    : undefined
+}
+
+function decodeChangeRow(value: unknown): ChangeRow | undefined {
+  if (!isRecord(value) || typeof value.name !== 'string' || value.name.trim() === '')
+    return undefined
+  const completedTasks = integer(value.completedTasks) ?? 0
+  const totalTasks = integer(value.totalTasks) ?? 0
+  const phase = decodePhase(value.phase)
+  return {
+    name: value.name,
+    completedTasks,
+    totalTasks,
+    status: typeof value.status === 'string' ? value.status : 'no-tasks',
+    presence: decodePresence(value.presence),
+    ...(phase === undefined ? {} : { phase }),
+    ...(typeof value.archived === 'boolean' ? { archived: value.archived } : {}),
+    ...(value.archivedAt === undefined ? {} : { archivedAt: stringOrNull(value.archivedAt) }),
+    ...(value.summary === undefined ? {} : { summary: summaryText(value.summary) }),
+    ...(value.modified === undefined ? {} : { modified: stringOrNull(value.modified) }),
+    ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
+  }
+}
+
+function decodeChangeRows(value: unknown): ChangeRow[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const rows: ChangeRow[] = []
+  for (const entry of value) {
+    const row = decodeChangeRow(entry)
+    if (row === undefined) return undefined
+    rows.push(row)
+  }
+  return rows
+}
+
+function decodeCounts(
+  value: unknown,
+  changes: readonly ChangeRow[],
+  archived: readonly ChangeRow[],
+): WorkspaceCounts {
+  const record = isRecord(value) ? value : undefined
+  return {
+    active: integer(record?.active) ?? changes.length,
+    archived: integer(record?.archived) ?? archived.length,
+    capabilities: integer(record?.capabilities) ?? 0,
+  }
+}
+
+function decodeChangeList(body: Record<string, unknown>): ChangeListResponse | undefined {
+  const changes = decodeChangeRows(body.changes)
+  if (changes === undefined) return undefined
+  const archived = body.archived === undefined ? [] : decodeChangeRows(body.archived)
+  if (archived === undefined) return undefined
+  return { changes, archived, counts: decodeCounts(body.counts, changes, archived) }
+}
+
+function decodeRequirementScenario(value: unknown): RequirementScenario | undefined {
+  if (!isRecord(value) || typeof value.name !== 'string') return undefined
+  return { name: value.name, rawText: typeof value.rawText === 'string' ? value.rawText : '' }
+}
+
+function decodeRequirement(value: unknown): Requirement | undefined {
+  if (!isRecord(value) || typeof value.name !== 'string') return undefined
+  const scenarios: RequirementScenario[] = []
+  if (Array.isArray(value.scenarios)) {
+    for (const entry of value.scenarios) {
+      const scenario = decodeRequirementScenario(entry)
+      if (scenario !== undefined) scenarios.push(scenario)
+    }
+  }
+  return { name: value.name, text: typeof value.text === 'string' ? value.text : '', scenarios }
+}
+
+function decodeRequirements(value: unknown): Requirement[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const requirements: Requirement[] = []
+  for (const entry of value) {
+    const requirement = decodeRequirement(entry)
+    if (requirement === undefined) return undefined
+    requirements.push(requirement)
+  }
+  return requirements
+}
+
+function decodeOperation(value: unknown): DeltaOperation | undefined {
+  return value === 'ADDED' || value === 'MODIFIED' || value === 'REMOVED' || value === 'RENAMED'
+    ? value
+    : undefined
+}
+
+function decodeRename(value: unknown): { from: string; to: string } | undefined {
+  if (!isRecord(value) || typeof value.from !== 'string' || typeof value.to !== 'string')
+    return undefined
+  return { from: value.from, to: value.to }
+}
+
+function decodeDelta(value: unknown): Delta | undefined {
+  if (!isRecord(value) || typeof value.capability !== 'string') return undefined
+  const operation = decodeOperation(value.operation)
+  if (operation === undefined) return undefined
+  const requirements = decodeRequirements(value.requirements)
+  if (requirements === undefined) return undefined
+  const rename = decodeRename(value.rename)
+  return {
+    capability: value.capability,
+    operation,
+    requirements,
+    ...(rename === undefined ? {} : { rename }),
+  }
+}
+
+function decodeDeltas(value: unknown): Delta[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const deltas: Delta[] = []
+  for (const entry of value) {
+    const delta = decodeDelta(entry)
+    if (delta === undefined) return undefined
+    deltas.push(delta)
+  }
+  return deltas
+}
+
+function decodeDeltaSpecs(value: unknown): DeltaSpec[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const specs: DeltaSpec[] = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.capability !== 'string') return undefined
+    specs.push({
+      capability: entry.capability,
+      body: typeof entry.body === 'string' ? entry.body : '',
+      modified: typeof entry.modified === 'string' ? entry.modified : '',
+    })
+  }
+  return specs
+}
+
+function decodeArtifacts(value: unknown): ChangeDetail['artifacts'] | undefined {
+  if (!isRecord(value)) return undefined
+  const field = (key: 'proposal' | 'design' | 'tasks'): string | null | undefined => {
+    const raw = value[key]
+    if (raw === undefined || raw === null) return null
+    return typeof raw === 'string' ? raw : undefined
+  }
+  const proposal = field('proposal')
+  const design = field('design')
+  const tasks = field('tasks')
+  if (proposal === undefined || design === undefined || tasks === undefined) return undefined
+  return { proposal, design, tasks }
+}
+
+function decodeTaskFiles(value: unknown): TaskFile[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const files: TaskFile[] = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.path !== 'string' || typeof entry.body !== 'string')
+      return undefined
+    files.push({ path: entry.path, body: entry.body })
+  }
+  return files
+}
+
+function decodeChangeDetail(value: unknown): ChangeDetail | undefined {
+  if (!isRecord(value) || typeof value.name !== 'string') return undefined
+  const artifacts = decodeArtifacts(value.artifacts)
+  const specs = decodeDeltaSpecs(value.specs)
+  const deltas = decodeDeltas(value.deltas)
+  const taskFiles = decodeTaskFiles(value.taskFiles)
+  if (
+    artifacts === undefined ||
+    specs === undefined ||
+    deltas === undefined ||
+    taskFiles === undefined
+  )
+    return undefined
+  const phase = decodePhase(value.phase)
+  return {
+    name: value.name,
+    status: typeof value.status === 'string' ? value.status : 'no-tasks',
+    completedTasks: integer(value.completedTasks) ?? 0,
+    totalTasks: integer(value.totalTasks) ?? 0,
+    artifacts,
+    specs,
+    modified: stringOrNull(value.modified),
+    deltas,
+    ...(taskFiles.length === 0 ? {} : { taskFiles }),
+    ...(value.presence === undefined ? {} : { presence: decodePresence(value.presence) }),
+    ...(phase === undefined ? {} : { phase }),
+    ...(typeof value.archived === 'boolean' ? { archived: value.archived } : {}),
+    ...(value.archivedAt === undefined ? {} : { archivedAt: stringOrNull(value.archivedAt) }),
+    ...(value.summary === undefined ? {} : { summary: summaryText(value.summary) }),
+    ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
+  }
+}
+
+function decodeHistoryEntry(value: unknown): HistoryEntry | undefined {
+  if (!isRecord(value) || typeof value.name !== 'string' || typeof value.date !== 'string')
+    return undefined
+  return {
+    name: value.name,
+    date: value.date,
+    completedTasks: integer(value.completedTasks) ?? 0,
+    totalTasks: integer(value.totalTasks) ?? 0,
+    commit: decodeCommit(value.commit),
+  }
+}
+
+function decodeHistory(value: unknown): HistoryEntry[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const history: HistoryEntry[] = []
+  for (const entry of value) {
+    const decoded = decodeHistoryEntry(entry)
+    if (decoded === undefined) return undefined
+    history.push(decoded)
+  }
+  return history
+}
+
+function decodeCapabilityRows(value: unknown): CapabilitySummary[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const rows: CapabilitySummary[] = []
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.id !== 'string') return undefined
+    const lastChange = decodeHistoryEntry(entry.lastChange)
+    rows.push({
+      id: entry.id,
+      requirementCount: integer(entry.requirementCount) ?? 0,
+      ...(entry.purpose === undefined ? {} : { purpose: summaryText(entry.purpose) ?? undefined }),
+      ...(entry.modified === undefined ? {} : { modified: stringOrNull(entry.modified) }),
+      ...(entry.lastChange === undefined || entry.lastChange === null ? {} : { lastChange }),
+      ...(entry.commit === undefined ? {} : { commit: decodeCommit(entry.commit) }),
+    })
+  }
+  return rows
+}
+
+function decodeCapabilityDetail(value: unknown): CapabilityDetail | undefined {
+  if (!isRecord(value) || typeof value.id !== 'string') return undefined
+  const requirements = decodeRequirements(value.requirements)
+  const history = decodeHistory(value.history)
+  if (requirements === undefined || history === undefined) return undefined
+  const capability: CapabilityDetail = {
+    id: value.id,
+    requirementCount: integer(value.requirementCount) ?? 0,
+    body: typeof value.body === 'string' ? value.body : '',
+    modified: typeof value.modified === 'string' ? value.modified : '',
+    requirements,
+    history,
+  }
+  return {
+    ...capability,
+    ...(value.purpose === undefined ? {} : { purpose: summaryText(value.purpose) ?? undefined }),
+    ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
+  }
 }
 
 /**
@@ -262,13 +878,32 @@ async function request<T>(
   return value
 }
 
-/** Read one change's artifact bodies, delta specs, and progress. */
-export async function requestChange(sessionId: string, name: string): Promise<ChangeDetail> {
+/** Read the workspace's active changes, archived changes, and header totals. */
+export async function requestChangeList(sessionId: string): Promise<ChangeListResponse> {
   return request(
-    `${CHANGE_PATH}?session=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(name)}`,
+    `${CHANGES_PATH}?session=${encodeURIComponent(sessionId)}`,
+    'The OpenSpec change list request failed',
+    'The OpenSpec change list response was not understood.',
+    decodeChangeList,
+  )
+}
+
+/**
+ * Read one change's artifact bodies, delta specs, and progress.
+ * @param archived - resolve the name against the archive family only.
+ */
+export async function requestChange(
+  sessionId: string,
+  name: string,
+  archived = false,
+): Promise<ChangeDetail> {
+  return request(
+    `${CHANGE_PATH}?session=${encodeURIComponent(sessionId)}&name=${encodeURIComponent(name)}${
+      archived ? '&archived=1' : ''
+    }`,
     'The OpenSpec change request failed',
     'The OpenSpec change response was not understood.',
-    (body) => (isRecord(body.change) ? (body.change as unknown as ChangeDetail) : undefined),
+    (body) => decodeChangeDetail(body.change),
   )
 }
 
@@ -278,10 +913,7 @@ export async function requestCapabilities(sessionId: string): Promise<Capability
     `${SPECS_PATH}?session=${encodeURIComponent(sessionId)}`,
     'The OpenSpec capability list request failed',
     'The OpenSpec capability list response was not understood.',
-    (body) =>
-      Array.isArray(body.capabilities)
-        ? (body.capabilities as unknown as CapabilitySummary[])
-        : undefined,
+    (body) => decodeCapabilityRows(body.capabilities),
   )
 }
 
@@ -291,7 +923,6 @@ export async function requestCapability(sessionId: string, id: string): Promise<
     `${SPECS_PATH}?session=${encodeURIComponent(sessionId)}&id=${encodeURIComponent(id)}`,
     'The OpenSpec capability request failed',
     'The OpenSpec capability response was not understood.',
-    (body) =>
-      isRecord(body.capability) ? (body.capability as unknown as CapabilityDetail) : undefined,
+    (body) => decodeCapabilityDetail(body.capability),
   )
 }

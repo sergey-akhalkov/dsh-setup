@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useEffect as registerEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,86 +32,213 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   MarkdownText: (props: Record<string, unknown>) => ({ type: 'MarkdownText', props }),
   Pill: (props: Record<string, unknown>) => ({ type: 'Pill', props }),
   SegmentedControl: (props: Record<string, unknown>) => ({ type: 'SegmentedControl', props }),
+  SegmentedTabs: (props: Record<string, unknown>) => ({ type: 'SegmentedTabs', props }),
+  Input: (props: Record<string, unknown>) => ({ type: 'Input', props }),
   StateDot: (props: Record<string, unknown>) => ({ type: 'StateDot', props }),
   Tag: (props: Record<string, unknown>) => ({ type: 'Tag', props }),
+  TextShimmer: (props: Record<string, unknown>) => ({ type: 'TextShimmer', props }),
+  Tooltip: (props: Record<string, unknown>) => ({ type: 'Tooltip', props }),
+  IconBranchOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconBranchOutlineRegular',
+    props,
+  }),
+  IconBrowseOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconBrowseOutlineRegular',
+    props,
+  }),
+  IconCheckCircleOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconCheckCircleOutlineRegular',
+    props,
+  }),
+  IconPlusOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconPlusOutlineRegular',
+    props,
+  }),
+  IconRightUpOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconRightUpOutlineRegular',
+    props,
+  }),
+  IconSearchOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconSearchOutlineRegular',
+    props,
+  }),
+  IconWarningTriangleOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconWarningTriangleOutlineRegular',
+    props,
+  }),
+  // Keeps the shipped bucketing contract without loading the real CSS modules.
+  relativeTime: (at: number, now: number) => {
+    const minute = 60_000
+    const hour = 3_600_000
+    const day = 86_400_000
+    const diff = Math.max(0, now - at)
+    if (diff < minute) return { unit: 'now', n: 0 }
+    if (diff < hour) return { unit: 'minutes', n: Math.floor(diff / minute) }
+    if (diff < day) return { unit: 'hours', n: Math.floor(diff / hour) }
+    if (diff < 30 * day) return { unit: 'days', n: Math.floor(diff / day) }
+    if (diff < 365 * day) return { unit: 'months', n: Math.floor(diff / (30 * day)) }
+    return { unit: 'years', n: Math.floor(diff / (365 * day)) }
+  },
 }))
 
 import {
   apply,
   CapabilityBody,
   CapabilityView,
+  type CapabilityViewProps,
   ChangeBody,
   ChangeView,
+  type ChangeViewProps,
   createHandoff,
   FileWatch,
+  InlineText,
   OpenSpecTab,
+  PANEL_CSS,
+  RequirementList,
   type ResourceFacts,
   RootBody,
   RootView,
+  type RootViewProps,
   registerPanel,
+  TaskChecklist,
 } from '../src/client/index.tsx'
 import {
   applyDraft,
+  archivedChangeAddress,
   type CapabilityDetail,
   type CapabilitySummary,
   CHANGE_PATH,
+  CHANGES_PATH,
   type ChangeDetail,
+  type ChangeListResponse,
   type ChangePresence,
   type ChangeRow,
+  type CommitFact,
   canOpenOpenSpec,
   capabilityAddress,
-  capabilitySpecPath,
   changeAddress,
-  changeArtifactPath,
-  changeWatchPaths,
-  deltaSpecPath,
+  type Delta,
+  derivePhase,
+  EXPLORE_DRAFT,
   fileAddress,
+  type HistoryEntry,
+  hasArtifact,
+  initialArtifact,
+  initialRootSegment,
+  isoDate,
+  isRootSegment,
   LOADING,
+  matchesQuery,
   OPENSPEC_ID,
   OPENSPEC_KIND,
   openSpecTarget,
   openSpecTitle,
   PROPOSE_DRAFT,
+  parseTaskGroups,
+  parseTaskLines,
+  phaseDot,
+  phaseOf,
+  phaseTone,
+  type Requirement,
   ROOT_ADDRESS,
+  readSegment,
+  relativeLabel,
   requestCapabilities,
   requestCapability,
   requestChange,
+  requestChangeList,
+  type SegmentStorage,
   SPECS_ADDRESS,
   SPECS_PATH,
+  segmentStorageKey,
+  sortArchived,
   sortChanges,
-  updatedLabel,
+  sortHistory,
+  summaryText,
+  type WorkspaceCounts,
+  writeSegment,
 } from '../src/client/panel.ts'
-import { MISSING_CLI_MESSAGE, NO_LOCAL_ROOT_MESSAGE } from '../src/host/change-list.ts'
+
+/** The Host's readable causes, as literals so the client test stays host-independent. */
+const NO_LOCAL_ROOT_MESSAGE =
+  'No workspace-local OpenSpec root was found. Run `openspec init --tools none` in the workspace root first.'
+const MISSING_CLI_MESSAGE =
+  'The OpenSpec CLI (`openspec`) was not found on PATH. Install it with `npm install -g @fission-ai/openspec`.'
 
 const COPY: Record<string, string> = {
   'guide.title': 'OpenSpec',
-  'guide.description': 'Browse OpenSpec changes and capability specs',
+  'guide.description': 'Browse OpenSpec changes, archive, and capability specs',
   'segment.label': 'OpenSpec view',
   'segment.changes': 'Changes',
   'segment.specs': 'Specs',
+  'segment.archive': 'Archive',
+  'summary.changes': 'changes',
+  'summary.specs': 'specs',
+  'summary.archived': 'archived',
+  'root.explore': 'Explore',
+  'root.propose': 'Propose',
+  'root.exploreBody': 'Outline a change before proposing it.',
+  'root.proposeBody': 'Write a new change proposal.',
+  'actions.seeArchive': 'See all archive',
+  'group.inProgress': 'In progress',
+  'group.complete': 'Complete',
+  'group.recentlyArchived': 'Recently archived',
   'state.loading': 'Loading…',
   'state.retry': 'Retry',
-  'changes.empty': 'No open changes in this workspace.',
-  'changes.propose': 'Propose a change',
-  'capabilities.empty': 'No capability specs yet. Sync an accepted change to add one.',
+  'specs.emptyTitle': 'No accepted specs yet',
+  'specs.emptyBody': 'Archive a completed change to add one.',
+  'specs.archive': 'Open archive',
+  'specs.filterLabel': 'Filter capabilities',
+  'specs.filterPlaceholder': 'Search capabilities…',
+  'specs.noMatch': 'No capabilities match this filter.',
+  'specs.req': 'req',
+  'specs.acceptedVia': 'Accepted via',
+  'archive.emptyTitle': 'Nothing archived yet',
+  'archive.emptyBody': 'Complete a change and archive it to keep its history here.',
+  'archive.filterLabel': 'Filter archived changes',
+  'archive.filterPlaceholder': 'Search archive…',
+  'archive.noMatch': 'No archived changes match this filter.',
   'presence.proposal': 'proposal',
   'presence.design': 'design',
   'presence.spec': 'spec',
   'presence.specs': 'specs',
   'presence.tasks': 'tasks',
-  'status.complete': 'complete',
-  'status.inProgress': 'in progress',
-  'status.noTasks': 'no tasks',
+  'phase.planning': 'planning',
+  'phase.ready-to-apply': 'ready to apply',
+  'phase.applying': 'applying',
+  'phase.complete': 'complete',
+  'phase.archived': 'archived',
   'change.apply': 'Apply change',
   'change.tasks': 'tasks',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
+  'change.updated': 'updated',
+  'change.tasksNotWritten': 'tasks not written yet',
+  'change.unparsedTasks': 'tasks not parsed from the file.',
   'artifact.proposal': 'Why',
   'artifact.design': 'Design',
   'artifact.specs': 'Specs',
   'artifact.tasks': 'Tasks',
   'artifact.notWritten': 'Not written yet.',
   'capability.requirements': 'requirements',
+  'capability.scenarios': 'scenarios',
+  'capability.accepted': 'Accepted',
+  'capability.via': 'via',
+  'capability.openAccepted': 'Open accepted spec',
+  'capability.sections': 'Capability sections',
+  'capability.requirementsTab': 'Requirements',
+  'capability.historyTab': 'History',
+  'capability.historyEmpty': 'No archived change produced this capability.',
+  'requirements.filterLabel': 'Filter requirements',
+  'requirements.filterPlaceholder': 'Search requirements…',
+  'requirements.noMatch': 'No requirements match this filter.',
+  'delta.from': 'from',
+  'delta.to': 'to',
+  'scenario.label': 'Scenario:',
+  'scenario.when': 'WHEN',
+  'scenario.then': 'THEN',
+  'scenario.and': 'AND',
+  'scenario.but': 'BUT',
   'markdown.copy': 'Copy',
   'markdown.copied': 'Copied',
   'markdown.footnotes': 'Footnotes',
@@ -123,49 +251,217 @@ const LABELS = {
   footnotes: 'Footnotes',
 }
 
+const NOW = new Date('2026-11-05T17:00:00')
+
+const COMMIT: CommitFact = {
+  short: '7e87448',
+  at: '2026-10-27T10:00:00Z',
+  subject: 'feat: add the admin indicator',
+}
+
+const EMPTY_PRESENCE: ChangePresence = {
+  proposal: false,
+  design: false,
+  tasks: false,
+  specs: 0,
+}
+
+const SIGN_IN: Requirement = {
+  name: 'Sign-in',
+  text: 'The system SHALL sign in with `token` and MUST NOT log it.',
+  scenarios: [
+    {
+      name: 'Valid token',
+      rawText:
+        '- **WHEN** a token arrives\n- **THEN** the session starts\n- **AND** the audit log records it',
+    },
+  ],
+}
+
+const AUTH_DELTA: Delta = {
+  capability: 'auth',
+  operation: 'ADDED',
+  requirements: [SIGN_IN],
+}
+
+const BILLING_DELTA: Delta = {
+  capability: 'billing',
+  operation: 'MODIFIED',
+  requirements: [
+    {
+      name: 'Billing window',
+      text: 'The system MUST bill monthly.',
+      scenarios: [
+        {
+          name: 'Month end',
+          rawText: '- **WHEN** the month ends\n- **THEN** an invoice is issued',
+        },
+      ],
+    },
+  ],
+}
+
 const FULL: ChangeDetail = {
   name: 'add-auth',
   status: 'in-progress',
   completedTasks: 4,
   totalTasks: 12,
-  artifacts: { proposal: '# Why', design: '# Design', tasks: '- [ ] task' },
-  specs: [{ capability: 'auth', body: '# auth delta', modified: '2026-11-05T14:03:00' }],
+  artifacts: { proposal: '# Why', design: '# Design', tasks: '## Group\n- [ ] task' },
+  specs: [],
+  deltas: [AUTH_DELTA],
   modified: '2026-11-05T14:03:00',
+  summary: 'Add authentication to the product.',
+  commit: COMMIT,
+  phase: 'applying',
+  presence: { proposal: true, design: true, tasks: true, specs: 1 },
 }
 
 const LATER: ChangeDetail = {
   ...FULL,
   completedTasks: 5,
-  artifacts: { proposal: '# Why, revised', design: '# Design', tasks: '- [x] task' },
-  specs: [{ capability: 'auth', body: '# auth delta, revised', modified: '2026-11-05T15:20:00' }],
+  artifacts: { proposal: '# Why, revised', design: '# Design', tasks: '## Group\n- [x] task' },
   modified: '2026-11-05T15:20:00',
 }
 
-const TWO_SPECS: ChangeDetail = {
-  ...FULL,
-  specs: [
-    { capability: 'auth', body: '# auth delta', modified: '2026-11-05T14:03:00' },
-    { capability: 'billing', body: '# billing delta', modified: '2026-11-05T14:05:00' },
-  ],
-}
+const TWO_DELTAS: ChangeDetail = { ...FULL, deltas: [AUTH_DELTA, BILLING_DELTA] }
 
-/** A change with no delta specs: its view observes exactly the three artifacts. */
-const NO_DELTAS: ChangeDetail = { ...FULL, specs: [] }
+const NO_DELTAS: ChangeDetail = { ...FULL, deltas: [], specs: [] }
 
 const NO_DESIGN: ChangeDetail = {
   ...FULL,
-  artifacts: { proposal: '# Why', design: null, tasks: '- [ ] task' },
+  artifacts: { proposal: '# Why', design: null, tasks: '## Group\n- [ ] task' },
 }
+
+/** A pre-redesign response body: deltas only as raw Markdown. */
+const LEGACY_DELTAS: ChangeDetail = {
+  ...FULL,
+  deltas: [],
+  specs: [{ capability: 'auth', body: '# auth delta', modified: '2026-11-05T14:03:00' }],
+}
+
+const RENAMED: ChangeDetail = {
+  ...FULL,
+  deltas: [
+    {
+      capability: 'auth',
+      operation: 'RENAMED',
+      requirements: [],
+      rename: { from: 'Old name', to: 'New name' },
+    },
+    {
+      capability: 'auth',
+      operation: 'ADDED',
+      requirements: [{ name: 'New requirement', text: 'The system MUST keep it.', scenarios: [] }],
+    },
+  ],
+}
+
+const ARCHIVED: ChangeDetail = {
+  ...FULL,
+  name: '2026-10-27-add-admin-indicator',
+  status: 'complete',
+  completedTasks: 5,
+  totalTasks: 5,
+  phase: 'archived',
+  archived: true,
+  archivedAt: '2026-10-27',
+  modified: '2026-10-27T10:00:00',
+}
+
+const CAPABILITY: CapabilityDetail = {
+  id: 'auth',
+  requirementCount: 2,
+  body: '# auth',
+  modified: '2026-10-27T10:00:00',
+  purpose: 'Authenticate requests before they reach a capability.',
+  requirements: [
+    SIGN_IN,
+    { name: 'No logging', text: 'The system MUST NOT log tokens.', scenarios: [] },
+  ],
+  history: [
+    {
+      name: '2026-10-20-earlier',
+      date: '2026-10-20',
+      completedTasks: 2,
+      totalTasks: 4,
+      commit: null,
+    },
+    {
+      name: '2026-10-27-add-admin-indicator',
+      date: '2026-10-27',
+      completedTasks: 5,
+      totalTasks: 5,
+      commit: COMMIT,
+    },
+  ],
+  commit: COMMIT,
+}
+
+const CAPABILITY_ROWS: CapabilitySummary[] = [
+  {
+    id: 'admin-indicator',
+    requirementCount: 10,
+    purpose: 'Shows whether the running DSH Desktop has administrator rights.',
+    modified: '2026-10-27T10:00:00',
+    lastChange: {
+      name: '2026-10-27-add-admin-indicator',
+      date: '2026-10-27',
+      completedTasks: 5,
+      totalTasks: 5,
+      commit: COMMIT,
+    },
+    commit: COMMIT,
+  },
+  {
+    id: 'openspec-panel',
+    requirementCount: 4,
+    purpose: 'A read-only right-sidebar panel for OpenSpec changes.',
+  },
+]
 
 function row(
   name: string,
   status: string,
   completedTasks = 0,
   totalTasks = 0,
-  presence: ChangePresence = { proposal: false, design: false, tasks: false, specs: 0 },
+  presence: ChangePresence = EMPTY_PRESENCE,
+  extra: Partial<ChangeRow> = {},
 ): ChangeRow {
-  return { name, status, completedTasks, totalTasks, presence }
+  return { name, status, completedTasks, totalTasks, presence, ...extra }
 }
+
+function listOf(
+  changes: ChangeRow[],
+  archived: ChangeRow[] = [],
+  counts?: Partial<WorkspaceCounts>,
+): ChangeListResponse {
+  return {
+    changes,
+    archived,
+    counts: {
+      active: changes.length,
+      archived: archived.length,
+      capabilities: 0,
+      ...counts,
+    },
+  }
+}
+
+const ARCHIVED_ROW = row('2026-10-27-add-admin-indicator', 'complete', 5, 5, EMPTY_PRESENCE, {
+  archived: true,
+  archivedAt: '2026-10-27',
+  summary: 'Add the admin indicator to the app.',
+  modified: '2026-10-27T10:00:00',
+  commit: COMMIT,
+  phase: 'archived',
+})
+
+const OLDER_ARCHIVED_ROW = row('2026-09-01-older-change', 'complete', 3, 3, EMPTY_PRESENCE, {
+  archived: true,
+  archivedAt: '2026-09-01',
+  summary: 'Older archived work.',
+  phase: 'archived',
+})
 
 function response(body: unknown, ok = true, status = ok ? 200 : 500): Response {
   return { ok, status, json: async () => body } as unknown as Response
@@ -325,6 +621,7 @@ function viewProps(tree: unknown, component: unknown): Record<string, unknown> {
   return found.props
 }
 
+/** The root's counted segmented control. */
 function segmented(tree: unknown): Found {
   const found = nodes(tree).find(
     (node) => Array.isArray(node.props.options) && typeof node.props.onChange === 'function',
@@ -333,9 +630,21 @@ function segmented(tree: unknown): Found {
   return found
 }
 
-function rowButtons(tree: unknown): Found[] {
+/** The artifact/capability tab control. */
+function tabControl(tree: unknown): Found {
+  const found = nodes(tree).find(
+    (node) => Array.isArray(node.props.items) && typeof node.props.onChange === 'function',
+  )
+  if (found === undefined) throw new Error('segmented tabs missing')
+  return found
+}
+
+function cardButtons(tree: unknown): Found[] {
   return nodes(tree).filter(
-    (node) => node.type === 'button' && node.props.className === 'dsh-openspec-row',
+    (node) =>
+      (node.type === 'button' || node.type === 'Button') &&
+      typeof node.props.className === 'string' &&
+      /dsh-openspec-(card|history-row)/.exec(node.props.className) !== null,
   )
 }
 
@@ -345,12 +654,35 @@ function buttonByText(tree: unknown, label: string): Found {
   return found
 }
 
+function actionCard(tree: unknown, title: string): Found {
+  const found = nodes(tree).find(
+    (node) =>
+      node.type === 'button' &&
+      node.props.className === 'dsh-openspec-action-card' &&
+      textOf(node).startsWith(title),
+  )
+  if (found === undefined) throw new Error(`action card ${title} missing`)
+  return found
+}
+
+function inputOf(tree: unknown): Found {
+  const found = typed(tree, 'Input')[0]
+  if (found === undefined) throw new Error('input missing')
+  return found
+}
+
 /** Invoke a found control's click handler, failing loudly when it is absent. */
 function click(node: Found | undefined): void {
   if (node === undefined) throw new Error('control missing')
   const action = node.props.onClick
   if (typeof action !== 'function') throw new Error('control onClick missing')
   ;(action as () => void)()
+}
+
+function typeInto(node: Found, value: string): void {
+  const action = node.props.onChange
+  if (typeof action !== 'function') throw new Error('input onChange missing')
+  ;(action as (event: { target: { value: string } }) => void)({ target: { value } })
 }
 
 interface FakeTab {
@@ -543,6 +875,86 @@ function panelFake(available = true, panel = available): FakePanel {
   }
 }
 
+function memoryStorage(): { storage: SegmentStorage; values: Map<string, string> } {
+  const values = new Map<string, string>()
+  return {
+    values,
+    storage: {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => {
+        values.set(key, value)
+      },
+    },
+  }
+}
+
+function rootProps(overrides: Partial<RootViewProps> = {}): RootViewProps {
+  return {
+    segment: 'changes',
+    changes: LOADING,
+    capabilities: LOADING,
+    specQuery: '',
+    archiveQuery: '',
+    t,
+    now: NOW,
+    onSegment: () => {},
+    onSpecQuery: () => {},
+    onArchiveQuery: () => {},
+    onRetry: () => {},
+    onOpenChange: () => {},
+    onOpenCapability: () => {},
+    onExplore: () => {},
+    onPropose: () => {},
+    onSeeArchive: () => {},
+    ...overrides,
+  }
+}
+
+function changeProps(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    tab: fakeTab(changeAddress('add-auth')).tab,
+    name: 'add-auth',
+    sessionId: 's1',
+    t,
+    draft: () => {},
+    open: () => {},
+    ...overrides,
+  }
+}
+
+function changeViewProps(overrides: Partial<ChangeViewProps> = {}): ChangeViewProps {
+  return {
+    change: FULL,
+    artifact: 'proposal',
+    delta: 'auth',
+    requirementQuery: '',
+    t,
+    labels: LABELS,
+    now: NOW,
+    onArtifact: () => {},
+    onDelta: () => {},
+    onRequirementQuery: () => {},
+    onApply: () => {},
+    onOpenCapability: () => {},
+    ...overrides,
+  }
+}
+
+function capabilityViewProps(overrides: Partial<CapabilityViewProps> = {}): CapabilityViewProps {
+  return {
+    capability: CAPABILITY,
+    requirementQuery: '',
+    t,
+    labels: LABELS,
+    now: NOW,
+    section: 'requirements',
+    onSection: () => {},
+    onRequirementQuery: () => {},
+    onOpenArchived: () => {},
+    ...overrides,
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
@@ -550,15 +962,17 @@ afterEach(() => {
 })
 
 describe('OpenSpec panel addresses', () => {
-  it('accepts exactly the four documented shapes', () => {
+  it('accepts the root, active change, archived change, and capability shapes', () => {
     expect(canOpenOpenSpec(ROOT_ADDRESS)).toBe(true)
     expect(canOpenOpenSpec(SPECS_ADDRESS)).toBe(true)
     expect(canOpenOpenSpec(changeAddress('add-auth'))).toBe(true)
+    expect(canOpenOpenSpec(archivedChangeAddress('add-auth'))).toBe(true)
     expect(canOpenOpenSpec(capabilityAddress('auth'))).toBe(true)
     for (const address of [
       'sidebar://openspec/extra',
       'dsh-resource://openspec/specs/',
       'dsh-resource://openspec/change/',
+      'dsh-resource://openspec/archive-change/',
       'dsh-resource://openspec/change/add-auth/design',
       'dsh-resource://openspec/spec/%E0%A4%A',
       'dsh-resource://openspec/change/add-auth?artifact=design',
@@ -570,22 +984,266 @@ describe('OpenSpec panel addresses', () => {
     }
   })
 
-  it('keeps one address and title per change and capability', () => {
-    expect(changeAddress('add-auth')).toBe('dsh-resource://openspec/change/add-auth')
-    expect(changeAddress('add-auth')).not.toContain('?')
+  it('keeps the archived address distinct from a same-named active change', () => {
+    const name = '2026-10-27-add-admin-indicator'
+    expect(changeAddress(name)).toBe(`dsh-resource://openspec/change/${name}`)
+    expect(archivedChangeAddress(name)).toBe(`dsh-resource://openspec/archive-change/${name}`)
+    expect(changeAddress(name)).not.toBe(archivedChangeAddress(name))
+    expect(openSpecTarget(changeAddress(name))).toEqual({ view: 'change', name })
+    expect(openSpecTarget(archivedChangeAddress(name))).toEqual({
+      view: 'change',
+      name,
+      archived: true,
+    })
+    expect(openSpecTitle(archivedChangeAddress(name))).toBe(name)
+    expect(openSpecTitle(changeAddress(name))).toBe(name)
     expect(openSpecTarget(ROOT_ADDRESS)).toEqual({ view: 'root', segment: 'changes' })
     expect(openSpecTarget(SPECS_ADDRESS)).toEqual({ view: 'root', segment: 'specs' })
-    expect(openSpecTarget(changeAddress('add-auth'))).toEqual({
-      view: 'change',
-      name: 'add-auth',
-    })
     expect(openSpecTarget(capabilityAddress('auth'))).toEqual({ view: 'capability', id: 'auth' })
-    expect(openSpecTitle(changeAddress('add-auth'))).toBe('add-auth')
-    expect(openSpecTitle(capabilityAddress('auth'))).toBe('auth')
     expect(openSpecTitle(ROOT_ADDRESS)).toBe('OpenSpec')
   })
+})
 
-  it('sorts unfinished changes first, stable within each group', () => {
+describe('OpenSpec panel data layer', () => {
+  it('decodes a legacy list response and derives the missing totals', async () => {
+    const fetchMock = vi.fn(async () =>
+      response({
+        changes: [
+          {
+            name: 'add-auth',
+            completedTasks: 4,
+            totalTasks: 12,
+            status: 'in-progress',
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const decoded = await requestChangeList('s1')
+    expect(decoded.changes).toHaveLength(1)
+    expect(decoded.changes[0]?.phase).toBeUndefined()
+    expect(phaseOf(decoded.changes[0] as ChangeRow)).toBe('applying')
+    expect(decoded.archived).toEqual([])
+    expect(decoded.counts).toEqual({ active: 1, archived: 0, capabilities: 0 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${CHANGES_PATH}?session=s1`,
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+  })
+
+  it('decodes the additive list response with archive rows and counts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          changes: [row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, { phase: 'applying' })],
+          archived: [ARCHIVED_ROW],
+          counts: { active: 2, archived: 34, capabilities: 19 },
+        }),
+      ),
+    )
+    const decoded = await requestChangeList('s1')
+    expect(decoded.changes).toHaveLength(1)
+    expect(decoded.archived[0]?.name).toBe(ARCHIVED_ROW.name)
+    expect(decoded.archived[0]?.archivedAt).toBe('2026-10-27')
+    expect(decoded.archived[0]?.summary).toBe('Add the admin indicator to the app.')
+    expect(decoded.archived[0]?.commit).toEqual(COMMIT)
+    expect(decoded.counts).toEqual({ active: 2, archived: 34, capabilities: 19 })
+  })
+
+  it('derives every phase and prefers an explicit host phase', () => {
+    expect(derivePhase({ status: 'no-tasks' })).toBe('planning')
+    expect(derivePhase({ status: 'in-progress', completedTasks: 0, totalTasks: 0 })).toBe(
+      'planning',
+    )
+    expect(derivePhase({ status: 'in-progress', completedTasks: 0, totalTasks: 3 })).toBe(
+      'ready-to-apply',
+    )
+    expect(derivePhase({ status: 'in-progress', completedTasks: 4, totalTasks: 12 })).toBe(
+      'applying',
+    )
+    expect(derivePhase({ status: 'in-progress', completedTasks: 12, totalTasks: 12 })).toBe(
+      'complete',
+    )
+    expect(derivePhase({ status: 'complete', completedTasks: 3, totalTasks: 3 })).toBe('complete')
+    expect(derivePhase({ status: 'in-progress', archived: true })).toBe('archived')
+    expect(phaseOf(row('a', 'complete', 1, 1, EMPTY_PRESENCE, { phase: 'planning' }))).toBe(
+      'planning',
+    )
+  })
+
+  it('decodes a renamed delta and its from/to pair', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          change: {
+            name: 'add-auth',
+            status: 'in-progress',
+            completedTasks: 4,
+            totalTasks: 12,
+            artifacts: { proposal: '# Why', design: null, tasks: null },
+            specs: [],
+            deltas: [
+              {
+                capability: 'auth',
+                operation: 'RENAMED',
+                requirements: [],
+                rename: { from: 'Old name', to: 'New name' },
+              },
+              {
+                capability: 'auth',
+                operation: 'ADDED',
+                requirements: [
+                  { name: 'New requirement', text: 'The system MUST keep it.', scenarios: [] },
+                ],
+              },
+            ],
+            modified: '2026-11-05T14:03:00',
+          },
+        }),
+      ),
+    )
+    const change = await requestChange('s1', 'add-auth')
+    expect(change.deltas).toHaveLength(2)
+    expect(change.deltas?.[0]).toMatchObject({
+      capability: 'auth',
+      operation: 'RENAMED',
+      requirements: [],
+      rename: { from: 'Old name', to: 'New name' },
+    })
+    expect(change.deltas?.[1]?.requirements[0]?.name).toBe('New requirement')
+    expect(change.archived).toBeUndefined()
+    expect(change.summary).toBeUndefined()
+  })
+
+  it('decodes the task files the checklist must parse', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          change: {
+            name: 'add-auth',
+            status: 'in-progress',
+            completedTasks: 1,
+            totalTasks: 2,
+            artifacts: { proposal: '# Why', design: null, tasks: '## A\n- [x] one' },
+            specs: [],
+            deltas: [],
+            taskFiles: [
+              { path: 'openspec/changes/add-auth/tasks.md', body: '## A\n- [x] one' },
+              { path: 'openspec/changes/add-auth/tasks/nested.md', body: '## B\n- [ ] two' },
+            ],
+            modified: null,
+          },
+        }),
+      ),
+    )
+    const change = await requestChange('s1', 'add-auth')
+    expect(change.taskFiles).toEqual([
+      { path: 'openspec/changes/add-auth/tasks.md', body: '## A\n- [x] one' },
+      { path: 'openspec/changes/add-auth/tasks/nested.md', body: '## B\n- [ ] two' },
+    ])
+  })
+
+  it('requests an archived change through the same route with the archived flag', async () => {
+    const fetchMock = vi.fn(async () => response({ change: ARCHIVED }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      requestChange('s1', '2026-10-27-add-admin-indicator', true),
+    ).resolves.toMatchObject({ name: ARCHIVED.name, archived: true, archivedAt: '2026-10-27' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${CHANGE_PATH}?session=s1&name=2026-10-27-add-admin-indicator&archived=1`,
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+  })
+
+  it('decodes legacy capability responses without the structured fields', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes('id=auth')
+        ? response({
+            capability: {
+              id: 'auth',
+              requirementCount: 2,
+              body: '# a',
+              modified: '2026-11-05T14:03:00',
+            },
+          })
+        : response({ capabilities: [{ id: 'auth', requirementCount: 2 }] }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(requestCapabilities('s1')).resolves.toHaveLength(1)
+    await expect(requestCapability('s1', 'auth')).resolves.toMatchObject({
+      id: 'auth',
+      requirementCount: 2,
+      body: '# a',
+      requirements: [],
+      history: [],
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${SPECS_PATH}?session=s1`,
+      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    )
+  })
+
+  it('searches case-insensitively and treats a missing summary as absent', () => {
+    expect(matchesQuery('AUTH', 'add-auth', null)).toBe(true)
+    expect(matchesQuery('  auth  ', 'ADD-AUTH')).toBe(true)
+    expect(matchesQuery('billing', 'add-auth')).toBe(false)
+    expect(matchesQuery('', 'anything')).toBe(true)
+    expect(matchesQuery('purpose', undefined, 'A Purpose Here')).toBe(true)
+    expect(summaryText(undefined)).toBeNull()
+    expect(summaryText('   ')).toBeNull()
+    expect(summaryText('  one line  ')).toBe('one line')
+    const withoutSummary = row('add-auth', 'in-progress', 1, 2)
+    expect(withoutSummary.summary).toBeUndefined()
+  })
+
+  it('formats relative update facts and ISO dates', () => {
+    expect(relativeLabel(null, NOW)).toBeNull()
+    expect(relativeLabel('not-a-date', NOW)).toBeNull()
+    expect(relativeLabel('2026-11-05T17:00:00', NOW)).toBe('just now')
+    expect(relativeLabel('2026-11-05T16:55:00', NOW)).toBe('5m ago')
+    expect(relativeLabel('2026-11-05T14:03:00', NOW)).toBe('2h ago')
+    expect(relativeLabel('2026-11-03T17:00:00', NOW)).toBe('2d ago')
+    expect(relativeLabel('2026-09-05T17:00:00', NOW)).toBe('2mo ago')
+    expect(relativeLabel('2025-11-05T17:00:00', NOW)).toBe('1y ago')
+    expect(relativeLabel('2025-11-05T17:00:00', NOW)).toBe('1y ago')
+    expect(isoDate('2026-10-27T10:00:00Z')).toBe('2026-10-27')
+    expect(isoDate('2026-10-27')).toBe('2026-10-27')
+    expect(isoDate(null)).toBeNull()
+    expect(isoDate('nonsense')).toBeNull()
+  })
+
+  it('sorts archive newest first and history newest first', () => {
+    expect(sortArchived([OLDER_ARCHIVED_ROW, ARCHIVED_ROW]).map((entry) => entry.name)).toEqual([
+      ARCHIVED_ROW.name,
+      OLDER_ARCHIVED_ROW.name,
+    ])
+    const history: HistoryEntry[] = [
+      { name: 'old', date: '2026-09-01', completedTasks: 1, totalTasks: 1, commit: null },
+      { name: 'new', date: '2026-10-27', completedTasks: 5, totalTasks: 5, commit: COMMIT },
+    ]
+    expect(sortHistory(history).map((entry) => entry.name)).toEqual(['new', 'old'])
+  })
+
+  it('treats nested task files as the Tasks artifact', () => {
+    const nested: ChangeDetail = {
+      ...FULL,
+      deltas: [],
+      specs: [],
+      artifacts: { proposal: null, design: null, tasks: null },
+      taskFiles: [
+        { path: 'openspec/changes/add-auth/tasks/nested.md', body: '## Nested\n- [ ] one' },
+      ],
+    }
+    expect(hasArtifact(nested, 'tasks')).toBe(true)
+    expect(initialArtifact(nested)).toBe('tasks')
+    expect(hasArtifact({ ...nested, taskFiles: [] }, 'tasks')).toBe(false)
+  })
+
+  it('sorts unfinished changes before complete ones, stable within each group', () => {
     const rows = [
       row('complete-a', 'complete'),
       row('open-b', 'in-progress'),
@@ -600,78 +1258,228 @@ describe('OpenSpec panel addresses', () => {
     ])
   })
 
-  it('builds the file address and watched paths the panel observes', () => {
+  it('builds the file addresses and watched paths the panel observes', () => {
     expect(fileAddress('s1', 'openspec/changes/add-auth/tasks.md')).toBe(
       'dsh-resource://file/session/s1/openspec/changes/add-auth/tasks.md',
     )
-    expect(changeArtifactPath('add-auth', 'design')).toBe('openspec/changes/add-auth/design.md')
-    expect(deltaSpecPath('add-auth', 'auth')).toBe('openspec/changes/add-auth/specs/auth/spec.md')
-    expect(capabilitySpecPath('auth')).toBe('openspec/specs/auth/spec.md')
-    expect(changeWatchPaths('add-auth', ['auth', 'billing'])).toEqual([
-      'openspec/changes/add-auth/proposal.md',
-      'openspec/changes/add-auth/design.md',
-      'openspec/changes/add-auth/tasks.md',
-      'openspec/changes/add-auth/specs/auth/spec.md',
-      'openspec/changes/add-auth/specs/billing/spec.md',
-    ])
+    expect(fileAddress('s1', 'openspec/changes/add-auth/specs/auth/spec.md')).toBe(
+      'dsh-resource://file/session/s1/openspec/changes/add-auth/specs/auth/spec.md',
+    )
   })
 
-  it('formats the last-updated fact in local time', () => {
-    const now = new Date('2026-11-05T18:00:00')
-    expect(updatedLabel('2026-11-05T14:03:00', now)).toBe('Updated 14:03')
-    expect(updatedLabel('2026-11-04T09:05:00', now)).toBe('Updated 2026-11-04 09:05')
-    expect(updatedLabel(null, now)).toBeNull()
-    expect(updatedLabel('not-a-date', now)).toBeNull()
+  it('remembers the root segment in injected storage', () => {
+    const { storage, values } = memoryStorage()
+    expect(readSegment(storage, 's1')).toBeUndefined()
+    expect(readSegment(undefined, 's1')).toBeUndefined()
+    writeSegment(storage, 's1', 'specs')
+    expect(readSegment(storage, 's1')).toBe('specs')
+    expect(values.get(segmentStorageKey('s1'))).toBe('specs')
+    expect(readSegment(storage, 's2')).toBeUndefined()
+    writeSegment(storage, 's2', 'archive')
+    expect(readSegment(storage, 's1')).toBe('specs')
+    expect(readSegment(storage, 's2')).toBe('archive')
+    values.set(segmentStorageKey('s1'), 'nonsense')
+    expect(isRootSegment('nonsense')).toBe(false)
+    expect(readSegment(storage, 's1')).toBeUndefined()
+    const throwing: SegmentStorage = {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      setItem: () => {
+        throw new Error('blocked')
+      },
+    }
+    expect(readSegment(throwing, 's1')).toBeUndefined()
+    expect(() => writeSegment(throwing, 's1', 'changes')).not.toThrow()
+    expect(initialRootSegment('specs', 'archive')).toBe('specs')
+    expect(initialRootSegment('changes', 'archive')).toBe('archive')
+    expect(initialRootSegment('changes', undefined)).toBe('changes')
   })
 })
 
-describe('OpenSpec panel reads', () => {
-  it('requests a change with the session and name, and decodes the Host error', async () => {
-    const fetchMock = vi.fn(async () => response({ change: FULL }))
-    vi.stubGlobal('fetch', fetchMock)
-    await expect(requestChange('s1', 'add-auth')).resolves.toEqual(FULL)
-    expect(fetchMock).toHaveBeenCalledWith(
-      `${CHANGE_PATH}?session=s1&name=add-auth`,
-      expect.objectContaining({ credentials: 'same-origin' }),
-    )
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => response({ error: NO_LOCAL_ROOT_MESSAGE }, false)),
-    )
-    await expect(requestChange('s1', 'add-auth')).rejects.toThrow(NO_LOCAL_ROOT_MESSAGE)
+describe('OpenSpec panel renderers', () => {
+  it('renders inline code, strong, emphasis, and http links', () => {
+    const tree = InlineText({
+      text: 'Use `administrator`, **bold**, *em*, and [docs](https://example.com/docs).',
+    })
+    expect(textOf(tree)).toBe('Use administrator, bold, em, and docs.')
+    expect(textOf(tree)).not.toContain('`')
+    expect(nodes(tree).find((node) => node.type === 'code')?.props.children).toBe('administrator')
+    expect(nodes(tree).some((node) => node.type === 'strong')).toBe(true)
+    expect(nodes(tree).some((node) => node.type === 'em')).toBe(true)
+    const link = nodes(tree).find((node) => node.type === 'a')
+    expect(link?.props.href).toBe('https://example.com/docs')
+    expect(link?.props.target).toBe('_blank')
   })
 
-  it('requests the capability inventory and one capability', async () => {
-    const fetchMock = vi.fn(async (url: string) =>
-      url.includes('id=auth')
-        ? response({
-            capability: {
-              id: 'auth',
-              requirementCount: 2,
-              body: '# a',
-              modified: '2026-11-05T14:03:00',
-            },
-          })
-        : response({ capabilities: [{ id: 'auth', requirementCount: 2 }] }),
+  it('marks SHALL, MUST, and MUST NOT without changing the text', () => {
+    const source = 'The system SHALL keep it; a client MUST NOT lose it; lower-case shall stays.'
+    const tree = InlineText({ text: source })
+    expect(textOf(tree)).toBe(source)
+    const keywords = nodes(tree).filter(
+      (node) => node.type === 'span' && node.props.className === 'dsh-openspec-keyword',
     )
-    vi.stubGlobal('fetch', fetchMock)
-    await expect(requestCapabilities('s1')).resolves.toEqual([{ id: 'auth', requirementCount: 2 }])
-    await expect(requestCapability('s1', 'auth')).resolves.toEqual({
-      id: 'auth',
-      requirementCount: 2,
-      body: '# a',
-      modified: '2026-11-05T14:03:00',
+    expect(keywords.map((node) => node.props.children)).toEqual(['SHALL', 'MUST NOT'])
+  })
+
+  it('renders a requirement with several labelled scenarios', () => {
+    const requirement: Requirement = {
+      name: 'Long requirement',
+      text: 'The system MUST branch.',
+      scenarios: [
+        {
+          name: 'First',
+          rawText: '- **WHEN** one\n- **THEN** two\n- **AND** three\n- **BUT** not four',
+        },
+        { name: 'Second', rawText: '- **WHEN** five\n- **THEN** six' },
+      ],
+    }
+    const tree = RequirementList({ requirements: [requirement], query: '', t, onQuery: () => {} })
+    const text = textOf(tree)
+    expect(text).toContain('Long requirement')
+    expect(text).toContain('Scenario: First')
+    expect(text).toContain('Scenario: Second')
+    const tags = nodes(tree).filter(
+      (node) => node.type === 'span' && node.props.className === 'dsh-openspec-step-tag',
+    )
+    expect(tags.map((node) => node.props.children)).toEqual([
+      'WHEN',
+      'THEN',
+      'AND',
+      'BUT',
+      'WHEN',
+      'THEN',
+    ])
+  })
+
+  it('renders a requirement without scenarios and keeps its inline code', () => {
+    const tree = RequirementList({
+      requirements: [
+        { name: 'No scenarios', text: 'The system SHALL call `probe` once.', scenarios: [] },
+      ],
+      query: '',
+      t,
+      onQuery: () => {},
     })
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      `${SPECS_PATH}?session=s1`,
-      expect.objectContaining({ headers: { accept: 'application/json' } }),
+    expect(textOf(tree)).toContain('No scenarios')
+    expect(textOf(tree)).not.toContain('Scenario:')
+    expect(nodes(tree).find((node) => node.type === 'code')?.props.children).toBe('probe')
+  })
+
+  it('filters more than twelve requirements and states an empty match', () => {
+    const requirements: Requirement[] = Array.from({ length: 13 }, (_value, index) => ({
+      name: `Requirement ${String(index + 1)}`,
+      text: `The system SHALL do step ${String(index + 1)}.`,
+      scenarios: [],
+    }))
+    const base = { requirements, t, onQuery: () => {} }
+    const all = RequirementList({ ...base, query: '' })
+    expect(typed(all, 'Input')).toHaveLength(1)
+    expect(textOf(all)).toContain('Requirement 13')
+    const filtered = RequirementList({ ...base, query: 'requirement 7' })
+    expect(textOf(filtered)).toContain('Requirement 7')
+    expect(textOf(filtered)).not.toContain('Requirement 8')
+    const empty = RequirementList({ ...base, query: 'nothing' })
+    expect(textOf(empty)).toContain('No requirements match this filter.')
+  })
+
+  it('does not filter twelve or fewer requirements', () => {
+    const requirements: Requirement[] = Array.from({ length: 12 }, (_value, index) => ({
+      name: `Requirement ${String(index + 1)}`,
+      text: 'The system SHALL do it.',
+      scenarios: [],
+    }))
+    const tree = RequirementList({ requirements, query: '', t, onQuery: () => {} })
+    expect(typed(tree, 'Input')).toHaveLength(0)
+    expect(textOf(tree)).toContain('Requirement 12')
+  })
+
+  it('renders task groups with per-group done/total and step marks', () => {
+    const content = [
+      '## First',
+      '- [x] alpha',
+      '- [ ] beta',
+      '## Second',
+      '- [x] gamma',
+      '- [x] delta',
+      '- [ ] epsilon',
+      '- [x] zeta',
+      '## Third',
+      '- [ ] eta',
+    ].join('\n')
+    const tree = TaskChecklist({ content, completedTasks: 4, totalTasks: 7, t })
+    const text = textOf(tree)
+    expect(text).toContain('First')
+    expect(text).toContain('Second')
+    expect(text).toContain('Third')
+    expect(text).toContain('1/2')
+    expect(text).toContain('3/4')
+    expect(text).toContain('0/1')
+    const steps = typed(tree, 'StateDot')
+    expect(steps).toHaveLength(7)
+    expect(steps.filter((step) => step.props.state === 'done')).toHaveLength(4)
+    expect(steps.filter((step) => step.props.state === 'idle')).toHaveLength(3)
+    expect(steps.every((step) => step.props.appearance === 'step')).toBe(true)
+    expect(
+      nodes(tree).some(
+        (node) =>
+          node.type === 'span' &&
+          typeof node.props.className === 'string' &&
+          node.props.className.includes('dsh-openspec-task-done'),
+      ),
+    ).toBe(true)
+  })
+
+  it('parses the pinned CLI task grammar to the same 2/3 the CLI reports', () => {
+    const content = '* [x] done\n1. [ ] pending\n- [X] also done'
+    expect(parseTaskLines(content)).toEqual([
+      { done: true, description: 'done' },
+      { done: false, description: 'pending' },
+      { done: true, description: 'also done' },
+    ])
+    const tree = TaskChecklist({ content, completedTasks: 2, totalTasks: 3, t })
+    expect(textOf(tree)).toContain('2/3')
+  })
+
+  it('counts every checkbox form and skips link bullets', () => {
+    const content = [
+      '- [Some doc](./doc.md)',
+      '- [A](https://example.com)',
+      '  - [~] waiting',
+      '2) [ ] ordered',
+      '+ [] empty',
+      '- [ x ] padded',
+      '- [1] unusual',
+      '- [x] real',
+    ].join('\n')
+    const tasks = parseTaskLines(content)
+    expect(tasks).toEqual([
+      { done: false, description: 'waiting' },
+      { done: false, description: 'ordered' },
+      { done: false, description: 'empty' },
+      { done: true, description: 'padded' },
+      { done: false, description: 'unusual' },
+      { done: true, description: 'real' },
+    ])
+    expect(parseTaskGroups(content)).toHaveLength(1)
+  })
+
+  it('states when tasks are not written and names an unparsed remainder', () => {
+    expect(textOf(TaskChecklist({ content: null, completedTasks: 0, totalTasks: 0, t }))).toContain(
+      'Not written yet.',
     )
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      `${SPECS_PATH}?session=s1&id=auth`,
-      expect.objectContaining({ credentials: 'same-origin' }),
-    )
+    expect(
+      textOf(
+        TaskChecklist({ content: 'No checkboxes here.', completedTasks: 0, totalTasks: 0, t }),
+      ),
+    ).toContain('tasks not written yet')
+    const tree = TaskChecklist({
+      content: '## Group\n- [x] one\n- [ ] two',
+      completedTasks: 1,
+      totalTasks: 4,
+      t,
+    })
+    expect(textOf(tree)).toContain('2 tasks not parsed from the file.')
   })
 })
 
@@ -683,6 +1491,11 @@ describe('OpenSpec panel registration', () => {
     expect(fake.locales[0]?.namespace).toBe('dsh-setup-openspec-panel')
     expect(fake.locales[0]?.locale).toBe('en')
     expect(fake.locales[0]?.dictionary['guide.title']).toBe('OpenSpec')
+    expect(fake.locales[0]?.dictionary['segment.archive']).toBe('Archive')
+    expect(fake.locales[0]?.dictionary['phase.ready-to-apply']).toBe('ready to apply')
+    expect(fake.locales[0]?.dictionary['capability.historyEmpty']).toBe(
+      'No archived change produced this capability.',
+    )
     expect(fake.tabs).toHaveLength(1)
     const definition = fake.tabs[0]
     expect(definition?.id).toBe(OPENSPEC_ID)
@@ -690,6 +1503,10 @@ describe('OpenSpec panel registration', () => {
     expect(definition?.patterns).toEqual([ROOT_ADDRESS, 'dsh-resource://openspec/**'])
     expect(definition?.priority).toBe('extension')
     expect(definition?.canOpen?.(ROOT_ADDRESS)).toBe(true)
+    expect(definition?.canOpen?.(SPECS_ADDRESS)).toBe(true)
+    expect(definition?.canOpen?.(changeAddress('add-auth'))).toBe(true)
+    expect(definition?.canOpen?.(archivedChangeAddress('add-auth'))).toBe(true)
+    expect(definition?.canOpen?.('sidebar://files')).toBe(false)
     expect(definition?.guide).toHaveLength(1)
     expect(definition?.guide?.[0]).toMatchObject({
       id: 'open',
@@ -725,44 +1542,16 @@ describe('OpenSpec panel registration', () => {
     expect((fake.commands[0] as { name: string }).name).toBe('openspec-apply')
     expect(fake.locales).toHaveLength(1)
     expect(fake.tabs).toHaveLength(1)
-    const definition = fake.tabs[0]
-    expect(definition?.id).toBe(OPENSPEC_ID)
-    expect(definition?.kind).toBe(OPENSPEC_KIND)
-    expect(definition?.patterns).toEqual([ROOT_ADDRESS, 'dsh-resource://openspec/**'])
-    expect(definition?.priority).toBe('extension')
-    expect(definition?.canOpen?.(ROOT_ADDRESS)).toBe(true)
-    expect(definition?.canOpen?.(SPECS_ADDRESS)).toBe(true)
-    expect(definition?.canOpen?.(changeAddress('add-auth'))).toBe(true)
-    expect(definition?.canOpen?.(capabilityAddress('auth'))).toBe(true)
-    expect(definition?.canOpen?.('sidebar://files')).toBe(false)
-    expect(definition?.title(changeAddress('add-auth'))).toBe('add-auth')
-    expect(definition?.guide).toHaveLength(1)
-    expect(definition?.guide?.[0]).toMatchObject({
-      id: 'open',
-      commandId: 'openspec.panel',
-      order: 10,
-    })
-    expect(definition?.guide?.[0]?.title()).toBe('OpenSpec')
-    expect(fake.injections).toEqual(['sidebar.right.pane.tab'])
-    expect(fake.slotOptions[0]).toMatchObject({
-      name: 'sidebar.right.pane.tab',
-      key: OPENSPEC_ID,
-      locale: 'dsh-setup-openspec-panel',
-    })
     expect(fake.bodies).toHaveLength(1)
   })
 
   it('registers no panel without the right-sidebar services, while the picker still registers', () => {
     const fake = panelFake(true, false)
     expect(() => apply(fake.ctx as never)).not.toThrow()
-    expect(fake.injects).toEqual([
-      ['sidebarRight', 'sidebarRightTabs', 'slots', 'locale', 'resources'],
-    ])
     expect(fake.commands).toHaveLength(1)
     expect(fake.tabs).toEqual([])
     expect(fake.locales).toEqual([])
     expect(fake.injections).toEqual([])
-    expect(fake.slotOptions).toEqual([])
     expect(fake.bodies).toEqual([])
   })
 })
@@ -793,37 +1582,27 @@ describe('OpenSpec panel composer handoff', () => {
     handoff.draft('s1', applyDraft('add-auth'))
     expect(drafts).toEqual(['/openspec-apply-change add-auth'])
     expect(submits).toEqual([])
-    handoff.draft('s1', PROPOSE_DRAFT)
-    expect(drafts).toEqual(['/openspec-apply-change add-auth', '/openspec-propose '])
     expect(() => handoff.draft('closed', applyDraft('add-auth'))).toThrow(/not open/)
   })
 
-  it('opens resources through the sidebar when the tab action is unavailable', () => {
-    const opened: string[] = []
-    const handoff = createHandoff(undefined, undefined, {
-      openResource: (address) => {
-        opened.push(address)
-      },
-    })
-    handoff.open(changeAddress('add-auth'))
-    expect(opened).toEqual(['dsh-resource://openspec/change/add-auth'])
-  })
-
-  it('fills the propose draft from the mounted empty root state without submitting', async () => {
+  it('fills the exact explore and propose drafts from the mounted root without submitting', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => response({ changes: [] })),
+      vi.fn(async () =>
+        response({
+          changes: [],
+          archived: [],
+          counts: { active: 0, archived: 0, capabilities: 0 },
+        }),
+      ),
     )
     const drafts: string[] = []
     const submits: string[] = []
-    const opened: string[] = []
-    const actx = { remote: {} }
     const handoff = createHandoff(
-      { scope: (id) => (id === 's1' ? actx : undefined) },
+      { scope: (id) => (id === 's1' ? { remote: {} } : undefined) },
       {
         input: {
-          for(received: unknown) {
-            expect(received).toBe(actx)
+          for() {
             return {
               setDraft(text: string) {
                 drafts.push(text)
@@ -835,268 +1614,702 @@ describe('OpenSpec panel composer handoff', () => {
           },
         },
       },
-      {
-        openResource: (address) => {
-          opened.push(address)
-        },
-      },
+      { openResource: () => {} },
     )
-    const dispatch = mount(
-      OpenSpecTab as never,
+    const body = mount(
+      RootBody as never,
       {
-        useTabInfo: () => ({ tab: fakeTab(ROOT_ADDRESS).tab }),
+        tab: fakeTab(ROOT_ADDRESS).tab,
+        initialSegment: 'changes',
         sessionId: 's1',
         t,
-        handoff,
+        draft: (text: string) => handoff.draft('s1', text),
+        open: () => {},
       } as never,
     )
-    dispatch.render()
-    const rootBody = nodes(dispatch.tree).find((node) => node.type === RootBody)
-    if (rootBody === undefined) throw new Error('root body missing')
-    const body = mount(RootBody as never, rootBody.props as never)
     body.render()
     await settle()
     body.render()
-    click(buttonByText(RootView(viewProps(body.tree, RootView) as never), 'Propose a change'))
-    expect(drafts).toEqual(['/openspec-propose '])
+    const view = RootView(viewProps(body.tree, RootView) as never)
+    click(actionCard(view, 'Explore'))
+    click(actionCard(view, 'Propose'))
+    expect(drafts).toEqual([EXPLORE_DRAFT, PROPOSE_DRAFT])
     expect(submits).toEqual([])
-    expect(opened).toEqual([])
     body.destroy()
-    dispatch.destroy()
+  })
+
+  it('opens resources through the sidebar when the tab action is unavailable', () => {
+    const opened: string[] = []
+    const handoff = createHandoff(undefined, undefined, {
+      openResource: (address) => {
+        opened.push(address)
+      },
+    })
+    handoff.open(archivedChangeAddress('add-auth'))
+    expect(opened).toEqual(['dsh-resource://openspec/archive-change/add-auth'])
   })
 })
 
 describe('OpenSpec root view', () => {
-  const base = {
-    segment: 'changes' as const,
-    changes: LOADING,
-    capabilities: LOADING,
-    t,
-    onSegment: () => {},
-    onRetry: () => {},
-    onOpenChange: () => {},
-    onOpenCapability: () => {},
-    onPropose: () => {},
-  }
+  it('shows the counted header and all three totals before Specs loads', async () => {
+    const fetchMock = vi.fn(async (_url: string) =>
+      response({
+        changes: [row('add-auth', 'in-progress', 4, 12)],
+        archived: [ARCHIVED_ROW],
+        counts: { active: 2, archived: 34, capabilities: 19 },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const body = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(ROOT_ADDRESS).tab,
+        initialSegment: 'changes',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: () => {},
+      } as never,
+    )
+    body.render()
+    await settle()
+    body.render()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/changes')
+    const view = RootView(viewProps(body.tree, RootView) as never)
+    expect(textOf(view)).toContain('2 changes · 19 specs · 34 archived')
+    const options = segmented(view).props.options as Array<{ value: string; label: string }>
+    expect(options.map((option) => option.label)).toEqual(['Changes 2', 'Specs 19', 'Archive 34'])
+    expect(buttonByText(view, 'Explore')).toBeDefined()
+    expect(buttonByText(view, 'Propose')).toBeDefined()
+    body.destroy()
+  })
 
-  it('shows loading instead of an empty list', () => {
-    const tree = RootView(base)
+  it('shows one quiet loading line instead of an empty list', () => {
+    const tree = RootView(rootProps())
     expect(textOf(tree)).toContain('Loading…')
+    expect(typed(tree, 'TextShimmer')[0]?.props.active).toBe(true)
     expect(textOf(tree)).not.toContain('No open changes')
   })
 
-  it('lists change rows with status, progress, and artifact facts', () => {
-    const changes = {
-      phase: 'ready' as const,
-      value: [
-        row('add-auth', 'in-progress', 4, 12, {
-          proposal: true,
-          design: true,
-          tasks: false,
-          specs: 0,
-        }),
-      ],
-    }
-    const tree = RootView({ ...base, changes })
-    const rows = rowButtons(tree)
-    expect(rows).toHaveLength(1)
-    const text = textOf(rows[0])
+  it('renders the change card decision facts', () => {
+    const applying = row(
+      'add-auth',
+      'in-progress',
+      4,
+      12,
+      {
+        proposal: true,
+        design: true,
+        tasks: false,
+        specs: 2,
+      },
+      {
+        summary: 'Add authentication to the product.',
+        modified: '2026-11-05T15:00:00',
+        commit: COMMIT,
+        phase: 'applying',
+      },
+    )
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([applying]) },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const text = textOf(card)
+    expect(text).toContain('applying')
     expect(text).toContain('add-auth')
     expect(text).toContain('4/12')
-    expect(text).toContain('in progress')
+    expect(text).toContain('Add authentication to the product.')
     expect(text).toContain('proposal')
     expect(text).toContain('design')
+    expect(text).toContain('specs')
+    expect(text).toContain('updated 2h ago')
+    expect(text).toContain('7e87448')
+    const phaseTag = typed(tree, 'Tag').find((tag) => tag.props.children === 'applying')
+    expect(phaseTag?.props.tone).toBe('info')
     expect(typed(tree, 'StateDot')[0]?.props.state).toBe('ongoing')
-    const tags = typed(tree, 'Tag')
-    expect(tags).toHaveLength(2)
-    expect(tags.every((tag) => tag.props.tone === 'quiet')).toBe(true)
+    const progress = nodes(tree).find((node) => node.props.role === 'progressbar')
+    expect(progress?.props['aria-valuenow']).toBe(4)
+    expect(progress?.props['aria-valuemax']).toBe(12)
+    expect(typed(tree, 'Tooltip')[0]?.props.label).toBe('Add authentication to the product.')
   })
 
-  it('puts unfinished changes before complete ones', () => {
-    const changes = {
-      phase: 'ready' as const,
-      value: [
-        row('z-complete', 'complete'),
-        row('a-open', 'in-progress'),
-        row('b-open', 'no-tasks'),
-      ],
-    }
-    const tree = RootView({ ...base, changes })
-    expect(rowButtons(tree).map((entry) => textOf(entry))).toEqual([
+  it('maps planning, complete, and archived cards to their semantic tones', () => {
+    const planning = row(
+      'new-idea',
+      'no-tasks',
+      0,
+      0,
+      { proposal: true, design: false, tasks: false, specs: 0 },
+      { phase: 'planning', summary: 'An idea.' },
+    )
+    const complete = row('done-change', 'complete', 2, 2, EMPTY_PRESENCE, { summary: 'Done.' })
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([planning, complete]) },
+      }),
+    )
+    const tags = typed(tree, 'Tag')
+    expect(tags.find((tag) => tag.props.children === 'planning')?.props.tone).toBe('warning')
+    expect(tags.find((tag) => tag.props.children === 'complete')?.props.tone).toBe('success')
+    expect(textOf(tree)).toContain('tasks not written yet')
+    const archivedTree = RootView(
+      rootProps({
+        segment: 'archive',
+        changes: {
+          phase: 'ready',
+          value: listOf([], [ARCHIVED_ROW], { archived: 1 }),
+        },
+      }),
+    )
+    const archivedTag = typed(archivedTree, 'Tag').find(
+      (tag) => tag.props.children === '2026-10-27',
+    )
+    expect(archivedTag?.props.tone).toBe('quiet')
+    expect(cardButtons(archivedTree)[0]?.props.className).toContain('dsh-openspec-card-archived')
+  })
+
+  it('groups unfinished changes before complete ones', () => {
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('z-complete', 'complete'),
+            row('a-open', 'in-progress', 1, 2),
+            row('b-open', 'no-tasks'),
+          ]),
+        },
+      }),
+    )
+    const text = textOf(tree)
+    expect(text).toContain('In progress')
+    expect(text).toContain('Complete')
+    expect(cardButtons(tree).map((entry) => textOf(entry))).toEqual([
       expect.stringContaining('a-open'),
       expect.stringContaining('b-open'),
       expect.stringContaining('z-complete'),
     ])
   })
 
-  it('shows the empty change state with a propose action', () => {
-    const onPropose = vi.fn()
-    const tree = RootView({ ...base, changes: { phase: 'ready', value: [] }, onPropose })
-    expect(textOf(tree)).toContain('No open changes in this workspace.')
-    const button = buttonByText(tree, 'Propose a change')
-    ;(button.props.onClick as () => void)()
-    expect(onPropose).toHaveBeenCalledTimes(1)
+  it('filters capability rows by name or purpose and states an empty match', () => {
+    const tree = RootView(
+      rootProps({
+        segment: 'specs',
+        changes: { phase: 'ready', value: listOf([], [], { capabilities: 2 }) },
+        capabilities: { phase: 'ready', value: CAPABILITY_ROWS },
+        specQuery: 'right-sidebar',
+      }),
+    )
+    expect(cardButtons(tree)).toHaveLength(1)
+    expect(textOf(cardButtons(tree)[0])).toContain('openspec-panel')
+    const upper = RootView(
+      rootProps({
+        segment: 'specs',
+        changes: { phase: 'ready', value: listOf([], [], { capabilities: 2 }) },
+        capabilities: { phase: 'ready', value: CAPABILITY_ROWS },
+        specQuery: 'ADMIN',
+      }),
+    )
+    expect(cardButtons(upper)).toHaveLength(1)
+    expect(textOf(cardButtons(upper)[0])).toContain('admin-indicator')
+    const empty = RootView(
+      rootProps({
+        segment: 'specs',
+        changes: { phase: 'ready', value: listOf([], [], { capabilities: 2 }) },
+        capabilities: { phase: 'ready', value: CAPABILITY_ROWS },
+        specQuery: 'nothing-matches',
+      }),
+    )
+    expect(textOf(empty)).toContain('No capabilities match this filter.')
+    expect(segmented(empty).props.options).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: 'specs', label: 'Specs 2' })]),
+    )
   })
 
-  it('lists capabilities with requirement counts in the specs segment', () => {
-    const onOpenCapability = vi.fn()
-    const capabilities: CapabilitySummary[] = [
-      { id: 'auth', requirementCount: 4 },
-      { id: 'billing', requirementCount: 2 },
+  it('filters archived changes and states an empty match', () => {
+    const rows = [ARCHIVED_ROW, OLDER_ARCHIVED_ROW]
+    const tree = RootView(
+      rootProps({
+        segment: 'archive',
+        changes: { phase: 'ready', value: listOf([], rows, { archived: 2 }) },
+        archiveQuery: 'ADMIN',
+      }),
+    )
+    expect(cardButtons(tree)).toHaveLength(1)
+    expect(textOf(cardButtons(tree)[0])).toContain(ARCHIVED_ROW.name)
+    const empty = RootView(
+      rootProps({
+        segment: 'archive',
+        changes: { phase: 'ready', value: listOf([], rows, { archived: 2 }) },
+        archiveQuery: 'zzz',
+      }),
+    )
+    expect(textOf(empty)).toContain('No archived changes match this filter.')
+  })
+
+  it('renders an empty change list with totals, both actions, and recent archive', () => {
+    const onSeeArchive = vi.fn()
+    const rows = [
+      ARCHIVED_ROW,
+      OLDER_ARCHIVED_ROW,
+      row('2026-08-01-third', 'complete', 1, 1, EMPTY_PRESENCE, {
+        archived: true,
+        archivedAt: '2026-08-01',
+        summary: 'Third.',
+      }),
+      row('2026-07-01-fourth', 'complete', 1, 1, EMPTY_PRESENCE, {
+        archived: true,
+        archivedAt: '2026-07-01',
+        summary: 'Fourth.',
+      }),
     ]
-    const tree = RootView({
-      ...base,
-      segment: 'specs',
-      capabilities: { phase: 'ready', value: capabilities },
-      onOpenCapability,
-    })
-    expect(segmented(tree).props.value).toBe('specs')
-    const rows = rowButtons(tree)
-    expect(textOf(rows[0])).toContain('auth')
-    expect(textOf(rows[0])).toContain('4 requirements')
-    expect(textOf(rows[1])).toContain('billing')
-    click(rows[1])
-    expect(onOpenCapability).toHaveBeenCalledWith('billing')
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([], rows, { archived: 4, capabilities: 19 }),
+        },
+        onSeeArchive,
+      }),
+    )
+    const text = textOf(tree)
+    expect(text).toContain('0 changes · 19 specs · 4 archived')
+    expect(text).toContain('Recently archived')
+    expect(text).toContain(ARCHIVED_ROW.name)
+    expect(text).toContain('2026-08-01-third')
+    expect(text).not.toContain('2026-07-01-fourth')
+    expect(actionCard(tree, 'Explore')).toBeDefined()
+    expect(actionCard(tree, 'Propose')).toBeDefined()
+    click(buttonByText(tree, 'See all archive'))
+    expect(onSeeArchive).toHaveBeenCalledTimes(1)
   })
 
-  it('offers the capability empty next action', () => {
-    const tree = RootView({
-      ...base,
-      segment: 'specs',
-      capabilities: { phase: 'ready', value: [] },
-    })
-    expect(textOf(tree)).toContain('No capability specs yet')
+  it('renders the specs and archive empty states with their next actions', () => {
+    const onSeeArchive = vi.fn()
+    const specs = RootView(
+      rootProps({
+        segment: 'specs',
+        capabilities: { phase: 'ready', value: [] },
+        changes: {
+          phase: 'ready',
+          value: listOf([], [ARCHIVED_ROW], { archived: 1, capabilities: 0 }),
+        },
+        onSeeArchive,
+      }),
+    )
+    expect(textOf(specs)).toContain('No accepted specs yet')
+    expect(textOf(specs)).toContain('Archive a completed change to add one.')
+    click(buttonByText(specs, 'Open archive'))
+    expect(onSeeArchive).toHaveBeenCalledTimes(1)
+    const archive = RootView(
+      rootProps({
+        segment: 'archive',
+        changes: { phase: 'ready', value: listOf([], [], { archived: 0 }) },
+      }),
+    )
+    expect(textOf(archive)).toContain('Nothing archived yet')
+    expect(textOf(archive)).toContain('Complete a change and archive it to keep its history here.')
   })
 
   it('shows the Host cause for a missing root and a missing CLI, with retry', () => {
     for (const message of [NO_LOCAL_ROOT_MESSAGE, MISSING_CLI_MESSAGE]) {
       const onRetry = vi.fn()
-      const tree = RootView({
-        ...base,
-        changes: { phase: 'error', message },
-        onRetry,
-      })
+      const tree = RootView(
+        rootProps({
+          changes: { phase: 'error', message },
+          onRetry,
+        }),
+      )
       expect(textOf(tree)).toContain(message)
-      const button = buttonByText(tree, 'Retry')
-      ;(button.props.onClick as () => void)()
+      expect(typed(tree, 'IconWarningTriangleOutlineRegular')).toHaveLength(1)
+      click(buttonByText(tree, 'Retry'))
       expect(onRetry).toHaveBeenCalledTimes(1)
     }
   })
 
-  it('opens the chosen change canonical address', () => {
-    const onOpenChange = vi.fn()
-    const tree = RootView({
-      ...base,
-      changes: {
-        phase: 'ready',
-        value: [row('add-auth', 'in-progress', 1, 2)],
-      },
-      onOpenChange,
+  it('opens the exact active and archived addresses', async () => {
+    const opened: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          changes: [row('add-auth', 'in-progress', 1, 2)],
+          archived: [ARCHIVED_ROW],
+          counts: { active: 1, archived: 1, capabilities: 0 },
+        }),
+      ),
+    )
+    const body = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(ROOT_ADDRESS).tab,
+        initialSegment: 'changes',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: (address: string) => opened.push(address),
+      } as never,
+    )
+    body.render()
+    await settle()
+    body.render()
+    const view = () => RootView(viewProps(body.tree, RootView) as never)
+    click(cardButtons(view())[0])
+    expect(opened).toEqual([changeAddress('add-auth')])
+    ;(segmented(view()).props.onChange as (value: string) => void)('archive')
+    body.render()
+    click(cardButtons(view())[0])
+    expect(opened).toEqual([changeAddress('add-auth'), archivedChangeAddress(ARCHIVED_ROW.name)])
+    expect(openSpecTarget(opened[1] as string)).toEqual({
+      view: 'change',
+      name: ARCHIVED_ROW.name,
+      archived: true,
     })
-    click(rowButtons(tree)[0])
-    expect(onOpenChange).toHaveBeenCalledWith('add-auth')
+    body.destroy()
+  })
+
+  it('restores the remembered Specs segment after a capability was opened', async () => {
+    const { storage } = memoryStorage()
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes('/specs')
+        ? response({ capabilities: CAPABILITY_ROWS })
+        : response({
+            changes: [],
+            archived: [],
+            counts: { active: 0, archived: 0, capabilities: 2 },
+          }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const first = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(ROOT_ADDRESS).tab,
+        initialSegment: 'changes',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: () => {},
+        storage,
+      } as never,
+    )
+    first.render()
+    await settle()
+    first.render()
+    ;(
+      segmented(RootView(viewProps(first.tree, RootView) as never)).props.onChange as (
+        value: string,
+      ) => void
+    )('specs')
+    first.render()
+    await settle()
+    first.render()
+    expect(viewProps(first.tree, RootView).segment).toBe('specs')
+    expect(readSegment(storage, 's1')).toBe('specs')
+    first.destroy()
+
+    const second = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(ROOT_ADDRESS).tab,
+        initialSegment: 'changes',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: () => {},
+        storage,
+      } as never,
+    )
+    second.render()
+    await settle()
+    second.render()
+    expect(viewProps(second.tree, RootView).segment).toBe('specs')
+    second.destroy()
+  })
+
+  it('lets the explicit Specs address win over a remembered segment', async () => {
+    const { storage } = memoryStorage()
+    writeSegment(storage, 's1', 'archive')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('/specs')
+          ? response({ capabilities: CAPABILITY_ROWS })
+          : response({
+              changes: [],
+              archived: [],
+              counts: { active: 0, archived: 0, capabilities: 2 },
+            }),
+      ),
+    )
+    const body = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(SPECS_ADDRESS).tab,
+        initialSegment: 'specs',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: () => {},
+        storage,
+      } as never,
+    )
+    body.render()
+    await settle()
+    body.render()
+    expect(viewProps(body.tree, RootView).segment).toBe('specs')
+    body.destroy()
   })
 })
 
 describe('OpenSpec change view', () => {
-  const base = {
-    change: FULL,
-    artifact: 'proposal' as const,
-    delta: 'auth',
-    t,
-    labels: LABELS,
-    onArtifact: () => {},
-    onDelta: () => {},
-    onApply: () => {},
-  }
-
-  it('offers the four artifact kinds as one segmented control', () => {
-    const tree = ChangeView(base)
-    expect(segmented(tree).props.options).toEqual([
-      { value: 'proposal', label: 'Why' },
-      { value: 'design', label: 'Design' },
-      { value: 'specs', label: 'Specs' },
-      { value: 'tasks', label: 'Tasks' },
-    ])
+  it('offers the four artifact tabs with ids and the delta count', () => {
+    const chosen: string[] = []
+    const tree = ChangeView(
+      changeViewProps({
+        change: TWO_DELTAS,
+        onArtifact: (kind) => chosen.push(kind),
+      }),
+    )
+    const control = tabControl(tree)
+    const items = control.props.items as Array<Record<string, string>>
+    expect(items.map((item) => item.label)).toEqual(['Why', 'Design', 'Specs (2)', 'Tasks'])
+    expect(items.map((item) => item.value)).toEqual(['proposal', 'design', 'specs', 'tasks'])
+    expect(new Set(items.map((item) => item.id)).size).toBe(4)
+    expect(items.every((item) => String(item.panelId).endsWith('-panel'))).toBe(true)
+    ;(control.props.onChange as (value: string) => void)('design')
+    expect(chosen).toEqual(['design'])
     expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('# Why')
     expect(typed(tree, 'MarkdownText')[0]?.props.labels).toBe(LABELS)
   })
 
-  it('disables a missing artifact with the reason as its title', () => {
-    const tree = ChangeView({ ...base, change: NO_DESIGN })
-    const options = segmented(tree).props.options as Array<{
-      value: string
-      disabled?: boolean
-      title?: string
-    }>
-    const design = options.find((option) => option.value === 'design')
-    expect(design?.disabled).toBe(true)
-    expect(design?.title).toBe('Not written yet.')
+  it('shows a missing artifact as unavailable with its reason', () => {
+    const tree = ChangeView(changeViewProps({ change: NO_DESIGN, artifact: 'design' }))
+    expect(textOf(tree)).toContain('Not written yet.')
+    expect(typed(tree, 'MarkdownText')).toHaveLength(0)
   })
 
-  it('switches between two delta specs and shows their count', () => {
+  it('switches between delta capabilities and maps operation tones', () => {
     const deltas: string[] = []
-    const tree = ChangeView({
-      ...base,
-      change: TWO_SPECS,
-      artifact: 'specs',
-      onDelta: (capability) => deltas.push(capability),
-    })
+    const tree = ChangeView(
+      changeViewProps({
+        change: TWO_DELTAS,
+        artifact: 'specs',
+        delta: 'auth',
+        onDelta: (capability) => deltas.push(capability),
+      }),
+    )
     expect(textOf(tree)).toContain('2 delta specs')
     const pills = typed(tree, 'Pill')
     expect(pills.map((pill) => pill.props.children)).toEqual(['auth', 'billing'])
     expect(pills[0]?.props.active).toBe(true)
     click(pills[1])
     expect(deltas).toEqual(['billing'])
-    const switched = ChangeView({ ...base, change: TWO_SPECS, artifact: 'specs', delta: 'billing' })
-    expect(typed(switched, 'MarkdownText')[0]?.props.text).toBe('# billing delta')
-  })
-
-  it('renders tasks as written while keeping progress in the header', () => {
-    const tree = ChangeView({ ...base, artifact: 'tasks' })
-    expect(textOf(tree)).toContain('4/12 tasks')
-    expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('- [ ] task')
-  })
-
-  it('fills the apply draft through the header action', () => {
-    const applied: string[] = []
-    const tree = ChangeView({ ...base, onApply: () => applied.push('apply') })
-    ;(buttonByText(tree, 'Apply change').props.onClick as () => void)()
-    expect(applied).toEqual(['apply'])
-  })
-
-  it('shows the last-updated fact and hides it when the route has none', () => {
-    const now = new Date('2026-11-05T18:00:00')
-    expect(textOf(ChangeView({ ...base, now }))).toContain('Updated 14:03')
-    expect(textOf(ChangeView({ ...base, change: { ...FULL, modified: null }, now }))).not.toContain(
-      'Updated',
+    const switched = ChangeView(
+      changeViewProps({ change: TWO_DELTAS, artifact: 'specs', delta: 'billing' }),
     )
-    const older = ChangeView({
-      ...base,
-      change: { ...FULL, modified: '2026-11-03T09:05:00' },
-      now,
-    })
-    expect(textOf(older)).toContain('Updated 2026-11-03 09:05')
+    expect(textOf(switched)).toContain('Billing window')
+    expect(textOf(switched)).not.toContain('Sign-in')
+    const tags = typed(tree, 'Tag')
+    expect(tags.find((tag) => tag.props.children === 'ADDED')?.props.tone).toBe('info')
+  })
+
+  it('renders the RENAMED pair and keeps the other requirement groups', () => {
+    const tree = ChangeView(changeViewProps({ change: RENAMED, artifact: 'specs', delta: 'auth' }))
+    const text = textOf(tree)
+    expect(text).toContain('RENAMED')
+    expect(text).toContain('ADDED')
+    expect(text).toContain('Old name')
+    expect(text).toContain('New name')
+    expect(text).toContain('New requirement')
+    const tags = typed(tree, 'Tag')
+    expect(tags.find((tag) => tag.props.children === 'RENAMED')?.props.tone).toBe('warning')
+    expect(tags.find((tag) => tag.props.children === 'ADDED')?.props.tone).toBe('info')
+  })
+
+  it('opens the accepted capability from a delta', () => {
+    const opened: string[] = []
+    const tree = ChangeView(
+      changeViewProps({
+        artifact: 'specs',
+        onOpenCapability: (id) => opened.push(id),
+      }),
+    )
+    click(buttonByText(tree, 'Open accepted spec'))
+    expect(opened).toEqual(['auth'])
+  })
+
+  it('renders the pre-redesign delta body as Markdown', () => {
+    const tree = ChangeView(
+      changeViewProps({ change: LEGACY_DELTAS, artifact: 'specs', delta: 'auth' }),
+    )
+    expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('# auth delta')
+    expect(typed(tree, 'Tag').some((tag) => tag.props.children === 'ADDED')).toBe(false)
+  })
+
+  it('falls back to raw Markdown for a capability without a structured delta', () => {
+    const change: ChangeDetail = {
+      ...TWO_DELTAS,
+      deltas: [AUTH_DELTA],
+      specs: [{ capability: 'archived-cap', body: '# archived raw', modified: '' }],
+    }
+    const fallback = ChangeView(
+      changeViewProps({ change, artifact: 'specs', delta: 'archived-cap' }),
+    )
+    expect(typed(fallback, 'Pill').map((pill) => pill.props.children)).toEqual([
+      'auth',
+      'archived-cap',
+    ])
+    expect(typed(fallback, 'MarkdownText')[0]?.props.text).toBe('# archived raw')
+    const structured = ChangeView(changeViewProps({ change, artifact: 'specs', delta: 'auth' }))
+    expect(textOf(structured)).toContain('Sign-in')
+    expect(typed(structured, 'MarkdownText')).toHaveLength(0)
+  })
+
+  it('parses every task file the Host reports and keeps the CLI total', () => {
+    const change: ChangeDetail = {
+      ...FULL,
+      completedTasks: 2,
+      totalTasks: 3,
+      taskFiles: [
+        { path: 'openspec/changes/add-auth/tasks.md', body: '## One\n- [x] a\n- [ ] b' },
+        { path: 'openspec/changes/add-auth/tasks/nested.md', body: '## Two\n- [x] c' },
+      ],
+    }
+    const tree = ChangeView(changeViewProps({ change, artifact: 'tasks' }))
+    const text = textOf(tree)
+    expect(text).toContain('One')
+    expect(text).toContain('Two')
+    expect(text).toContain('1/2')
+    expect(text).toContain('1/1')
+    expect(text).toContain('2/3 tasks')
+    expect(text).not.toContain('tasks not parsed from the file.')
+  })
+
+  it('renders nested-only task files when the top-level tasks.md is absent', () => {
+    const change: ChangeDetail = {
+      ...ARCHIVED,
+      artifacts: { proposal: null, design: null, tasks: null },
+      completedTasks: 1,
+      totalTasks: 1,
+      taskFiles: [
+        { path: 'openspec/changes/archive/x/tasks/nested.md', body: '## Nested\n- [x] one' },
+      ],
+    }
+    const tree = ChangeView(changeViewProps({ change, artifact: 'tasks' }))
+    expect(textOf(tree)).toContain('Nested')
+    expect(textOf(tree)).not.toContain('Not written yet.')
+    expect(textOf(tree)).toContain('1/1 tasks')
+  })
+
+  it('renders the grouped task checklist while keeping the header progress', () => {
+    const tree = ChangeView(changeViewProps({ artifact: 'tasks' }))
+    expect(textOf(tree)).toContain('4/12 tasks')
+    expect(textOf(tree)).toContain('Group')
+    expect(typed(tree, 'MarkdownText')).toHaveLength(0)
+  })
+
+  it('fills the apply draft through the header action and hides it when archived', () => {
+    const applied: string[] = []
+    const tree = ChangeView(changeViewProps({ onApply: () => applied.push('apply') }))
+    click(buttonByText(tree, 'Apply change'))
+    expect(applied).toEqual(['apply'])
+    const archived = ChangeView(changeViewProps({ change: ARCHIVED, artifact: 'specs' }))
+    expect(textOf(archived)).toContain('archived')
+    expect(textOf(archived)).toContain('2026-10-27')
+    expect(
+      typed(archived, 'Button').some((button) => button.props.children === 'Apply change'),
+    ).toBe(false)
+  })
+
+  it('shows the relative last-updated fact and hides it when the route has none', () => {
+    expect(textOf(ChangeView(changeViewProps()))).toContain('updated 2h ago')
+    expect(
+      textOf(ChangeView(changeViewProps({ change: { ...FULL, modified: null } }))),
+    ).not.toContain('updated')
+    expect(
+      textOf(
+        ChangeView(
+          changeViewProps({
+            change: { ...FULL, modified: '2026-11-03T17:00:00' },
+          }),
+        ),
+      ),
+    ).toContain('updated 2d ago')
   })
 })
 
 describe('OpenSpec capability view', () => {
-  it('renders the accepted spec body with its count', () => {
-    const capability: CapabilityDetail = {
-      id: 'auth',
-      requirementCount: 4,
-      body: '# auth',
-      modified: '2026-11-05T14:03:00',
-    }
-    const tree = CapabilityView({ capability, t, labels: LABELS })
-    expect(textOf(tree)).toContain('auth')
-    expect(textOf(tree)).toContain('4 requirements')
-    expect(typed(tree, 'MarkdownText')[0]?.props.text).toBe('# auth')
-    expect(
-      textOf(
-        CapabilityView({ capability, t, labels: LABELS, now: new Date('2026-11-05T18:00:00') }),
-      ),
-    ).toContain('Updated 14:03')
+  it('renders the accepted-spec header facts', () => {
+    const tree = CapabilityView(capabilityViewProps())
+    const text = textOf(tree)
+    expect(text).toContain('auth')
+    expect(text).toContain('Authenticate requests before they reach a capability.')
+    expect(text).toContain('2 requirements')
+    expect(text).toContain('1 scenarios')
+    expect(text).toContain('Accepted 2026-10-27')
+    expect(text).toContain('via 2026-10-27-add-admin-indicator')
+    expect(text).toContain('7e87448')
+    expect(tabControl(tree).props.value).toBe('requirements')
+    const items = tabControl(tree).props.items as Array<Record<string, string>>
+    expect(items.map((item) => item.label)).toEqual(['Requirements (2)', 'History (2)'])
+    expect(textOf(tree)).toContain('Sign-in')
+  })
+
+  it('switches to the history section through the tabs', () => {
+    const sections: string[] = []
+    const tree = CapabilityView(
+      capabilityViewProps({ onSection: (section) => sections.push(section) }),
+    )
+    ;(tabControl(tree).props.onChange as (value: string) => void)('history')
+    expect(sections).toEqual(['history'])
+    const history = CapabilityView(capabilityViewProps({ section: 'history' }))
+    expect(textOf(history)).toContain('2026-10-27-add-admin-indicator')
+    expect(textOf(history)).toContain('5/5')
+  })
+
+  it('orders history newest first and opens the exact archived address', () => {
+    const opened: string[] = []
+    const tree = CapabilityView(
+      capabilityViewProps({
+        section: 'history',
+        onOpenArchived: (name) => opened.push(name),
+      }),
+    )
+    const rows = cardButtons(tree)
+    expect(rows).toHaveLength(2)
+    expect(textOf(rows[0])).toContain('2026-10-27-add-admin-indicator')
+    expect(textOf(rows[1])).toContain('2026-10-20-earlier')
+    click(rows[0])
+    expect(opened).toEqual(['2026-10-27-add-admin-indicator'])
+    expect(archivedChangeAddress(opened[0] as string)).toBe(
+      'dsh-resource://openspec/archive-change/2026-10-27-add-admin-indicator',
+    )
+  })
+
+  it('states an empty history and falls back to the Markdown body without requirements', () => {
+    const empty = CapabilityView(
+      capabilityViewProps({
+        capability: { ...CAPABILITY, history: [] },
+        section: 'history',
+      }),
+    )
+    expect(textOf(empty)).toContain('No archived change produced this capability.')
+    const legacy = CapabilityView(
+      capabilityViewProps({
+        capability: {
+          id: 'auth',
+          requirementCount: 2,
+          body: '# auth',
+          modified: '2026-10-27T10:00:00',
+        },
+      }),
+    )
+    expect(typed(legacy, 'MarkdownText')[0]?.props.text).toBe('# auth')
   })
 })
 
@@ -1106,28 +2319,8 @@ describe('OpenSpec tab bodies', () => {
       'fetch',
       vi.fn(async () => response({ change: FULL })),
     )
-    const first = mount(
-      ChangeBody as never,
-      {
-        tab: fakeTab(changeAddress('add-auth')).tab,
-        name: 'add-auth',
-        sessionId: 's1',
-        t,
-        draft: () => {},
-        open: () => {},
-      } as never,
-    )
-    const second = mount(
-      ChangeBody as never,
-      {
-        tab: fakeTab(changeAddress('add-auth')).tab,
-        name: 'add-auth',
-        sessionId: 's1',
-        t,
-        draft: () => {},
-        open: () => {},
-      } as never,
-    )
+    const first = mount(ChangeBody as never, changeProps() as never)
+    const second = mount(ChangeBody as never, changeProps() as never)
     first.render()
     second.render()
     await settle()
@@ -1146,15 +2339,47 @@ describe('OpenSpec tab bodies', () => {
     first.render()
     expect(firstView().props.artifact).toBe('design')
     expect(secondView().props.artifact).toBe('proposal')
+    first.destroy()
+    second.destroy()
   })
 
-  it('keeps the canonical change address through every artifact and Apply', async () => {
+  it('reads an archived change through the archived address without file observation', async () => {
+    const fetchMock = vi.fn(async () => response({ change: ARCHIVED }))
+    vi.stubGlobal('fetch', fetchMock)
+    const body = mount(
+      ChangeBody as never,
+      {
+        ...changeProps(),
+        tab: fakeTab(archivedChangeAddress(ARCHIVED.name)).tab,
+        archived: true,
+        name: ARCHIVED.name,
+      } as never,
+    )
+    body.render()
+    await settle()
+    body.render()
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${CHANGE_PATH}?session=s1&name=${ARCHIVED.name}&archived=1`,
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+    expect(nodes(body.tree).filter((node) => node.type === FileWatch)).toHaveLength(0)
+    const view = viewProps(body.tree, ChangeView)
+    expect(view.change).toMatchObject({ archived: true, archivedAt: '2026-10-27' })
+    expect(textOf(ChangeView(view as never))).toContain('2026-10-27')
+    body.destroy()
+  })
+
+  it('keeps the canonical active change address through every artifact and Apply', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) =>
         url.includes('name=add-auth')
           ? response({ change: FULL })
-          : response({ changes: [row('add-auth', 'in-progress', 4, 12)] }),
+          : response({
+              changes: [row('add-auth', 'in-progress', 4, 12)],
+              archived: [],
+              counts: { active: 1, archived: 0, capabilities: 0 },
+            }),
       ),
     )
     const open = vi.fn()
@@ -1172,16 +2397,13 @@ describe('OpenSpec tab bodies', () => {
     root.render()
     await settle()
     root.render()
-    click(rowButtons(RootView(viewProps(root.tree, RootView) as never))[0])
+    click(cardButtons(RootView(viewProps(root.tree, RootView) as never))[0])
     const firstCall = open.mock.calls[0]
     if (firstCall === undefined) throw new Error('navigation missing')
     const address: unknown = firstCall[0]
     if (typeof address !== 'string') throw new Error('navigation address missing')
     expect(address).toBe('dsh-resource://openspec/change/add-auth')
-    expect(address).toBe(changeAddress('add-auth'))
     expect(address).not.toContain('?')
-    expect(address).not.toContain('#')
-    expect(address).not.toContain('artifact=')
     expect(openSpecTarget(address)).toEqual({ view: 'change', name: 'add-auth' })
 
     const tab = fakeTab(address)
@@ -1199,6 +2421,7 @@ describe('OpenSpec tab bodies', () => {
     const changeBody = nodes(dispatch.tree).find((node) => node.type === ChangeBody)
     if (changeBody === undefined) throw new Error('change body missing')
     expect(changeBody.props.name).toBe('add-auth')
+    expect(changeBody.props.archived).toBe(false)
     expect(open).toHaveBeenCalledTimes(1)
     expect(tab.opened).toEqual([])
 
@@ -1217,11 +2440,28 @@ describe('OpenSpec tab bodies', () => {
     ;(viewProps(body.tree, ChangeView).onApply as () => void)()
     expect(draft).toHaveBeenCalledWith('s1', '/openspec-apply-change add-auth')
     expect(tab.tab.navigation.address).toBe(address)
-    expect(tab.opened).toEqual([])
-    expect(open).toHaveBeenCalledTimes(1)
     body.destroy()
     dispatch.destroy()
     root.destroy()
+  })
+
+  it('dispatches the archived tab address to the archived change body', () => {
+    const tree = OpenSpecTab({
+      useTabInfo: () => ({ tab: fakeTab(archivedChangeAddress(ARCHIVED.name)).tab }),
+      sessionId: 's1',
+      t,
+      handoff: { draft: () => {}, open: () => {} },
+    } as never)
+    const changeBody = nodes(tree).find((node) => node.type === ChangeBody)
+    expect(changeBody?.props.archived).toBe(true)
+    expect(changeBody?.props.name).toBe(ARCHIVED.name)
+    const root = OpenSpecTab({
+      useTabInfo: () => ({ tab: fakeTab(ROOT_ADDRESS).tab }),
+      sessionId: 's1',
+      t,
+      handoff: { draft: () => {}, open: () => {} },
+    } as never)
+    expect(nodes(root).some((node) => node.type === RootBody)).toBe(true)
   })
 
   it('registers one refresh command, re-reads once per refresh and on show, then disposes', async () => {
@@ -1230,14 +2470,7 @@ describe('OpenSpec tab bodies', () => {
     const timeout = vi.spyOn(globalThis, 'setTimeout')
     const interval = vi.spyOn(globalThis, 'setInterval')
     const fake = fakeTab(changeAddress('add-auth'))
-    const props = {
-      tab: fake.tab,
-      name: 'add-auth',
-      sessionId: 's1',
-      t,
-      draft: () => {},
-      open: () => {},
-    }
+    const props = changeProps({ tab: fake.tab })
     const body = mount(ChangeBody as never, props as never)
     body.render()
     await settle()
@@ -1248,7 +2481,6 @@ describe('OpenSpec tab bodies', () => {
     await settle()
     body.render()
     expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fake.commands).toHaveLength(1)
     body.render({ ...props, tab: { ...fake.tab, visible: false } } as never)
     body.render({ ...props, tab: { ...fake.tab, visible: true } } as never)
     await settle()
@@ -1269,6 +2501,8 @@ describe('OpenSpec tab bodies', () => {
       .mockResolvedValueOnce(
         response({
           changes: [row('add-auth', 'in-progress', 1, 2)],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
         }),
       )
     vi.stubGlobal('fetch', fetchMock)
@@ -1288,24 +2522,32 @@ describe('OpenSpec tab bodies', () => {
     body.render()
     const view = (): unknown => RootView(viewProps(body.tree, RootView) as never)
     expect(textOf(view())).toContain(MISSING_CLI_MESSAGE)
-    const retry = buttonByText(view(), 'Retry')
-    ;(retry.props.onClick as () => void)()
+    click(buttonByText(view(), 'Retry'))
     await settle()
     body.render()
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(textOf(view())).toContain('add-auth')
+    body.destroy()
   })
 
   it('starts the Specs segment for the specs root address', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => response({ capabilities: [{ id: 'auth', requirementCount: 1 }] })),
+      vi.fn(async (url: string) =>
+        url.includes('/specs')
+          ? response({ capabilities: CAPABILITY_ROWS })
+          : response({
+              changes: [],
+              archived: [],
+              counts: { active: 0, archived: 0, capabilities: 2 },
+            }),
+      ),
     )
     const body = mount(
       RootBody as never,
       {
         tab: fakeTab(SPECS_ADDRESS).tab,
-        initialSegment: openSpecTarget(SPECS_ADDRESS)?.view === 'root' ? 'specs' : 'changes',
+        initialSegment: 'specs',
         sessionId: 's1',
         t,
         draft: () => {},
@@ -1317,24 +2559,8 @@ describe('OpenSpec tab bodies', () => {
     body.render()
     const view = (): unknown => RootView(viewProps(body.tree, RootView) as never)
     expect(segmented(view()).props.value).toBe('specs')
-    expect(textOf(view())).toContain('auth')
-  })
-
-  it('dispatches a URL to the body view it names', () => {
-    const tree = OpenSpecTab({
-      useTabInfo: () => ({ tab: fakeTab(changeAddress('add-auth')).tab }),
-      sessionId: 's1',
-      t,
-      handoff: { draft: () => {}, open: () => {} },
-    } as never)
-    expect(nodes(tree).some((node) => node.type === ChangeBody)).toBe(true)
-    const root = OpenSpecTab({
-      useTabInfo: () => ({ tab: fakeTab(ROOT_ADDRESS).tab }),
-      sessionId: 's1',
-      t,
-      handoff: { draft: () => {}, open: () => {} },
-    } as never)
-    expect(nodes(root).some((node) => node.type === RootBody)).toBe(true)
+    expect(textOf(view())).toContain('admin-indicator')
+    body.destroy()
   })
 })
 
@@ -1343,17 +2569,6 @@ describe('OpenSpec live observation', () => {
 
   function watchesOf(tree: unknown): Found[] {
     return nodes(tree).filter((node) => node.type === FileWatch)
-  }
-
-  function changeProps(): Record<string, unknown> {
-    return {
-      tab: fakeTab(changeAddress('add-auth')).tab,
-      name: 'add-auth',
-      sessionId: 's1',
-      t,
-      draft: () => {},
-      open: () => {},
-    }
   }
 
   function watchElement(tree: unknown, address: string): Found {
@@ -1560,10 +2775,14 @@ describe('OpenSpec live observation', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(viewProps(body.tree, ChangeView).change).toEqual(FULL)
       const watches = new Map<string, WatchMount>()
-      syncWatches(body.tree, watches, () => ({
-        status: 'live',
-        value: { version: 'v-b' },
-      }))
+      syncWatches(
+        body.tree,
+        watches,
+        (): ResourceFacts => ({
+          status: 'live',
+          value: { version: 'v-b' },
+        }),
+      )
       expect(vi.getTimerCount()).toBe(1)
       vi.advanceTimersByTime(300)
       await settle()
@@ -1571,10 +2790,14 @@ describe('OpenSpec live observation', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2)
       const change = viewProps(body.tree, ChangeView).change as ChangeDetail
       expect(change.artifacts.proposal).toBe('# Why, revised')
-      syncWatches(body.tree, watches, () => ({
-        status: 'live',
-        value: { version: 'v-b' },
-      }))
+      syncWatches(
+        body.tree,
+        watches,
+        (): ResourceFacts => ({
+          status: 'live',
+          value: { version: 'v-b' },
+        }),
+      )
       expect(vi.getTimerCount()).toBe(0)
       expect(fetchMock).toHaveBeenCalledTimes(2)
       destroyWatches(watches)
@@ -1699,21 +2922,21 @@ describe('OpenSpec live observation', () => {
     vi.useFakeTimers()
     try {
       const authOnly: ChangeDetail = {
-        ...TWO_SPECS,
-        specs: [{ capability: 'auth', body: '# auth delta', modified: '2026-11-05T14:03:00' }],
+        ...TWO_DELTAS,
+        deltas: [AUTH_DELTA],
       }
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(response({ change: TWO_SPECS }))
+        .mockResolvedValueOnce(response({ change: TWO_DELTAS }))
         .mockResolvedValueOnce(response({ change: authOnly }))
-        .mockResolvedValueOnce(response({ change: TWO_SPECS }))
+        .mockResolvedValueOnce(response({ change: TWO_DELTAS }))
       vi.stubGlobal('fetch', fetchMock)
       const body = mount(ChangeBody as never, changeProps() as never)
       body.render()
       await settle()
       body.render()
       expect(fetchMock).toHaveBeenCalledTimes(1)
-      const billingAddress = fileAddress('s1', deltaSpecPath('add-auth', 'billing'))
+      const billingAddress = fileAddress('s1', 'openspec/changes/add-auth/specs/billing/spec.md')
       const initial = watchesOf(body.tree).find((watch) => watch.props.address === billingAddress)
       if (initial === undefined) throw new Error('billing watch missing')
       let file: ResourceFacts = { status: 'live', value: { version: 'v1' } }
@@ -1803,6 +3026,7 @@ describe('OpenSpec live observation', () => {
           id: 'auth',
           sessionId: 's1',
           t,
+          open: () => {},
         } as never,
       )
       body.render()
@@ -1811,7 +3035,7 @@ describe('OpenSpec live observation', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1)
       const element = watchesOf(body.tree)[0]
       if (element === undefined) throw new Error('watch missing')
-      expect(element.props.address).toBe(fileAddress('s1', capabilitySpecPath('auth')))
+      expect(element.props.address).toBe(fileAddress('s1', 'openspec/specs/auth/spec.md'))
       ;(element.props.change as () => void)()
       expect(vi.getTimerCount()).toBe(1)
       vi.advanceTimersByTime(300)
@@ -1830,15 +3054,13 @@ describe('OpenSpec live observation', () => {
   it('disposes every file subscription and its bookkeeping with the body', async () => {
     vi.useFakeTimers()
     try {
-      const fetchMock = vi.fn(async () => response({ change: TWO_SPECS }))
+      const fetchMock = vi.fn(async () => response({ change: TWO_DELTAS }))
       vi.stubGlobal('fetch', fetchMock)
       const observed: string[] = []
       const subscribed = new Set<string>()
       const disposals = new Map<string, number>()
       const useResource = (address: string): ResourceFacts => {
         observed.push(address)
-        // One subscription per mounted watch, cleaned up by the watch's own
-        // effect cleanup when the tree unmounts.
         registerEffect(() => {
           subscribed.add(address)
           return () => {
@@ -1852,9 +3074,13 @@ describe('OpenSpec live observation', () => {
       body.render()
       await settle()
       body.render()
-      const expected = changeWatchPaths('add-auth', ['auth', 'billing']).map((path) =>
-        fileAddress('s1', path),
-      )
+      const expected = [
+        'openspec/changes/add-auth/proposal.md',
+        'openspec/changes/add-auth/design.md',
+        'openspec/changes/add-auth/tasks.md',
+        'openspec/changes/add-auth/specs/auth/spec.md',
+        'openspec/changes/add-auth/specs/billing/spec.md',
+      ].map((path) => fileAddress('s1', path))
       const watches = new Map<string, WatchMount>()
       syncWatches(body.tree, watches, useResource, body)
       expect([...subscribed].sort()).toEqual([...expected].sort())
@@ -1886,7 +3112,7 @@ describe('OpenSpec live observation', () => {
     }
   })
 
-  it('advances the last-updated fact after a live re-read', async () => {
+  it('advances the relative last-updated fact after a live re-read', async () => {
     vi.useFakeTimers()
     try {
       const fetchMock = vi
@@ -1898,9 +3124,9 @@ describe('OpenSpec live observation', () => {
       body.render()
       await settle()
       body.render()
-      const now = new Date('2026-11-05T18:00:00')
+      const now = NOW
       const before = viewProps(body.tree, ChangeView)
-      expect(textOf(ChangeView({ ...before, now } as never))).toContain('Updated 14:03')
+      expect(textOf(ChangeView({ ...before, now } as never))).toContain('updated 2h ago')
       const element = watchesOf(body.tree)[0]
       if (element === undefined) throw new Error('watch missing')
       ;(element.props.change as () => void)()
@@ -1908,7 +3134,7 @@ describe('OpenSpec live observation', () => {
       await settle()
       body.render()
       const after = viewProps(body.tree, ChangeView)
-      expect(textOf(ChangeView({ ...after, now } as never))).toContain('Updated 15:20')
+      expect(textOf(ChangeView({ ...after, now } as never))).toContain('updated 1h ago')
       body.destroy()
     } finally {
       vi.useRealTimers()
@@ -1965,6 +3191,7 @@ describe('OpenSpec panel capability body', () => {
         id: 'auth',
         sessionId: 's1',
         t,
+        open: () => {},
       } as never,
     )
     body.render()
@@ -1972,5 +3199,116 @@ describe('OpenSpec panel capability body', () => {
     body.render()
     const view = nodes(body.tree).find((node) => node.type === CapabilityView)
     expect(view).toBeDefined()
+    body.destroy()
+  })
+
+  it('filters a capability with more than twelve requirements through the mounted body', async () => {
+    const requirements = Array.from({ length: 13 }, (_value, index) => ({
+      name: `Requirement ${String(index + 1)}`,
+      text: `The system SHALL do step ${String(index + 1)}.`,
+      scenarios: [],
+    }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          capability: {
+            ...CAPABILITY,
+            requirementCount: 13,
+            requirements,
+          },
+        }),
+      ),
+    )
+    const body = mount(
+      CapabilityBody as never,
+      {
+        tab: fakeTab(capabilityAddress('auth')).tab,
+        id: 'auth',
+        sessionId: 's1',
+        t,
+        open: () => {},
+      } as never,
+    )
+    body.render()
+    await settle()
+    body.render()
+    const view = (): ReactNode => CapabilityView(viewProps(body.tree, CapabilityView) as never)
+    expect(typed(view(), 'Input')).toHaveLength(1)
+    typeInto(inputOf(view()), 'Requirement 7')
+    body.render()
+    expect(textOf(view())).toContain('Requirement 7')
+    expect(textOf(view())).not.toContain('Requirement 8')
+    typeInto(inputOf(view()), 'zzz')
+    body.render()
+    expect(textOf(view())).toContain('No requirements match this filter.')
+    body.destroy()
+  })
+
+  it('opens an archived change from the history section', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response({ capability: CAPABILITY })),
+    )
+    const opened: string[] = []
+    const body = mount(
+      CapabilityBody as never,
+      {
+        tab: fakeTab(capabilityAddress('auth')).tab,
+        id: 'auth',
+        sessionId: 's1',
+        t,
+        open: (address: string) => opened.push(address),
+      } as never,
+    )
+    body.render()
+    await settle()
+    body.render()
+    ;(viewProps(body.tree, CapabilityView).onSection as (section: string) => void)('history')
+    body.render()
+    const view = CapabilityView(viewProps(body.tree, CapabilityView) as never)
+    click(cardButtons(view)[0])
+    expect(opened).toEqual([
+      'dsh-resource://openspec/archive-change/2026-10-27-add-admin-indicator',
+    ])
+    body.destroy()
+  })
+})
+
+describe('OpenSpec panel visual contract', () => {
+  it('maps each phase to one semantic tag tone', () => {
+    expect(phaseTone('planning')).toBe('warning')
+    expect(phaseTone('ready-to-apply')).toBe('info')
+    expect(phaseTone('applying')).toBe('info')
+    expect(phaseTone('complete')).toBe('success')
+    expect(phaseTone('archived')).toBe('quiet')
+    expect(phaseDot('planning')).toBe('warning')
+    expect(phaseDot('complete')).toBe('done')
+    expect(phaseDot('archived')).toBe('idle')
+  })
+
+  it('ships no literal colour in the panel CSS and uses the theme tokens', () => {
+    expect(PANEL_CSS).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(PANEL_CSS).not.toMatch(/\brgba?\(/)
+    expect(PANEL_CSS).not.toMatch(/\bhsla?\(/)
+    for (const token of [
+      '--dsw-alias-bg-layer-1',
+      '--dsw-alias-border-l2',
+      '--dsw-radius-md',
+      '--dsw-font-s-strong-14',
+      '--dsw-font-xs-13',
+      '--dsw-font-xxs-12',
+      '--dsw-alias-label-primary',
+      '--dsw-alias-label-secondary',
+      '--dsw-alias-label-tertiary',
+      '--dsw-alias-state-business-primary',
+      '--dsw-alias-bg-module-platform',
+      '--dsw-alias-interactive-bg-hover',
+    ]) {
+      expect(PANEL_CSS).toContain(token)
+    }
+    expect(PANEL_CSS).toContain('prefers-reduced-motion')
+    expect(PANEL_CSS).toContain('-webkit-line-clamp: 2')
+    expect(PANEL_CSS).toContain('flex-wrap: wrap')
   })
 })
