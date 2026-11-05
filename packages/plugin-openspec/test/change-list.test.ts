@@ -156,9 +156,9 @@ function gitOutput(commits: readonly { short: string; paths: readonly string[] }
   return commits
     .map(
       (commit) =>
-        `${commit.short}\t2026-11-01T10:00:00+03:00\tcommit ${commit.short}\n${commit.paths.join('\n')}\n`,
+        `\0${commit.short}\t2026-11-01T10:00:00+03:00\tcommit ${commit.short}\n${commit.paths.join('\n')}\n`,
     )
-    .join('\n')
+    .join('')
 }
 
 /** Force one platform branch for a test and restore it even when the test throws. */
@@ -487,10 +487,10 @@ describe('git provenance', () => {
     const cwd = workspace(true)
     const runner = vi.fn(async () =>
       [
-        'abc1234\t2026-11-01T10:00:00+03:00\tfeat: newer',
+        '\x00abc1234\t2026-11-01T10:00:00+03:00\tfeat: newer',
         'openspec/changes/add-auth/tasks.md',
         '',
-        'def5678\t2026-10-01T09:00:00+03:00\tdocs: older',
+        '\x00def5678\t2026-10-01T09:00:00+03:00\tdocs: older',
         'openspec/specs/alpha/spec.md',
         '',
       ].join('\n'),
@@ -503,7 +503,7 @@ describe('git provenance', () => {
         '300',
         '--name-only',
         '--relative',
-        '--pretty=format:%h%x09%aI%x09%s',
+        '--pretty=format:%x00%h%x09%aI%x09%s',
         '--',
         'openspec/changes',
         'openspec/specs',
@@ -548,21 +548,22 @@ describe('git provenance', () => {
     const badDate = await readGitLog(
       cwd,
       ['openspec'],
-      async () => 'abc1234\tnot-a-date\tsubject\nopenspec/changes/x/tasks.md\n',
+      async () => '\0abc1234\tnot-a-date\tsubject\nopenspec/changes/x/tasks.md\n',
     )
     expect(badDate).toBeNull()
     const badPath = await readGitLog(
       cwd,
       ['openspec'],
-      async () => 'abc1234\t2026-11-01T10:00:00+03:00\tsubject\nopenspec/changes/x\tinjected.md\n',
+      async () =>
+        '\0abc1234\t2026-11-01T10:00:00+03:00\tsubject\nopenspec/changes/x\tinjected.md\n',
     )
     expect(badPath).toBeNull()
     const badSection = await readGitLog(cwd, ['openspec'], async () =>
       [
-        'abc1234\t2026-11-01T10:00:00+03:00\tfirst',
+        '\0abc1234\t2026-11-01T10:00:00+03:00\tfirst',
         'openspec/changes/a/f.md',
         '',
-        'malformed header with spaces',
+        '\0malformed header with spaces',
         'openspec/changes/x/tasks.md',
         '',
       ].join('\n'),
@@ -571,7 +572,7 @@ describe('git provenance', () => {
     const yearOnly = await readGitLog(
       cwd,
       ['openspec'],
-      async () => 'abc1234\t2026\tfirst\nopenspec/changes/a/f.md\n',
+      async () => '\0abc1234\t2026\tfirst\nopenspec/changes/a/f.md\n',
     )
     expect(yearOnly).toBeNull()
   })
@@ -580,16 +581,29 @@ describe('git provenance', () => {
     const cwd = workspace(true)
     const entries = await readGitLog(cwd, ['openspec/changes'], async () =>
       [
-        'abc1234\t2026-11-01T10:00:00+03:00\tfirst',
+        '\0abc1234\t2026-11-01T10:00:00+03:00\tfirst',
         'openspec/changes/a/f.md',
-        '',
-        'def5678\t2026-10-01T09:00:00+03:00\t',
+        '\0def5678\t2026-10-01T09:00:00+03:00\t',
         'openspec/changes/b/f.md',
         '',
       ].join('\n'),
     )
     expect(commitFor(entries, 'openspec/changes/a')).toMatchObject({ short: 'abc1234' })
     expect(commitFor(entries, 'openspec/changes/b')).toMatchObject({ short: 'def5678' })
+  })
+
+  it('frames a merge commit with no file rows before the next header', async () => {
+    const cwd = workspace(true)
+    const entries = await readGitLog(cwd, ['openspec/changes'], async () =>
+      [
+        '\0e3ff66e\t2026-11-02T10:00:00+03:00\tMerge branch main',
+        '\x0052b5aff\t2026-11-01T10:00:00+03:00\tsecond',
+        'openspec/changes/a/f.md',
+        '',
+      ].join('\n'),
+    )
+    expect(entries?.map((entry) => entry.commit.short)).toEqual(['e3ff66e', '52b5aff'])
+    expect(commitFor(entries, 'openspec/changes/a')).toMatchObject({ short: '52b5aff' })
   })
 
   it('maps commits from a workspace nested inside a repository', async () => {
@@ -621,7 +635,10 @@ describe('git provenance', () => {
         _options: unknown,
         callback: (error: null, stdout: string) => void,
       ) => {
-        callback(null, 'abc1234\t2026-11-01T10:00:00+03:00\tfeat: work\nopenspec/changes/x/f.md\n')
+        callback(
+          null,
+          '\0abc1234\t2026-11-01T10:00:00+03:00\tfeat: work\nopenspec/changes/x/f.md\n',
+        )
       },
     )
     const entries = await readGitLog(cwd, ['openspec/changes'])

@@ -246,9 +246,9 @@ function gitOutput(commits: readonly { short: string; paths: readonly string[] }
   return commits
     .map(
       (commit) =>
-        `${commit.short}\t2026-11-01T10:00:00+03:00\tcommit ${commit.short}\n${commit.paths.join('\n')}\n`,
+        `\0${commit.short}\t2026-11-01T10:00:00+03:00\tcommit ${commit.short}\n${commit.paths.join('\n')}\n`,
     )
-    .join('\n')
+    .join('')
 }
 
 function serveGit(output: string): void {
@@ -1240,7 +1240,7 @@ describe('openspec capability reads', () => {
     const args = execFileMock.mock.calls[0]?.[1] as string[]
     expect(args).toEqual(
       expect.arrayContaining([
-        'openspec/specs/alpha',
+        'openspec/specs/alpha/spec.md',
         'openspec/changes/archive/2026-11-01-refine-alpha',
         'openspec/changes/archive/2026-10-20-update-alpha',
         'openspec/changes/archive/2026-10-01-add-alpha',
@@ -1331,6 +1331,27 @@ describe('openspec capability reads', () => {
       '--type',
       'spec',
     ])
+  })
+
+  it('uses the accepted spec file commit, not a newer neighbouring file', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'alpha', '# Alpha\n\n## Purpose\n\nProvenance.\n')
+    serveGit(
+      gitOutput([
+        { short: 'aaa1111', paths: ['openspec/specs/alpha/README.md'] },
+        { short: 'bbb2222', paths: ['openspec/specs/alpha/spec.md'] },
+      ]),
+    )
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'alpha', requirementCount: 0 }]) }
+      }
+      if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
+      return undefined
+    })
+    const rows = await listWorkspaceCapabilityRows(cwd)
+    expect(rows[0]?.commit).toMatchObject({ short: 'bbb2222' })
   })
 
   it('finds provenance for a nested capability id', async () => {
