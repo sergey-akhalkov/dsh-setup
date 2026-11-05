@@ -56,6 +56,7 @@ import {
   EXPLORE_DRAFT,
   fileAddress,
   type HistoryEntry,
+  hasArtifact,
   initialArtifact,
   initialRootSegment,
   isoDate,
@@ -745,6 +746,9 @@ export function RootBody(props: RootBodyProps): ReactNode {
     capabilities.reload()
   }
   useEffect(() => {
+    // Remember the resolved segment too, so an explicit Specs address survives
+    // the round trip through a capability tab.
+    writeSegment(storage, sessionId, start)
     changes.reload()
     // A remembered Specs segment must load its rows on mount, not only after a click.
     if (start === 'specs') loadSpecs()
@@ -1468,15 +1472,30 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
   const archived = change.archived === true
   const phase: Phase = archived ? 'archived' : phaseOf(change)
   const deltas = change.deltas ?? []
-  const baseId = `dsh-openspec-artifacts-${encodeURIComponent(change.name)}`
+  const baseId = `dsh-openspec-artifacts-${archived ? 'archived' : 'active'}-${encodeURIComponent(change.name)}`
   const items: [SegmentedTab<ArtifactKind>, ...SegmentedTab<ArtifactKind>[]] = ARTIFACT_KINDS.map(
-    (kind) => ({
-      value: kind,
-      label: artifactLabel(kind, change, t),
-      id: `${baseId}-${kind}`,
-      panelId: `${baseId}-${kind}-panel`,
-    }),
+    (kind) => {
+      const available = hasArtifact(change, kind)
+      const label = artifactLabel(kind, change, t)
+      return {
+        value: kind,
+        // The shipped tabs have no disabled option; an unavailable kind keeps
+        // its reason on the tab and its selection is refused below.
+        label: available ? (
+          label
+        ) : (
+          <span className="dsh-openspec-tab-unavailable" title={t('artifact.notWritten')}>
+            {label}
+          </span>
+        ),
+        id: `${baseId}-${kind}`,
+        panelId: `${baseId}-${kind}-panel`,
+      }
+    },
   ) as [SegmentedTab<ArtifactKind>, ...SegmentedTab<ArtifactKind>[]]
+  const chooseArtifact = (kind: ArtifactKind): void => {
+    if (hasArtifact(change, kind)) props.onArtifact(kind)
+  }
   const updated = relativeLabel(change.modified, props.now)
   const archivedOn = isoDate(change.archivedAt)
   return (
@@ -1512,7 +1531,7 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
       <primitives.SegmentedTabs
         items={items}
         value={artifact}
-        onChange={props.onArtifact}
+        onChange={chooseArtifact}
         label={t('change.artifactLabel')}
       />
       <div
@@ -1785,57 +1804,82 @@ function ScenarioBlock(props: {
   )
 }
 
-const INLINE_PATTERN = /`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+const INLINE_PATTERN = /\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+const CODE_SLOT = /\uE000(\d+)\uE000/g
 const KEYWORDS = new Set(['SHALL', 'MUST', 'MUST NOT'])
 const KEYWORD_PATTERN = /\b(MUST NOT|SHALL|MUST)\b/
 
 /**
  * The panel's small inline Markdown renderer: backticked code, strong,
  * emphasis, http(s) links, and normative keywords marked without changing text.
+ * Code spans are masked before emphasis/link matching, so a `*` inside code is
+ * never read as an emphasis delimiter.
  */
 export function InlineText(props: { readonly text: string }): ReactNode {
+  const codes: string[] = []
+  const masked = props.text.replace(/`([^`]+)`/g, (_whole, code: string) => {
+    codes.push(code)
+    return `\uE000${String(codes.length - 1)}\uE000`
+  })
+  return <>{inlineNodes(masked, codes)}</>
+}
+
+/** Emphasis, strong, and link matching over text whose code spans are masked. */
+function inlineNodes(text: string, codes: readonly string[]): ReactNode[] {
   const nodes: ReactNode[] = []
   let last = 0
   let key = 0
-  for (const match of props.text.matchAll(INLINE_PATTERN)) {
+  for (const match of text.matchAll(INLINE_PATTERN)) {
     const index = match.index ?? 0
-    if (index > last) {
-      for (const node of keywordNodes(props.text.slice(last, index), key)) {
-        nodes.push(node)
-        key += 1
-      }
-    }
-    const code = match[1]
-    const strong = match[2]
-    const emphasis = match[3]
-    const label = match[4]
-    const href = match[5]
-    if (code !== undefined) {
-      nodes.push(
-        <code className="dsh-openspec-code" key={`code-${String(key)}`}>
-          {code}
-        </code>,
-      )
-    } else if (strong !== undefined) {
+    if (index > last) nodes.push(...plainNodes(text.slice(last, index), codes, key++))
+    const strong = match[1]
+    const emphasis = match[2]
+    const label = match[3]
+    const href = match[4]
+    if (strong !== undefined) {
       // InlineText has no hooks, so nesting it as a call keeps the renderer
       // usable from the hook-mock test harness as well as from React.
-      nodes.push(<strong key={`strong-${String(key)}`}>{InlineText({ text: strong })}</strong>)
+      nodes.push(<strong key={`strong-${String(key)}`}>{inlineNodes(strong, codes)}</strong>)
     } else if (emphasis !== undefined) {
-      nodes.push(<em key={`em-${String(key)}`}>{InlineText({ text: emphasis })}</em>)
+      nodes.push(<em key={`em-${String(key)}`}>{inlineNodes(emphasis, codes)}</em>)
     } else if (label !== undefined && href !== undefined) {
       nodes.push(
         <a key={`link-${String(key)}`} href={href} target="_blank" rel="noreferrer">
-          {InlineText({ text: label })}
+          {inlineNodes(label, codes)}
         </a>,
       )
     }
     key += 1
     last = index + match[0].length
   }
-  if (last < props.text.length) {
-    for (const node of keywordNodes(props.text.slice(last), key)) nodes.push(node)
+  if (last < text.length) nodes.push(...plainNodes(text.slice(last), codes, key))
+  return nodes
+}
+
+/** One unstyled run: masked code slots become code, everything else keywords. */
+function plainNodes(text: string, codes: readonly string[], keyBase: number): ReactNode[] {
+  const nodes: ReactNode[] = []
+  let last = 0
+  let key = keyBase
+  for (const match of text.matchAll(CODE_SLOT)) {
+    const index = match.index ?? 0
+    if (index > last) {
+      for (const node of keywordNodes(text.slice(last, index), key)) nodes.push(node)
+      key += 1
+    }
+    const code = codes[Number(match[1])] ?? ''
+    nodes.push(
+      <code className="dsh-openspec-code" key={`code-${String(key)}`}>
+        {code}
+      </code>,
+    )
+    key += 1
+    last = index + match[0].length
   }
-  return <>{nodes}</>
+  if (last < text.length) {
+    for (const node of keywordNodes(text.slice(last), key)) nodes.push(node)
+  }
+  return nodes
 }
 
 /** Split plain text around the normative keywords; case-sensitive by construction. */

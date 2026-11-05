@@ -1326,6 +1326,17 @@ describe('OpenSpec panel renderers', () => {
     expect(nodes(linkTree).some((node) => node.type === 'code')).toBe(true)
   })
 
+  it('keeps asterisks inside nested inline code', () => {
+    const strong = InlineText({ text: '**Use `*.ts`.**' })
+    expect(textOf(strong)).toBe('Use *.ts.')
+    expect(nodes(strong).find((node) => node.type === 'code')?.props.children).toBe('*.ts')
+    expect(nodes(strong).some((node) => node.type === 'strong')).toBe(true)
+    const emphasis = InlineText({ text: '*Run `a * b`.*' })
+    expect(textOf(emphasis)).toBe('Run a * b.')
+    expect(nodes(emphasis).find((node) => node.type === 'code')?.props.children).toBe('a * b')
+    expect(nodes(emphasis).some((node) => node.type === 'em')).toBe(true)
+  })
+
   it('marks SHALL, MUST, and MUST NOT without changing the text', () => {
     const source = 'The system SHALL keep it; a client MUST NOT lose it; lower-case shall stays.'
     const tree = InlineText({ text: source })
@@ -2064,6 +2075,58 @@ describe('OpenSpec root view', () => {
     second.destroy()
   })
 
+  it('persists an explicit Specs address so returning from a capability keeps Specs', async () => {
+    const { storage } = memoryStorage()
+    writeSegment(storage, 's1', 'archive')
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes('/specs')
+        ? response({ capabilities: CAPABILITY_ROWS })
+        : response({
+            changes: [],
+            archived: [],
+            counts: { active: 0, archived: 0, capabilities: 2 },
+          }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const first = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(SPECS_ADDRESS).tab,
+        initialSegment: 'specs',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: () => {},
+        storage,
+      } as never,
+    )
+    first.render()
+    await settle()
+    first.render()
+    expect(viewProps(first.tree, RootView).segment).toBe('specs')
+    expect(readSegment(storage, 's1')).toBe('specs')
+    first.destroy()
+
+    const second = mount(
+      RootBody as never,
+      {
+        tab: fakeTab(ROOT_ADDRESS).tab,
+        initialSegment: 'changes',
+        sessionId: 's1',
+        t,
+        draft: () => {},
+        open: () => {},
+        storage,
+      } as never,
+    )
+    second.render()
+    await settle()
+    second.render()
+    expect(viewProps(second.tree, RootView).segment).toBe('specs')
+    expect((viewProps(second.tree, RootView).capabilities as { phase: string }).phase).toBe('ready')
+    second.destroy()
+  })
+
   it('lets the explicit Specs address win over a remembered segment', async () => {
     const { storage } = memoryStorage()
     writeSegment(storage, 's1', 'archive')
@@ -2129,9 +2192,38 @@ describe('OpenSpec change view', () => {
   })
 
   it('shows a missing artifact as unavailable with its reason', () => {
-    const tree = ChangeView(changeViewProps({ change: NO_DESIGN, artifact: 'design' }))
+    const chosen: string[] = []
+    const tree = ChangeView(
+      changeViewProps({
+        change: NO_DESIGN,
+        artifact: 'design',
+        onArtifact: (kind) => chosen.push(kind),
+      }),
+    )
     expect(textOf(tree)).toContain('Not written yet.')
     expect(typed(tree, 'MarkdownText')).toHaveLength(0)
+    const items = tabControl(tree).props.items as Array<{ value: string; label: unknown }>
+    const design = items.find((item) => item.value === 'design')
+    const unavailable = nodes(design?.label).find(
+      (node) => node.props.className === 'dsh-openspec-tab-unavailable',
+    )
+    expect(unavailable?.props.title).toBe('Not written yet.')
+    ;(tabControl(tree).props.onChange as (value: string) => void)('design')
+    expect(chosen).toEqual([])
+    ;(tabControl(tree).props.onChange as (value: string) => void)('proposal')
+    expect(chosen).toEqual(['proposal'])
+  })
+
+  it('namespaces tab and panel ids by the active/archive family', () => {
+    const idsOf = (tree: unknown): string[] =>
+      (tabControl(tree).props.items as Array<{ id: string; panelId: string }>).map(
+        (item) => `${item.id}|${item.panelId}`,
+      )
+    const active = idsOf(ChangeView(changeViewProps({ change: { ...FULL, name: 'same' } })))
+    const archived = idsOf(ChangeView(changeViewProps({ change: { ...ARCHIVED, name: 'same' } })))
+    expect(active.some((id) => archived.includes(id))).toBe(false)
+    expect(active.every((id) => id.includes('-active-'))).toBe(true)
+    expect(archived.every((id) => id.includes('-archived-'))).toBe(true)
   })
 
   it('switches between delta capabilities and maps operation tones', () => {
