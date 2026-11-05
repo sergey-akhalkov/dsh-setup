@@ -216,6 +216,7 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-05-guarantee-work-gates`                        | 14/14          |
 | `2026-11-05-add-openspec-panel`                          | 18/18          |
 | `2026-11-05-widen-dsh-support-to-engine-range`           | 5/5            |
+| `2026-11-05-redesign-openspec-panel`                     | 14/14          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -595,3 +596,23 @@ observable surface already worked there, but the exact list refused the install.
 `v0.26.1`, setup 0.26.1 pinned to `e9b4dd6`) validated 0.2.1-rc.3, 0.2.1-rc.5 and 0.2.2-rc.1 in one
 release run and published the index; an in-range DSH update now needs no `dsh.json` or `install.ps1`
 edit.
+
+The `2026-11-05-redesign-openspec-panel` change carries 14 tasks and 14/14 portable task approvals; it
+lifts the shipped read-only OpenSpec panel into a reading surface without adding a package, row,
+dependency, or write. The main `openspec-panel` spec gained 8 and modified 6 requirements: a counted
+`Changes | Specs | Archive` root with remembered segmentation, change cards with derived phase,
+proposal `Why` summary, progress, last-updated time and git commit, openable archived changes, a
+capability purpose/provenance/History view, structured requirement and scenario cards with
+SHALL/MUST marking, a grouped task checklist parsed with the pinned CLI grammar, and optional
+read-only git provenance. Host reads stay workspace-scoped and additive — the apply picker's
+active-only `changes` contract is untouched — and the client decodes every new field defensively; a
+`git` failure or an absent `connection.fetch` never fails a route. The serial tail regenerated the
+bundles and vendored setup and passed `pnpm validate` (98 files, 1877 tests), `pnpm build` with no
+diff, `pnpm gen:check` (329 files), `pnpm dogfood`, and `openspec validate --strict`. Live acceptance
+ran in a throwaway Web Harness and recorded eight screenshots under the archive: the full light
+checklist, the empty Changes state, dark appearance, the real 0.2.1-rc.3 floor host (which serves
+the routes, so no supported host lacks `connection.fetch`), and the defensive missing-route
+degradation (panel 404 state and picker error strip). Open follow-ups: the advisory
+integration-review findings (proposal-only renames, nested task-file live updates, mixed unparsed
+archived deltas, capability acceptance dates, per-spec requirement filtering) were accepted
+unresolved by the owner for this release, and the desktop install smoke remains an owner step.
