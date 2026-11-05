@@ -517,3 +517,23 @@ installer from an external PowerShell with the app closed); that install is what
 strict lane-fanout rule, the stricter checkpoint remedy, and the reviewer-bound approval audit. Until
 then the live desktop profile still runs the pre-change plugin, whose archive and completion gates
 cannot parse the new `reviewerProvider` marker field.
+
+The `2026-11-05-add-openspec-apply-picker` change carries 10 tasks and 10/10 portable task approvals.
+It adds the plugin's first Client half: `/openspec-apply` opens DSH's native `popupSelect` shell with
+one row per unfinished change in the open session's workspace, labeled with the change name and its
+`completed/total` task progress, and a pick writes `/openspec-apply-change <name>` into the composer
+draft without submitting. The rows come from the read-only, session-scoped
+`GET /plugins/dsh-setup-openspec/changes` route, which runs the documented `openspec list --json` CLI
+in the session workspace under a 10-second process-tree timeout and reports an ancestor root, a
+declared store, or a default store as the no-root error instead of listing another root's changes.
+The client half is inert without the client command service and the route stays unregistered on
+non-Web hosts, so the six skills still ship everywhere; the new `openspec-apply-picker` spec holds the
+requirements. The gate was green before archiving: `pnpm validate` (95 files, 1708 tests),
+`pnpm gen:check` (327 files), `pnpm reviews:check --change add-openspec-apply-picker` (10/10 PASS,
+archive-ready), `pnpm build && git diff --exit-code` on the committed tree, and `pnpm dogfood`. Review
+rounds fixed a missing `lib/change-list.js` packaging entry, a client typecheck error, stale-PID
+taskkill safety, cross-platform timeout tests, and a `"root": null` mapping on a non-zero exit. The
+live profile's 0.22.0 delegation plugin cannot parse the marker's `reviewerProvider` field, so the
+archive used the repository's 10/10 portable audit plus a temporary local marker parse workaround; the
+committed marker is unchanged. Open owner follow-up: install the release that carries the picker and
+open `/openspec-apply` in a workspace with an `openspec/` root.
