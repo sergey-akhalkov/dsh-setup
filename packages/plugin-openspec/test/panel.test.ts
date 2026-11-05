@@ -119,7 +119,6 @@ import {
   changeAddress,
   type Delta,
   derivePhase,
-  EXPLORE_DRAFT,
   fileAddress,
   type HistoryEntry,
   hasArtifact,
@@ -133,7 +132,6 @@ import {
   OPENSPEC_KIND,
   openSpecTarget,
   openSpecTitle,
-  PROPOSE_DRAFT,
   parseTaskGroups,
   parseTaskLines,
   phaseDot,
@@ -1312,6 +1310,22 @@ describe('OpenSpec panel renderers', () => {
     expect(link?.props.target).toBe('_blank')
   })
 
+  it('renders nested formatting inside strong, emphasis, and links', () => {
+    const strongTree = InlineText({ text: '**Use `probe`.**' })
+    expect(textOf(strongTree)).toBe('Use probe.')
+    expect(nodes(strongTree).find((node) => node.type === 'code')?.props.children).toBe('probe')
+    const emphasisTree = InlineText({ text: '*The system SHALL comply.*' })
+    expect(textOf(emphasisTree)).toBe('The system SHALL comply.')
+    expect(
+      nodes(emphasisTree).some(
+        (node) => node.type === 'span' && node.props.className === 'dsh-openspec-keyword',
+      ),
+    ).toBe(true)
+    const linkTree = InlineText({ text: '[`docs`](https://example.com/docs)' })
+    expect(textOf(linkTree)).toBe('docs')
+    expect(nodes(linkTree).some((node) => node.type === 'code')).toBe(true)
+  })
+
   it('marks SHALL, MUST, and MUST NOT without changing the text', () => {
     const source = 'The system SHALL keep it; a client MUST NOT lose it; lower-case shall stays.'
     const tree = InlineText({ text: source })
@@ -1464,6 +1478,13 @@ describe('OpenSpec panel renderers', () => {
     expect(parseTaskGroups(content)).toHaveLength(1)
   })
 
+  it('groups CRLF task files by their headings', () => {
+    const groups = parseTaskGroups('## First\r\n- [x] a\r\n## Second\r\n- [ ] b')
+    expect(groups.map((group) => group.title)).toEqual(['First', 'Second'])
+    expect(groups.map((group) => group.tasks.length)).toEqual([1, 1])
+    expect(groups[1]?.tasks[0]).toEqual({ done: false, description: 'b' })
+  })
+
   it('states when tasks are not written and names an unparsed remainder', () => {
     expect(textOf(TaskChecklist({ content: null, completedTasks: 0, totalTasks: 0, t }))).toContain(
       'Not written yet.',
@@ -1473,6 +1494,11 @@ describe('OpenSpec panel renderers', () => {
         TaskChecklist({ content: 'No checkboxes here.', completedTasks: 0, totalTasks: 0, t }),
       ),
     ).toContain('tasks not written yet')
+    expect(
+      textOf(
+        TaskChecklist({ content: 'No checkboxes here.', completedTasks: 0, totalTasks: 3, t }),
+      ),
+    ).toContain('3 tasks not parsed from the file.')
     const tree = TaskChecklist({
       content: '## Group\n- [x] one\n- [ ] two',
       completedTasks: 1,
@@ -1633,7 +1659,7 @@ describe('OpenSpec panel composer handoff', () => {
     const view = RootView(viewProps(body.tree, RootView) as never)
     click(actionCard(view, 'Explore'))
     click(actionCard(view, 'Propose'))
-    expect(drafts).toEqual([EXPLORE_DRAFT, PROPOSE_DRAFT])
+    expect(drafts).toEqual(['/openspec-explore ', '/openspec-propose '])
     expect(submits).toEqual([])
     body.destroy()
   })
@@ -1729,6 +1755,7 @@ describe('OpenSpec root view', () => {
     expect(text).toContain('specs')
     expect(text).toContain('updated 2h ago')
     expect(text).toContain('7e87448')
+    expect(text).toContain('2026-10-27')
     const phaseTag = typed(tree, 'Tag').find((tag) => tag.props.children === 'applying')
     expect(phaseTag?.props.tone).toBe('info')
     expect(typed(tree, 'StateDot')[0]?.props.state).toBe('ongoing')
@@ -2028,6 +2055,10 @@ describe('OpenSpec root view', () => {
     await settle()
     second.render()
     expect(viewProps(second.tree, RootView).segment).toBe('specs')
+    expect(
+      (viewProps(second.tree, RootView).capabilities as { phase: string }).phase,
+    ).toBe('ready')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/specs'))).toBe(true)
     second.destroy()
   })
 

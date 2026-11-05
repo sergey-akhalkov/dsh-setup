@@ -746,7 +746,8 @@ export function RootBody(props: RootBodyProps): ReactNode {
   }
   useEffect(() => {
     changes.reload()
-    if (initialSegment === 'specs') loadSpecs()
+    // A remembered Specs segment must load its rows on mount, not only after a click.
+    if (start === 'specs') loadSpecs()
     // The initial segment is fixed for the tab's lifetime.
   }, [])
   useTabRefresh(tab, () => {
@@ -1388,9 +1389,9 @@ export function ProgressBar(props: {
   )
 }
 
-/** The branch icon, short hash, and the subject on demand. */
+/** The branch icon, short hash, commit date, and the subject on demand. */
 function CommitFactView(props: {
-  readonly commit: { readonly short: string; readonly subject: string }
+  readonly commit: { readonly short: string; readonly at: string; readonly subject: string }
 }): ReactNode {
   return (
     <span className="dsh-openspec-commit">
@@ -1400,6 +1401,9 @@ function CommitFactView(props: {
       >
         <span>{props.commit.short}</span>
       </primitives.Tooltip>
+      {props.commit.at === '' ? null : (
+        <span className="dsh-openspec-meta">{props.commit.at.slice(0, 10)}</span>
+      )}
     </span>
   )
 }
@@ -1790,13 +1794,15 @@ export function InlineText(props: { readonly text: string }): ReactNode {
         </code>,
       )
     } else if (strong !== undefined) {
-      nodes.push(<strong key={`strong-${String(key)}`}>{strong}</strong>)
+      // InlineText has no hooks, so nesting it as a call keeps the renderer
+      // usable from the hook-mock test harness as well as from React.
+      nodes.push(<strong key={`strong-${String(key)}`}>{InlineText({ text: strong })}</strong>)
     } else if (emphasis !== undefined) {
-      nodes.push(<em key={`em-${String(key)}`}>{emphasis}</em>)
+      nodes.push(<em key={`em-${String(key)}`}>{InlineText({ text: emphasis })}</em>)
     } else if (label !== undefined && href !== undefined) {
       nodes.push(
         <a key={`link-${String(key)}`} href={href} target="_blank" rel="noreferrer">
-          {label}
+          {InlineText({ text: label })}
         </a>,
       )
     }
@@ -1855,10 +1861,10 @@ export function TaskChecklist(props: TaskChecklistProps): ReactNode {
     .flatMap((file) => parseTaskGroups(file.body))
     .filter((group) => group.tasks.length > 0)
   const parsed: TaskLine[] = sources.flatMap((file) => parseTaskLines(file.body))
-  if (groups.length === 0) {
+  const remainder = props.totalTasks - parsed.length
+  if (groups.length === 0 && props.totalTasks === 0) {
     return <p className="dsh-openspec-state">{props.t('change.tasksNotWritten')}</p>
   }
-  const remainder = props.totalTasks - parsed.length
   return (
     <div className="dsh-openspec-section">
       {remainder === 0 ? null : (

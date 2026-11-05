@@ -410,7 +410,7 @@ export const TASK_LINE_PATTERN =
 /** Parse every task line in document order. */
 export function parseTaskLines(content: string): TaskLine[] {
   const tasks: TaskLine[] = []
-  for (const line of content.split('\n')) {
+  for (const line of content.split(/\r?\n/)) {
     const match = TASK_LINE_PATTERN.exec(line)
     if (match === null) continue
     tasks.push({
@@ -436,7 +436,7 @@ export function parseTaskGroups(content: string): TaskGroup[] {
     groups.push(group)
     return group
   }
-  for (const line of content.split('\n')) {
+  for (const line of content.split(/\r?\n/)) {
     const heading = /^##\s+(.+)$/.exec(line)
     if (heading !== null) {
       current = open((heading[1] ?? '').trim())
