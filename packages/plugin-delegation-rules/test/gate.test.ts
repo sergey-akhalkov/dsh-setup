@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import {
   type BundleConfigLike,
   createAgent,
@@ -1659,10 +1660,13 @@ describe('lane-boundary gate', () => {
 
 describe('lane-assignment gate', () => {
   function laneAssignment(gate: 'strict' | 'soft' = 'strict'): BundleConfigLike {
-    return {
-      targets: codexTargets,
-      rules: [{ id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate }],
+    // Exercise the shipped rule, not a hand-written copy of its shape.
+    const fragment = parse(readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')) as {
+      rows: Array<{ config: BundleConfigLike }>
     }
+    const shipped = fragment.rows[0]?.config.rules?.find((rule) => rule.id === 'lane-fanout')
+    if (shipped === undefined) throw new Error('the shipped rules do not include lane-fanout')
+    return { targets: codexTargets, rules: [{ ...shipped, gate }] }
   }
 
   type Section = [heading: string, tasks: Array<[number: string, text: string, checked: boolean]>]
@@ -1862,6 +1866,24 @@ describe('lane-assignment gate', () => {
     expect(message).not.toContain('docs/a.md')
   })
 
+  it('accepts a serial note when it covers every unassigned lane', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', FIXTURE)
+    const harness = await ticked(
+      root,
+      dir,
+      twoLanes(false, false, false),
+      twoLanes(true, false, false),
+    )
+    await harness.callTool('task_progress', {
+      task: '2.1 Write docs',
+      status: 'in-progress',
+      reason: 'shares the hot file with the code lane, so this lane stays serial',
+    })
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
   it('reports a lane that appears after an earlier turn', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', FIXTURE)
@@ -1924,7 +1946,7 @@ describe('lane-assignment gate', () => {
     expect(combinedSteers(harness.agent)).toContain('lane-tag: change-a#2')
   })
 
-  it('stays silent for a single non-serial lane and for a plan without headings', async () => {
+  it('stays silent for a single lane, a hot-file plan, and a plan without headings', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', FIXTURE)
     const before = plan([
@@ -1949,6 +1971,21 @@ describe('lane-assignment gate', () => {
     const flat = await ticked(root2, dir2, flatBefore, flatAfter)
     await flat.turnStopping(1)
     expect(steerTexts(flat.agent)).toHaveLength(0)
+
+    // A serial-titled lane for a shared hot file never counts as parallel work.
+    const root3 = await workspace()
+    const dir3 = await writeChange(root3, 'change-c', FIXTURE)
+    const hotBefore = plan([
+      ['1. Code (owns `src/**`)', [['1.1', 'First code', false]]],
+      ['2. Shared hot file (serial, owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+    ])
+    const hotAfter = plan([
+      ['1. Code (owns `src/**`)', [['1.1', 'First code', true]]],
+      ['2. Shared hot file (serial, owns `docs/a.md`)', [['2.1', 'Write docs', false]]],
+    ])
+    const hot = await ticked(root3, dir3, hotBefore, hotAfter)
+    await hot.turnStopping(1)
+    expect(steerTexts(hot.agent)).toHaveLength(0)
   })
 
   it('fails open for a lane without owned paths and for an unreadable plan', async () => {

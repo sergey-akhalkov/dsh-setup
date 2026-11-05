@@ -59,9 +59,14 @@ describe('configuration validation', () => {
       'worker-deep',
       'bug-fix',
       'integration-review',
+      'lane-fanout',
     ])
     expect(config.rules.map((rule) => rule.when)).not.toContain('implementation-work')
-    expect(config.rules.map((rule) => rule.when)).not.toContain('lane-assignment')
+    expect(config.rules.find((rule) => rule.id === 'lane-fanout')).toMatchObject({
+      when: 'lane-assignment',
+      contract: 'note',
+      gate: 'strict',
+    })
     expect([...config.targets.keys()]).toEqual([
       'codex',
       'codex-write',

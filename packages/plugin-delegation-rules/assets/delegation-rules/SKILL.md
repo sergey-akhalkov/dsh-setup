@@ -61,7 +61,7 @@ A session with no involvement is not steered for the change. To opt in, edit the
 | `spec-ready` | A change this session created or whose spec artifacts it changed is review-ready and its whole-spec review has no matching PASS/ERROR for the current spec digest. | `review` scope `whole`, phase `spec` |
 | `spec-task-ready` | A task this session checked has no task-review PASS/ERROR record. | `review` scope `task` |
 | `implementation-work` | The turn changed implementation files in a change this session is involved in and has neither a newly checked-and-reviewed task nor a matching progress note for the current worktree digest. | `note` |
-| `lane-assignment` | This session is involved in a change with at least two non-serial lanes, the turn ticked a task or changed implementation files, and a non-current lane with unchecked tasks has neither a tagged worker start nor a serial note. | `note` |
+| `lane-assignment` | A readable `tasks.md` in a change this session is involved in has at least two non-serial lanes that name owned paths and hold unchecked tasks, the turn ticked a task or changed implementation files, and an unassigned non-current lane has neither a tagged worker start nor a serial note. | `note` |
 | `lane-boundary` (deprecated) | A task this session ticked in this turn completed the last unchecked task of a `tasks.md` lane, another non-`serial` lane with owned paths still has an unchecked task, and the turn started no parallel worker (`subagent`, `subagent_fork`, `spawn_teammate`, `workflow`). Satisfied by a worker start or by a matching progress note in a remaining lane. Kept for existing profiles; use `lane-assignment` for new rules. | `note` |
 | `implementation-complete` | This session completed the change's task list and the optional integration review has no matching PASS/ERROR for the current worktree digest. | `review` scope `whole`, phase `integration` |
 | `failure-streak` | The configured number of consecutive failed tool calls has no intervening success and no consultation attempt for that streak. | `answer` (soft) |
@@ -140,28 +140,48 @@ digest. Before handing work to more than one write-capable agent at once:
   longer.
 
 Triggers, records, and digests are unchanged by this section: it describes how to assign
-write-capable work. A profile `lane-fanout` rule makes the assignment happen at the first unassigned
-lane; when it steers, start one tagged worker per reported lane before continuing, or record the
-serial decision with `task_progress`. The shipped defaults omit it: the goal-continuity
-`work-checkpoints` capability owns the pause-time parallel decision and requires a `work_checkpoint`
-call before the turn closes.
+write-capable work. The shipped strict `lane-fanout` rule makes the assignment happen at the first
+unassigned lane; when it steers, start one tagged worker per reported lane before continuing, or
+record the serial decision with one `task_progress` note per lane. The goal-continuity
+`work-checkpoints` capability still owns the pause-time parallel decision and requires a
+`work_checkpoint` call before the turn closes.
 
 ## Lane assignment
 
-A profile `lane-fanout` rule can use the `lane-assignment` trigger. It reports the lanes that still
-need an owner at any implementation turn and stays quiet once each lane is assigned, serial,
+The shipped strict `lane-fanout` rule uses the `lane-assignment` trigger. It reports the lanes that
+still need an owner on an implementation turn and stays quiet once each lane is assigned, serial,
 current, or complete.
 
+It fires only when all of these hold:
+
+- `tasks.md` is readable and has at least two non-serial lanes that name owned paths and hold
+  unchecked tasks;
+- the turn ticked a task or changed implementation files;
+- an unassigned non-serial lane with unchecked tasks is not a lane this session ticked in the turn
+  and has neither a tagged worker start nor a serial note.
+
+A plan with exactly one non-serial lane, or whose remaining work is a hot-file, generated-output, or
+serial-gate lane (a heading containing `serial`), reports nothing.
+
+- **Tagged worker call** — for each reported lane the steer prints one
+  `subagent(description: "Lane: <title>", prompt: "lane-tag: <change>#<n>. ...")` call with the
+  exact `lane-tag: <change>#<n>` in the prompt, `<n>` being the lane's 1-based position in
+  `tasks.md`. The worker resolves the repository root, creates a sibling worktree and branch
+  (`git worktree add ../wt-<change>-<n> -b lane-<change>-<n>`), works only inside the lane's owned
+  paths, and does not tick `tasks.md`.
 - **Session ledger** — per session, change, and lane. A successful `subagent`, `subagent_fork`,
-  `spawn_teammate`, or `workflow` start whose arguments contain `lane-tag: <change>#<n>` assigns
-  exactly that lane, `<n>` being the lane's 1-based position in `tasks.md`. A successful
-  `task_progress` note for a task in a lane marks only that lane serial. The lane this session
-  ticked in the turn is current and is never stored.
-- **Tag evidence** — an untagged, failed, or unrelated worker start assigns nothing. Paste the
-  exact call the steer prints; it carries the tag.
-- **Per-lane serial escape** — one `task_progress` note serializes one lane and leaves the others
-  gated. A lane that disappears, completes, or is renamed loses its decision, and a Host restart
-  clears the ledger.
+  `spawn_teammate`, or `workflow` start whose arguments contain the exact tag assigns that lane; an
+  untagged, failed, or unrelated start assigns nothing. The lane this session ticked in the turn is
+  current and is never stored. A lane that disappears, completes, or is renamed loses its decision,
+  and a Host restart clears the ledger.
+- **Per-lane serial escape** — one `task_progress` note marks only one lane serial and leaves the
+  others gated. Name the work constraint in its reason: a shared hot file, generated output, or a
+  serial gate. The task-review or archive process is not a work constraint.
+- **Worker-assigned checkpoint lanes** — when a task lane was assigned to a tagged worker, the
+  matching `continue` checkpoint lane that covers the work MUST name an owner other than `lead`. A
+  bottleneck whose targets fall inside that lane MUST use `worker_start` or `user_decision`;
+  `lead_action` is refused. A missing checkpoint lane for a worker-assigned task lane is refused and
+  the steer names the lane; an unreadable checkpoint or task-lane plan fails open.
 - **Fail-open** — an unreadable `tasks.md`, a plan without level-2 headings, an unassigned lane
   without owned paths, and a turn with no tick or implementation change report nothing.
 
@@ -181,11 +201,13 @@ boundary behavior, but new rules use `lane-assignment`.
 | `worker-deep` | `manual` | answer | none |
 | `bug-fix` | `manual` | patch | none |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft |
+| `lane-fanout` | `lane-assignment` | note | strict |
 
-The shipped set intentionally omits the automatic `task-progress` and `lane-fanout` rules. The
-`implementation-work` and `lane-assignment` triggers and the `note` contract remain available to
-profile rules; the goal-continuity `work-checkpoints` capability owns the pause-time progress and
-parallel decision and requires a `work_checkpoint` call at each substantial pause.
+The shipped set includes the strict `lane-fanout` rule and intentionally omits an automatic
+`task-progress` rule. The `implementation-work` and `lane-assignment` triggers and the `note`
+contract remain available to profile rules; the goal-continuity `work-checkpoints` capability owns
+the pause-time progress and parallel decision and requires a `work_checkpoint` call at each
+substantial pause.
 
 The shipped defaults target the installed-Codex provider and select `gpt-6-astra` at `xhigh` for
 `codex` and `codex-write`; `codex-astra` is the explicit strong target the advisor uses. They are

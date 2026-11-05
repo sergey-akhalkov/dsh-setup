@@ -471,7 +471,7 @@ describe('target resolution', () => {
     expect(subagents.runs[1]?.agentOptions).toEqual({ reasoningEffort: 'max' })
   })
 
-  it('keeps the removed progress and lane triggers available to profile rules', async () => {
+  it('ships the strict lane rule and keeps the progress trigger available to profile rules', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', [{ number: '1.1', text: 'First task' }])
     const fragment = parse(readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')) as {
@@ -481,13 +481,16 @@ describe('target resolution', () => {
     if (shipped === undefined) throw new Error('missing shipped config')
     const shippedRules = shipped.rules ?? []
     expect(shippedRules.map((rule) => rule.when)).not.toContain('implementation-work')
-    expect(shippedRules.map((rule) => rule.when)).not.toContain('lane-assignment')
+    expect(shippedRules.find((rule) => rule.id === 'lane-fanout')).toMatchObject({
+      when: 'lane-assignment',
+      contract: 'note',
+      gate: 'strict',
+    })
     const harness = harnessFor(root, {
       ...shipped,
       rules: [
         ...shippedRules,
         { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
-        { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
       ],
     })
     await harness.preStep(1)
