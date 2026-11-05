@@ -247,6 +247,7 @@ const EN: Record<string, string> = {
   'phase.complete': 'complete',
   'phase.archived': 'archived',
   'change.apply': 'Apply change',
+  'change.expandFull': 'Show the full text',
   'change.tasks': 'tasks',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
@@ -1278,12 +1279,18 @@ function ChangeCard(props: {
         )}
       </span>
       {summaryText(props.row.why ?? props.row.summary) === null ? null : (
-        <primitives.Tooltip label={props.row.why ?? props.row.summary ?? ''}>
+        <span className="dsh-openspec-purpose-wrap">
+          <primitives.Tooltip label={props.row.why ?? props.row.summary ?? ''}>
+            <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">
+              {props.row.why ?? props.row.summary}
+            </span>
+          </primitives.Tooltip>
           {/* biome-ignore lint/a11y/useSemanticElements: the card is already a button; a nested button is invalid. */}
           <span
-            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-expand"
+            className="dsh-openspec-purpose-toggle"
             role="button"
             tabIndex={0}
+            aria-label={props.t('change.expandFull')}
             onClick={(event) => {
               event.stopPropagation()
               event.currentTarget.focus()
@@ -1294,9 +1301,9 @@ function ChangeCard(props: {
               event.stopPropagation()
             }}
           >
-            {props.row.why ?? props.row.summary}
+            <primitives.IconChevronDownOutlineRegular size={12} />
           </span>
-        </primitives.Tooltip>
+        </span>
       )}
       {props.row.totalTasks > 0 ? (
         ProgressBar({
@@ -1346,12 +1353,18 @@ function CapabilityCard(props: {
         )}
       </span>
       {summaryText(props.row.purpose) === null ? null : (
-        <primitives.Tooltip label={props.row.purpose ?? ''}>
+        <span className="dsh-openspec-purpose-wrap">
+          <primitives.Tooltip label={props.row.purpose ?? ''}>
+            <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one">
+              {props.row.purpose}
+            </span>
+          </primitives.Tooltip>
           {/* biome-ignore lint/a11y/useSemanticElements: the card is already a button; a nested button is invalid. */}
           <span
-            className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one dsh-openspec-purpose-expand"
+            className="dsh-openspec-purpose-toggle"
             role="button"
             tabIndex={0}
+            aria-label={props.t('change.expandFull')}
             onClick={(event) => {
               event.stopPropagation()
               event.currentTarget.focus()
@@ -1362,9 +1375,9 @@ function CapabilityCard(props: {
               event.stopPropagation()
             }}
           >
-            {props.row.purpose}
+            <primitives.IconChevronDownOutlineRegular size={12} />
           </span>
-        </primitives.Tooltip>
+        </span>
       )}
       <span className="dsh-openspec-meta">
         <span className="dsh-openspec-tags">
@@ -2269,13 +2282,36 @@ export const PANEL_CSS = `
 .dsh-openspec-purpose-one {
   -webkit-line-clamp: 1;
 }
-.dsh-openspec-purpose-expand {
+.dsh-openspec-purpose-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.dsh-openspec-purpose-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
 }
-.dsh-openspec-purpose-expand:focus {
+.dsh-openspec-purpose-toggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-openspec-purpose-wrap:focus-within .dsh-openspec-purpose {
   -webkit-line-clamp: unset;
   overflow: visible;
-  cursor: auto;
+}
+.dsh-openspec-purpose-wrap:focus-within .dsh-openspec-purpose-toggle svg {
+  transform: rotate(180deg);
 }
 .dsh-openspec-producer {
   max-width: 100%;

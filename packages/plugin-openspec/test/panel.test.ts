@@ -50,6 +50,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     type: 'IconCheckCircleOutlineRegular',
     props,
   }),
+  IconChevronDownOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconChevronDownOutlineRegular',
+    props,
+  }),
   IconPlusOutlineRegular: (props: Record<string, unknown>) => ({
     type: 'IconPlusOutlineRegular',
     props,
@@ -1786,7 +1790,7 @@ describe('OpenSpec root view', () => {
     expect(textOf(head)).toContain('updated 2h ago')
     expect(textOf(head)).not.toContain('4/12')
     const purpose = nodes(card).find((node) =>
-      String(node.props.className ?? '').includes('dsh-openspec-purpose'),
+      String(node.props.className ?? '').includes('dsh-openspec-purpose-clamp'),
     )
     expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-clamp')
     const phaseTag = typed(tree, 'Tag').find((tag) => tag.props.children === 'applying')
@@ -1816,11 +1820,12 @@ describe('OpenSpec root view', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
     expect(typed(card, 'Tooltip')[0]?.props.label).toBe(why)
-    const purpose = nodes(card).find((node) =>
-      String(node.props.className ?? '').includes('dsh-openspec-purpose'),
+    const toggle = nodes(card).find((node) =>
+      String(node.props.className ?? '').includes('dsh-openspec-purpose-toggle'),
     )
-    expect(purpose?.props.tabIndex).toBe(0)
-    expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-expand')
+    expect(toggle?.props.tabIndex).toBe(0)
+    expect(toggle?.props.role).toBe('button')
+    expect(PANEL_CSS).toContain(':focus-within')
     expect(PANEL_CSS).toContain('-webkit-line-clamp: unset')
   })
 
