@@ -1392,7 +1392,7 @@ window.__ModuleLoader__.load({
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
               props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.completedTasks)}/${String(props.row.totalTasks)}` }) : null
             ] }),
-            summaryText(props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.summary ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose", children: props.row.summary }) }),
+            summaryText(props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.summary ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.summary }) }),
             props.row.totalTasks > 0 ? ProgressBar({ done: props.row.completedTasks, total: props.row.totalTasks, t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(props.row.presence, props.t) }),
@@ -1411,7 +1411,7 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.id }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.requirementCount)} ${props.t("specs.req")}` })
         ] }),
-        summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-one", children: props.row.purpose }),
+        summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one", children: props.row.purpose }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
           provenance === void 0 || provenance === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${String(props.row.requirementCount)} ${props.t("capability.requirements")}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${props.t("specs.acceptedVia")} ${provenance.name}` }),
@@ -1807,7 +1807,7 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: `${String(requirementCount)} ${t("capability.requirements")}` }),
             scenarioCount === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: `${String(scenarioCount)} ${t("capability.scenarios")}` }),
             accepted === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: `${t("capability.accepted")} ${accepted}` }),
-            producer === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: `${t("capability.via")} ${producer.name}` }),
+            producer === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", className: "dsh-openspec-producer", children: `${t("capability.via")} ${producer.name}` }),
             capability.commit === void 0 || capability.commit === null ? null : CommitFactView({ commit: capability.commit })
           ] })
         ] }),
@@ -1967,17 +1967,26 @@ window.__ModuleLoader__.load({
       white-space: nowrap;
     }
     .dsh-openspec-purpose {
-      display: -webkit-box;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
-      overflow: hidden;
       margin: 0;
       font: var(--dsw-font-xs-13);
       color: var(--dsw-alias-label-secondary);
       overflow-wrap: anywhere;
     }
+    /* Cards clamp to two lines; detail headers keep the full purpose. */
+    .dsh-openspec-purpose-clamp {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
     .dsh-openspec-purpose-one {
       -webkit-line-clamp: 1;
+    }
+    .dsh-openspec-producer {
+      max-width: 100%;
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
     .dsh-openspec-meta {
       display: flex;
