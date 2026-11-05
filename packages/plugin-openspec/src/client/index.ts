@@ -12,8 +12,12 @@
  * moves. A host without the command service registers nothing.
  */
 
-/** Read-only Host route that lists the session workspace's changes. */
-export const CHANGES_PATH = '/plugins/dsh-setup-openspec/changes'
+/**
+ * Document-relative form of the Host route that lists the session workspace's
+ * changes. It stays relative so the desktop shell page and the Web page address
+ * the same `/api` Fetch route.
+ */
+export const CHANGES_PATH = 'api/plugins/dsh-setup-openspec/changes'
 
 /** Client services the picker needs; a host without them stays inert. */
 export const inject = ['commandUi', 'sessions', 'conversation']

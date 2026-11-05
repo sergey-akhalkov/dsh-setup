@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
@@ -200,24 +199,31 @@ export function apply(ctx: Context): void {
   registerChangeRoute(ctx)
 }
 
-/** Read-only route the Client picker asks for the session workspace's change list. */
-export const CHANGES_ROUTE = '/plugins/dsh-setup-openspec/changes'
+/**
+ * Read-only fetch route the Client picker asks for the session workspace's
+ * change list. It lives under `/api` so the carrier-neutral `connection.fetch`
+ * registry serves it: the Web carrier through the `/api` bridge and the
+ * desktop shell carrier through its directly dispatched Fetch handler.
+ */
+export const CHANGES_ROUTE = '/api/plugins/dsh-setup-openspec/changes'
+
+/** One exact Fetch route of the Host Connection service. */
+interface FetchRoute {
+  readonly path: string
+  readonly methods: readonly string[]
+  readonly requestBody: 'buffered'
+  fetch(request: Request): Promise<Response>
+}
 
 /**
- * The four Web Host services the change-list route needs. They are probed with
+ * The Host services the change-list route needs. They are probed with
  * `ctx.get` so a CLI, TUI, or ACP host keeps the six skills and registers
- * nothing.
+ * nothing; `connection.fetch` appeared in DSH 0.2.1-rc.5, so an older host
+ * registers nothing either.
  */
-interface ChangeRouteHost {
-  readonly webServer: {
-    register(route: {
-      kind: 'exact'
-      path: string
-      handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void
-    }): () => void
-  }
+interface ChangeRouteServices {
   readonly connection: {
-    requestRejection(request: { headers: IncomingHttpHeaders }): 401 | 403 | undefined
+    readonly fetch: { register(route: FetchRoute): () => void }
   }
   readonly agents: {
     get(id: string): { readonly session: unknown } | undefined
@@ -227,74 +233,60 @@ interface ChangeRouteHost {
   }
 }
 
-function changeRouteHost(ctx: Context): ChangeRouteHost | undefined {
-  const webServer = ctx.get('webServer') as ChangeRouteHost['webServer'] | undefined
-  const connection = ctx.get('connection') as ChangeRouteHost['connection'] | undefined
-  const agents = ctx.get('agents') as ChangeRouteHost['agents'] | undefined
+function changeRouteServices(ctx: Context): ChangeRouteServices | undefined {
+  const connection = ctx.get('connection') as
+    | { readonly fetch?: { register(route: FetchRoute): () => void } }
+    | undefined
+  const fetch = connection?.fetch
+  const agents = ctx.get('agents') as ChangeRouteServices['agents'] | undefined
   const workingDirectory = ctx.get('workingDirectory') as
-    | ChangeRouteHost['workingDirectory']
+    | ChangeRouteServices['workingDirectory']
     | undefined
   if (
-    webServer === undefined ||
-    connection === undefined ||
+    fetch === undefined ||
+    typeof fetch.register !== 'function' ||
     agents === undefined ||
     workingDirectory === undefined
   ) {
     return undefined
   }
-  return { webServer, connection, agents, workingDirectory }
+  return { connection: { fetch }, agents, workingDirectory }
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' })
-  res.end(JSON.stringify(body))
+function jsonResponse(status: number, body: unknown): Response {
+  return Response.json(body, { status })
 }
 
 /**
- * Register the workspace-scoped, read-only change list route when the Web Host
+ * Register the workspace-scoped, read-only change list route when the Host
  * services exist. The request carries only a session id; the workspace comes
- * from that live session, never from the request.
+ * from that live session, never from the request. The carrier admits the
+ * request (origin/cookie fence) before dispatching to this handler.
  */
 export function registerChangeRoute(ctx: Context): void {
-  const host = changeRouteHost(ctx)
-  if (host === undefined) return
-  ctx.effect(
-    () =>
-      host.webServer.register({
-        kind: 'exact',
-        path: CHANGES_ROUTE,
-        handler: async (req, res) => {
-          if (req.method !== 'GET') {
-            res.writeHead(405, { allow: 'GET' })
-            res.end()
-            return
-          }
-          const rejection = host.connection.requestRejection({ headers: req.headers })
-          if (rejection !== undefined) {
-            writeJson(res, rejection, { error: rejection === 401 ? 'Unauthorized' : 'Forbidden' })
-            return
-          }
-          const url = new URL(req.url ?? CHANGES_ROUTE, 'http://localhost')
-          const sessionId = url.searchParams.get('session')
-          if (sessionId === null || sessionId === '') {
-            writeJson(res, 400, { error: 'A session id is required.' })
-            return
-          }
-          const agent = host.agents.get(sessionId)
-          if (agent === undefined) {
-            writeJson(res, 400, { error: 'The session is not live in this host.' })
-            return
-          }
-          try {
-            const changes = await listWorkspaceChanges(host.workingDirectory.get(agent.session))
-            writeJson(res, 200, { changes })
-          } catch (error) {
-            writeJson(res, 500, {
-              error: error instanceof Error ? error.message : 'The change list could not be read.',
-            })
-          }
-        },
-      }),
-    'dsh-setup-openspec: change list route',
-  )
+  const services = changeRouteServices(ctx)
+  if (services === undefined) return
+  services.connection.fetch.register({
+    path: CHANGES_ROUTE,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    async fetch(request) {
+      const sessionId = new URL(request.url).searchParams.get('session')
+      if (sessionId === null || sessionId === '') {
+        return jsonResponse(400, { error: 'A session id is required.' })
+      }
+      const agent = services.agents.get(sessionId)
+      if (agent === undefined) {
+        return jsonResponse(400, { error: 'The session is not live in this host.' })
+      }
+      try {
+        const changes = await listWorkspaceChanges(services.workingDirectory.get(agent.session))
+        return jsonResponse(200, { changes })
+      } catch (error) {
+        return jsonResponse(500, {
+          error: error instanceof Error ? error.message : 'The change list could not be read.',
+        })
+      }
+    },
+  })
 }

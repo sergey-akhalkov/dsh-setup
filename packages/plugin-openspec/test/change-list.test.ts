@@ -1,6 +1,5 @@
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -309,54 +308,27 @@ describe('openspec change list', () => {
   })
 })
 
-interface Route {
-  readonly kind: string
+interface FetchRoute {
   readonly path: string
-  readonly handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void
-}
-
-class FakeResponse {
-  status = 0
-  headers: Record<string, string> = {}
-  body = ''
-
-  writeHead(status: number, headers: Record<string, string> = {}): this {
-    this.status = status
-    this.headers = headers
-    return this
-  }
-
-  end(body?: string): void {
-    this.body = body ?? ''
-  }
-
-  json(): unknown {
-    return JSON.parse(this.body) as unknown
-  }
-}
-
-function request(url: string, method = 'GET'): IncomingMessage {
-  return { method, url, headers: {} } as IncomingMessage
+  readonly methods: readonly string[]
+  readonly requestBody: string
+  fetch(request: Request): Promise<Response>
 }
 
 interface RouteHarness {
-  readonly route: Route
-  rejection: 401 | 403 | undefined
+  readonly route: FetchRoute
 }
 
+/** A desktop shell host has `connection.fetch` but no `webServer` service. */
 function routeHarness(workspaces: ReadonlyMap<string, string>): RouteHarness {
-  let route: Route | undefined
-  const state = { rejection: undefined as 401 | 403 | undefined }
+  let route: FetchRoute | undefined
   const services: Record<string, unknown> = {
-    webServer: {
-      register(value: Route) {
-        route = value
-        return () => {}
-      },
-    },
     connection: {
-      requestRejection() {
-        return state.rejection
+      fetch: {
+        register(value: FetchRoute) {
+          route = value
+          return () => {}
+        },
       },
     },
     agents: {
@@ -370,41 +342,30 @@ function routeHarness(workspaces: ReadonlyMap<string, string>): RouteHarness {
         return session.directory
       },
     },
+    webServer: {
+      register() {
+        throw new Error('the change list route must not depend on webServer')
+      },
+    },
   }
   const ctx = {
-    effect(callback: () => () => void) {
-      callback()
-      return () => {}
-    },
     get(name: string) {
       return services[name]
     },
   }
   registerChangeRoute(ctx as never)
   if (route === undefined) throw new Error('route not registered')
-  return {
-    route,
-    get rejection() {
-      return state.rejection
-    },
-    set rejection(value: 401 | 403 | undefined) {
-      state.rejection = value
-    },
-  }
+  return { route }
 }
 
 async function answer(
   harness: RouteHarness,
   session: string | undefined,
   workspaceAt?: string,
-): Promise<FakeResponse> {
+): Promise<Response> {
   const query = session === undefined ? '' : `?session=${session}`
-  const response = new FakeResponse()
-  const pending = Promise.resolve(
-    harness.route.handler(
-      request(`${CHANGES_ROUTE}${query}`),
-      response as unknown as ServerResponse,
-    ),
+  const pending = harness.route.fetch(
+    new Request(`http://localhost${CHANGES_ROUTE}${query}`, { method: 'GET' }),
   )
   const child = spawnMock.mock.results.at(-1)?.value as FakeChild | undefined
   if (workspaceAt !== undefined && child !== undefined) {
@@ -416,14 +377,17 @@ async function answer(
       ]),
     )
   }
-  await pending
-  return response
+  return pending
 }
 
 describe('change list route', () => {
-  it('registers the read-only exact path', () => {
+  it('registers an /api fetch route on the desktop shell carrier', () => {
     const harness = routeHarness(new Map())
-    expect(harness.route).toMatchObject({ kind: 'exact', path: CHANGES_ROUTE })
+    expect(harness.route).toMatchObject({
+      path: CHANGES_ROUTE,
+      methods: ['GET'],
+      requestBody: 'buffered',
+    })
   })
 
   it('scopes each session to its own workspace', async () => {
@@ -437,7 +401,7 @@ describe('change list route', () => {
     )
     const one = await answer(harness, 's1', first)
     expect(one.status).toBe(200)
-    expect(one.json()).toEqual({
+    await expect(one.json()).resolves.toEqual({
       changes: [{ name: 'add-auth', completedTasks: 3, totalTasks: 14, status: 'in-progress' }],
     })
     const two = await answer(harness, 's2', second)
@@ -448,15 +412,6 @@ describe('change list route', () => {
     ])
   })
 
-  it('rejects a foreign origin without running the CLI', async () => {
-    const harness = routeHarness(new Map())
-    harness.rejection = 403
-    const response = await answer(harness, 's1')
-    expect(response.status).toBe(403)
-    expect(response.json()).toEqual({ error: 'Forbidden' })
-    expect(spawnMock).not.toHaveBeenCalled()
-  })
-
   it('rejects an unknown session without running the CLI', async () => {
     const harness = routeHarness(new Map())
     const response = await answer(harness, 'missing')
@@ -464,16 +419,11 @@ describe('change list route', () => {
     expect(spawnMock).not.toHaveBeenCalled()
   })
 
-  it('requires a session id and allows only GET', async () => {
+  it('requires a session id', async () => {
     const harness = routeHarness(new Map())
-    expect((await answer(harness, undefined)).status).toBe(400)
-    const response = new FakeResponse()
-    await harness.route.handler(
-      request(CHANGES_ROUTE, 'POST'),
-      response as unknown as ServerResponse,
-    )
-    expect(response.status).toBe(405)
-    expect(response.headers.allow).toBe('GET')
+    const response = await answer(harness, undefined)
+    expect(response.status).toBe(400)
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 
   it('reports the no-root error when the workspace has no local root', async () => {
@@ -481,40 +431,29 @@ describe('change list route', () => {
     const harness = routeHarness(new Map([['s1', child]]))
     const response = await answer(harness, 's1')
     expect(response.status).toBe(500)
-    expect(response.json()).toEqual({ error: NO_LOCAL_ROOT_MESSAGE })
+    await expect(response.json()).resolves.toEqual({ error: NO_LOCAL_ROOT_MESSAGE })
     expect(spawnMock).not.toHaveBeenCalled()
   })
 
   it('ignores request text other than the session id', async () => {
     const cwd = workspace(true)
     const harness = routeHarness(new Map([['s1', cwd]]))
-    const response = new FakeResponse()
-    const pending = Promise.resolve(
-      harness.route.handler(
-        request(`${CHANGES_ROUTE}?session=s1&path=/etc`),
-        response as unknown as ServerResponse,
-      ),
+    const pending = harness.route.fetch(
+      new Request(`http://localhost${CHANGES_ROUTE}?session=s1&path=/etc`),
     )
     const child = spawnMock.mock.results.at(-1)?.value as FakeChild
     complete(child, 0, output(cwd))
-    await pending
+    const response = await pending
     expect(response.status).toBe(200)
     expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ cwd })
   })
 
-  it('registers nothing on a host without the Web services', () => {
-    const registered: unknown[] = []
+  it('registers nothing on a host without the connection fetch registry', () => {
     const ctx = {
-      effect(callback: () => () => void) {
-        callback()
-        return () => {}
-      },
       get() {
         return undefined
       },
-      webServer: { register: (route: unknown) => registered.push(route) },
     }
     expect(() => registerChangeRoute(ctx as never)).not.toThrow()
-    expect(registered).toEqual([])
   })
 })

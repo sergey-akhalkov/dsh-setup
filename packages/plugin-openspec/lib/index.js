@@ -166,68 +166,61 @@ export function apply(ctx) {
     ctx.skills.registerProvider(() => createSkillProvider(lock, guidance));
     registerChangeRoute(ctx);
 }
-/** Read-only route the Client picker asks for the session workspace's change list. */
-export const CHANGES_ROUTE = '/plugins/dsh-setup-openspec/changes';
-function changeRouteHost(ctx) {
-    const webServer = ctx.get('webServer');
+/**
+ * Read-only fetch route the Client picker asks for the session workspace's
+ * change list. It lives under `/api` so the carrier-neutral `connection.fetch`
+ * registry serves it: the Web carrier through the `/api` bridge and the
+ * desktop shell carrier through its directly dispatched Fetch handler.
+ */
+export const CHANGES_ROUTE = '/api/plugins/dsh-setup-openspec/changes';
+function changeRouteServices(ctx) {
     const connection = ctx.get('connection');
+    const fetch = connection?.fetch;
     const agents = ctx.get('agents');
     const workingDirectory = ctx.get('workingDirectory');
-    if (webServer === undefined ||
-        connection === undefined ||
+    if (fetch === undefined ||
+        typeof fetch.register !== 'function' ||
         agents === undefined ||
         workingDirectory === undefined) {
         return undefined;
     }
-    return { webServer, connection, agents, workingDirectory };
+    return { connection: { fetch }, agents, workingDirectory };
 }
-function writeJson(res, status, body) {
-    res.writeHead(status, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
+function jsonResponse(status, body) {
+    return Response.json(body, { status });
 }
 /**
- * Register the workspace-scoped, read-only change list route when the Web Host
+ * Register the workspace-scoped, read-only change list route when the Host
  * services exist. The request carries only a session id; the workspace comes
- * from that live session, never from the request.
+ * from that live session, never from the request. The carrier admits the
+ * request (origin/cookie fence) before dispatching to this handler.
  */
 export function registerChangeRoute(ctx) {
-    const host = changeRouteHost(ctx);
-    if (host === undefined)
+    const services = changeRouteServices(ctx);
+    if (services === undefined)
         return;
-    ctx.effect(() => host.webServer.register({
-        kind: 'exact',
+    services.connection.fetch.register({
         path: CHANGES_ROUTE,
-        handler: async (req, res) => {
-            if (req.method !== 'GET') {
-                res.writeHead(405, { allow: 'GET' });
-                res.end();
-                return;
-            }
-            const rejection = host.connection.requestRejection({ headers: req.headers });
-            if (rejection !== undefined) {
-                writeJson(res, rejection, { error: rejection === 401 ? 'Unauthorized' : 'Forbidden' });
-                return;
-            }
-            const url = new URL(req.url ?? CHANGES_ROUTE, 'http://localhost');
-            const sessionId = url.searchParams.get('session');
+        methods: ['GET'],
+        requestBody: 'buffered',
+        async fetch(request) {
+            const sessionId = new URL(request.url).searchParams.get('session');
             if (sessionId === null || sessionId === '') {
-                writeJson(res, 400, { error: 'A session id is required.' });
-                return;
+                return jsonResponse(400, { error: 'A session id is required.' });
             }
-            const agent = host.agents.get(sessionId);
+            const agent = services.agents.get(sessionId);
             if (agent === undefined) {
-                writeJson(res, 400, { error: 'The session is not live in this host.' });
-                return;
+                return jsonResponse(400, { error: 'The session is not live in this host.' });
             }
             try {
-                const changes = await listWorkspaceChanges(host.workingDirectory.get(agent.session));
-                writeJson(res, 200, { changes });
+                const changes = await listWorkspaceChanges(services.workingDirectory.get(agent.session));
+                return jsonResponse(200, { changes });
             }
             catch (error) {
-                writeJson(res, 500, {
+                return jsonResponse(500, {
                     error: error instanceof Error ? error.message : 'The change list could not be read.',
                 });
             }
         },
-    }), 'dsh-setup-openspec: change list route');
+    });
 }

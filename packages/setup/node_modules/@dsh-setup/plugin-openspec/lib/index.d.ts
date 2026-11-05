@@ -21,11 +21,17 @@ export declare function assertGuidanceTargets(skills: ReadonlyArray<{
 }>): void;
 /** Register the pinned skill set from the committed lock. */
 export declare function apply(ctx: Context): void;
-/** Read-only route the Client picker asks for the session workspace's change list. */
-export declare const CHANGES_ROUTE = "/plugins/dsh-setup-openspec/changes";
 /**
- * Register the workspace-scoped, read-only change list route when the Web Host
+ * Read-only fetch route the Client picker asks for the session workspace's
+ * change list. It lives under `/api` so the carrier-neutral `connection.fetch`
+ * registry serves it: the Web carrier through the `/api` bridge and the
+ * desktop shell carrier through its directly dispatched Fetch handler.
+ */
+export declare const CHANGES_ROUTE = "/api/plugins/dsh-setup-openspec/changes";
+/**
+ * Register the workspace-scoped, read-only change list route when the Host
  * services exist. The request carries only a session id; the workspace comes
- * from that live session, never from the request.
+ * from that live session, never from the request. The carrier admits the
+ * request (origin/cookie fence) before dispatching to this handler.
  */
 export declare function registerChangeRoute(ctx: Context): void;

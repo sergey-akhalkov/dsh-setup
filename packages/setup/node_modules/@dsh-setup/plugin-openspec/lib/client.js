@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
       inject: () => inject
     });
     module.exports = __toCommonJS(index_exports);
-    var CHANGES_PATH = "/plugins/dsh-setup-openspec/changes";
+    var CHANGES_PATH = "api/plugins/dsh-setup-openspec/changes";
     var inject = ["commandUi", "sessions", "conversation"];
     async function requestChanges(sessionId) {
       const response = await fetch(`${CHANGES_PATH}?session=${encodeURIComponent(sessionId)}`, {

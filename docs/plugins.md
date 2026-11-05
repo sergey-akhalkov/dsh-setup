@@ -463,12 +463,14 @@ shipped map in `packages/setup/defaults.yml`:
 Typing it opens the native `popupSelect` shell with one row per unfinished change in the open
 session's workspace, labeled with the change name and its `completed/total` task progress. Completed
 changes are omitted, so a root whose changes are all closed shows the shell's empty state. The rows
-come from `GET /plugins/dsh-setup-openspec/changes?session=<id>`: a read-only, session-scoped Host
-route that runs the documented `openspec list --json` CLI in that session's workspace under a
-10-second process-tree timeout. A workspace without its own `openspec/` root, or one whose CLI
-resolution returns an ancestor root or a store, reports the no-root error instead of another root's
-changes; an absent CLI, a timeout, and unreadable output report their own readable errors. The
-shell owns the search field, keyboard handling, empty state, error strip, and styling.
+come from `GET /api/plugins/dsh-setup-openspec/changes?session=<id>`: a read-only, session-scoped Host
+fetch route registered on the carrier-neutral `connection.fetch` registry, so the Web `/api` bridge
+and the desktop shell carrier both serve it. It runs the documented `openspec list --json` CLI in the
+session's workspace under a 10-second process-tree timeout. A workspace without its own `openspec/`
+root, or one whose CLI resolution returns an ancestor root or a store, reports the no-root error
+instead of another root's changes; an absent CLI, a timeout, and unreadable output report their own
+readable errors. The shell owns the search field, keyboard handling, empty state, error strip, and
+styling.
 
 Picking a row writes `/openspec-apply-change <name>` into the composer draft and never submits; the
 user sends the line and the ordinary skill-invocation path runs it. The picker adds no React, CSS,
