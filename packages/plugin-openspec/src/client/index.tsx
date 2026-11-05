@@ -213,9 +213,6 @@ const EN: Record<string, string> = {
   'segment.changes': 'Changes',
   'segment.specs': 'Specs',
   'segment.archive': 'Archive',
-  'summary.changes': 'changes',
-  'summary.specs': 'specs',
-  'summary.archived': 'archived',
   'root.explore': 'Explore',
   'root.propose': 'Propose',
   'root.exploreBody': 'Outline a change before proposing it.',
@@ -479,6 +476,7 @@ export function OpenSpecTab(props: TabBodyProps): ReactNode {
         tab={tab}
         name={target.name}
         archived={target.archived === true}
+        initialArtifact={target.artifact}
         sessionId={props.sessionId}
         t={t}
         draft={draft}
@@ -781,6 +779,9 @@ export function RootBody(props: RootBodyProps): ReactNode {
       onOpenChange={(name, archived) =>
         open(archived ? archivedChangeAddress(name) : changeAddress(name))
       }
+      onOpenArtifact={(name, archived, artifact) =>
+        open(archived ? archivedChangeAddress(name, artifact) : changeAddress(name, artifact))
+      }
       onOpenCapability={(id) => open(capabilityAddress(id))}
       onExplore={() => draft(EXPLORE_DRAFT)}
       onPropose={() => draft(PROPOSE_DRAFT)}
@@ -793,6 +794,7 @@ interface ChangeBodyProps extends DraftAndOpen {
   readonly tab: TabFace
   readonly name: string
   readonly archived?: boolean
+  readonly initialArtifact?: ArtifactKind
   readonly useResource?: UseResource
 }
 
@@ -801,7 +803,7 @@ export function ChangeBody(props: ChangeBodyProps): ReactNode {
   const { tab, name, sessionId, t, draft } = props
   const archived = props.archived === true
   const read = useRead<ChangeDetail>(() => requestChange(sessionId, name, archived))
-  const [artifact, setArtifact] = useState<ArtifactKind | undefined>(undefined)
+  const [artifact, setArtifact] = useState<ArtifactKind | undefined>(props.initialArtifact)
   const [delta, setDelta] = useState<string | undefined>(undefined)
   const [requirementQuery, setRequirementQuery] = useState('')
   useEffect(() => {
@@ -970,6 +972,7 @@ export interface RootViewProps {
   onArchiveQuery(value: string): void
   onRetry(): void
   onOpenChange(name: string, archived: boolean): void
+  onOpenArtifact(name: string, archived: boolean, artifact: ArtifactKind): void
   onOpenCapability(id: string): void
   onExplore(): void
   onPropose(): void
@@ -1012,11 +1015,6 @@ export function RootView(props: RootViewProps): ReactNode {
       <header className="dsh-openspec-root-header">
         <div className="dsh-openspec-title-row">
           <h2 className="dsh-openspec-panel-title">{t('guide.title')}</h2>
-          {list === undefined ? null : (
-            <span className="dsh-openspec-summary">
-              {workspaceSummary(list.counts, capabilityTotal, t)}
-            </span>
-          )}
         </div>
         <div className="dsh-openspec-actions">
           {ActionCard({
@@ -1046,19 +1044,6 @@ export function RootView(props: RootViewProps): ReactNode {
   )
 }
 
-/** `2 changes · 19 specs · 34 archived` for the header and the empty state. */
-function workspaceSummary(
-  counts: ChangeListResponse['counts'],
-  capabilityTotal: number | undefined,
-  t: Translate,
-): string {
-  return [
-    `${String(counts.active)} ${t('summary.changes')}`,
-    `${String(capabilityTotal ?? counts.capabilities)} ${t('summary.specs')}`,
-    `${String(counts.archived)} ${t('summary.archived')}`,
-  ].join(' · ')
-}
-
 /** The Changes segment: In progress and Complete groups, or the empty state. */
 function changesBody(response: ChangeListResponse, props: RootViewProps): ReactNode {
   const active = sortChanges(response.changes).filter((row) => phaseOf(row) !== 'archived')
@@ -1077,6 +1062,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 t: props.t,
                 now: props.now,
                 onOpen: (name) => props.onOpenChange(name, false),
+                onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               }),
             )}
           </div>
@@ -1092,6 +1078,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 t: props.t,
                 now: props.now,
                 onOpen: (name) => props.onOpenChange(name, false),
+                onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
               }),
             )}
           </div>
@@ -1117,6 +1104,7 @@ function changesEmpty(response: ChangeListResponse, props: RootViewProps): React
                 now: props.now,
                 archived: true,
                 onOpen: (name) => props.onOpenChange(name, true),
+                onOpenArtifact: (kind) => props.onOpenArtifact(row.name, true, kind),
               }),
             )}
           </div>
@@ -1263,6 +1251,7 @@ function ChangeCard(props: {
   readonly now?: Date
   readonly archived?: boolean
   onOpen(name: string): void
+  onOpenArtifact?(kind: ArtifactKind): void
 }): ReactNode {
   const archived = props.archived === true || props.row.archived === true
   const phase = archived ? 'archived' : phaseOf(props.row)
@@ -1306,7 +1295,9 @@ function ChangeCard(props: {
         <span className="dsh-openspec-meta">{props.t('change.tasksNotWritten')}</span>
       )}
       <span className="dsh-openspec-meta">
-        <span className="dsh-openspec-tags">{presenceFacts(props.row.presence, props.t)}</span>
+        <span className="dsh-openspec-tags">
+          {presenceFacts(props.row.presence, props.t, props.onOpenArtifact)}
+        </span>
         {props.row.commit === undefined || props.row.commit === null
           ? null
           : CommitFactView({ commit: props.row.commit })}
@@ -1410,38 +1401,51 @@ function CommitFactView(props: {
 }
 
 /** Quiet artifact facts for a change card. */
-function presenceFacts(presence: ChangePresence | undefined, t: Translate): ReactNode[] {
+function presenceFacts(
+  presence: ChangePresence | undefined,
+  t: Translate,
+  onOpen?: (kind: ArtifactKind) => void,
+): ReactNode[] {
   if (presence === undefined) return []
-  const facts: ReactNode[] = []
-  if (presence.proposal) {
-    facts.push(
-      <Tag key="proposal" tone="quiet">
-        {t('presence.proposal')}
-      </Tag>,
-    )
-  }
-  if (presence.design) {
-    facts.push(
-      <Tag key="design" tone="quiet">
-        {t('presence.design')}
-      </Tag>,
-    )
-  }
+  const facts: { readonly kind: ArtifactKind; readonly label: string }[] = []
+  if (presence.proposal) facts.push({ kind: 'proposal', label: t('presence.proposal') })
+  if (presence.design) facts.push({ kind: 'design', label: t('presence.design') })
   if (presence.specs > 0) {
-    facts.push(
-      <Tag key="specs" tone="quiet">
-        {presence.specs === 1 ? t('presence.spec') : t('presence.specs')}
-      </Tag>,
-    )
+    facts.push({
+      kind: 'specs',
+      label: presence.specs === 1 ? t('presence.spec') : t('presence.specs'),
+    })
   }
-  if (presence.tasks) {
-    facts.push(
-      <Tag key="tasks" tone="quiet">
-        {t('presence.tasks')}
-      </Tag>,
+  if (presence.tasks) facts.push({ kind: 'tasks', label: t('presence.tasks') })
+  return facts.map((fact) => {
+    const tag = (
+      <Tag key={fact.kind} tone="quiet">
+        {fact.label}
+      </Tag>
     )
-  }
-  return facts
+    if (onOpen === undefined) return tag
+    return (
+      // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
+      <span
+        key={fact.kind}
+        role="button"
+        tabIndex={0}
+        className="dsh-openspec-artifact-link"
+        onClick={(event) => {
+          event.stopPropagation()
+          onOpen(fact.kind)
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          event.stopPropagation()
+          onOpen(fact.kind)
+        }}
+      >
+        {tag}
+      </span>
+    )
+  })
 }
 
 export interface ChangeViewProps {
@@ -2255,6 +2259,13 @@ export const PANEL_CSS = `
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
+}
+.dsh-openspec-artifact-link {
+  display: inline-flex;
+  cursor: pointer;
+}
+.dsh-openspec-artifact-link:hover {
+  filter: brightness(1.2);
 }
 .dsh-openspec-progress {
   display: flex;

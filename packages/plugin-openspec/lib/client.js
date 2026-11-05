@@ -77,11 +77,38 @@ window.__ModuleLoader__.load({
     var CHANGE_SEGMENT = "dsh-resource://openspec/change/";
     var ARCHIVED_CHANGE_SEGMENT = "dsh-resource://openspec/archive-change/";
     var CAPABILITY_SEGMENT = "dsh-resource://openspec/spec/";
-    function changeAddress(name) {
-      return `${CHANGE_SEGMENT}${encodeURIComponent(name)}`;
+    function changeAddress(name, artifact) {
+      return `${CHANGE_SEGMENT}${encodeURIComponent(name)}${artifact === void 0 ? "" : `/${artifact}`}`;
     }
-    function archivedChangeAddress(name) {
-      return `${ARCHIVED_CHANGE_SEGMENT}${encodeURIComponent(name)}`;
+    function archivedChangeAddress(name, artifact) {
+      return `${ARCHIVED_CHANGE_SEGMENT}${encodeURIComponent(name)}${artifact === void 0 ? "" : `/${artifact}`}`;
+    }
+    function isArtifactKind(value) {
+      return ARTIFACT_KINDS.includes(value);
+    }
+    function changeSegment(address, prefix) {
+      if (!address.startsWith(prefix)) return void 0;
+      const rest = address.slice(prefix.length);
+      if (rest === "" || rest.includes("?") || rest.includes("#")) return void 0;
+      const parts = rest.split("/");
+      if (parts.length > 2) return void 0;
+      let name;
+      try {
+        name = decodeURIComponent(parts[0] ?? "");
+      } catch {
+        return void 0;
+      }
+      if (name === "") return void 0;
+      const encodedArtifact = parts[1];
+      if (encodedArtifact === void 0) return { name };
+      let artifact;
+      try {
+        artifact = decodeURIComponent(encodedArtifact);
+      } catch {
+        return void 0;
+      }
+      if (!isArtifactKind(artifact)) return void 0;
+      return { name, artifact };
     }
     function capabilityAddress(id) {
       return `${CAPABILITY_SEGMENT}${encodeURIComponent(id)}`;
@@ -101,10 +128,17 @@ window.__ModuleLoader__.load({
     function openSpecTarget(address) {
       if (address === ROOT_ADDRESS) return { view: "root", segment: "changes" };
       if (address === SPECS_ADDRESS) return { view: "root", segment: "specs" };
-      const archivedName = singleSegment(address, ARCHIVED_CHANGE_SEGMENT);
-      if (archivedName !== void 0) return { view: "change", name: archivedName, archived: true };
-      const name = singleSegment(address, CHANGE_SEGMENT);
-      if (name !== void 0) return { view: "change", name };
+      const archived = changeSegment(address, ARCHIVED_CHANGE_SEGMENT);
+      if (archived !== void 0) {
+        return {
+          view: "change",
+          name: archived.name,
+          archived: true,
+          ...archived.artifact === void 0 ? {} : { artifact: archived.artifact }
+        };
+      }
+      const change = changeSegment(address, CHANGE_SEGMENT);
+      if (change !== void 0) return { view: "change", ...change };
       const id = singleSegment(address, CAPABILITY_SEGMENT);
       if (id !== void 0) return { view: "capability", id };
       return void 0;
@@ -647,9 +681,6 @@ window.__ModuleLoader__.load({
       "segment.changes": "Changes",
       "segment.specs": "Specs",
       "segment.archive": "Archive",
-      "summary.changes": "changes",
-      "summary.specs": "specs",
-      "summary.archived": "archived",
       "root.explore": "Explore",
       "root.propose": "Propose",
       "root.exploreBody": "Outline a change before proposing it.",
@@ -807,6 +838,7 @@ window.__ModuleLoader__.load({
             tab,
             name: target.name,
             archived: target.archived === true,
+            initialArtifact: target.artifact,
             sessionId: props.sessionId,
             t,
             draft,
@@ -1032,6 +1064,7 @@ window.__ModuleLoader__.load({
             else changes.reload();
           },
           onOpenChange: (name, archived) => open(archived ? archivedChangeAddress(name) : changeAddress(name)),
+          onOpenArtifact: (name, archived, artifact) => open(archived ? archivedChangeAddress(name, artifact) : changeAddress(name, artifact)),
           onOpenCapability: (id) => open(capabilityAddress(id)),
           onExplore: () => draft(EXPLORE_DRAFT),
           onPropose: () => draft(PROPOSE_DRAFT),
@@ -1043,7 +1076,7 @@ window.__ModuleLoader__.load({
       const { tab, name, sessionId, t, draft } = props;
       const archived = props.archived === true;
       const read = useRead(() => requestChange(sessionId, name, archived));
-      const [artifact, setArtifact] = (0, import_react.useState)(void 0);
+      const [artifact, setArtifact] = (0, import_react.useState)(props.initialArtifact);
       const [delta, setDelta] = (0, import_react.useState)(void 0);
       const [requirementQuery, setRequirementQuery] = (0, import_react.useState)("");
       (0, import_react.useEffect)(() => {
@@ -1183,10 +1216,7 @@ window.__ModuleLoader__.load({
       }
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-openspec-root-header", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-title-row", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "dsh-openspec-panel-title", children: t("guide.title") }),
-            list === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-summary", children: workspaceSummary(list.counts, capabilityTotal, t) })
-          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-title-row", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "dsh-openspec-panel-title", children: t("guide.title") }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-actions", children: [
             ActionCard({
               icon: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBrowseOutlineRegular, { size: 14 }),
@@ -1216,13 +1246,6 @@ window.__ModuleLoader__.load({
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-scroll", children: body })
       ] });
     }
-    function workspaceSummary(counts, capabilityTotal, t) {
-      return [
-        `${String(counts.active)} ${t("summary.changes")}`,
-        `${String(capabilityTotal ?? counts.capabilities)} ${t("summary.specs")}`,
-        `${String(counts.archived)} ${t("summary.archived")}`
-      ].join(" \xB7 ");
-    }
     function changesBody(response, props) {
       const active = sortChanges(response.changes).filter((row) => phaseOf(row) !== "archived");
       if (active.length === 0) return changesEmpty(response, props);
@@ -1236,7 +1259,8 @@ window.__ModuleLoader__.load({
               row,
               t: props.t,
               now: props.now,
-              onOpen: (name) => props.onOpenChange(name, false)
+              onOpen: (name) => props.onOpenChange(name, false),
+              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind)
             })
           ) })
         ] }) : null,
@@ -1247,7 +1271,8 @@ window.__ModuleLoader__.load({
               row,
               t: props.t,
               now: props.now,
-              onOpen: (name) => props.onOpenChange(name, false)
+              onOpen: (name) => props.onOpenChange(name, false),
+              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind)
             })
           ) })
         ] }) : null
@@ -1263,7 +1288,8 @@ window.__ModuleLoader__.load({
             t: props.t,
             now: props.now,
             archived: true,
-            onOpen: (name) => props.onOpenChange(name, true)
+            onOpen: (name) => props.onOpenChange(name, true),
+            onOpenArtifact: (kind) => props.onOpenArtifact(row.name, true, kind)
           })
         ) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onSeeArchive, children: props.t("actions.seeArchive") })
@@ -1375,7 +1401,7 @@ window.__ModuleLoader__.load({
               showLabel: false
             }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(props.row.presence, props.t) }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(props.row.presence, props.t, props.onOpenArtifact) }),
               props.row.commit === void 0 || props.row.commit === null ? null : CommitFactView({ commit: props.row.commit }),
               props.row.totalTasks > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${String(props.row.completedTasks)}/${String(props.row.totalTasks)} ${props.t("change.tasks")}` }) : null
             ] })
@@ -1434,30 +1460,45 @@ window.__ModuleLoader__.load({
         props.commit.at === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.commit.at.slice(0, 10) })
       ] });
     }
-    function presenceFacts(presence, t) {
+    function presenceFacts(presence, t, onOpen) {
       if (presence === void 0) return [];
       const facts = [];
-      if (presence.proposal) {
-        facts.push(
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: t("presence.proposal") }, "proposal")
-        );
-      }
-      if (presence.design) {
-        facts.push(
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: t("presence.design") }, "design")
-        );
-      }
+      if (presence.proposal) facts.push({ kind: "proposal", label: t("presence.proposal") });
+      if (presence.design) facts.push({ kind: "design", label: t("presence.design") });
       if (presence.specs > 0) {
-        facts.push(
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: presence.specs === 1 ? t("presence.spec") : t("presence.specs") }, "specs")
-        );
+        facts.push({
+          kind: "specs",
+          label: presence.specs === 1 ? t("presence.spec") : t("presence.specs")
+        });
       }
-      if (presence.tasks) {
-        facts.push(
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: t("presence.tasks") }, "tasks")
+      if (presence.tasks) facts.push({ kind: "tasks", label: t("presence.tasks") });
+      return facts.map((fact) => {
+        const tag = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: fact.label }, fact.kind);
+        if (onOpen === void 0) return tag;
+        return (
+          // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            "span",
+            {
+              role: "button",
+              tabIndex: 0,
+              className: "dsh-openspec-artifact-link",
+              onClick: (event) => {
+                event.stopPropagation();
+                onOpen(fact.kind);
+              },
+              onKeyDown: (event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                onOpen(fact.kind);
+              },
+              children: tag
+            },
+            fact.kind
+          )
         );
-      }
-      return facts;
+      });
     }
     function ChangeView(props) {
       const { change, artifact, delta, t, labels } = props;
@@ -2031,6 +2072,13 @@ window.__ModuleLoader__.load({
       flex-wrap: wrap;
       gap: 4px;
       min-width: 0;
+    }
+    .dsh-openspec-artifact-link {
+      display: inline-flex;
+      cursor: pointer;
+    }
+    .dsh-openspec-artifact-link:hover {
+      filter: brightness(1.2);
     }
     .dsh-openspec-progress {
       display: flex;

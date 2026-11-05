@@ -183,7 +183,12 @@ export interface CapabilityDetail {
 /** Where one address points; exactly four shapes exist. */
 export type OpenSpecTarget =
   | { readonly view: 'root'; readonly segment: 'changes' | 'specs' }
-  | { readonly view: 'change'; readonly name: string; readonly archived?: true }
+  | {
+      readonly view: 'change'
+      readonly name: string
+      readonly archived?: true
+      readonly artifact?: ArtifactKind
+    }
   | { readonly view: 'capability'; readonly id: string }
 
 const CHANGE_SEGMENT = 'dsh-resource://openspec/change/'
@@ -191,13 +196,46 @@ const ARCHIVED_CHANGE_SEGMENT = 'dsh-resource://openspec/archive-change/'
 const CAPABILITY_SEGMENT = 'dsh-resource://openspec/spec/'
 
 /** The one canonical address for an active change; artifact selection is tab state. */
-export function changeAddress(name: string): string {
-  return `${CHANGE_SEGMENT}${encodeURIComponent(name)}`
+export function changeAddress(name: string, artifact?: ArtifactKind): string {
+  return `${CHANGE_SEGMENT}${encodeURIComponent(name)}${artifact === undefined ? '' : `/${artifact}`}`
 }
 
 /** The one canonical address for an archived change; never the active address. */
-export function archivedChangeAddress(name: string): string {
-  return `${ARCHIVED_CHANGE_SEGMENT}${encodeURIComponent(name)}`
+export function archivedChangeAddress(name: string, artifact?: ArtifactKind): string {
+  return `${ARCHIVED_CHANGE_SEGMENT}${encodeURIComponent(name)}${artifact === undefined ? '' : `/${artifact}`}`
+}
+
+function isArtifactKind(value: string): value is ArtifactKind {
+  return (ARTIFACT_KINDS as readonly string[]).includes(value)
+}
+
+/** A change address's name plus its optional artifact selection. */
+function changeSegment(
+  address: string,
+  prefix: string,
+): { name: string; artifact?: ArtifactKind } | undefined {
+  if (!address.startsWith(prefix)) return undefined
+  const rest = address.slice(prefix.length)
+  if (rest === '' || rest.includes('?') || rest.includes('#')) return undefined
+  const parts = rest.split('/')
+  if (parts.length > 2) return undefined
+  let name: string
+  try {
+    name = decodeURIComponent(parts[0] ?? '')
+  } catch {
+    return undefined
+  }
+  if (name === '') return undefined
+  const encodedArtifact = parts[1]
+  if (encodedArtifact === undefined) return { name }
+  let artifact: string
+  try {
+    artifact = decodeURIComponent(encodedArtifact)
+  } catch {
+    return undefined
+  }
+  if (!isArtifactKind(artifact)) return undefined
+  return { name, artifact }
 }
 
 /** The one canonical address for a capability. */
@@ -223,10 +261,17 @@ function singleSegment(address: string, prefix: string): string | undefined {
 export function openSpecTarget(address: string): OpenSpecTarget | undefined {
   if (address === ROOT_ADDRESS) return { view: 'root', segment: 'changes' }
   if (address === SPECS_ADDRESS) return { view: 'root', segment: 'specs' }
-  const archivedName = singleSegment(address, ARCHIVED_CHANGE_SEGMENT)
-  if (archivedName !== undefined) return { view: 'change', name: archivedName, archived: true }
-  const name = singleSegment(address, CHANGE_SEGMENT)
-  if (name !== undefined) return { view: 'change', name }
+  const archived = changeSegment(address, ARCHIVED_CHANGE_SEGMENT)
+  if (archived !== undefined) {
+    return {
+      view: 'change',
+      name: archived.name,
+      archived: true,
+      ...(archived.artifact === undefined ? {} : { artifact: archived.artifact }),
+    }
+  }
+  const change = changeSegment(address, CHANGE_SEGMENT)
+  if (change !== undefined) return { view: 'change', ...change }
   const id = singleSegment(address, CAPABILITY_SEGMENT)
   if (id !== undefined) return { view: 'capability', id }
   return undefined

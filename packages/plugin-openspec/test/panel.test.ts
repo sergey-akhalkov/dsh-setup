@@ -900,6 +900,7 @@ function rootProps(overrides: Partial<RootViewProps> = {}): RootViewProps {
     onArchiveQuery: () => {},
     onRetry: () => {},
     onOpenChange: () => {},
+    onOpenArtifact: () => {},
     onOpenCapability: () => {},
     onExplore: () => {},
     onPropose: () => {},
@@ -964,14 +965,18 @@ describe('OpenSpec panel addresses', () => {
     expect(canOpenOpenSpec(ROOT_ADDRESS)).toBe(true)
     expect(canOpenOpenSpec(SPECS_ADDRESS)).toBe(true)
     expect(canOpenOpenSpec(changeAddress('add-auth'))).toBe(true)
+    expect(canOpenOpenSpec(changeAddress('add-auth', 'design'))).toBe(true)
     expect(canOpenOpenSpec(archivedChangeAddress('add-auth'))).toBe(true)
+    expect(canOpenOpenSpec(archivedChangeAddress('add-auth', 'specs'))).toBe(true)
     expect(canOpenOpenSpec(capabilityAddress('auth'))).toBe(true)
     for (const address of [
       'sidebar://openspec/extra',
       'dsh-resource://openspec/specs/',
       'dsh-resource://openspec/change/',
       'dsh-resource://openspec/archive-change/',
-      'dsh-resource://openspec/change/add-auth/design',
+      'dsh-resource://openspec/change/add-auth/bogus',
+      'dsh-resource://openspec/change/add-auth/design/extra',
+      'dsh-resource://openspec/archive-change/add-auth/design/extra',
       'dsh-resource://openspec/spec/%E0%A4%A',
       'dsh-resource://openspec/change/add-auth?artifact=design',
       'sidebar://files',
@@ -995,6 +1000,17 @@ describe('OpenSpec panel addresses', () => {
     })
     expect(openSpecTitle(archivedChangeAddress(name))).toBe(name)
     expect(openSpecTitle(changeAddress(name))).toBe(name)
+    expect(openSpecTarget(changeAddress(name, 'design'))).toEqual({
+      view: 'change',
+      name,
+      artifact: 'design',
+    })
+    expect(openSpecTarget(archivedChangeAddress(name, 'tasks'))).toEqual({
+      view: 'change',
+      name,
+      archived: true,
+      artifact: 'tasks',
+    })
     expect(openSpecTarget(ROOT_ADDRESS)).toEqual({ view: 'root', segment: 'changes' })
     expect(openSpecTarget(SPECS_ADDRESS)).toEqual({ view: 'root', segment: 'specs' })
     expect(openSpecTarget(capabilityAddress('auth'))).toEqual({ view: 'capability', id: 'auth' })
@@ -1714,7 +1730,6 @@ describe('OpenSpec root view', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/changes')
     const view = RootView(viewProps(body.tree, RootView) as never)
-    expect(textOf(view)).toContain('2 changes · 19 specs · 34 archived')
     const options = segmented(view).props.options as Array<{ value: string; label: string }>
     expect(options.map((option) => option.label)).toEqual(['Changes 2', 'Specs 19', 'Archive 34'])
     expect(actionCard(view, 'Explore')).toBeDefined()
@@ -1781,6 +1796,36 @@ describe('OpenSpec root view', () => {
     expect(progress?.props['aria-valuenow']).toBe(4)
     expect(progress?.props['aria-valuemax']).toBe(12)
     expect(typed(tree, 'Tooltip')[0]?.props.label).toBe('Add authentication to the product.')
+  })
+
+  it('opens a change at the artifact whose card tag was clicked', () => {
+    const onOpenArtifact = vi.fn()
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, {
+              proposal: true,
+              design: true,
+              tasks: true,
+              specs: 2,
+            }),
+          ]),
+        },
+        onOpenArtifact,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const link = nodes(card).find(
+      (node) => node.props.className === 'dsh-openspec-artifact-link' && textOf(node) === 'design',
+    )
+    if (link === undefined) throw new Error('artifact link missing')
+    ;(link.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    expect(onOpenArtifact).toHaveBeenCalledWith('add-auth', false, 'design')
   })
 
   it('maps planning, complete, and archived cards to their semantic tones', () => {
@@ -1946,10 +1991,9 @@ describe('OpenSpec root view', () => {
       }),
     )
     const text = textOf(tree)
-    expect(text).toContain('0 changes · 19 specs · 4 archived')
-    expect(text.split('0 changes · 19 specs · 4 archived')).toHaveLength(2)
     expect(text).toContain('Recently archived')
     expect(text).toContain(ARCHIVED_ROW.name)
+    expect(text).not.toContain('0 changes · 19 specs · 4 archived')
     expect(text).toContain('2026-08-01-third')
     expect(text).not.toContain('2026-07-01-fourth')
     expect(actionCard(tree, 'Explore')).toBeDefined()
