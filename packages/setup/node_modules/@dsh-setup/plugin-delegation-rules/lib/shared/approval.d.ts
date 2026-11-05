@@ -64,6 +64,11 @@ export interface ReviewTarget {
     model?: string;
     reasoningEffort?: string;
 }
+/** The optional reviewer identity a repository marker pins every portable PASS to. */
+export interface ReviewerBinding {
+    provider?: string;
+    model?: string;
+}
 /** The sanitized, committed approval record for one checked task. */
 export interface PortableTaskReviewRecord {
     rule: string;
@@ -134,6 +139,8 @@ export interface ApprovalCoverageInput {
     /** Repository-relative display path of the expected record for one task. */
     recordPath(taskId: string): string;
     inspect(taskId: string): ApprovalRecordState | Promise<ApprovalRecordState>;
+    /** Marker-declared reviewer; absent keeps provider-agnostic behavior. */
+    reviewer?: ReviewerBinding;
 }
 /**
  * PASS-only coverage over every checked task, independent of session
@@ -149,9 +156,20 @@ export interface ReviewApprovalMarker {
     version: 1;
     archiveGate: boolean;
     taskRule: string;
+    /** Pinned reviewer provider; when absent any record target counts. */
+    reviewerProvider?: string;
+    /** Pinned reviewer model; only checked when declared. */
+    reviewerModel?: string;
     cutoff?: string;
     grandfathered?: Record<string, string>;
 }
+/** The binding a parsed marker declares; undefined keeps provider-agnostic behavior. */
+export declare function reviewerBindingOf(marker: ReviewApprovalMarker | undefined): ReviewerBinding | undefined;
+/** Whether a record target satisfies the declared reviewer binding. */
+export declare function reviewerMatches(target: {
+    provider: string;
+    model?: string;
+}, binding: ReviewerBinding | undefined): boolean;
 export declare function parseReviewApprovalMarker(value: unknown): {
     marker?: ReviewApprovalMarker;
     error?: string;

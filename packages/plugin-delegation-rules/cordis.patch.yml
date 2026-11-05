@@ -85,6 +85,10 @@
             scope: whole
             gate: soft
             instruction: bundled:review-integration
+          - id: lane-fanout
+            when: lane-assignment
+            contract: note
+            gate: strict
         timeouts:
           review: 600000
           answer: 300000

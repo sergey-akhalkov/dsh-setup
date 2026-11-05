@@ -513,9 +513,7 @@ describe('reviews:check --staged', () => {
   it('audits a staged non-ASCII path in an unapproved archive', async () => {
     const root = await initRepo()
     await writeMarker(root)
-    const changeDir = await writeArchive(root, '2026-10-10-quoted', [
-      { text: 'Unapproved task' },
-    ])
+    const changeDir = await writeArchive(root, '2026-10-10-quoted', [{ text: 'Unapproved task' }])
     await writeFile(join(changeDir, 'café.md'), 'first\n', 'utf8')
     await commit(root, 'add the unapproved archive')
     await writeFile(join(changeDir, 'café.md'), 'second\n', 'utf8')

@@ -105,6 +105,12 @@ rows:
           scope: whole
           gate: soft
           instruction: "bundled:review-integration"
+        # The decomposition gate: one tagged worker per unassigned multi-lane plan,
+        # or one task_progress serial note per lane that cannot run in parallel.
+        - id: lane-fanout
+          when: lane-assignment
+          contract: note
+          gate: strict
       timeouts:
         review: 600000
         answer: 300000

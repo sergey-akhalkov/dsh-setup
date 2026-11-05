@@ -1902,8 +1902,34 @@ function checkpointPlan(evidence, workspace) {
         return undefined;
     }
 }
-/** Whether a successful worker start after the checkpoint carries its id. */
-function taggedWorkerStarted(evidence, id) {
+/** Every decoded string value in one tool call's serialized arguments. */
+function argumentStrings(text) {
+    let value;
+    try {
+        value = JSON.parse(text);
+    }
+    catch {
+        return [text];
+    }
+    const collect = (node) => {
+        if (typeof node === 'string')
+            return [node];
+        if (Array.isArray(node))
+            return node.flatMap(collect);
+        if (isRecord(node))
+            return Object.values(node).flatMap(collect);
+        return [];
+    };
+    return collect(value);
+}
+/**
+ * Whether a successful worker start after the checkpoint carries the id. The
+ * bottleneck id is optional so the parallel fan-out gate keeps its id-only
+ * evidence; the remedy gate passes it and requires both. Matching decodes the
+ * call arguments, so an id with JSON-escaped characters still matches the text
+ * the worker received.
+ */
+function taggedWorkerStarted(evidence, id, bottleneckId) {
     const checkpoint = evidence.checkpoint;
     if (checkpoint === undefined)
         return false;
@@ -1912,12 +1938,30 @@ function taggedWorkerStarted(evidence, id) {
             continue;
         if (!WORKER_START_TOOLS.includes(call.name))
             continue;
-        if (!call.arguments.includes(id))
+        const texts = argumentStrings(call.arguments);
+        if (!texts.some((text) => text.includes(id)))
             continue;
+        if (bottleneckId !== undefined && !texts.some((text) => text.includes(bottleneckId))) {
+            continue;
+        }
         // A delegate can answer from a cached record without starting a target.
         if (call.name === 'delegate' && !delegateStarted(call.resultText))
             continue;
         return true;
+    }
+    return false;
+}
+/** Whether a successful ask_user_question call followed the checkpoint. */
+function userDecisionAsked(evidence) {
+    const checkpoint = evidence.checkpoint;
+    if (checkpoint === undefined)
+        return false;
+    for (const call of evidence.calls.values()) {
+        if (call.index > checkpoint.index &&
+            call.result === 'success' &&
+            call.name === 'ask_user_question') {
+            return true;
+        }
     }
     return false;
 }
@@ -1931,19 +1975,31 @@ function targetMatched(targets, destination, workspace) {
     const path = normalizeScopePath(destination, workspace);
     return targets.some((target) => pathContains(normalizeScopePath(target, workspace), path));
 }
-/** Whether the declared remedy was executed after the checkpoint. */
-function remedyMatched(evidence, bottleneck, id, workspace) {
+/**
+ * Whether the declared remedy was executed after the checkpoint. A non-`lead`
+ * bottleneck is not a lead write while a worker tool is visible; a worker
+ * start carrying both ids or a user decision is the accepted evidence then,
+ * and a targeted lead_action stays the fail-open escape without worker tools.
+ */
+function remedyMatched(evidence, bottleneck, id, workspace, workerVisible) {
     const checkpoint = evidence.checkpoint;
     if (checkpoint === undefined)
         return false;
-    if (bottleneck.action === 'worker_start')
-        return taggedWorkerStarted(evidence, id);
+    if (bottleneck.action === 'worker_start') {
+        return taggedWorkerStarted(evidence, id, bottleneck.id);
+    }
+    if (bottleneck.action === 'user_decision')
+        return userDecisionAsked(evidence);
+    const workerOwned = bottleneck.owner !== 'lead' && workerVisible;
+    // The worker remedy replaces a refused non-lead lead_action; without worker
+    // tools a targeted edit/write stays the fail-open escape.
+    if (workerOwned) {
+        return taggedWorkerStarted(evidence, id, bottleneck.id) || userDecisionAsked(evidence);
+    }
     for (const call of evidence.calls.values()) {
         if (call.index <= checkpoint.index || call.result !== 'success')
             continue;
-        if (bottleneck.action === 'user_decision' && call.name === 'ask_user_question')
-            return true;
-        if (bottleneck.action !== 'lead_action' || !WRITE_TOOLS.includes(call.name))
+        if (!WRITE_TOOLS.includes(call.name))
             continue;
         const destination = writtenPathOf(call.arguments);
         if (destination !== undefined && targetMatched(bottleneck.targets, destination, workspace)) {
@@ -2031,17 +2087,19 @@ function composeParallelRequest(id, max) {
  * identifiers shrink until the whole message fits, and the checkpoint id is
  * added only when room remains.
  */
-function composeRemedyRequest(id, bottleneck, max, workspace) {
+function composeRemedyRequest(id, bottleneck, max, workspace, workerVisible) {
     const build = (clipLength, withId) => {
         const clip = (value) => storedText(value, workspace, clipLength);
         const targets = bottleneck.targets.map(clip);
         const expected = bottleneck.action === 'worker_start'
-            ? `start a worker whose call arguments contain ${id}`
+            ? `start a worker whose call arguments contain ${id} and "${clip(bottleneck.id)}"`
             : bottleneck.action === 'user_decision'
                 ? 'ask the user with ask_user_question'
-                : `complete an edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
+                : bottleneck.owner !== 'lead' && workerVisible
+                    ? `use worker_start with a worker call carrying ${id} and "${clip(bottleneck.id)}", or user_decision with ask_user_question; lead_action is refused when the bottleneck owner is not "lead"`
+                    : `complete an edit or write at ${targets.length === 0 ? '(no target declared)' : targets.join(', ')}`;
         const blocking = bottleneck.blockingLanes.length === 0 ? 'none' : bottleneck.blockingLanes.map(clip).join(', ');
-        const suffix = withId ? ` Checkpoint ${id}.` : '';
+        const suffix = withId && !expected.includes(id) ? ` Checkpoint ${id}.` : '';
         return `Before the close, ${expected}. Blocking lanes: ${blocking}. Bottleneck "${clip(bottleneck.id)}" ${bottleneck.action}.${suffix}`;
     };
     // Prefer the longest readable identifiers, then drop the checkpoint id.
@@ -2296,7 +2354,7 @@ function installCheckpointTool(ctx, stateFor) {
                         action: {
                             type: 'string',
                             enum: ['worker_start', 'lead_action', 'user_decision'],
-                            description: 'The remedy the plugin verifies before the close: a tagged worker start, a successful edit or write at a target, or a question to the user.',
+                            description: 'The remedy the plugin verifies before the close: a worker start whose arguments carry the checkpoint id and the bottleneck id, a successful edit or write at a target (lead-owned bottlenecks only while a worker tool is visible), or a question to the user.',
                         },
                         blockingLanes: { type: 'array', items: { type: 'string' } },
                         targets: {
@@ -2326,6 +2384,15 @@ function installCheckpointTool(ctx, stateFor) {
                 throw new Error('work_checkpoint requires a calling agent');
             const workspace = workspaceFor(ctx, agent);
             const input = parseCheckpointInput(args);
+            const declared = input.bottleneck;
+            // The close gate re-checks this on every close; refusing the call here
+            // gives the field diagnostic before a record exists.
+            if (input.outcome === 'continue' &&
+                declared?.action === 'lead_action' &&
+                declared.owner !== 'lead' &&
+                workerToolVisible(ctx, agent)) {
+                throw new Error('work_checkpoint.bottleneck.action "lead_action" is refused when bottleneck.owner is not "lead"; use "worker_start" or "user_decision" instead');
+            }
             const turn = openTurnNumber(agent);
             if (turn === undefined)
                 throw new Error('work_checkpoint: no open turn to record');
@@ -2483,6 +2550,8 @@ function installCheckpointGate(ctx, config, stateFor) {
             return;
         const workspace = workspaceFor(ctx, agent);
         const evidence = checkpointEvidence(agent, turn, workspace, state.shellOutcomes);
+        // The owner rule fails open without a worker tool, so read visibility once.
+        const workerVisible = workerToolVisible(ctx, agent);
         if (!freshCheckpoint(evidence, state)) {
             // A readable checkpoint still owes its remedy, even once it is too old to
             // satisfy the close; the obligation is not erased by the new request.
@@ -2490,8 +2559,8 @@ function installCheckpointGate(ctx, config, stateFor) {
             if (stalePlan !== undefined &&
                 stalePlan.outcome === 'continue' &&
                 stalePlan.bottleneck !== undefined &&
-                !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn), workspace)) {
-                refuse(agent, budget, composeRemedyRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, config.maxMessageChars, workspace), 'goal-continuity: work checkpoint remedy required', `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
+                !remedyMatched(evidence, stalePlan.bottleneck, checkpointIdFor(agent.session.id, turn), workspace, workerVisible)) {
+                refuse(agent, budget, composeRemedyRequest(checkpointIdFor(agent.session.id, turn), stalePlan.bottleneck, config.maxMessageChars, workspace, workerVisible), 'goal-continuity: work checkpoint remedy required', `this turn closed without the ${stalePlan.bottleneck.action} remedy for bottleneck "${storedText(stalePlan.bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
                 return;
             }
             // An aged bottleneck keeps its refusal even after the checkpoint expires.
@@ -2521,7 +2590,7 @@ function installCheckpointGate(ctx, config, stateFor) {
         // A later amendment replaces the plan, so only the latest plan gates here.
         if (config.enforceParallel &&
             plan.parallelComputed &&
-            workerToolVisible(ctx, agent) &&
+            workerVisible &&
             !taggedWorkerStarted(evidence, id)) {
             refuse(agent, budget, composeParallelRequest(id, config.maxMessageChars), `goal-continuity: work checkpoint ${id} needs a parallel worker`, `this turn closed without a tagged worker start for ${id} after the refusal cap`);
             return;
@@ -2529,8 +2598,8 @@ function installCheckpointGate(ctx, config, stateFor) {
         const bottleneck = plan.bottleneck;
         if (bottleneck === undefined)
             return;
-        if (!remedyMatched(evidence, bottleneck, id, workspace)) {
-            refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
+        if (!remedyMatched(evidence, bottleneck, id, workspace, workerVisible)) {
+            refuse(agent, budget, composeRemedyRequest(id, bottleneck, config.maxMessageChars, workspace, workerVisible), `goal-continuity: work checkpoint ${id} needs its bottleneck remedy`, `this turn closed without the ${bottleneck.action} remedy for bottleneck "${storedText(bottleneck.id, workspace, MAX_CHECKPOINT_PATH_CHARS)}" after the refusal cap`);
             return;
         }
         // The write counted the preceding checkpoint, in this turn or an earlier one.

@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
+import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -1874,7 +1874,7 @@ async function inspectNote(cwd, change) {
         return { kind: 'malformed' };
     }
 }
-/** The task-review rule whose portable PASS is the approval. */
+/** The task-review rule whose portable PASS is the approval, with its reviewer binding. */
 async function approvalRuleId(config, openspecRoot) {
     const path = join(openspecRoot, APPROVAL_MARKER_FILE);
     let raw;
@@ -1910,7 +1910,8 @@ async function approvalRuleId(config, openspecRoot) {
         if (rule.gate !== 'strict') {
             return { error: `marker taskRule "${rule.id}" is not a strict rule` };
         }
-        return { id: rule.id };
+        const reviewer = reviewerBindingOf(marker);
+        return { id: rule.id, ...(reviewer === undefined ? {} : { reviewer }) };
     }
     const taskRules = config.rules.filter((rule) => rule.when === 'spec-task-ready' && rule.contract === 'review' && rule.scope === 'task');
     const strict = taskRules.find((rule) => rule.gate === 'strict');
@@ -1920,6 +1921,34 @@ async function approvalRuleId(config, openspecRoot) {
     return fallback === undefined
         ? { error: 'no task-scoped review rule is configured' }
         : { id: fallback.id };
+}
+/**
+ * The reviewer binding the marker declares, read from an OpenSpec root. A
+ * missing marker keeps provider-agnostic behavior; an unreadable or invalid
+ * marker is reported so the live task gate can fail closed instead of treating
+ * it as "no binding".
+ */
+async function readReviewerBinding(openspecRoot) {
+    let raw;
+    try {
+        raw = await readFile(join(openspecRoot, APPROVAL_MARKER_FILE), 'utf8');
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return {};
+        return { error: `${APPROVAL_MARKER_FILE} is unreadable: ${errorMessage(error)}` };
+    }
+    try {
+        const parsed = parseReviewApprovalMarker(JSON.parse(raw));
+        if (parsed.marker === undefined) {
+            return { error: `${APPROVAL_MARKER_FILE}: ${parsed.error ?? 'invalid marker'}` };
+        }
+        const reviewer = reviewerBindingOf(parsed.marker);
+        return reviewer === undefined ? {} : { reviewer };
+    }
+    catch (error) {
+        return { error: `${APPROVAL_MARKER_FILE} is not valid JSON: ${errorMessage(error)}` };
+    }
 }
 async function inspectPortableRecord(changeDir, taskId) {
     let raw;
@@ -1956,6 +1985,7 @@ async function changeApproval(config, change, openspecRoot, tasks) {
     const coverage = await computeApprovalCoverage({
         change: change.name,
         rule: rule.id,
+        ...(rule.reviewer === undefined ? {} : { reviewer: rule.reviewer }),
         tasks,
         unparseable: unparseableCheckedLines(markdown),
         recordPath: (taskId) => portableTaskRecordDisplayPath(`openspec/changes/${change.name}`, taskId),
@@ -2064,6 +2094,7 @@ class DelegationState {
         state.baseline = undefined;
         state.evidence = new Map();
         state.workerStarted = false;
+        delete state.checkpoint;
         return true;
     }
     evidenceFor(agentId, change) {
@@ -2086,6 +2117,16 @@ class DelegationState {
     }
     hasWorkerStart(agentId) {
         return this.of(agentId).workerStarted;
+    }
+    /** Remember the latest successful checkpoint call for this agent's current turn. */
+    recordCheckpoint(agentId, argumentsValue, resultValue) {
+        const state = this.of(agentId);
+        state.checkpoint = { turn: state.turn, arguments: argumentsValue, result: resultValue };
+    }
+    /** The checkpoint observed for this exact turn; a stale turn is unreadable. */
+    checkpointOf(agentId, turn) {
+        const checkpoint = this.of(agentId).checkpoint;
+        return checkpoint?.turn === turn ? checkpoint : undefined;
     }
     lanesFor(agentId, change) {
         const state = this.of(agentId);
@@ -2544,13 +2585,20 @@ class DelegationEngine {
             const existing = await inspectRecord(prepared.path);
             run.existingFingerprint =
                 existing.kind === 'record' ? JSON.stringify(existing.record) : undefined;
+            const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)));
             if (existing.kind === 'record' &&
                 recordIdentifies(existing.record, run.context.rule, run.context.change.name, run.context.task?.id)) {
                 const record = existing.record;
                 const reusable = record.verdict === 'PASS' ||
                     (record.verdict === 'FINDINGS' && record.digest === prepared.digest);
                 const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest;
-                if (reusable && current) {
+                // A cached PASS from another reviewer is not reused: the marker binding
+                // prescribes a fresh run of the configured reviewer instead. An
+                // unreadable marker also forbids reuse until it is repaired.
+                if (reusable &&
+                    current &&
+                    reviewer.error === undefined &&
+                    reviewerMatches(record.target, reviewer.reviewer)) {
                     await this.discardSnapshot(run);
                     await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'));
                     this.freeRun(run);
@@ -2922,10 +2970,19 @@ class DelegationEngine {
         return this.config.rules.filter((rule) => rule.when === 'spec-task-ready' && rule.contract === 'review' && rule.scope === 'task');
     }
     async taskHasReview(change, cwd, taskId) {
+        // A record from another reviewer is not a review: task selection must pick
+        // this task so the delegate call starts the configured reviewer. An
+        // unreadable marker cannot prove any record, so the task reads unreviewed.
+        const reviewer = await readReviewerBinding(dirname(dirname(change.dir)));
+        if (reviewer.error !== undefined)
+            return false;
         for (const rule of this.taskReviewRules()) {
             const state = await inspectRecord(recordPath(cwd, rule, change.name, taskId));
-            if (recordSatisfies(state, change.name, 'task', undefined, taskId))
+            if (state.kind === 'record' &&
+                reviewerMatches(state.record.target, reviewer.reviewer) &&
+                recordSatisfies(state, change.name, 'task', undefined, taskId)) {
                 return true;
+            }
         }
         return false;
     }
@@ -3148,12 +3205,18 @@ class DelegationEngine {
                     }
                     lines.push(`  ${rule.id}: ${detail} at ${relativePath(cwd, path)}`);
                 }
+                const reviewer = await readReviewerBinding(dirname(dirname(change.dir)));
+                if (reviewer.error !== undefined) {
+                    lines.push(`  approval marker: unreadable (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)})`);
+                }
                 for (const rule of this.taskReviewRules()) {
                     const reviewed = new Set();
                     for (const task of checked) {
                         const path = recordPath(cwd, rule, change.name, task.id);
                         const state = await inspectRecord(path);
-                        if (state.kind === 'record' &&
+                        if (reviewer.error === undefined &&
+                            state.kind === 'record' &&
+                            reviewerMatches(state.record.target, reviewer.reviewer) &&
                             (state.record.verdict === 'PASS' || state.record.verdict === 'ERROR')) {
                             reviewed.add(task.id);
                         }
@@ -3237,6 +3300,94 @@ async function readTaskLanesOrUndefined(changeDir) {
     catch {
         return undefined;
     }
+}
+/**
+ * Parse one successful `work_checkpoint` argument tree. Any unexpected shape is
+ * unreadable and therefore fails open, so the consistency check never blocks on
+ * evidence it cannot interpret.
+ */
+function checkpointPlanOf(argumentsValue) {
+    if (!isRecord(argumentsValue))
+        return undefined;
+    const outcome = argumentsValue.outcome;
+    if (outcome !== 'continue' && outcome !== 'done')
+        return undefined;
+    if (!Array.isArray(argumentsValue.lanes))
+        return undefined;
+    const lanes = [];
+    for (const value of argumentsValue.lanes) {
+        if (!isRecord(value) || typeof value.owner !== 'string')
+            return undefined;
+        if (!Array.isArray(value.scope) || !value.scope.every((entry) => typeof entry === 'string')) {
+            return undefined;
+        }
+        lanes.push({ owner: value.owner, scope: value.scope });
+    }
+    const raw = argumentsValue.bottleneck;
+    let bottleneck;
+    if (raw !== undefined) {
+        if (!isRecord(raw) || typeof raw.action !== 'string')
+            return undefined;
+        if (raw.id !== undefined && typeof raw.id !== 'string')
+            return undefined;
+        if (raw.targets !== undefined &&
+            (!Array.isArray(raw.targets) || !raw.targets.every((entry) => typeof entry === 'string'))) {
+            return undefined;
+        }
+        bottleneck = {
+            ...(typeof raw.id === 'string' ? { id: raw.id } : {}),
+            action: raw.action,
+            targets: Array.isArray(raw.targets) ? raw.targets : [],
+        };
+    }
+    return { outcome, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) };
+}
+/**
+ * Normalize a plan path against the workspace: dot segments and a
+ * relative/absolute spelling collapse to one comparable path, a trailing `/**`
+ * names the directory it covers, and Windows compares case-insensitively.
+ */
+function planPath(value, workspace) {
+    const trimmed = value
+        .trim()
+        .replaceAll('\\', '/')
+        .replace(/\/\*\*$/u, '')
+        .replace(/\/+$/u, '');
+    if (trimmed === '')
+        return '';
+    const absolute = resolve(workspace, trimmed).replaceAll('\\', '/');
+    return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+/** Equal paths, or one path lies inside the other, after workspace resolution. */
+function pathsOverlap(left, right, workspace) {
+    const a = planPath(left, workspace);
+    const b = planPath(right, workspace);
+    if (a === '' || b === '')
+        return false;
+    return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+/** A checkpoint lane covers a task lane when a scoped path touches an owned path. */
+function checkpointCovers(entry, lane, workspace) {
+    return lane.owns.some((own) => entry.scope.some((scope) => pathsOverlap(own, scope, workspace)));
+}
+/** The worker-owner test the requirement uses; `lead` is the self-declared escape. */
+function leadOwned(owner) {
+    return owner.trim().toLowerCase() === 'lead';
+}
+/** Visible worker-start tools per agent; undefined keeps the gate enabled. */
+function workerToolVisibility(ctx) {
+    const tools = ctx.tools;
+    const get = tools.get;
+    if (typeof get !== 'function')
+        return () => undefined;
+    return (agent) => {
+        try {
+            return [...WORKER_TOOLS].some((name) => get.call(tools, name, agent) !== undefined);
+        }
+        catch {
+            return undefined;
+        }
+    };
 }
 /** An argument value safe to print inside a double-quoted suggested call. */
 function quotedArg(text) {
@@ -3339,6 +3490,7 @@ async function evaluateGate(deps, agent, turn, signal) {
         ? undefined
         : deps.services.pendingReview?.(workspaceRoot, ruleId, changeName, taskId);
     if (openspecRoot !== undefined) {
+        const reviewer = await readReviewerBinding(openspecRoot);
         for (const change of involved) {
             const entry = involvement.changes[change.name];
             const changeSnapshot = current.changes.find((entry) => entry.name === change.name);
@@ -3409,7 +3561,10 @@ async function evaluateGate(deps, agent, turn, signal) {
                 let findingsOnly = false;
                 for (const rule of taskRules) {
                     const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
-                    if (recordSatisfies(state, change.name, 'task', undefined, task.id)) {
+                    if (reviewer.error === undefined &&
+                        state.kind === 'record' &&
+                        reviewerMatches(state.record.target, reviewer.reviewer) &&
+                        recordSatisfies(state, change.name, 'task', undefined, task.id)) {
                         satisfied = true;
                         break;
                     }
@@ -3420,15 +3575,19 @@ async function evaluateGate(deps, agent, turn, signal) {
                     continue;
                 const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review';
                 const pending = pendingFor(ruleId, change.name, task.id);
-                const detail = pending !== undefined
-                    ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
-                    : findingsOnly
-                        ? 'its review record has unresolved findings'
-                        : 'it has no task-review PASS/ERROR record';
+                const detail = reviewer.error !== undefined
+                    ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
+                    : pending !== undefined
+                        ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
+                        : findingsOnly
+                            ? 'its review record has unresolved findings'
+                            : 'it has no task-review PASS/ERROR record';
                 const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`;
-                const call = pending === undefined
-                    ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
-                    : `delegation_status (run ${pending.id})`;
+                const call = reviewer.error !== undefined
+                    ? `repair openspec/${APPROVAL_MARKER_FILE}`
+                    : pending === undefined
+                        ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
+                        : `delegation_status (run ${pending.id})`;
                 if (strictTaskRule !== undefined)
                     pushStrict(ruleId, text, call);
                 else if (softTaskRule !== undefined) {
@@ -3479,7 +3638,10 @@ async function evaluateGate(deps, agent, turn, signal) {
                 for (const task of ownChecked) {
                     for (const rule of taskRules) {
                         const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
-                        if (recordSatisfies(state, change.name, 'task', undefined, task.id)) {
+                        if (reviewer.error === undefined &&
+                            state.kind === 'record' &&
+                            reviewerMatches(state.record.target, reviewer.reviewer) &&
+                            recordSatisfies(state, change.name, 'task', undefined, task.id)) {
                             reviewedOwn.add(task.id);
                             break;
                         }
@@ -3527,7 +3689,12 @@ async function evaluateGate(deps, agent, turn, signal) {
             // tick and remembers each lane's tagged worker or serial decision across
             // turns. A lane ticked in this turn is current and is never reported.
             const assignmentRules = deps.config.rules.filter((rule) => rule.when === 'lane-assignment' && rule.contract === 'note' && rule.gate !== 'none');
-            if (assignmentRules.length > 0) {
+            // A profile with no visible worker-start tool cannot assign a lane, so the
+            // gate reports nothing there instead of demanding an impossible call.
+            if (assignmentRules.length > 0 && deps.workerToolVisible?.(agent) !== false) {
+                const ruleId = assignmentRules.find((rule) => rule.gate === 'strict')?.id ??
+                    assignmentRules[0]?.id ??
+                    'lane-fanout';
                 // An unreadable plan fails open; a readable plan with no headings or
                 // tasks reports nothing but still releases every assignment.
                 const lanes = await readTaskLanesOrUndefined(change.dir);
@@ -3575,9 +3742,6 @@ async function evaluateGate(deps, agent, turn, signal) {
                         unassigned.length > 0 &&
                         unassigned.every((lane) => lane.owns.length > 0) &&
                         (ticked.size > 0 || implementationChanged)) {
-                        const ruleId = assignmentRules.find((rule) => rule.gate === 'strict')?.id ??
-                            assignmentRules[0]?.id ??
-                            'lane-fanout';
                         const titles = unassigned.map((lane) => `"${lane.title}"`).join(', ');
                         const text = `rule "${ruleId}": lane assignment is missing in change "${change.name}": ${unassigned.length} unassigned non-serial lane(s) with unchecked tasks (${titles}); this turn ticked a task or changed implementation files, and no tagged worker start or serial note covers them.`;
                         const call = laneAssignmentCall(change.name, readable, unassigned);
@@ -3586,6 +3750,64 @@ async function evaluateGate(deps, agent, turn, signal) {
                         }
                         else {
                             pushSoft(`lane-assignment:${change.name}:${unassigned.map((lane) => lane.title).join('|')}`, ruleId, text, call);
+                        }
+                    }
+                }
+                // Worker-lane checkpoint consistency: a task lane assigned to a tagged
+                // worker must appear as a non-lead checkpoint lane, and a bottleneck
+                // targeting that lane's work needs a worker or the user, not the lead.
+                // A missing checkpoint, an unreadable plan, or a task lane without owned
+                // paths fails open.
+                if (lanes !== undefined) {
+                    const checkpoint = deps.state.checkpointOf(agentId, turn);
+                    const checkpointPlan = checkpoint === undefined ? undefined : checkpointPlanOf(checkpoint.arguments);
+                    if (checkpointPlan !== undefined && checkpointPlan.outcome === 'continue') {
+                        const assigned = titled.filter((lane) => lane.owns.length > 0 &&
+                            deps.state.laneDecision(agentId, change.name, lane.title) === 'assigned');
+                        const problems = [];
+                        const planRoot = workspaceRoot ?? dirname(openspecRoot);
+                        for (const lane of assigned) {
+                            const covering = checkpointPlan.lanes.filter((entry) => checkpointCovers(entry, lane, planRoot));
+                            if (covering.length === 0) {
+                                problems.push(`lane "${lane.title}" has no matching checkpoint lane`);
+                            }
+                            else if (covering.every((entry) => leadOwned(entry.owner))) {
+                                problems.push(`lane "${lane.title}" is covered only by lead-owned checkpoint lane(s)`);
+                            }
+                        }
+                        if (problems.length > 0) {
+                            const affected = assigned.filter((lane) => problems.some((problem) => problem.includes(`lane "${lane.title}"`)));
+                            const text = `rule "${ruleId}": worker-assigned checkpoint lanes are missing or lead-owned in change "${change.name}": ${problems.join('; ')}. The continue checkpoint must carry one lane per worker-assigned task lane, scoped to its owned paths and owned by the worker, not lead.`;
+                            const call = affected
+                                .map((lane) => `work_checkpoint lane: id "${quotedArg(lane.title)}", owner "<non-lead worker>", scope [${lane.owns.map((own) => `"${quotedArg(own)}"`).join(', ')}], state "running"`)
+                                .join('\n');
+                            if (assignmentRules.some((rule) => rule.gate === 'strict')) {
+                                pushStrict(ruleId, text, call);
+                            }
+                            else {
+                                pushSoft(`checkpoint-lanes:${change.name}:${affected.map((lane) => lane.title).join('|')}`, ruleId, text, call);
+                            }
+                        }
+                        const bottleneck = checkpointPlan.bottleneck;
+                        if (bottleneck?.action === 'lead_action') {
+                            const hits = [];
+                            for (const target of bottleneck.targets) {
+                                for (const lane of assigned) {
+                                    if (lane.owns.some((own) => pathsOverlap(target, own, planRoot))) {
+                                        hits.push(`target "${target}" in worker-assigned lane "${lane.title}"`);
+                                    }
+                                }
+                            }
+                            if (hits.length > 0) {
+                                const text = `rule "${ruleId}": a lead_action bottleneck may not edit worker-assigned work in change "${change.name}" (${hits.join('; ')}); use action "worker_start" (tagging both the checkpoint and the bottleneck id) or "user_decision".`;
+                                const call = `work_checkpoint(..., bottleneck: { id: "${quotedArg(bottleneck.id ?? '<bottleneck id>')}", owner: "<worker>", action: "worker_start" })`;
+                                if (assignmentRules.some((rule) => rule.gate === 'strict')) {
+                                    pushStrict(ruleId, text, call);
+                                }
+                                else {
+                                    pushSoft(`checkpoint-lead-action:${change.name}:${bottleneck.id ?? hits.length}`, ruleId, text, call);
+                                }
+                            }
                         }
                     }
                 }
@@ -3833,6 +4055,9 @@ function attachGate({ ctx, deps }) {
                 deps.state.recordToolResult(agentId, result.isError);
                 const cwd = deps.services.workingDirectory.get(exec.agent.session);
                 recordWriteEvidence(deps.state, agentId, cwd, exec, result);
+                if (!result.isError && exec.name === 'work_checkpoint') {
+                    deps.state.recordCheckpoint(agentId, exec.arguments, result.value);
+                }
                 if (!result.isError && WORKER_TOOLS.has(exec.name)) {
                     deps.state.markWorkerStarted(agentId);
                     recordLaneAssignment(deps.state, agentId, cwd, exec.arguments);
@@ -4068,5 +4293,13 @@ export function apply(ctx, config = {}, options = {}) {
         ctx.tools.register(definition);
     }
     ctx.skills.registerProvider(() => createSkillProvider(skillAdapterNote()));
-    attachGate({ ctx, deps: { config: validated, state, services } });
+    attachGate({
+        ctx,
+        deps: {
+            config: validated,
+            state,
+            services,
+            workerToolVisible: workerToolVisibility(ctx),
+        },
+    });
 }

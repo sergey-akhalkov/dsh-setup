@@ -695,13 +695,7 @@ export async function auditStaged(cwd: string): Promise<AuditResult> {
     if (!statSync(changeDir, { throwIfNoEntry: false })?.isDirectory()) continue
     const change = archivedChangeName(directory)
     const displayDir = `openspec/changes/archive/${directory}`
-    const audit = await auditChange(
-      changeDir,
-      displayDir,
-      change,
-      rule,
-      reviewerOf(marker),
-    )
+    const audit = await auditChange(changeDir, displayDir, change, rule, reviewerOf(marker))
     if (!audit.ok) ok = false
     lines.push(...audit.lines)
   }

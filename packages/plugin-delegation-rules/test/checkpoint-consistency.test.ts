@@ -185,6 +185,30 @@ describe('worker-assigned checkpoint consistency', () => {
     expect(await steersOf(setup)).toBe('')
   })
 
+  it('matches equivalent path spellings in checkpoint scope and lead_action target', async () => {
+    const covered = await tickedAndAssigned(twoLanes(false, false), twoLanes(true, false))
+    await covered.harness.toolOutcome(
+      'work_checkpoint',
+      checkpointArgs({ lanes: [{ id: 'docs', owner: 'lane-worker', scope: ['./docs/a.md'] }] }),
+      { text: 'checkpoint saved' },
+    )
+    expect(await steersOf(covered)).toBe('')
+
+    const escaped = await tickedAndAssigned(twoLanes(false, false), twoLanes(true, false))
+    await escaped.harness.toolOutcome(
+      'work_checkpoint',
+      checkpointArgs({
+        lanes: [{ id: 'docs', owner: 'lane-worker', scope: ['./docs/a.md'] }],
+        action: 'lead_action',
+        targets: ['docs/./a.md'],
+      }),
+      { text: 'checkpoint saved' },
+    )
+    expect(await steersOf(escaped)).toContain(
+      'lead_action bottleneck may not edit worker-assigned work',
+    )
+  })
+
   it('fails open on an unreadable checkpoint argument tree', async () => {
     const setup = await tickedAndAssigned(twoLanes(false, false), twoLanes(true, false))
     await setup.harness.toolOutcome(

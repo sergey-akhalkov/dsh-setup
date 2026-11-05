@@ -4258,26 +4258,33 @@ function checkpointPlanOf(argumentsValue: unknown): CheckpointPlan | undefined {
   return { outcome, lanes, ...(bottleneck === undefined ? {} : { bottleneck }) }
 }
 
-/** Normalize a plan path; a trailing `/**` glob names the directory it covers. */
-function planPath(value: string): string {
-  return value
+/**
+ * Normalize a plan path against the workspace: dot segments and a
+ * relative/absolute spelling collapse to one comparable path, a trailing `/**`
+ * names the directory it covers, and Windows compares case-insensitively.
+ */
+function planPath(value: string, workspace: string): string {
+  const trimmed = value
     .trim()
     .replaceAll('\\', '/')
     .replace(/\/\*\*$/u, '')
     .replace(/\/+$/u, '')
+  if (trimmed === '') return ''
+  const absolute = resolve(workspace, trimmed).replaceAll('\\', '/')
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
 }
 
-/** Equal paths, or one path lies inside the other. */
-function pathsOverlap(left: string, right: string): boolean {
-  const a = planPath(left)
-  const b = planPath(right)
+/** Equal paths, or one path lies inside the other, after workspace resolution. */
+function pathsOverlap(left: string, right: string, workspace: string): boolean {
+  const a = planPath(left, workspace)
+  const b = planPath(right, workspace)
   if (a === '' || b === '') return false
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 }
 
 /** A checkpoint lane covers a task lane when a scoped path touches an owned path. */
-function checkpointCovers(entry: CheckpointLane, lane: TaskLane): boolean {
-  return lane.owns.some((own) => entry.scope.some((scope) => pathsOverlap(own, scope)))
+function checkpointCovers(entry: CheckpointLane, lane: TaskLane, workspace: string): boolean {
+  return lane.owns.some((own) => entry.scope.some((scope) => pathsOverlap(own, scope, workspace)))
 }
 
 /** The worker-owner test the requirement uses; `lead` is the self-declared escape. */
@@ -4788,8 +4795,11 @@ async function evaluateGate(
                 deps.state.laneDecision(agentId, change.name, lane.title) === 'assigned',
             )
             const problems: string[] = []
+            const planRoot = workspaceRoot ?? dirname(openspecRoot)
             for (const lane of assigned) {
-              const covering = checkpointPlan.lanes.filter((entry) => checkpointCovers(entry, lane))
+              const covering = checkpointPlan.lanes.filter((entry) =>
+                checkpointCovers(entry, lane, planRoot),
+              )
               if (covering.length === 0) {
                 problems.push(`lane "${lane.title}" has no matching checkpoint lane`)
               } else if (covering.every((entry) => leadOwned(entry.owner))) {
@@ -4825,7 +4835,7 @@ async function evaluateGate(
               const hits: string[] = []
               for (const target of bottleneck.targets) {
                 for (const lane of assigned) {
-                  if (lane.owns.some((own) => pathsOverlap(target, own))) {
+                  if (lane.owns.some((own) => pathsOverlap(target, own, planRoot))) {
                     hits.push(`target "${target}" in worker-assigned lane "${lane.title}"`)
                   }
                 }
