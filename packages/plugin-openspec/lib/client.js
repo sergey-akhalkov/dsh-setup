@@ -1002,6 +1002,7 @@ window.__ModuleLoader__.load({
         capabilities.reload();
       };
       (0, import_react.useEffect)(() => {
+        writeSegment(storage, sessionId, start);
         changes.reload();
         if (start === "specs") loadSpecs();
       }, []);
@@ -1482,15 +1483,24 @@ window.__ModuleLoader__.load({
       const archived = change.archived === true;
       const phase = archived ? "archived" : phaseOf(change);
       const deltas = change.deltas ?? [];
-      const baseId = `dsh-openspec-artifacts-${encodeURIComponent(change.name)}`;
+      const baseId = `dsh-openspec-artifacts-${archived ? "archived" : "active"}-${encodeURIComponent(change.name)}`;
       const items = ARTIFACT_KINDS.map(
-        (kind) => ({
-          value: kind,
-          label: artifactLabel(kind, change, t),
-          id: `${baseId}-${kind}`,
-          panelId: `${baseId}-${kind}-panel`
-        })
+        (kind) => {
+          const available = hasArtifact(change, kind);
+          const label = artifactLabel(kind, change, t);
+          return {
+            value: kind,
+            // The shipped tabs have no disabled option; an unavailable kind keeps
+            // its reason on the tab and its selection is refused below.
+            label: available ? label : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tab-unavailable", title: t("artifact.notWritten"), children: label }),
+            id: `${baseId}-${kind}`,
+            panelId: `${baseId}-${kind}-panel`
+          };
+        }
       );
+      const chooseArtifact = (kind) => {
+        if (hasArtifact(change, kind)) props.onArtifact(kind);
+      };
       const updated = relativeLabel(change.modified, props.now);
       const archivedOn = isoDate(change.archivedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
@@ -1515,7 +1525,7 @@ window.__ModuleLoader__.load({
           {
             items,
             value: artifact,
-            onChange: props.onArtifact,
+            onChange: chooseArtifact,
             label: t("change.artifactLabel")
           }
         ),
@@ -1681,46 +1691,65 @@ window.__ModuleLoader__.load({
         ] }, `${step.label}-${String(index)}`))
       ] });
     }
-    var INLINE_PATTERN = /`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+    var INLINE_PATTERN = /\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+    var CODE_SLOT = /\uE000(\d+)\uE000/g;
     var KEYWORDS = /* @__PURE__ */ new Set(["SHALL", "MUST", "MUST NOT"]);
     var KEYWORD_PATTERN = /\b(MUST NOT|SHALL|MUST)\b/;
     function InlineText(props) {
+      const codes = [];
+      const masked = props.text.replace(/`([^`]+)`/g, (_whole, code) => {
+        codes.push(code);
+        return `\uE000${String(codes.length - 1)}\uE000`;
+      });
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: inlineNodes(masked, codes) });
+    }
+    function inlineNodes(text, codes) {
       const nodes = [];
       let last = 0;
       let key = 0;
-      for (const match of props.text.matchAll(INLINE_PATTERN)) {
+      for (const match of text.matchAll(INLINE_PATTERN)) {
         const index = match.index ?? 0;
-        if (index > last) {
-          for (const node of keywordNodes(props.text.slice(last, index), key)) {
-            nodes.push(node);
-            key += 1;
-          }
-        }
-        const code = match[1];
-        const strong = match[2];
-        const emphasis = match[3];
-        const label = match[4];
-        const href = match[5];
-        if (code !== void 0) {
-          nodes.push(
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { className: "dsh-openspec-code", children: code }, `code-${String(key)}`)
-          );
-        } else if (strong !== void 0) {
-          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: InlineText({ text: strong }) }, `strong-${String(key)}`));
+        if (index > last) nodes.push(...plainNodes(text.slice(last, index), codes, key++));
+        const strong = match[1];
+        const emphasis = match[2];
+        const label = match[3];
+        const href = match[4];
+        if (strong !== void 0) {
+          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: inlineNodes(strong, codes) }, `strong-${String(key)}`));
         } else if (emphasis !== void 0) {
-          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: InlineText({ text: emphasis }) }, `em-${String(key)}`));
+          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: inlineNodes(emphasis, codes) }, `em-${String(key)}`));
         } else if (label !== void 0 && href !== void 0) {
           nodes.push(
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { href, target: "_blank", rel: "noreferrer", children: InlineText({ text: label }) }, `link-${String(key)}`)
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { href, target: "_blank", rel: "noreferrer", children: inlineNodes(label, codes) }, `link-${String(key)}`)
           );
         }
         key += 1;
         last = index + match[0].length;
       }
-      if (last < props.text.length) {
-        for (const node of keywordNodes(props.text.slice(last), key)) nodes.push(node);
+      if (last < text.length) nodes.push(...plainNodes(text.slice(last), codes, key));
+      return nodes;
+    }
+    function plainNodes(text, codes, keyBase) {
+      const nodes = [];
+      let last = 0;
+      let key = keyBase;
+      for (const match of text.matchAll(CODE_SLOT)) {
+        const index = match.index ?? 0;
+        if (index > last) {
+          for (const node of keywordNodes(text.slice(last, index), key)) nodes.push(node);
+          key += 1;
+        }
+        const code = codes[Number(match[1])] ?? "";
+        nodes.push(
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { className: "dsh-openspec-code", children: code }, `code-${String(key)}`)
+        );
+        key += 1;
+        last = index + match[0].length;
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: nodes });
+      if (last < text.length) {
+        for (const node of keywordNodes(text.slice(last), key)) nodes.push(node);
+      }
+      return nodes;
     }
     function keywordNodes(text, keyBase) {
       const parts = text.split(KEYWORD_PATTERN);
