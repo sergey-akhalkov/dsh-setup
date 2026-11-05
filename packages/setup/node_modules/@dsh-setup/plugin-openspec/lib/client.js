@@ -1501,9 +1501,6 @@ window.__ModuleLoader__.load({
           };
         }
       );
-      const chooseArtifact = (kind) => {
-        if (hasArtifact(change, kind)) props.onArtifact(kind);
-      };
       const updated = relativeLabel(change.modified, props.now);
       const archivedOn = isoDate(change.archivedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
@@ -1528,7 +1525,7 @@ window.__ModuleLoader__.load({
           {
             items,
             value: artifact,
-            onChange: chooseArtifact,
+            onChange: props.onArtifact,
             label: t("change.artifactLabel")
           }
         ),
