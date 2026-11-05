@@ -214,7 +214,7 @@ window.__ModuleLoader__.load({
     var TASK_LINE_PATTERN = /^\s*(?:[-*+]|\d{1,9}[.)])\s*\[(?:\s*([^\]\s]?)\s*\](?![([])|\s+\])\s*(.*)/;
     function parseTaskLines(content) {
       const tasks = [];
-      for (const line of content.split("\n")) {
+      for (const line of content.split(/\r?\n/)) {
         const match = TASK_LINE_PATTERN.exec(line);
         if (match === null) continue;
         tasks.push({
@@ -232,7 +232,7 @@ window.__ModuleLoader__.load({
         groups.push(group);
         return group;
       };
-      for (const line of content.split("\n")) {
+      for (const line of content.split(/\r?\n/)) {
         const heading = /^##\s+(.+)$/.exec(line);
         if (heading !== null) {
           current = open((heading[1] ?? "").trim());
@@ -1003,7 +1003,7 @@ window.__ModuleLoader__.load({
       };
       (0, import_react.useEffect)(() => {
         changes.reload();
-        if (initialSegment === "specs") loadSpecs();
+        if (start === "specs") loadSpecs();
       }, []);
       useTabRefresh(tab, () => {
         if (segment === "specs") capabilities.reload();
@@ -1448,7 +1448,8 @@ window.__ModuleLoader__.load({
             label: props.commit.subject === "" ? props.commit.short : props.commit.subject,
             children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: props.commit.short })
           }
-        )
+        ),
+        props.commit.at === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.commit.at.slice(0, 10) })
       ] });
     }
     function presenceFacts(presence, t) {
@@ -1683,12 +1684,12 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { className: "dsh-openspec-code", children: code }, `code-${String(key)}`)
           );
         } else if (strong !== void 0) {
-          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: strong }, `strong-${String(key)}`));
+          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: InlineText({ text: strong }) }, `strong-${String(key)}`));
         } else if (emphasis !== void 0) {
-          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: emphasis }, `em-${String(key)}`));
+          nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: InlineText({ text: emphasis }) }, `em-${String(key)}`));
         } else if (label !== void 0 && href !== void 0) {
           nodes.push(
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { href, target: "_blank", rel: "noreferrer", children: label }, `link-${String(key)}`)
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { href, target: "_blank", rel: "noreferrer", children: InlineText({ text: label }) }, `link-${String(key)}`)
           );
         }
         key += 1;
@@ -1722,10 +1723,10 @@ window.__ModuleLoader__.load({
       }
       const groups = sources.flatMap((file) => parseTaskGroups(file.body)).filter((group) => group.tasks.length > 0);
       const parsed = sources.flatMap((file) => parseTaskLines(file.body));
-      if (groups.length === 0) {
+      const remainder = props.totalTasks - parsed.length;
+      if (groups.length === 0 && props.totalTasks === 0) {
         return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", children: props.t("change.tasksNotWritten") });
       }
-      const remainder = props.totalTasks - parsed.length;
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-section", children: [
         remainder === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-meta", children: `${String(Math.abs(remainder))} ${props.t("change.unparsedTasks")}` }),
         groups.map((group, index) => {
