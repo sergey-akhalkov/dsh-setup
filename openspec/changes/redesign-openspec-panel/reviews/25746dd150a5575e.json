@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "redesign-openspec-panel",
+  "scope": "task",
+  "taskId": "25746dd150a5575e",
+  "digest": "8fa2140ae7cc7b970f3ab8a6ca9102c299a948459212cff9fbb633ff532352fe",
+  "worktreeDigest": "f1f4e2c4ec4faf9c76f093dacb970eee9af98aba9a166be78793b407bbcbe7b8",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-05T19:45:10.982Z"
+}
