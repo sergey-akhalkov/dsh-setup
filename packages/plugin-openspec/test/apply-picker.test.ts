@@ -134,6 +134,17 @@ function changesResponse(changes: unknown[]): Response {
   } as unknown as Response
 }
 
+function extendedResponse(
+  changes: unknown[],
+  archived: unknown[],
+  counts: { active: number; archived: number; capabilities: number },
+): Response {
+  return {
+    ok: true,
+    json: async () => ({ changes, archived, counts }),
+  } as unknown as Response
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -180,6 +191,32 @@ describe('openspec apply picker', () => {
       `${CHANGES_PATH}?session=s1`,
       expect.objectContaining({ credentials: 'same-origin' }),
     )
+  })
+
+  it('ignores the additive archived list and counts in the extended response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        extendedResponse(
+          [
+            { name: 'add-auth', completedTasks: 3, totalTasks: 14, status: 'in-progress' },
+            { name: 'done-change', completedTasks: 4, totalTasks: 4, status: 'complete' },
+          ],
+          [
+            {
+              name: '2026-11-05-add-openspec-panel',
+              completedTasks: 18,
+              totalTasks: 18,
+              status: 'complete',
+              archived: true,
+            },
+          ],
+          { active: 2, archived: 1, capabilities: 19 },
+        ),
+      ),
+    )
+    const rows = await contribution().ui.options({ sessionId: 's1' })
+    expect(rows).toEqual([{ id: 'add-auth', label: 'add-auth', detail: '3/14' }])
   })
 
   it('shows the empty list when no unfinished change remains', async () => {

@@ -162,8 +162,12 @@ function autoCli(handler: (args: readonly string[]) => CliAnswer): void {
 
 /** The CLI arguments after the `openspec` token, on either platform branch. */
 function commandOf(args: readonly string[]): string[] {
-  const index = args.indexOf('openspec')
-  return args.slice(index + 1)
+  if (args[0] === '/d') {
+    const line = args[3] ?? ''
+    const tokens = [...line.matchAll(/"([^"]*)"|(\S+)/g)].map((match) => match[1] ?? match[2] ?? '')
+    return tokens.slice(1)
+  }
+  return [...args]
 }
 
 function complete(child: FakeChild, code: number | null, stdout = '', stderr = ''): void {
@@ -370,7 +374,10 @@ describe('active change detail', () => {
 
   it('groups consecutive CLI requirements for one capability and operation', async () => {
     const cwd = workspace()
-    const directory = writeChange(cwd, 'add-auth', { tasks: '- [ ] one\n' })
+    const directory = writeChange(cwd, 'add-auth', {
+      proposal: '# Why\n\nGrouped.\n',
+      tasks: '- [ ] one\n',
+    })
     autoCli((args) => {
       const command = commandOf(args)
       if (command[0] === 'list') {
@@ -459,10 +466,58 @@ describe('active change detail', () => {
     ])
   })
 
+  it('opens a change without a proposal and skips the structured-delta read', async () => {
+    const cwd = workspace()
+    writeChange(cwd, 'scaffold', { tasks: '- [ ] one\n' })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'scaffold', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'status') return { stdout: statusOutput(cwd, 'scaffold', []) }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, 'scaffold')
+    expect(change.deltas).toEqual([])
+    expect(change.artifacts.proposal).toBeNull()
+    const showCalls = spawnMock.mock.calls.filter((call) => commandOf(call[1]).at(0) === 'show')
+    expect(showCalls).toEqual([])
+  })
+
+  it('accepts a description-only CLI delta from the proposal fallback', async () => {
+    const cwd = workspace()
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nProse only.\n', tasks: '- [ ] one\n' })
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            { name: 'add-auth', completedTasks: 0, totalTasks: 1, status: 'in-progress' },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        return {
+          stdout: changeShowOutput(cwd, [
+            { spec: 'alpha', operation: 'ADDED', description: 'Add a feature' },
+          ]),
+        }
+      }
+      if (command[0] === 'status') return { stdout: statusOutput(cwd, 'add-auth', []) }
+      return undefined
+    })
+    const change = await readWorkspaceChange(cwd, 'add-auth')
+    expect(change.deltas).toEqual([{ capability: 'alpha', operation: 'ADDED', requirements: [] }])
+  })
+
   it('passes the explicit --type change so a name shared with a capability is unambiguous', async () => {
     const cwd = workspace()
     writeSpec(cwd, 'same', '# Same\n\n## Purpose\n\nCapability.\n')
-    writeChange(cwd, 'same', { tasks: '- [ ] one\n' })
+    writeChange(cwd, 'same', { proposal: '# Why\n\nSame name.\n', tasks: '- [ ] one\n' })
     autoCli((args) => {
       const command = commandOf(args)
       if (command[0] === 'list') {
@@ -564,6 +619,8 @@ describe('active change detail', () => {
           ]),
         }
       }
+      if (command[0] === 'show') return { stdout: changeShowOutput(cwd, []) }
+      if (command[0] === 'status') return { stdout: statusOutput(cwd, 'add-auth', []) }
       return undefined
     })
     await expect(readWorkspaceChange(cwd, 'add-auth')).rejects.toThrow(OUTSIDE_ROOT_MESSAGE)
@@ -782,6 +839,58 @@ describe('archived change detail', () => {
       requirements: [],
       rename: { from: 'Old name', to: 'New name' },
     })
+  })
+
+  it('ignores headings inside a fenced example', () => {
+    const deltas = parseArchivedDeltas(
+      'alpha',
+      [
+        '## ADDED Requirements',
+        '',
+        '### Requirement: Real',
+        '',
+        'Real text with an example:',
+        '',
+        '```markdown',
+        '### Requirement: Example only',
+        '',
+        '#### Scenario: Fake',
+        '',
+        '- **WHEN** fake',
+        '```',
+        '',
+        '### Requirement: Second',
+        '',
+        'Second text.',
+        '',
+      ].join('\n'),
+    )
+    expect(deltas).toHaveLength(1)
+    expect(deltas[0]?.requirements.map((req) => req.name)).toEqual(['Real', 'Second'])
+    expect(deltas[0]?.requirements[0]?.scenarios).toEqual([])
+    expect(deltas[0]?.requirements[0]?.text).toContain('### Requirement: Example only')
+  })
+
+  it('stops at an unsupported section instead of inheriting the operation', () => {
+    const deltas = parseArchivedDeltas(
+      'alpha',
+      [
+        '## ADDED Requirements',
+        '',
+        '### Requirement: Real',
+        '',
+        'Real text.',
+        '',
+        '## Notes',
+        '',
+        '### Requirement: Informational',
+        '',
+        'Not a delta requirement.',
+        '',
+      ].join('\n'),
+    )
+    expect(deltas).toHaveLength(1)
+    expect(deltas[0]?.requirements.map((req) => req.name)).toEqual(['Real'])
   })
 
   it('keeps several requirements and one without scenarios', () => {
@@ -1190,6 +1299,81 @@ describe('openspec capability reads', () => {
     ])
   })
 
+  it('finds provenance for a nested capability id', async () => {
+    const cwd = workspace()
+    writeSpec(cwd, 'auth/login', '# Login\n\n## Purpose\n\nNested capability.\n')
+    writeChange(
+      cwd,
+      '2026-11-01-add-login',
+      { specs: { 'auth/login': '## ADDED Requirements\n\n### Requirement: Login\n\nText.\n' } },
+      true,
+    )
+    serveGit(
+      gitOutput([
+        {
+          short: 'abc1234',
+          paths: ['openspec/changes/archive/2026-11-01-add-login/specs/auth/login/spec.md'],
+        },
+      ]),
+    )
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: 'auth/login', requirementCount: 1 }]) }
+      }
+      if (command[0] === 'list') {
+        return {
+          stdout: listOutput(cwd, [
+            {
+              name: '2026-11-01-add-login',
+              completedTasks: 3,
+              totalTasks: 3,
+              status: 'complete',
+              archived: true,
+            },
+          ]),
+        }
+      }
+      if (command[0] === 'show') {
+        return { stdout: specShowOutput(cwd, 'auth/login', 'Overview.', []) }
+      }
+      return undefined
+    })
+    const capability = await readWorkspaceCapability(cwd, 'auth/login')
+    expect(capability.history.map((entry) => entry.name)).toEqual(['2026-11-01-add-login'])
+    expect(capability.lastChange?.name).toBe('2026-11-01-add-login')
+    const rows = await listWorkspaceCapabilityRows(cwd)
+    expect(rows.find((row) => row.id === 'auth/login')?.lastChange?.name).toBe(
+      '2026-11-01-add-login',
+    )
+  })
+
+  it('quotes a CLI-reported id so cmd cannot run an embedded command', async () => {
+    const cwd = workspace()
+    const evil = 'alpha&echo.PWNED&rem'
+    writeSpec(cwd, evil, '# Evil\n\n## Purpose\n\nQuoted.\n')
+    autoCli((args) => {
+      const command = commandOf(args)
+      if (command[0] === 'list' && command[1] === '--specs') {
+        return { stdout: specsOutput(cwd, [{ id: evil, requirementCount: 0 }]) }
+      }
+      if (command[0] === 'list') return { stdout: listOutput(cwd, []) }
+      if (command[0] === 'show') {
+        return { stdout: specShowOutput(cwd, evil, 'Overview.', []) }
+      }
+      return undefined
+    })
+    await readWorkspaceCapability(cwd, evil)
+    const showCall = spawnMock.mock.calls.find((call) => commandOf(call[1]).at(0) === 'show')
+    if (showCall === undefined) throw new Error('the show command was not spawned')
+    if (process.platform === 'win32') {
+      expect(String((showCall[1] as string[])[3])).toContain(`"${evil}"`)
+      expect(showCall[2]).toMatchObject({ windowsVerbatimArguments: true })
+    } else {
+      expect(commandOf(showCall[1] as string[])).toEqual(['show', evil, '--json', '--type', 'spec'])
+    }
+  })
+
   it('refuses a capability spec that links outside the OpenSpec root', async () => {
     const cwd = workspace()
     const outside = temporaryDirectory('openspec-outside-')
@@ -1494,6 +1678,33 @@ describe('openspec read routes', () => {
     await expect(missingArchived.json()).resolves.toEqual({
       error: unreportedArchivedChangeMessage('add-auth'),
     })
+  })
+
+  it('resolves a same-named active and archived change to different content', async () => {
+    const cwd = workspace()
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nActive content.\n' })
+    writeChange(cwd, 'add-auth', { proposal: '# Why\n\nArchived content.\n' }, true)
+    const harness = routeHarness(new Map([['s1', cwd]]))
+    serveDetail(cwd, {
+      rows: [
+        { name: 'add-auth', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+        { name: 'add-auth', completedTasks: 2, totalTasks: 2, status: 'complete', archived: true },
+      ],
+    })
+    const active = await harness.request(CHANGE_DETAIL_ROUTE, '?session=s1&name=add-auth')
+    expect(active.status).toBe(200)
+    const activeBody = (await active.json()) as { change: { archived: boolean; summary: string } }
+    expect(activeBody.change).toMatchObject({ archived: false, summary: 'Active content.' })
+
+    const archived = await harness.request(
+      CHANGE_DETAIL_ROUTE,
+      '?session=s1&archived=1&name=add-auth',
+    )
+    expect(archived.status).toBe(200)
+    const archivedBody = (await archived.json()) as {
+      change: { archived: boolean; summary: string }
+    }
+    expect(archivedBody.change).toMatchObject({ archived: true, summary: 'Archived content.' })
   })
 
   it('serves the capability inventory with purpose and provenance', async () => {

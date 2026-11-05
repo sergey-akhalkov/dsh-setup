@@ -234,15 +234,32 @@ function nullRootOutput(stdout: string): boolean {
   }
 }
 
+/**
+ * Quote one argument for the Windows `cmd.exe /c` command line.
+ *
+ * cmd re-parses the line it receives, so a CLI-reported name containing `&`,
+ * `|`, `<`, `>` or `^` would otherwise run as a separate command. Double
+ * quotes make every metacharacter literal; a `"` cannot occur in a Windows
+ * file name, and doubling it follows the usual cmd convention anyway.
+ */
+function windowsArgument(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
 /** Run one bounded `openspec` CLI call and return its stdout. */
 function runCli(workspace: string, args: readonly string[], label: string): Promise<string> {
-  const file = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : 'openspec'
-  const command = process.platform === 'win32' ? ['/d', '/s', '/c', 'openspec', ...args] : [...args]
+  const windows = process.platform === 'win32'
+  const file = windows ? (process.env.ComSpec ?? 'cmd.exe') : 'openspec'
+  // Every request-derived name is a quoted token: no shell metacharacter in a
+  // CLI-reported name can execute a second command.
+  const command = windows
+    ? ['/d', '/s', '/c', `openspec ${args.map(windowsArgument).join(' ')}`]
+    : [...args]
   return new Promise((resolve, reject) => {
     const child = spawn(file, command, {
       cwd: workspace,
       stdio: ['ignore', 'pipe', 'pipe'],
-      ...(process.platform === 'win32' ? { windowsHide: true } : { detached: true }),
+      ...(windows ? { windowsHide: true, windowsVerbatimArguments: true } : { detached: true }),
     })
     let stdout = ''
     let stderr = ''
@@ -467,31 +484,43 @@ export interface DeltaSpecFile {
 /** The delta spec files under one change directory, sorted by capability. */
 export function deltaSpecFiles(root: string, changeDirectory: string): DeltaSpecFile[] {
   const directory = join(changeDirectory, 'specs')
-  let entries: Dirent[]
-  try {
-    entries = readdirSync(directory, { withFileTypes: true })
-  } catch (error) {
-    if (isMissing(error)) return []
-    throw new Error(
-      `Could not read the OpenSpec delta specs directory ${directory}: ${causeOf(error)}`,
-    )
-  }
   const files: DeltaSpecFile[] = []
-  for (const entry of entries) {
-    const file = join(directory, entry.name, 'spec.md')
+  // OpenSpec discovers nested capabilities (specs/<area>/<id>/spec.md) with the
+  // id `area/id`; walk the whole tree so those keep their deltas and provenance.
+  const walk = (current: string, prefix: string): void => {
+    const actualDirectory = realArtifactPath(current, artifactReadMessage)
+    if (actualDirectory === null) return
+    requireInsideRoot(root, actualDirectory)
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(current, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return
+      throw new Error(
+        `Could not read the OpenSpec delta specs directory ${current}: ${causeOf(error)}`,
+      )
+    }
+    for (const entry of entries) {
+      // A junction/symlink is followed only after the containment check above.
+      if (entry.isDirectory() || entry.isSymbolicLink()) {
+        walk(join(current, entry.name), prefix === '' ? entry.name : `${prefix}/${entry.name}`)
+      }
+    }
+    if (prefix === '') return
+    const file = join(current, 'spec.md')
     const actual = realArtifactPath(file, artifactReadMessage)
-    if (actual === null) continue
+    if (actual === null) return
     requireInsideRoot(root, actual)
     let present = false
     try {
       present = statSync(actual).isFile()
     } catch (error) {
-      if (isMissing(error)) continue
+      if (isMissing(error)) return
       throw new Error(artifactReadMessage(file, causeOf(error)))
     }
-    if (!present) continue
-    files.push({ capability: entry.name, file })
+    if (present) files.push({ capability: prefix, file })
   }
+  walk(directory, '')
   return files.sort((left, right) => left.capability.localeCompare(right.capability))
 }
 
@@ -738,6 +767,9 @@ export async function readGitLog(
         '-n',
         String(GIT_LOG_LIMIT),
         '--name-only',
+        // The workspace may sit below the repository root; without --relative
+        // git prints repository-relative names and no row would match.
+        '--relative',
         '--pretty=format:%h%x09%aI%x09%s',
         '--',
         ...safe,
@@ -764,17 +796,24 @@ function parseGitLog(output: string): GitLogEntry[] | null {
   const entries: Array<{ commit: CommitFact; paths: string[] }> = []
   let current: { commit: CommitFact; paths: string[] } | undefined
   for (const raw of output.split(/\r?\n/)) {
-    const line = raw.trimEnd()
+    // Do not trim: an empty commit subject still ends its header with the
+    // subject tab, and cutting it turns the header into a bogus path line.
+    const line = raw
     if (line === '') continue
-    const header = /^([0-9a-f]{7,40})\t(\S+)\t(.*)$/.exec(line)
+    const header = /^([0-9a-f]{7,40})\t([^\t]+)\t(.*)$/.exec(line)
     if (header !== null) {
+      const at = header[2] ?? ''
+      if (Number.isNaN(Date.parse(at))) return null
       current = {
-        commit: { short: header[1] ?? '', at: header[2] ?? '', subject: header[3] ?? '' },
+        commit: { short: header[1] ?? '', at, subject: header[3] ?? '' },
         paths: [],
       }
       entries.push(current)
       continue
     }
+    // A path line never carries a tab (git quotes such paths); a tab here is a
+    // malformed section and must not inherit the preceding commit.
+    if (line.includes('\t')) return null
     current?.paths.push(line.split('\\').join('/'))
   }
   return entries.length === 0 && output.trim() !== '' ? null : entries

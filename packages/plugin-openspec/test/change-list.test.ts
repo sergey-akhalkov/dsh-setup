@@ -36,6 +36,9 @@ class FakeChild extends EventEmitter {
 
 const temporary: string[] = []
 
+/** The real PATH before each test replaces it with a fake `openspec` directory. */
+const ORIGINAL_PATH = process.env.PATH
+
 function temporaryDirectory(prefix: string): string {
   const directory = mkdtempSync(join(tmpdir(), prefix))
   temporary.push(directory)
@@ -275,14 +278,17 @@ describe('openspec change list', () => {
     expect(spawnMock.mock.calls.map((call) => call[1])).toEqual(
       process.platform === 'win32'
         ? [
-            ['/d', '/s', '/c', 'openspec', 'list', '--all', '--json'],
-            ['/d', '/s', '/c', 'openspec', 'list', '--specs', '--json'],
+            ['/d', '/s', '/c', 'openspec "list" "--all" "--json"'],
+            ['/d', '/s', '/c', 'openspec "list" "--specs" "--json"'],
           ]
         : [
             ['list', '--all', '--json'],
             ['list', '--specs', '--json'],
           ],
     )
+    if (process.platform === 'win32') {
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ windowsVerbatimArguments: true })
+    }
   })
 
   it('derives each phase from the counts and the archive flag', async () => {
@@ -496,6 +502,7 @@ describe('git provenance', () => {
         '-n',
         '300',
         '--name-only',
+        '--relative',
         '--pretty=format:%h%x09%aI%x09%s',
         '--',
         'openspec/changes',
@@ -532,8 +539,60 @@ describe('git provenance', () => {
     const cwd = workspace(true)
     const runner = vi.fn(async () => '')
     await expect(readGitLog(cwd, ['../outside'], runner)).resolves.toBeNull()
-    await expect(readGitLog(cwd, ['C:\\outside'], runner)).resolves.toBeNull()
+    await expect(readGitLog(cwd, [join(cwd, '..', 'outside')], runner)).resolves.toBeNull()
     expect(runner).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed headers and path lines instead of inventing provenance', async () => {
+    const cwd = workspace(true)
+    const badDate = await readGitLog(
+      cwd,
+      ['openspec'],
+      async () => 'abc1234\tnot-a-date\tsubject\nopenspec/changes/x/tasks.md\n',
+    )
+    expect(badDate).toBeNull()
+    const badPath = await readGitLog(
+      cwd,
+      ['openspec'],
+      async () => 'abc1234\t2026-11-01T10:00:00+03:00\tsubject\nopenspec/changes/x\tinjected.md\n',
+    )
+    expect(badPath).toBeNull()
+  })
+
+  it('keeps an empty-subject commit separate from the previous one', async () => {
+    const cwd = workspace(true)
+    const entries = await readGitLog(cwd, ['openspec/changes'], async () =>
+      [
+        'abc1234\t2026-11-01T10:00:00+03:00\tfirst',
+        'openspec/changes/a/f.md',
+        '',
+        'def5678\t2026-10-01T09:00:00+03:00\t',
+        'openspec/changes/b/f.md',
+        '',
+      ].join('\n'),
+    )
+    expect(commitFor(entries, 'openspec/changes/a')).toMatchObject({ short: 'abc1234' })
+    expect(commitFor(entries, 'openspec/changes/b')).toMatchObject({ short: 'def5678' })
+  })
+
+  it('maps commits from a workspace nested inside a repository', async () => {
+    vi.stubEnv('PATH', ORIGINAL_PATH ?? '')
+    const repo = temporaryDirectory('openspec-git-')
+    const real = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+    real.execFileSync('git', ['init', '-q'], { cwd: repo })
+    const nested = join(repo, 'packages', 'pkg')
+    mkdirSync(join(nested, 'openspec', 'specs', 'alpha'), { recursive: true })
+    writeFileSync(join(nested, 'openspec', 'specs', 'alpha', 'spec.md'), '# A\n')
+    real.execFileSync('git', ['add', '-A'], { cwd: repo })
+    real.execFileSync(
+      'git',
+      ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-qm', 'add'],
+      { cwd: repo },
+    )
+    const runner = async (args: readonly string[], cwd: string): Promise<string> =>
+      real.execFileSync('git', [...args], { cwd, encoding: 'utf8' })
+    const entries = await readGitLog(nested, ['openspec/specs/alpha'], runner)
+    expect(commitFor(entries, 'openspec/specs/alpha')).not.toBeNull()
   })
 
   it('runs the real executor with fixed arguments and bounded options', async () => {
@@ -552,7 +611,7 @@ describe('git provenance', () => {
     expect(entries).toHaveLength(1)
     expect(execFileMock).toHaveBeenCalledWith(
       'git',
-      expect.arrayContaining(['log', '-n', '300', '--name-only']),
+      expect.arrayContaining(['log', '-n', '300', '--name-only', '--relative']),
       {
         cwd,
         windowsHide: true,

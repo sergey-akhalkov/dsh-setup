@@ -373,7 +373,10 @@ async function activeDeltas(workspace: string, name: string): Promise<Delta[]> {
       })
       continue
     }
-    const requirements = parseRequirementList(entry.requirements)
+    // The CLI's prose fallback emits description-only deltas when a change has
+    // no delta sections; they still describe an operation, so keep them.
+    const requirements =
+      entry.requirements === undefined ? [] : parseRequirementList(entry.requirements)
     const last = deltas.at(-1)
     if (
       last !== undefined &&
@@ -422,6 +425,7 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
     | undefined
   let scenario: { readonly name: string; readonly rawText: string[] } | undefined
   let renameFrom: string | undefined
+  let fence: string | undefined
 
   const flushScenario = (): void => {
     if (scenario === undefined || requirement === undefined) return
@@ -444,6 +448,25 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
 
   for (const line of lines) {
     const trimmed = line.trim()
+    const fenceMatch = /^\s*(`{3,}|~{3,})/.exec(line)
+    if (fenceMatch !== null) {
+      const marker = (fenceMatch[1] ?? '`').slice(0, 1)
+      if (fence === undefined) fence = marker
+      else if (marker === fence) fence = undefined
+      if (requirement !== undefined && operation !== 'RENAMED') {
+        if (scenario !== undefined) scenario.rawText.push(line)
+        else requirement.text.push(line)
+      }
+      continue
+    }
+    if (fence !== undefined) {
+      // Headings inside a fenced example are content, not delta structure.
+      if (requirement !== undefined && operation !== 'RENAMED') {
+        if (scenario !== undefined) scenario.rawText.push(line)
+        else requirement.text.push(line)
+      }
+      continue
+    }
     const sectionMatch = DELTA_SECTION.exec(trimmed)
     if (sectionMatch !== null) {
       flushRequirement()
@@ -451,6 +474,15 @@ export function parseArchivedDeltas(capability: string, body: string): Delta[] {
       requirements = []
       renameFrom = undefined
       if (operation !== 'RENAMED') deltas.push({ capability, operation, requirements })
+      continue
+    }
+    if (/^#{1,2}\s+/.test(trimmed)) {
+      // Any other level-1/2 heading ends the delta section; requirements after
+      // it are not part of the preceding operation.
+      flushRequirement()
+      operation = undefined
+      requirements = undefined
+      renameFrom = undefined
       continue
     }
     if (operation === 'RENAMED') {
@@ -571,7 +603,9 @@ export async function readWorkspaceChange(
   const specBodies = new Map(specs.map((spec) => [spec.capability, spec.body]))
   const deltas = archived
     ? archivedDeltas(specFiles, specBodies)
-    : await activeDeltas(workspace, name)
+    : proposal === null
+      ? []
+      : await activeDeltas(workspace, name)
   const taskFiles = await readTaskFiles(workspace, root, directory, name, archived)
   const path = archived ? `openspec/changes/archive/${name}` : `openspec/changes/${name}`
   const git = await readGitLog(workspace, [path])
