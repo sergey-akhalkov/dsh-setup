@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "guarantee-work-gates",
+  "scope": "task",
+  "taskId": "a5593ace322e35d5",
+  "digest": "cc5a58da2d5bef4b17a6b2e8ce7eb005c14eb2a42e67224e1f8720e3cfdb962e",
+  "worktreeDigest": "33aef3230f04661582f560ff4fdfb31aea369a139c33696d24e0f8fc0fb4ea84",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-05T11:36:34.133Z"
+}
