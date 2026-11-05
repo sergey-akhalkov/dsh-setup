@@ -54,6 +54,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     type: 'IconChevronDownOutlineRegular',
     props,
   }),
+  IconChevronUpOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconChevronUpOutlineRegular',
+    props,
+  }),
   IconPlusOutlineRegular: (props: Record<string, unknown>) => ({
     type: 'IconPlusOutlineRegular',
     props,
@@ -193,6 +197,8 @@ const COPY: Record<string, string> = {
   'specs.filterLabel': 'Filter capabilities',
   'specs.filterPlaceholder': 'Search capabilities…',
   'specs.noMatch': 'No capabilities match this filter.',
+  'specs.orderNewest': 'Newest first',
+  'specs.orderOldest': 'Oldest first',
   'specs.req': 'req',
   'specs.acceptedVia': 'Accepted via',
   'archive.emptyTitle': 'Nothing archived yet',
@@ -897,11 +903,13 @@ function rootProps(overrides: Partial<RootViewProps> = {}): RootViewProps {
     capabilities: LOADING,
     specQuery: '',
     archiveQuery: '',
+    specOrder: 'newest',
     t,
     now: NOW,
     onSegment: () => {},
     onSpecQuery: () => {},
     onArchiveQuery: () => {},
+    onSpecOrder: () => {},
     onRetry: () => {},
     onOpenChange: () => {},
     onOpenArtifact: () => {},
@@ -1980,6 +1988,77 @@ describe('OpenSpec root view', () => {
     expect(text).not.toContain('5/5')
     expect(typed(card, 'Tooltip')[0]?.props.label).toBe(
       'Shows whether the running DSH Desktop has administrator rights.',
+    )
+  })
+
+  it('orders capabilities newest first and toggles to oldest first', () => {
+    const rows: CapabilitySummary[] = [
+      {
+        id: 'older',
+        requirementCount: 1,
+        lastChange: {
+          name: '2026-01-01-a',
+          date: '2026-01-01',
+          completedTasks: 1,
+          totalTasks: 1,
+          commit: null,
+        },
+      },
+      {
+        id: 'newer',
+        requirementCount: 1,
+        lastChange: {
+          name: '2026-03-01-b',
+          date: '2026-03-01',
+          completedTasks: 1,
+          totalTasks: 1,
+          commit: null,
+        },
+      },
+      { id: 'undated', requirementCount: 1 },
+    ]
+    const changes = {
+      phase: 'ready',
+      value: listOf([], [], { capabilities: 3 }),
+    } as const
+    const newest = RootView(
+      rootProps({
+        segment: 'specs',
+        changes,
+        capabilities: { phase: 'ready', value: rows },
+      }),
+    )
+    const newestText = cardButtons(newest).map((card) => textOf(card))
+    expect(newestText.findIndex((text) => text.includes('newer'))).toBeLessThan(
+      newestText.findIndex((text) => text.includes('older')),
+    )
+    expect(newestText.at(-1)).toContain('undated')
+    const onSpecOrder = vi.fn()
+    const toggle = RootView(
+      rootProps({
+        segment: 'specs',
+        changes,
+        capabilities: { phase: 'ready', value: rows },
+        onSpecOrder,
+      }),
+    )
+    const sort = typed(toggle, 'Button').find(
+      (button) => button.props['aria-label'] === 'Oldest first',
+    )
+    if (sort === undefined) throw new Error('sort button missing')
+    click(sort)
+    expect(onSpecOrder).toHaveBeenCalledWith('oldest')
+    const oldest = RootView(
+      rootProps({
+        segment: 'specs',
+        changes,
+        capabilities: { phase: 'ready', value: rows },
+        specOrder: 'oldest',
+      }),
+    )
+    const oldestText = cardButtons(oldest).map((card) => textOf(card))
+    expect(oldestText.findIndex((text) => text.includes('older'))).toBeLessThan(
+      oldestText.findIndex((text) => text.includes('newer')),
     )
   })
 

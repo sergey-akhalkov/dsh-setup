@@ -699,6 +699,8 @@ window.__ModuleLoader__.load({
       "specs.filterLabel": "Filter capabilities",
       "specs.filterPlaceholder": "Search capabilities\u2026",
       "specs.noMatch": "No capabilities match this filter.",
+      "specs.orderNewest": "Newest first",
+      "specs.orderOldest": "Oldest first",
       "specs.req": "req",
       "specs.acceptedVia": "Accepted via",
       "archive.emptyTitle": "Nothing archived yet",
@@ -1027,6 +1029,7 @@ window.__ModuleLoader__.load({
       const storage = props.storage ?? defaultSegmentStorage();
       const start = initialRootSegment(initialSegment, readSegment(storage, sessionId));
       const [segment, setSegment] = (0, import_react.useState)(start);
+      const [specOrder, setSpecOrder] = (0, import_react.useState)("newest");
       const [specQuery, setSpecQuery] = (0, import_react.useState)("");
       const [archiveQuery, setArchiveQuery] = (0, import_react.useState)("");
       const changes = useRead(() => requestChangeList(sessionId));
@@ -1062,6 +1065,8 @@ window.__ModuleLoader__.load({
           onSegment: choose,
           onSpecQuery: setSpecQuery,
           onArchiveQuery: setArchiveQuery,
+          specOrder,
+          onSpecOrder: setSpecOrder,
           onRetry: () => {
             if (segment === "specs") loadSpecs();
             else changes.reload();
@@ -1312,14 +1317,34 @@ window.__ModuleLoader__.load({
           (list?.counts.archived ?? 0) > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onSeeArchive, children: props.t("specs.archive") }) : null
         ] });
       }
-      const visible = rows.filter((row) => matchesQuery(props.specQuery, row.id, row.purpose));
+      const visible = sortCapabilities(
+        rows.filter((row) => matchesQuery(props.specQuery, row.id, row.purpose)),
+        props.specOrder
+      );
+      const nextOrder = props.specOrder === "newest" ? "oldest" : "newest";
+      const sortLabel = props.t(nextOrder === "newest" ? "specs.orderNewest" : "specs.orderOldest");
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-section", children: [
-        FilterField({
-          label: props.t("specs.filterLabel"),
-          placeholder: props.t("specs.filterPlaceholder"),
-          value: props.specQuery,
-          onChange: props.onSpecQuery
-        }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-filter-row", children: [
+          FilterField({
+            label: props.t("specs.filterLabel"),
+            placeholder: props.t("specs.filterPlaceholder"),
+            value: props.specQuery,
+            onChange: props.onSpecQuery
+          }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            import_dsh_client_ui_primitives.Button,
+            {
+              type: "button",
+              variant: "ghost",
+              size: "sm",
+              className: "dsh-openspec-sort",
+              "aria-label": sortLabel,
+              title: sortLabel,
+              icon: nextOrder === "newest" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconChevronDownOutlineRegular, { size: 14 }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconChevronUpOutlineRegular, { size: 14 }),
+              onClick: () => props.onSpecOrder(nextOrder)
+            }
+          )
+        ] }),
         visible.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", children: props.t("specs.noMatch") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: visible.map(
           (row) => CapabilityCard({
             row,
@@ -1357,6 +1382,21 @@ window.__ModuleLoader__.load({
           })
         ) })
       ] });
+    }
+    function capabilityDate(row) {
+      const accepted = row.lastChange?.date;
+      if (accepted !== void 0 && accepted !== null && accepted !== "") return accepted;
+      return isoDate(row.modified) ?? "";
+    }
+    function sortCapabilities(rows, order) {
+      return [...rows].sort((left, right) => {
+        const leftDate = capabilityDate(left);
+        const rightDate = capabilityDate(right);
+        if (leftDate === rightDate) return left.id.localeCompare(right.id);
+        if (leftDate === "") return 1;
+        if (rightDate === "") return -1;
+        return order === "newest" ? rightDate.localeCompare(leftDate) : leftDate.localeCompare(rightDate);
+      });
     }
     function FilterField(props) {
       const id = `dsh-openspec-filter-${props.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
@@ -2267,6 +2307,15 @@ window.__ModuleLoader__.load({
       flex-direction: column;
       gap: 4px;
       min-width: 0;
+    }
+    .dsh-openspec-filter-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      min-width: 0;
+    }
+    .dsh-openspec-filter-row .dsh-openspec-filter {
+      flex: 1;
     }
     .dsh-openspec-filter-label {
       font: var(--dsw-font-xxs-12);

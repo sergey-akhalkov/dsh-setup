@@ -228,6 +228,8 @@ const EN: Record<string, string> = {
   'specs.filterLabel': 'Filter capabilities',
   'specs.filterPlaceholder': 'Search capabilities…',
   'specs.noMatch': 'No capabilities match this filter.',
+  'specs.orderNewest': 'Newest first',
+  'specs.orderOldest': 'Oldest first',
   'specs.req': 'req',
   'specs.acceptedVia': 'Accepted via',
   'archive.emptyTitle': 'Nothing archived yet',
@@ -734,6 +736,7 @@ export function RootBody(props: RootBodyProps): ReactNode {
   const storage = props.storage ?? defaultSegmentStorage()
   const start = initialRootSegment(initialSegment, readSegment(storage, sessionId))
   const [segment, setSegment] = useState<RootSegment>(start)
+  const [specOrder, setSpecOrder] = useState<SpecOrder>('newest')
   const [specQuery, setSpecQuery] = useState('')
   const [archiveQuery, setArchiveQuery] = useState('')
   const changes = useRead<ChangeListResponse>(() => requestChangeList(sessionId))
@@ -772,6 +775,8 @@ export function RootBody(props: RootBodyProps): ReactNode {
       onSegment={choose}
       onSpecQuery={setSpecQuery}
       onArchiveQuery={setArchiveQuery}
+      specOrder={specOrder}
+      onSpecOrder={setSpecOrder}
       onRetry={() => {
         if (segment === 'specs') loadSpecs()
         else changes.reload()
@@ -965,11 +970,13 @@ export interface RootViewProps {
   readonly capabilities: ReadState<CapabilitySummary[]>
   readonly specQuery: string
   readonly archiveQuery: string
+  readonly specOrder: SpecOrder
   readonly t: Translate
   readonly now?: Date
   onSegment(segment: RootSegment): void
   onSpecQuery(value: string): void
   onArchiveQuery(value: string): void
+  onSpecOrder(order: SpecOrder): void
   onRetry(): void
   onOpenChange(name: string, archived: boolean): void
   onOpenArtifact(name: string, archived: boolean, artifact: ArtifactKind): void
@@ -978,6 +985,9 @@ export interface RootViewProps {
   onPropose(): void
   onSeeArchive(): void
 }
+
+/** Newest-first or oldest-first capability ordering. */
+type SpecOrder = 'newest' | 'oldest'
 
 /** Root view: the counted workspace header and its three segments. */
 export function RootView(props: RootViewProps): ReactNode {
@@ -1151,15 +1161,38 @@ function specsBody(
       </div>
     )
   }
-  const visible = rows.filter((row) => matchesQuery(props.specQuery, row.id, row.purpose))
+  const visible = sortCapabilities(
+    rows.filter((row) => matchesQuery(props.specQuery, row.id, row.purpose)),
+    props.specOrder,
+  )
+  const nextOrder: SpecOrder = props.specOrder === 'newest' ? 'oldest' : 'newest'
+  const sortLabel = props.t(nextOrder === 'newest' ? 'specs.orderNewest' : 'specs.orderOldest')
   return (
     <div className="dsh-openspec-section">
-      {FilterField({
-        label: props.t('specs.filterLabel'),
-        placeholder: props.t('specs.filterPlaceholder'),
-        value: props.specQuery,
-        onChange: props.onSpecQuery,
-      })}
+      <div className="dsh-openspec-filter-row">
+        {FilterField({
+          label: props.t('specs.filterLabel'),
+          placeholder: props.t('specs.filterPlaceholder'),
+          value: props.specQuery,
+          onChange: props.onSpecQuery,
+        })}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="dsh-openspec-sort"
+          aria-label={sortLabel}
+          title={sortLabel}
+          icon={
+            nextOrder === 'newest' ? (
+              <primitives.IconChevronDownOutlineRegular size={14} />
+            ) : (
+              <primitives.IconChevronUpOutlineRegular size={14} />
+            )
+          }
+          onClick={() => props.onSpecOrder(nextOrder)}
+        />
+      </div>
       {visible.length === 0 ? (
         <p className="dsh-openspec-state">{props.t('specs.noMatch')}</p>
       ) : (
@@ -1216,6 +1249,30 @@ function archiveBody(rows: readonly ChangeRow[], props: RootViewProps): ReactNod
       )}
     </div>
   )
+}
+
+/** The acceptance date a capability row sorts by; undated rows sort last. */
+function capabilityDate(row: CapabilitySummary): string {
+  const accepted = row.lastChange?.date
+  if (accepted !== undefined && accepted !== null && accepted !== '') return accepted
+  return isoDate(row.modified) ?? ''
+}
+
+/** Capabilities ordered by acceptance date, with the most recent first or last. */
+function sortCapabilities(
+  rows: readonly CapabilitySummary[],
+  order: SpecOrder,
+): CapabilitySummary[] {
+  return [...rows].sort((left, right) => {
+    const leftDate = capabilityDate(left)
+    const rightDate = capabilityDate(right)
+    if (leftDate === rightDate) return left.id.localeCompare(right.id)
+    if (leftDate === '') return 1
+    if (rightDate === '') return -1
+    return order === 'newest'
+      ? rightDate.localeCompare(leftDate)
+      : leftDate.localeCompare(rightDate)
+  })
 }
 
 /** A labelled text filter; the label stays visible above the input. */
@@ -2442,6 +2499,15 @@ export const PANEL_CSS = `
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+.dsh-openspec-filter-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.dsh-openspec-filter-row .dsh-openspec-filter {
+  flex: 1;
 }
 .dsh-openspec-filter-label {
   font: var(--dsw-font-xxs-12);
