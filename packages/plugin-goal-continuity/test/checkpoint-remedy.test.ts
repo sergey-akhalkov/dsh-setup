@@ -68,7 +68,12 @@ describe('executed bottleneck remedy', () => {
     it(`accepts a tagged ${tool} start as the remedy`, async () => {
       const harness = await create({ availableTools: [tool] })
       const id = await checkpointed(harness, 'worker_start')
-      call(harness, tool, { objective: `take the lane for ${id}` }, 'started')
+      call(
+        harness,
+        tool,
+        { objective: `take the lane for ${id} guarding guard-missing` },
+        'started',
+      )
       await harness.turnStopping()
       expect(harness.steers).toHaveLength(0)
     })

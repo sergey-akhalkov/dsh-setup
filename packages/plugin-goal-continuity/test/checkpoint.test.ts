@@ -722,6 +722,81 @@ describe('close gate', () => {
   })
 })
 
+describe('bottleneck owner rule', () => {
+  /** One serial continue plan with the given bottleneck fields. */
+  function plan(bottleneck: Record<string, unknown>): Record<string, unknown> {
+    return {
+      outcome: 'continue',
+      lanes: [{ id: 'edit', owner: 'lead', scope: ['src/a.ts'], state: 'running' }],
+      bottleneck: { id: 'guard-missing', blockingLanes: ['edit'], ...bottleneck },
+      next: 'execute the remedy',
+    }
+  }
+
+  /** One successful worker start after the checkpoint. */
+  function worker(harness: CheckpointHarness, args: Record<string, unknown>): void {
+    const callId = harness.toolCall('subagent', args)
+    harness.toolResult(callId, 'started')
+  }
+
+  it('refuses a worker-owned lead_action and names the valid actions', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    const message = await harness.failedCheckpoint(
+      plan({ owner: 'lane-docs', action: 'lead_action', targets: ['src/a.ts'] }),
+    )
+    expect(message).toContain('lead_action')
+    expect(message).toContain('worker_start')
+    expect(message).toContain('user_decision')
+    expect(await harness.tryReadRecord()).toBeUndefined()
+  })
+
+  it('requires a worker_start remedy to carry the bottleneck id', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    const result = await harness.checkpoint(plan({ owner: 'lead', action: 'worker_start' }))
+    const id = result.text.match(ID_PATTERN)?.[0] as string
+    worker(harness, { prompt: `take the lane for ${id}` })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+    expect(noticeText(harness.steers[0] as never)).toContain('guard-missing')
+    // The same worker call carrying both ids satisfies the remedy.
+    worker(harness, { prompt: `take the lane for ${id} on guard-missing` })
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(1)
+  })
+
+  it('accepts a lead-owned lead_action at a declared target', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint(plan({ owner: 'lead', action: 'lead_action', targets: ['src/a.ts'] }))
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('accepts a user_decision question for a worker-owned bottleneck', async () => {
+    const harness = await create({ availableTools: ['subagent'] })
+    harness.turnStart()
+    await harness.checkpoint(plan({ owner: 'lane-docs', action: 'user_decision' }))
+    const callId = harness.toolCall('ask_user_question', { question: 'which route?' })
+    harness.toolResult(callId, 'answered')
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+
+  it('fails open to a targeted lead_action when no worker tool is visible', async () => {
+    const harness = await create()
+    harness.turnStart()
+    await harness.checkpoint(
+      plan({ owner: 'lane-docs', action: 'lead_action', targets: ['src/a.ts'] }),
+    )
+    remedy(harness)
+    await harness.turnStopping()
+    expect(harness.steers).toHaveLength(0)
+  })
+})
+
 describe('parallel-action gate', () => {
   async function parallelCheckpoint(
     harness: CheckpointHarness,
@@ -742,10 +817,12 @@ describe('parallel-action gate', () => {
     expect(text).toContain('computes parallel lanes')
   })
 
-  it('passes after a successful worker start that contains the id', async () => {
+  it('passes after a successful worker start that contains both ids', async () => {
     const harness = await create({ availableTools: ['subagent'] })
     const id = await parallelCheckpoint(harness)
-    const call = harness.toolCall('subagent', { prompt: `take lane one for ${id}` })
+    const call = harness.toolCall('subagent', {
+      prompt: `take lane one for ${id} and ${PARALLEL_WORKER.bottleneck.id}`,
+    })
     harness.toolResult(call, 'started')
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
@@ -755,7 +832,9 @@ describe('parallel-action gate', () => {
     it(`passes the parallel gate after a tagged ${tool} start`, async () => {
       const harness = await create({ availableTools: [tool] })
       const id = await parallelCheckpoint(harness)
-      const call = harness.toolCall(tool, { prompt: `take lane one for ${id}` })
+      const call = harness.toolCall(tool, {
+        prompt: `take lane one for ${id} and ${PARALLEL_WORKER.bottleneck.id}`,
+      })
       harness.toolResult(call, 'started')
       await harness.turnStopping()
       expect(harness.steers).toHaveLength(0)
@@ -765,10 +844,7 @@ describe('parallel-action gate', () => {
   it('passes after an amendment that leaves one runnable lane', async () => {
     const harness = await create({ availableTools: ['subagent'] })
     await parallelCheckpoint(harness)
-    await harness.checkpoint({
-      ...SERIAL,
-      bottleneck: { ...SERIAL.bottleneck, owner: 'lane-docs' },
-    })
+    await harness.checkpoint(SERIAL)
     remedy(harness)
     await harness.turnStopping()
     expect(harness.steers).toHaveLength(0)
