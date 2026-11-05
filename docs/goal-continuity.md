@@ -204,7 +204,8 @@ The Host registers one `work_checkpoint` tool with these fields:
   `blocked`, or `done`, and optional `blockedBy` lane ids. At most 8 lanes;
 - `bottleneck`: the current bottleneck, required for `continue`: `id`, `owner`, `action` of
   `worker_start`, `lead_action`, or `user_decision`, the `blockingLanes` ids, and, for `lead_action`,
-  the `targets` it edits;
+  the `targets` it edits. When `owner` is not `lead`, the tool refuses `lead_action` while a
+  worker-start tool is visible and names `worker_start` and `user_decision` in the field diagnostic;
 - `next`: the next action (required).
 
 A call and its record look like this (the record is written by the tool; the model only sends the
@@ -280,10 +281,11 @@ arguments):
 
 An unknown field, an unknown outcome, a missing next action, a continuation without a lane plan, a
 duplicate lane id, an unknown `blockedBy`, an empty scope, more than 8 lanes, an unknown state, a
-continuation without a bottleneck, and a `lead_action` without a target are rejected with a field
-diagnostic. The removed fields `parallel`, `serialReason`, `remaining`, and `speedup` are rejected
-too, and each diagnostic names the field that replaces it (`lanes` for the first three, `next` for
-`speedup`). Every successful call writes one atomic local record:
+continuation without a bottleneck, a `lead_action` without a target, and a `lead_action` whose owner
+is not `lead` while a worker-start tool is visible are rejected with a field diagnostic. The removed
+fields `parallel`, `serialReason`, `remaining`, and `speedup` are rejected too, and each diagnostic
+names the field that replaces it (`lanes` for the first three, `next` for `speedup`). Every successful
+call writes one atomic local record:
 
 ```
 .dsh/work-checkpoints/<hashed-session>/<turn>.json
@@ -351,17 +353,24 @@ A `continue` checkpoint names one bottleneck and the action that removes it. The
 the action with a later tool call, never with prose:
 
 - `worker_start`: a successful worker start after the checkpoint that the same classifier accepts
-  and whose serialized arguments contain the checkpoint id; a cached `delegate` reuse and
-  `send_message` are not starts;
+  and whose serialized arguments contain both the checkpoint id and the bottleneck id; a cached
+  `delegate` reuse, `send_message`, and a start carrying only the checkpoint id are not evidence;
 - `lead_action`: a successful `edit` or `write` whose `file_path` equals a declared target or lies
-  beneath a declared directory target by path component; `src2/file.ts` does not match `src`, both
-  sides resolve against the workspace so a relative target matches its absolute form, a failed or
-  pending call is not evidence, and a target mentioned only in written content or a shell command does
-  not match;
+  beneath a declared directory target by path component, for a bottleneck whose owner is `lead`;
+  `src2/file.ts` does not match `src`, both sides resolve against the workspace so a relative target
+  matches its absolute form, a failed or pending call is not evidence, and a target mentioned only in
+  written content or a shell command does not match;
 - `user_decision`: an `ask_user_question` call; the independent question review still applies.
 
+The owner rule binds the remedy to who can execute it. When the bottleneck owner is not `lead`, the
+action must be `worker_start` or `user_decision`: the close gate accepts a worker start carrying both
+ids or a question to the user, and refuses a lead write. When no worker-start tool is visible the rule
+fails open and accepts a targeted `lead_action` edit or write, so a profile without workers is never
+trapped; the close gate applies the same owner rule when it re-reads a checkpoint record.
+
 No match refuses the close with a steer naming the checkpoint id, the bottleneck id and owner, its
-action, its blocking lanes, and the missing evidence. A command-only remedy is not verifiable: the
+action, its blocking lanes, and the missing evidence; for a worker-owned `lead_action` the steer names
+`worker_start` and `user_decision` instead of the target. A command-only remedy is not verifiable: the
 checkpoint must dispatch the work, edit the target, or ask the user. A `done` checkpoint has no
 remedy obligation.
 
