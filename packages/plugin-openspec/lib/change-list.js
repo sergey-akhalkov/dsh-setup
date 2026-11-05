@@ -628,7 +628,7 @@ export async function readGitLog(workspace, paths, runner = defaultGitRunner) {
             // The workspace may sit below the repository root; without --relative
             // git prints repository-relative names and no row would match.
             '--relative',
-            '--pretty=format:%h%x09%aI%x09%s',
+            '--pretty=format:%x00%h%x09%aI%x09%s',
             '--',
             ...safe,
         ], workspace);
@@ -650,15 +650,17 @@ function workspaceRelative(workspace, path) {
 }
 /** Parse `git log --name-only` output; null when it is not the fixed format. */
 function parseGitLog(output) {
-    const text = output.replace(/[\r\n]+$/, '');
-    if (text === '')
+    if (output.replaceAll('\0', '').trim() === '')
         return [];
     const entries = [];
-    // git prints one blank-line-separated section per commit: its header, then
-    // the files it touched. A section whose first line is not a valid header is
-    // malformed output, not a path list to attach to the previous commit.
-    for (const block of text.split(/\r?\n\r?\n/)) {
-        const [headerLine = '', ...paths] = block.split(/\r?\n/);
+    // Each commit record starts with the NUL the format prints. The explicit
+    // delimiter also frames a merge commit that lists no files, which git emits
+    // immediately before the next header with no blank line between them.
+    for (const chunk of output.split('\0')) {
+        const block = chunk.replace(/^[\r\n]+/, '').replace(/[\r\n]+$/, '');
+        if (block === '')
+            continue;
+        const [headerLine = '', ...pathLines] = block.split(/\r?\n/);
         const header = /^([0-9a-f]{7,40})\t([^\t]+)\t(.*)$/.exec(headerLine);
         if (header === null)
             return null;
@@ -666,7 +668,8 @@ function parseGitLog(output) {
         if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(at)) {
             return null;
         }
-        if (paths.some((path) => path === '' || path.includes('\t')))
+        const paths = pathLines.filter((path) => path !== '');
+        if (paths.some((path) => path.includes('\t')))
             return null;
         entries.push({
             commit: { short: header[1] ?? '', at, subject: header[3] ?? '' },

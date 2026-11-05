@@ -523,7 +523,8 @@ async function capabilityRows(workspace) {
             purpose: purposeSection(body) ?? (await capabilityOverview(workspace, capability.id)),
             modified,
             lastChange: history[0] ?? null,
-            commit: commitFor(git, `openspec/specs/${capability.id}`),
+            // The accepted spec FILE, not a newer neighbouring file in its directory.
+            commit: commitFor(git, `openspec/specs/${capability.id}/spec.md`),
         };
     }));
     return rows;
@@ -569,8 +570,9 @@ export async function readWorkspaceCapability(workspace, id) {
     const changes = await readWorkspaceChangeRows(workspace);
     const archivedRows = new Map(changes.archived.map((row) => [row.name, row]));
     const producers = scanArchiveProducers(workspace).get(id) ?? [];
+    const specFile = `openspec/specs/${id}/spec.md`;
     const git = await readGitLog(workspace, [
-        `openspec/specs/${id}`,
+        specFile,
         ...producers.map((producer) => `openspec/changes/archive/${producer.name}`),
     ]);
     const history = historyEntries(producers, archivedRows, git);
@@ -581,7 +583,7 @@ export async function readWorkspaceCapability(workspace, id) {
             (overview === null ? '' : overview.replace(/\s+/g, ' ').trim()),
         modified: artifact.modified,
         lastChange: history[0] ?? null,
-        commit: commitFor(git, `openspec/specs/${id}`),
+        commit: commitFor(git, specFile),
         body: artifact.body,
         requirements,
         history,
