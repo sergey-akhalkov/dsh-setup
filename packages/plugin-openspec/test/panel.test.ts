@@ -2213,10 +2213,10 @@ describe('OpenSpec change view', () => {
     )
     expect(unavailable?.props.title).toBe('Not written yet.')
     expect(textOf(design?.label)).toContain('Not written yet.')
+    // The shipped control moves focus and selection together; the view honours
+    // its change and the unavailable body carries the reason.
     ;(tabControl(tree).props.onChange as (value: string) => void)('design')
-    expect(chosen).toEqual([])
-    ;(tabControl(tree).props.onChange as (value: string) => void)('proposal')
-    expect(chosen).toEqual(['proposal'])
+    expect(chosen).toEqual(['design'])
   })
 
   it('namespaces tab and panel ids by the active/archive family', () => {

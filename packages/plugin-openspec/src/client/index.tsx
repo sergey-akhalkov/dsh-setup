@@ -1494,9 +1494,6 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
       }
     },
   ) as [SegmentedTab<ArtifactKind>, ...SegmentedTab<ArtifactKind>[]]
-  const chooseArtifact = (kind: ArtifactKind): void => {
-    if (hasArtifact(change, kind)) props.onArtifact(kind)
-  }
   const updated = relativeLabel(change.modified, props.now)
   const archivedOn = isoDate(change.archivedAt)
   return (
@@ -1532,7 +1529,7 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
       <primitives.SegmentedTabs
         items={items}
         value={artifact}
-        onChange={chooseArtifact}
+        onChange={props.onArtifact}
         label={t('change.artifactLabel')}
       />
       <div
