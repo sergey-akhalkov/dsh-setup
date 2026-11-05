@@ -91,7 +91,7 @@ describe('model-facing budget', () => {
     expect(docs).toContain('reasoningEffort: max')
   })
 
-  it('documents the lane triggers as profile rules and names the checkpoint owner', () => {
+  it('documents the lane triggers and names the checkpoint owner', () => {
     const skill = read('SKILL.md')
     const docs = readFileSync(docsPath, 'utf8')
     const fragment = readFileSync(join(packageDir, 'cordis.fragment.yml'), 'utf8')
@@ -109,7 +109,10 @@ describe('model-facing budget', () => {
     expect(skill).toContain('Host restart')
     expect(docs).toContain('lane-tag: <change>#<n>')
     expect(docs).toContain('lane-boundary` is deprecated')
-    expect(fragment).not.toContain('when: lane-assignment')
+    // The shipped default includes the strict lane-fanout rule; the progress
+    // rule stays a profile option.
+    expect(fragment).toContain('- id: lane-fanout')
+    expect(fragment).toContain('when: lane-assignment')
     expect(fragment).not.toContain('when: implementation-work')
     expect(fragment).not.toContain('when: lane-boundary')
     // The task-completion requirement belongs to a profile that configures the
@@ -118,6 +121,21 @@ describe('model-facing budget', () => {
     expect(skill).toContain('may pause mid-task through the goal-continuity')
     expect(skill).not.toContain('With the shipped defaults the gate refuses')
     expect(docs).toMatch(/when a profile configures/iu)
+  })
+
+  it('documents the lane-fanout fire conditions, tagged call, and worker-lane checkpoint binding', () => {
+    const skill = read('SKILL.md')
+    const docs = readFileSync(docsPath, 'utf8')
+    for (const text of [skill, docs]) {
+      expect(text).toContain('shared hot file')
+      expect(text).toContain('generated output')
+      expect(text).toContain('serial gate')
+      expect(text).toContain('worker_start')
+      expect(text).toContain('user_decision')
+      expect(text).toContain('Worker-assigned checkpoint lanes')
+    }
+    expect(skill).toContain('`lane-tag: <change>#<n>`')
+    expect(docs).toContain('lane-tag: <change>#<n>')
   })
 })
 
