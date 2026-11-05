@@ -214,6 +214,7 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-10-31-improve-observability-actionability`         | 15/15          |
 | `2026-10-31-replace-rare-triggers-with-work-checkpoints` | 18/19          |
 | `2026-11-05-guarantee-work-gates`                        | 14/14          |
+| `2026-11-05-add-openspec-panel`                          | 18/18          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -560,3 +561,25 @@ host with `connection.fetch` but no `webServer`. The release workflow passed DSH
 0.2.1-rc.5, the publish job and the Pages deployment; the published index returns HTTP 200, lists all
 18 packages at 0.25.1 pinned to that commit, and retains 0.25.0 and earlier. The owner installs
 0.25.1 the same way; the picker then opens on both carriers.
+
+The `2026-11-05-add-openspec-panel` change carries 18 tasks and 18/18 portable task approvals; it was
+implemented in one session by two lane workers (host reads, Client panel) with the lead integrating
+the generated setup tree. It adds the plugin's second Client surface and the `openspec-panel`
+capability: one right-sidebar tab type opened from a Start-page guide card, a `Changes | Specs` root
+view, one address-keyed tab per change with Why/Design/Specs/Tasks Markdown and per-capability delta
+switching, capability tabs, the `/openspec-apply-change <name>` and `/openspec-propose ` composer
+drafts without submitting, the native `page.refresh` binding, and live updates through the shipped
+`file` resource provider over `workspaceFiles.changes` (300 ms debounce, last-updated fact, no polling
+or plugin-owned watcher). Two read-only session-scoped Host routes serve one change's
+artifacts/progress/last-modified times and the capability inventory or one spec, guarded by the
+CLI-reported item plus canonical-path containment. The integration check found and fixed a real
+late-service defect: the routes now register through cordis `ctx.inject`, so a Web profile whose
+`connection` service appears after the row mounts still serves them. The `openspec-apply-picker`
+requirement is scoped so another client surface may use the shipped component library. The gate was
+green before archiving: `pnpm validate` (97 files, 1794 tests), `pnpm build` with no diff,
+`pnpm gen:check` (329 files), `pnpm reviews:check --change add-openspec-panel` (18/18 PASS,
+archive-ready), `pnpm dogfood`, and `openspec validate add-openspec-panel --strict`. Live checks in
+throwaway rc.5 and rc.3 web Harnesses passed the Start card, change list, change tab, and the native
+`Ctrl+Alt+R` refresh; rc.5 also passed live updates, the exact Apply draft, and the 480 px layout, while
+rc.3 lacks the standard `useResource` hook so its live observation degrades to manual refresh as
+designed. Open owner follow-up: install the release and smoke the panel in the desktop app.

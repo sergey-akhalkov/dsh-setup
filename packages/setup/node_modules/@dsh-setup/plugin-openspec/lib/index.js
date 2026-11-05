@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { changePresence, listWorkspaceCapabilities, readWorkspaceCapability, readWorkspaceChange, UnreportedItemError, } from './change-detail.js';
 import { listWorkspaceChanges } from './change-list.js';
 /**
  * OpenSpec plugin: registers the six generated core skills from a pinned
@@ -167,12 +168,17 @@ export function apply(ctx) {
     registerChangeRoute(ctx);
 }
 /**
- * Read-only fetch route the Client picker asks for the session workspace's
- * change list. It lives under `/api` so the carrier-neutral `connection.fetch`
- * registry serves it: the Web carrier through the `/api` bridge and the
- * desktop shell carrier through its directly dispatched Fetch handler.
+ * Read-only fetch routes the Client picker and panel ask for the session
+ * workspace's OpenSpec data. They live under `/api` so the carrier-neutral
+ * `connection.fetch` registry serves them: the Web carrier through the `/api`
+ * bridge and the desktop shell carrier through its directly dispatched Fetch
+ * handler.
  */
 export const CHANGES_ROUTE = '/api/plugins/dsh-setup-openspec/changes';
+/** One change's artifact bodies and progress, addressed by its CLI-reported name. */
+export const CHANGE_DETAIL_ROUTE = '/api/plugins/dsh-setup-openspec/change';
+/** The capability inventory, or one capability's spec body when `id` is given. */
+export const SPECS_ROUTE = '/api/plugins/dsh-setup-openspec/specs';
 function changeRouteServices(ctx) {
     const connection = ctx.get('connection');
     const fetch = connection?.fetch;
@@ -189,38 +195,145 @@ function changeRouteServices(ctx) {
 function jsonResponse(status, body) {
     return Response.json(body, { status });
 }
+/** The readable 500 body a failed read returns. */
+function errorResponse(error, fallback) {
+    return jsonResponse(500, {
+        error: error instanceof Error ? error.message : fallback,
+    });
+}
+/** The 400 for an item the CLI did not report, otherwise the readable 500. */
+function readErrorResponse(error, fallback) {
+    if (error instanceof UnreportedItemError) {
+        return jsonResponse(400, { error: error.message });
+    }
+    return errorResponse(error, fallback);
+}
 /**
- * Register the workspace-scoped, read-only change list route when the Host
- * services exist. The request carries only a session id; the workspace comes
- * from that live session, never from the request. The carrier admits the
- * request (origin/cookie fence) before dispatching to this handler.
+ * Resolve the live session's workspace from the request query. A returned
+ * `Response` is the refusal; the workspace always comes from the session,
+ * never from any other request text.
  */
-export function registerChangeRoute(ctx) {
+function sessionWorkspace(services, request) {
+    const sessionId = new URL(request.url).searchParams.get('session');
+    if (sessionId === null || sessionId === '') {
+        return { response: jsonResponse(400, { error: 'A session id is required.' }) };
+    }
+    const agent = services.agents.get(sessionId);
+    if (agent === undefined) {
+        return { response: jsonResponse(400, { error: 'The session is not live in this host.' }) };
+    }
+    return { workspace: services.workingDirectory.get(agent.session) };
+}
+/**
+ * Register the workspace-scoped, read-only OpenSpec routes on the Host's fetch
+ * registry: the picker's change list (now carrying artifact presence), one
+ * change's artifacts, and the capability inventory or one spec body. Every
+ * request carries a session id and at most an item name; the workspace comes
+ * from that live session, never from the request. The carrier admits each
+ * request (origin/cookie fence) before dispatching to these handlers. Each
+ * registration is an effect, so disposal removes the routes with the context
+ * that owns them.
+ */
+function registerRoutes(ctx) {
     const services = changeRouteServices(ctx);
     if (services === undefined)
         return;
-    services.connection.fetch.register({
-        path: CHANGES_ROUTE,
-        methods: ['GET'],
-        requestBody: 'buffered',
-        async fetch(request) {
-            const sessionId = new URL(request.url).searchParams.get('session');
-            if (sessionId === null || sessionId === '') {
-                return jsonResponse(400, { error: 'A session id is required.' });
-            }
-            const agent = services.agents.get(sessionId);
-            if (agent === undefined) {
-                return jsonResponse(400, { error: 'The session is not live in this host.' });
-            }
-            try {
-                const changes = await listWorkspaceChanges(services.workingDirectory.get(agent.session));
-                return jsonResponse(200, { changes });
-            }
-            catch (error) {
-                return jsonResponse(500, {
-                    error: error instanceof Error ? error.message : 'The change list could not be read.',
-                });
-            }
+    const routes = [
+        {
+            path: CHANGES_ROUTE,
+            methods: ['GET'],
+            requestBody: 'buffered',
+            async fetch(request) {
+                const resolved = sessionWorkspace(services, request);
+                if ('response' in resolved)
+                    return resolved.response;
+                try {
+                    const changes = (await listWorkspaceChanges(resolved.workspace)).map((change) => ({
+                        ...change,
+                        presence: changePresence(resolved.workspace, change.name),
+                    }));
+                    return jsonResponse(200, { changes });
+                }
+                catch (error) {
+                    return errorResponse(error, 'The change list could not be read.');
+                }
+            },
         },
+        {
+            path: CHANGE_DETAIL_ROUTE,
+            methods: ['GET'],
+            requestBody: 'buffered',
+            async fetch(request) {
+                const resolved = sessionWorkspace(services, request);
+                if ('response' in resolved)
+                    return resolved.response;
+                const name = new URL(request.url).searchParams.get('name');
+                if (name === null || name === '') {
+                    return jsonResponse(400, { error: 'A change name is required.' });
+                }
+                try {
+                    const change = await readWorkspaceChange(resolved.workspace, name);
+                    return jsonResponse(200, { change });
+                }
+                catch (error) {
+                    return readErrorResponse(error, 'The change could not be read.');
+                }
+            },
+        },
+        {
+            path: SPECS_ROUTE,
+            methods: ['GET'],
+            requestBody: 'buffered',
+            async fetch(request) {
+                const resolved = sessionWorkspace(services, request);
+                if ('response' in resolved)
+                    return resolved.response;
+                const id = new URL(request.url).searchParams.get('id');
+                if (id === '') {
+                    return jsonResponse(400, { error: 'A capability id is required.' });
+                }
+                try {
+                    if (id === null) {
+                        const capabilities = await listWorkspaceCapabilities(resolved.workspace);
+                        return jsonResponse(200, { capabilities });
+                    }
+                    const capability = await readWorkspaceCapability(resolved.workspace, id);
+                    return jsonResponse(200, { capability });
+                }
+                catch (error) {
+                    return readErrorResponse(error, 'The capability could not be read.');
+                }
+            },
+        },
+    ];
+    for (const route of routes) {
+        const register = () => services.connection.fetch.register(route);
+        if (typeof ctx.effect === 'function') {
+            ctx.effect(register);
+        }
+        else {
+            // A minimal host stub exposes get() only; registering is still safe.
+            register();
+        }
+    }
+}
+/**
+ * Register the OpenSpec read routes when the Host services exist.
+ *
+ * The plain Web profile provides `connection`, `agents`, and
+ * `workingDirectory` after this row mounts, so an absent probe waits through
+ * cordis `inject` instead of silently registering nothing; the child context
+ * owns the registrations. A host without `inject` (or an older host without
+ * `connection.fetch`) keeps the six skills and registers nothing.
+ */
+export function registerChangeRoute(ctx) {
+    if (changeRouteServices(ctx) !== undefined) {
+        registerRoutes(ctx);
+        return;
+    }
+    if (typeof ctx.inject !== 'function')
+        return;
+    ctx.inject(['connection', 'agents', 'workingDirectory'], (serviceCtx) => {
+        registerRoutes(serviceCtx);
     });
 }

@@ -11,7 +11,9 @@ so a user can fill the apply-change command line without remembering change name
 The plugin SHALL register the client command `/openspec-apply` through the DSH client command API and
 SHALL present its choices with the client's built-in `popupSelect` shell. The plugin MUST supply only
 option data and the selection handler; it MUST NOT ship its own React components, styles, icons, or
-popup. When the client command service is unavailable the client half MUST register nothing and raise
+popup. This clause governs the picker's own presentation only: other client surfaces the same package
+ships are governed by their own capability, and their bodies MAY be built from the shipped DSH component
+library. When the client command service is unavailable the client half MUST register nothing and raise
 no error.
 
 #### Scenario: Command listed and picker opens
@@ -28,6 +30,11 @@ no error.
 
 - **WHEN** the picker renders
 - **THEN** the rows, search field, keyboard navigation, empty state, error strip, and styling come from the picker shell
+
+#### Scenario: A second surface does not change the picker
+
+- **WHEN** the package also contributes a panel outside the composer
+- **THEN** `/openspec-apply` still opens the built-in picker shell unchanged
 
 ### Requirement: Unfinished change list
 

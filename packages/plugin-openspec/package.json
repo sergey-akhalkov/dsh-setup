@@ -1,7 +1,7 @@
 {
   "name": "@dsh-setup/plugin-openspec",
   "version": "0.25.1",
-  "description": "OpenSpec spec-driven workflow: the six core OpenSpec skills packaged on demand from a pinned upstream release, with the openspec CLI as a documented prerequisite",
+  "description": "OpenSpec spec-driven workflow: the six core OpenSpec skills packaged on demand from a pinned upstream release, plus a read-only right-sidebar panel for the workspace's changes and capability specs, with the openspec CLI as a documented prerequisite",
   "license": "MIT",
   "icon": "./icon.svg",
   "type": "module",
@@ -26,6 +26,8 @@
     "lib/index.d.ts",
     "lib/change-list.js",
     "lib/change-list.d.ts",
+    "lib/change-detail.js",
+    "lib/change-detail.d.ts",
     "lib/client.js",
     "cordis.patch.yml",
     "cordis.fragment.yml",
@@ -47,6 +49,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.3",
     "@deepseek-ai/dsh-skill": "0.2.1-rc.3"
   },
   "dsh": {
@@ -59,7 +62,9 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-commands"
       ],
-      "external": []
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
     }
   }
 }

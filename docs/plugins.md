@@ -473,9 +473,48 @@ readable errors. The shell owns the search field, keyboard handling, empty state
 styling.
 
 Picking a row writes `/openspec-apply-change <name>` into the composer draft and never submits; the
-user sends the line and the ordinary skill-invocation path runs it. The picker adds no React, CSS,
-icons, bundle row, dependency, or install script, and a host without the Web services or without
-the Client command service stays skills-only.
+user sends the line and the ordinary skill-invocation path runs it. The picker itself adds no React,
+CSS, icons, bundle row, or install script, and a host without the Web services or without the Client
+command service stays skills-only. The package's panel (below) uses the shipped component library as a
+host-provided external module; a host without the right-sidebar services keeps the picker and the six
+skills.
+
+## OpenSpec panel
+
+[`packages/plugin-openspec`](../packages/plugin-openspec) also contributes one OpenSpec tab type to the
+right sidebar. A Start-page card, the sidebar's panel list, and client navigation open its root page
+(`sidebar://openspec`), which lists the workspace's `openspec list --json` changes by default: name,
+status, `completed/total` task progress, and the artifact kinds the change already carries, unfinished
+first. The `Specs` segment (`dsh-resource://openspec/specs`, the address that opens the same root on
+that segment) lists the `openspec list --specs --json` capabilities with their requirement counts.
+
+Choosing a change opens its own tab at `dsh-resource://openspec/change/<name>` — one canonical address
+per change, so reopening focuses the existing tab and two changes can sit side by side. Its artifact
+segments are Why (`proposal.md`), Design, Specs (each delta spec, with a switcher when a change carries
+several), and Tasks; each renders through the shared Markdown renderer, and a missing artifact is a
+disabled segment that says it is not written yet. Choosing a capability opens
+`dsh-resource://openspec/spec/<id>` with its accepted spec. The panel is read-only: `Apply change`
+writes `/openspec-apply-change <name>` into the composer draft and an empty change list offers
+`/openspec-propose `, both without submitting. The native refresh re-reads the current request, and a
+body re-reads when its tab becomes visible after being hidden.
+
+The two read routes are `GET /api/plugins/dsh-setup-openspec/change?session=<id>&name=<change>` and
+`GET /api/plugins/dsh-setup-openspec/specs?session=<id>` (add `&id=<capability>` for one spec). Like the
+change list they resolve the workspace from the session, refuse a workspace without its own
+`openspec/` root, and read artifact bodies only for items the CLI reports. The DSH component library is
+consumed as a host-provided external module, and a host without the right-sidebar services registers
+no panel and keeps the picker and the six skills.
+
+An open change or capability view also follows its files through the host's shipped file observation:
+the client `file` resource provider over the Host's `workspaceFiles.changes` feed. A change watches
+`openspec/changes/<name>/proposal.md`, `design.md`, `tasks.md`, and every delta
+`specs/<capability>/spec.md`; a capability watches `openspec/specs/<id>/spec.md`. The first observed
+version is the baseline, and any later version, appearance, or disappearance schedules exactly one
+re-read 300 ms after the last change, so artifact bodies, task counts, and the header's last-updated
+fact move together. Subscriptions and the pending timer dispose with the tab body, and no timer runs
+while nothing changes. The header states when the shown files were last modified in local time, adding
+the date when it is not today. A host without the provider reports no live resource, and the native
+refresh plus the hidden-to-visible re-read remain the fallback.
 
 ## Adding a package
 

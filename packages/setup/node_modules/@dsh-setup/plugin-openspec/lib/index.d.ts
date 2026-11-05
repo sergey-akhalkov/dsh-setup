@@ -22,16 +22,24 @@ export declare function assertGuidanceTargets(skills: ReadonlyArray<{
 /** Register the pinned skill set from the committed lock. */
 export declare function apply(ctx: Context): void;
 /**
- * Read-only fetch route the Client picker asks for the session workspace's
- * change list. It lives under `/api` so the carrier-neutral `connection.fetch`
- * registry serves it: the Web carrier through the `/api` bridge and the
- * desktop shell carrier through its directly dispatched Fetch handler.
+ * Read-only fetch routes the Client picker and panel ask for the session
+ * workspace's OpenSpec data. They live under `/api` so the carrier-neutral
+ * `connection.fetch` registry serves them: the Web carrier through the `/api`
+ * bridge and the desktop shell carrier through its directly dispatched Fetch
+ * handler.
  */
 export declare const CHANGES_ROUTE = "/api/plugins/dsh-setup-openspec/changes";
+/** One change's artifact bodies and progress, addressed by its CLI-reported name. */
+export declare const CHANGE_DETAIL_ROUTE = "/api/plugins/dsh-setup-openspec/change";
+/** The capability inventory, or one capability's spec body when `id` is given. */
+export declare const SPECS_ROUTE = "/api/plugins/dsh-setup-openspec/specs";
 /**
- * Register the workspace-scoped, read-only change list route when the Host
- * services exist. The request carries only a session id; the workspace comes
- * from that live session, never from the request. The carrier admits the
- * request (origin/cookie fence) before dispatching to this handler.
+ * Register the OpenSpec read routes when the Host services exist.
+ *
+ * The plain Web profile provides `connection`, `agents`, and
+ * `workingDirectory` after this row mounts, so an absent probe waits through
+ * cordis `inject` instead of silently registering nothing; the child context
+ * owns the registrations. A host without `inject` (or an older host without
+ * `connection.fetch`) keeps the six skills and registers nothing.
  */
 export declare function registerChangeRoute(ctx: Context): void;

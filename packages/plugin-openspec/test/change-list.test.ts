@@ -326,7 +326,7 @@ function routeHarness(workspaces: ReadonlyMap<string, string>): RouteHarness {
     connection: {
       fetch: {
         register(value: FetchRoute) {
-          route = value
+          if (value.path === CHANGES_ROUTE) route = value
           return () => {}
         },
       },
@@ -402,7 +402,15 @@ describe('change list route', () => {
     const one = await answer(harness, 's1', first)
     expect(one.status).toBe(200)
     await expect(one.json()).resolves.toEqual({
-      changes: [{ name: 'add-auth', completedTasks: 3, totalTasks: 14, status: 'in-progress' }],
+      changes: [
+        {
+          name: 'add-auth',
+          completedTasks: 3,
+          totalTasks: 14,
+          status: 'in-progress',
+          presence: { proposal: false, design: false, tasks: false, specs: 0 },
+        },
+      ],
     })
     const two = await answer(harness, 's2', second)
     expect(two.status).toBe(200)

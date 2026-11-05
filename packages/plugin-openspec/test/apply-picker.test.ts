@@ -1,5 +1,31 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apply, CHANGES_PATH, inject } from '../src/client/index.ts'
+
+// The picker is plain data and callbacks; these stubs only let the shared
+// client module (which also defines the panel components) load under Vitest.
+vi.mock('react', () => ({
+  useState: (initial: unknown) => [initial, () => {}],
+  useEffect: () => {},
+  useRef: (initial: unknown) => ({ current: initial }),
+  useMemo: (factory: () => unknown) => factory(),
+}))
+const { element } = vi.hoisted(() => ({
+  element: (type: unknown, props: unknown) => ({ type, props }),
+}))
+vi.mock('react/jsx-runtime', () => ({ jsx: element, jsxs: element, Fragment: Symbol('Fragment') }))
+vi.mock('react/jsx-dev-runtime', () => ({
+  jsxDEV: element,
+  Fragment: Symbol('Fragment'),
+}))
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
+  Button: () => null,
+  MarkdownText: () => null,
+  Pill: () => null,
+  SegmentedControl: () => null,
+  StateDot: () => null,
+  Tag: () => null,
+}))
+
+import { apply, CHANGES_PATH, inject } from '../src/client/index.tsx'
 import {
   MALFORMED_MESSAGE,
   MISSING_CLI_MESSAGE,
@@ -29,10 +55,14 @@ interface Picker {
   readonly registered: Registered[]
   readonly drafts: string[]
   readonly submits: string[]
-  readonly ctx: { get(name: string): unknown; effect(callback: () => () => void): () => void }
+  readonly ctx: {
+    get(name: string): unknown
+    effect(callback: () => () => void): () => void
+    inject(deps: readonly string[], callback: (ctx: unknown) => void): () => void
+  }
 }
 
-function picker(withServices = true): Picker {
+function picker(withServices = true, withPanel = false): Picker {
   const registered: Registered[] = []
   const drafts: string[] = []
   const submits: string[] = []
@@ -40,6 +70,10 @@ function picker(withServices = true): Picker {
   const ctx = {
     effect(callback: () => () => void) {
       callback()
+      return () => {}
+    },
+    inject(_deps: readonly string[], callback: (ctx: unknown) => void) {
+      if (withPanel) callback(ctx)
       return () => {}
     },
     get(name: string): unknown {

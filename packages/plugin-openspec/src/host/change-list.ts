@@ -151,14 +151,12 @@ function nullRootOutput(stdout: string): boolean {
   }
 }
 
-function runList(workspace: string): Promise<string> {
+/** Run one bounded `openspec` CLI call and return its stdout. */
+function runCli(workspace: string, args: readonly string[], label: string): Promise<string> {
   const file = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : 'openspec'
-  const args =
-    process.platform === 'win32'
-      ? ['/d', '/s', '/c', 'openspec', 'list', '--json']
-      : ['list', '--json']
+  const command = process.platform === 'win32' ? ['/d', '/s', '/c', 'openspec', ...args] : [...args]
   return new Promise((resolve, reject) => {
-    const child = spawn(file, args, {
+    const child = spawn(file, command, {
       cwd: workspace,
       stdio: ['ignore', 'pipe', 'pipe'],
       ...(process.platform === 'win32' ? { windowsHide: true } : { detached: true }),
@@ -212,7 +210,7 @@ function runList(workspace: string): Promise<string> {
           new Error(
             error.code === 'ENOENT'
               ? MISSING_CLI_MESSAGE
-              : `\`openspec list\` could not run: ${error.message}`,
+              : `\`openspec ${label}\` could not run: ${error.message}`,
           ),
         ),
       )
@@ -227,7 +225,7 @@ function runList(workspace: string): Promise<string> {
         else {
           reject(
             new Error(
-              `\`openspec list\` failed: ${
+              `\`openspec ${label}\` failed: ${
                 stderr.trim() === '' ? `exit code ${String(code)}` : stderr.trim()
               }`,
             ),
@@ -239,12 +237,22 @@ function runList(workspace: string): Promise<string> {
 }
 
 /**
- * List the changes of the workspace's own OpenSpec root.
+ * Run one bounded `openspec list`-family call against the workspace's own root
+ * and return its parsed JSON.
+ *
+ * The workspace must carry a local `openspec/` root and the CLI must resolve
+ * through PATH; both are refused before spawning. The reported root is checked
+ * against the workspace, so an ancestor or declared store root is refused too.
  * @param workspace - absolute session working directory.
- * @returns the changes `openspec list --json` reports there.
+ * @param args - CLI arguments after `openspec`.
+ * @param label - the command as it appears in readable failures, e.g. `list`.
  * @throws a readable error for a missing CLI, no local root, a timeout, or malformed output.
  */
-export async function listWorkspaceChanges(workspace: string): Promise<WorkspaceChange[]> {
+export async function runOpenSpecJson(
+  workspace: string,
+  args: readonly string[],
+  label: string,
+): Promise<Record<string, unknown>> {
   let isDirectory = false
   try {
     isDirectory = statSync(join(workspace, 'openspec')).isDirectory()
@@ -254,7 +262,7 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
   if (!isDirectory) throw new Error(NO_LOCAL_ROOT_MESSAGE)
   if (!cliOnPath()) throw new Error(MISSING_CLI_MESSAGE)
 
-  const output = await runList(workspace)
+  const output = await runCli(workspace, args, label)
   let parsed: unknown
   try {
     parsed = JSON.parse(output)
@@ -263,5 +271,15 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
   }
   if (!isRecord(parsed)) throw new Error(MALFORMED_MESSAGE)
   requireRoot(parsed, workspace)
-  return parseChanges(parsed)
+  return parsed
+}
+
+/**
+ * List the changes of the workspace's own OpenSpec root.
+ * @param workspace - absolute session working directory.
+ * @returns the changes `openspec list --json` reports there.
+ * @throws a readable error for a missing CLI, no local root, a timeout, or malformed output.
+ */
+export async function listWorkspaceChanges(workspace: string): Promise<WorkspaceChange[]> {
+  return parseChanges(await runOpenSpecJson(workspace, ['list', '--json'], 'list'))
 }

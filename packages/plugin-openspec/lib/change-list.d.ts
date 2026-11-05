@@ -26,6 +26,19 @@ export declare const MALFORMED_MESSAGE = "`openspec list --json` returned output
 /** Whether the CLI name resolves through PATH (PATHEXT aware on Windows). */
 export declare function cliOnPath(): boolean;
 /**
+ * Run one bounded `openspec list`-family call against the workspace's own root
+ * and return its parsed JSON.
+ *
+ * The workspace must carry a local `openspec/` root and the CLI must resolve
+ * through PATH; both are refused before spawning. The reported root is checked
+ * against the workspace, so an ancestor or declared store root is refused too.
+ * @param workspace - absolute session working directory.
+ * @param args - CLI arguments after `openspec`.
+ * @param label - the command as it appears in readable failures, e.g. `list`.
+ * @throws a readable error for a missing CLI, no local root, a timeout, or malformed output.
+ */
+export declare function runOpenSpecJson(workspace: string, args: readonly string[], label: string): Promise<Record<string, unknown>>;
+/**
  * List the changes of the workspace's own OpenSpec root.
  * @param workspace - absolute session working directory.
  * @returns the changes `openspec list --json` reports there.
