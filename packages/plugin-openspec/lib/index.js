@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { changePresence, listWorkspaceCapabilities, readWorkspaceCapability, readWorkspaceChange, UnreportedItemError, } from './change-detail.js';
+import { listWorkspaceCapabilityRows, readWorkspaceCapability, readWorkspaceChange, UnreportedItemError, } from './change-detail.js';
 import { listWorkspaceChanges } from './change-list.js';
 /**
  * OpenSpec plugin: registers the six generated core skills from a pinned
@@ -248,11 +248,7 @@ function registerRoutes(ctx) {
                 if ('response' in resolved)
                     return resolved.response;
                 try {
-                    const changes = (await listWorkspaceChanges(resolved.workspace)).map((change) => ({
-                        ...change,
-                        presence: changePresence(resolved.workspace, change.name),
-                    }));
-                    return jsonResponse(200, { changes });
+                    return jsonResponse(200, await listWorkspaceChanges(resolved.workspace));
                 }
                 catch (error) {
                     return errorResponse(error, 'The change list could not be read.');
@@ -271,8 +267,9 @@ function registerRoutes(ctx) {
                 if (name === null || name === '') {
                     return jsonResponse(400, { error: 'A change name is required.' });
                 }
+                const archived = new URL(request.url).searchParams.get('archived') === '1';
                 try {
-                    const change = await readWorkspaceChange(resolved.workspace, name);
+                    const change = await readWorkspaceChange(resolved.workspace, name, archived);
                     return jsonResponse(200, { change });
                 }
                 catch (error) {
@@ -294,7 +291,7 @@ function registerRoutes(ctx) {
                 }
                 try {
                     if (id === null) {
-                        const capabilities = await listWorkspaceCapabilities(resolved.workspace);
+                        const capabilities = await listWorkspaceCapabilityRows(resolved.workspace);
                         return jsonResponse(200, { capabilities });
                     }
                     const capability = await readWorkspaceCapability(resolved.workspace, id);
