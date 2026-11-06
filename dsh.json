@@ -1,6 +1,6 @@
 {
-  "runtime": "0.2.1-rc.5",
-  "enginesDsh": ">=0.2.1-rc.3 <0.3.0",
+  "runtime": "0.2.2-rc.1",
+  "enginesDsh": ">=0.2.2-rc.1 <0.3.0",
   "repository": "https://github.com/sergey-akhalkov/dsh-setup",
   "installBundles": {
     "shipped": [
@@ -9,7 +9,9 @@
       "@deepseek-ai/dsh-experimental-ralph-bundle",
       "@deepseek-ai/dsh-experimental-plugin-market-bundle",
       "@deepseek-ai/dsh-experimental-session-search",
-      "@deepseek-ai/dsh-experimental-terminal-bundle"
+      "@deepseek-ai/dsh-experimental-terminal-bundle",
+      "@deepseek-ai/dsh-experimental-forge-bundle",
+      "@deepseek-ai/dsh-experimental-session-titles-bundle"
     ],
     "registry": []
   }

@@ -144,14 +144,16 @@ $ErrorActionPreference = 'Stop'
 # BEGIN REPOSITORY METADATA
 # Kept in sync with dsh.json by scripts/validate-repo.ts. A standalone copy of
 # this script has no repository to read these from.
-$DshEngineRange = '>=0.2.1-rc.3 <0.3.0'
+$DshEngineRange = '>=0.2.2-rc.1 <0.3.0'
 $ShippedBundles = @(
   '@deepseek-ai/dsh-experimental-agent-team-profile',
   '@deepseek-ai/dsh-experimental-tool-worktree',
   '@deepseek-ai/dsh-experimental-ralph-bundle',
   '@deepseek-ai/dsh-experimental-plugin-market-bundle',
   '@deepseek-ai/dsh-experimental-session-search',
-  '@deepseek-ai/dsh-experimental-terminal-bundle'
+  '@deepseek-ai/dsh-experimental-terminal-bundle',
+  '@deepseek-ai/dsh-experimental-forge-bundle',
+  '@deepseek-ai/dsh-experimental-session-titles-bundle'
 )
 $RegistryBundles = @()
 # END REPOSITORY METADATA

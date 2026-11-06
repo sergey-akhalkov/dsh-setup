@@ -29,18 +29,18 @@
     "cordis.fragment.yml"
   ],
   "engines": {
-    "dsh": ">=0.2.1-rc.3 <0.3.0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "dependencies": {
     "@vectorize-io/hindsight-coding-agents": "0.8.2",
     "fflate": "0.8.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.5"
+    "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.5",
-    "@deepseek-ai/dsh-agent": "0.2.1-rc.3"
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1"
   },
   "dsh": {
     "bundle": {

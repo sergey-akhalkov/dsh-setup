@@ -571,7 +571,7 @@ dsh plugin --profile dev add link:<absolute path to packages/plugin-<name>>
 pnpm build --watch
 ```
 
-Observed behavior on the supported Harness version (0.2.1-rc.3, Web boot of a throwaway `dev`
+Observed behavior on DSH 0.2.1-rc.3 (Web boot of a throwaway `dev`
 profile with the plugin installed as a `link:`):
 
 - **The Client half reloads without a page reload or Host restart.** Editing

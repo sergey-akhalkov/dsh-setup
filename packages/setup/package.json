@@ -11,7 +11,7 @@
     "locale/*.json"
   ],
   "engines": {
-    "dsh": ">=0.2.1-rc.3 <0.3.0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "dependencies": {
     "@dsh-setup/plugin-admin-indicator": "0.27.8",
@@ -31,8 +31,8 @@
     "@dsh-setup/plugin-serena": "0.27.8",
     "@dsh-setup/plugin-verification-gate": "0.27.8",
     "@dsh-setup/plugin-working-principles": "0.27.8",
-    "@deepseek-ai/dsh-brand": "0.2.1-rc.3",
-    "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "~3.18.5",
     "@modelcontextprotocol/client": "2.2.0",
     "@openai/codex": "0.164.0",

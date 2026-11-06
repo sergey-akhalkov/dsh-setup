@@ -586,11 +586,11 @@ function main(): number {
             '-DryRun',
             '-NoHindsight',
           ],
-          { ...env, STUB_DSH_VERSION: '0.2.2-rc.1' },
+          { ...env, STUB_DSH_VERSION: '0.2.2-rc.2' },
           120_000,
         )
         if (result.status !== 0) throw fail(result)
-        for (const fragment of ['DSH 0.2.2-rc.1', 'Dry run: no changes were made']) {
+        for (const fragment of ['DSH 0.2.2-rc.2', 'Dry run: no changes were made']) {
           if (!result.stdout.includes(fragment)) {
             throw new Error(`the in-range run lacks "${fragment}"\n${result.stdout.trim()}`)
           }

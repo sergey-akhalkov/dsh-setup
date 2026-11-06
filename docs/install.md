@@ -22,7 +22,7 @@ profile, use [`pnpm dogfood`](#dogfood-on-the-current-machine) instead.
   the `desktop` profile the installer writes to.
 - PowerShell 5.1 or newer (PowerShell 7 recommended).
 - Network access to GitHub and the plugin registry.
-- A DSH version inside the supported `enginesDsh` range (`>=0.2.1-rc.3 <0.3.0` in
+- A DSH version inside the supported `enginesDsh` range (`>=0.2.2-rc.1 <0.3.0` in
   [`dsh.json`](../dsh.json)); the installer refuses anything outside it before changing anything.
 - `uv` on `PATH` for the local Hindsight runtime. When it is missing, the installer warns and skips
   only that phase; the setup does not install system tools.
@@ -148,6 +148,8 @@ installer selects them; the setup bundle does not duplicate their rows or add th
 - **Custom plugin markets** — `@deepseek-ai/dsh-experimental-plugin-market-bundle`
 - **Session search** — `@deepseek-ai/dsh-experimental-session-search`
 - **Terminal** — `@deepseek-ai/dsh-experimental-terminal-bundle`
+- **Change requests & worktrees** — `@deepseek-ai/dsh-experimental-forge-bundle`
+- **Conversation-following titles** — `@deepseek-ai/dsh-experimental-session-titles-bundle`
 
 Codex subagents come from the setup bundle's `@dsh-setup/plugin-codex-subagent`; the stock
 `@deepseek-ai/dsh-subagent-codex` bundle is not selected by the installer.

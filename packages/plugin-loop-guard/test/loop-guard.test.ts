@@ -8,6 +8,13 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
 import { apply, DEFAULT_CONFIG, type ResolvedConfig } from '../lib/index.js'
 
+declare module '@deepseek-ai/dsh-llm' {
+  interface LlmRequestPurposeMap {
+    /** Auxiliary compaction requests, declared by the compaction producer. */
+    compaction: true
+  }
+}
+
 /**
  * `@deepseek-ai/dsh-scope` is an uninstalled peer of `dsh-session` in this
  * repository (`autoInstallPeers: false`). The guard test needs the real
@@ -261,7 +268,14 @@ function createHarness(
     }
     await ctx.waterfall(
       'agent/pre-step',
-      { agent: fake.agent, messages: [], turn, step, signal: controller.current.signal },
+      {
+        agent: fake.agent,
+        messages: [],
+        turn,
+        step,
+        signal: controller.current.signal,
+        modelSelection: { provider: 'test', model: 'test' },
+      },
       () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
     )
   }

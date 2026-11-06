@@ -616,3 +616,15 @@ degradation (panel 404 state and picker error strip). Open follow-ups: the advis
 integration-review findings (proposal-only renames, nested task-file live updates, mixed unparsed
 archived deltas, capability acceptance dates, per-spec requirement filtering) were accepted
 unresolved by the owner for this release, and the desktop install smoke remains an owner step.
+
+v0.28.0 raises the supported DSH floor to `0.2.2-rc.1` because the installer now selects two bundles
+that first ship in 0.2.2: `@deepseek-ai/dsh-experimental-forge-bundle` (Change requests & worktrees)
+and `@deepseek-ai/dsh-experimental-session-titles-bundle` (Conversation-following titles).
+Personalized recommendations stays out of the shipped selection. DSH 0.2.1 is refused with the
+update message; `enginesDsh`, `install.ps1`, every plugin manifest, and the client devDependencies
+moved together, and the vendored setup was regenerated. The gate was green before the release:
+`pnpm validate` (98 files, 1883 tests), `pnpm build` with no diff, `pnpm gen:check` (329 files),
+`pnpm validate:repo`, `pnpm validate:composition`, and `pnpm validate:installer` on DSH
+0.2.2-rc.1, whose composed profile contains every shipped bundle. Open owner follow-up: run the
+installer on the second machine from an external PowerShell with the app closed and confirm the
+Experimental plugins page shows the same on/off set.
