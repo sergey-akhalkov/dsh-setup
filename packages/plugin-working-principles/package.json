@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-working-principles",
-  "version": "0.27.7",
+  "version": "0.27.8",
   "description": "First-party working contract, on by default, plus the working-principles, verify-change, instruction-budget, and interface-design skills",
   "license": "MIT",
   "icon": "./icon.svg",
