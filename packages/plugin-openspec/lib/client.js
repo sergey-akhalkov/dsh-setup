@@ -1522,11 +1522,11 @@ window.__ModuleLoader__.load({
         });
       }
       return facts.map((fact) => {
-        const content = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: fact.label }),
+        const tag = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", className: "dsh-openspec-artifact-tag", children: [
+          fact.label,
           fact.suffix === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-artifact-count", children: fact.suffix })
         ] });
-        if (onOpen === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: content }, fact.kind);
+        if (onOpen === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: tag }, fact.kind);
         return (
           // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -1545,7 +1545,7 @@ window.__ModuleLoader__.load({
                 event.stopPropagation();
                 onOpen(fact.kind);
               },
-              children: content
+              children: tag
             },
             fact.kind
           )
@@ -2114,8 +2114,10 @@ window.__ModuleLoader__.load({
     .dsh-openspec-artifact-link {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
       cursor: pointer;
+    }
+    .dsh-openspec-artifact-tag {
+      gap: 4px;
     }
     .dsh-openspec-artifact-link:hover {
       filter: brightness(1.2);

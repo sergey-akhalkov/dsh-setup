@@ -1485,15 +1485,15 @@ function presenceFacts(
     })
   }
   return facts.map((fact) => {
-    const content = (
-      <>
-        <Tag tone="quiet">{fact.label}</Tag>
+    const tag = (
+      <Tag tone="quiet" className="dsh-openspec-artifact-tag">
+        {fact.label}
         {fact.suffix === undefined ? null : (
           <span className="dsh-openspec-artifact-count">{fact.suffix}</span>
         )}
-      </>
+      </Tag>
     )
-    if (onOpen === undefined) return <span key={fact.kind}>{content}</span>
+    if (onOpen === undefined) return <span key={fact.kind}>{tag}</span>
     return (
       // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
       <span
@@ -1512,7 +1512,7 @@ function presenceFacts(
           onOpen(fact.kind)
         }}
       >
-        {content}
+        {tag}
       </span>
     )
   })
@@ -2308,8 +2308,10 @@ export const PANEL_CSS = `
 .dsh-openspec-artifact-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   cursor: pointer;
+}
+.dsh-openspec-artifact-tag {
+  gap: 4px;
 }
 .dsh-openspec-artifact-link:hover {
   filter: brightness(1.2);
