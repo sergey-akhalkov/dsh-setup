@@ -1431,7 +1431,7 @@ window.__ModuleLoader__.load({
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
               updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
             ] }),
-            summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.why ?? props.row.summary }) }),
+            summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.why ?? props.row.summary }) }),
             props.row.totalTasks > 0 ? ProgressBar({
               done: props.row.completedTasks,
               total: props.row.totalTasks,
@@ -1464,7 +1464,7 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.id }),
           updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
         ] }),
-        summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.purpose ?? "", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one", children: props.row.purpose }) }),
+        summaryText(props.row.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.purpose ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one", children: props.row.purpose }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-artifact-count", children: `${String(props.row.requirementCount)} ${props.t("specs.req")}` }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: provenance === void 0 || provenance === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${props.t("specs.acceptedVia")} ${provenance.name}` }) }),
@@ -1496,6 +1496,7 @@ window.__ModuleLoader__.load({
           primitives2.Tooltip,
           {
             label: props.commit.subject === "" ? props.commit.short : props.commit.subject,
+            portal: true,
             children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: props.commit.short })
           }
         ),

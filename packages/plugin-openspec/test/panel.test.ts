@@ -1830,6 +1830,7 @@ describe('OpenSpec root view', () => {
     const card = cardButtons(tree)[0]
     if (card === undefined) throw new Error('card missing')
     expect(typed(card, 'Tooltip')[0]?.props.label).toBe(why)
+    expect(typed(card, 'Tooltip')[0]?.props.portal).toBe(true)
     const purpose = nodes(card).find((node) =>
       String(node.props.className ?? '').includes('dsh-openspec-purpose-clamp'),
     )

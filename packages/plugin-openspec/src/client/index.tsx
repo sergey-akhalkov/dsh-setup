@@ -1328,7 +1328,7 @@ function ChangeCard(props: {
         )}
       </span>
       {summaryText(props.row.why ?? props.row.summary) === null ? null : (
-        <primitives.Tooltip label={props.row.why ?? props.row.summary ?? ''}>
+        <primitives.Tooltip label={props.row.why ?? props.row.summary ?? ''} portal>
           <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp">
             {props.row.why ?? props.row.summary}
           </span>
@@ -1386,7 +1386,7 @@ function CapabilityCard(props: {
         )}
       </span>
       {summaryText(props.row.purpose) === null ? null : (
-        <primitives.Tooltip label={props.row.purpose ?? ''}>
+        <primitives.Tooltip label={props.row.purpose ?? ''} portal>
           <span className="dsh-openspec-purpose dsh-openspec-purpose-clamp dsh-openspec-purpose-one">
             {props.row.purpose}
           </span>
@@ -1446,6 +1446,7 @@ function CommitFactView(props: {
       <primitives.IconBranchOutlineRegular size={14} />
       <primitives.Tooltip
         label={props.commit.subject === '' ? props.commit.short : props.commit.subject}
+        portal
       >
         <span>{props.commit.short}</span>
       </primitives.Tooltip>
