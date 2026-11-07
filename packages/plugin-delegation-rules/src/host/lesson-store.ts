@@ -1,7 +1,13 @@
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { FINDING_CLASSES, type FindingClass, hasMachinePath } from '../shared/approval.js'
+import {
+  FINDING_CLASSES,
+  type FindingClass,
+  hasMachinePath,
+  sanitizeText,
+} from '../shared/approval.js'
 import { workspaceKeyOf } from './finding-history.js'
 
 /**
@@ -22,8 +28,6 @@ const LESSON_STATUSES: ReadonlySet<string> = new Set([
   'rejected',
   'applied',
 ])
-const SECRET_PATTERN =
-  /(?:\bsk-[A-Za-z0-9_-]{8,}|\bghp_[A-Za-z0-9]{20,}|\bAKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:token|password|passwd|secret|api[_-]?key|private[_-]?key)\s*[=:]\s*\S+)/iu
 
 export type LessonStatus = 'proposed' | 'accepted' | 'rejected' | 'applied'
 
@@ -83,7 +87,9 @@ function requireText(value: unknown, at: string, maximum: number): string {
   if (hasMachinePath(value)) {
     throw new LessonStoreError(`${at} must not contain a machine path`, 'validation')
   }
-  if (SECRET_PATTERN.test(value)) {
+  // The review sanitizer owns the credential formats (headers, quoted JSON
+  // values, key prefixes); any redaction means the value must not be stored.
+  if (sanitizeText(value, value.length) !== value) {
     throw new LessonStoreError(`${at} must not contain a credential`, 'validation')
   }
   return clip(value.trim(), maximum)
@@ -245,6 +251,54 @@ async function removeOwnedLock(lock: string, owner: string): Promise<void> {
 }
 
 /**
+ * The store is local scratch: refuse to create it where Git could track it.
+ * Only an established "not a git repository" answer allows the write; a Git
+ * execution error or an unexpected status fails closed.
+ */
+function assertStoreIgnored(workspaceRoot: string): void {
+  const env = { ...process.env, LC_ALL: 'C', LANG: 'C' }
+  const check = spawnSync(
+    'git',
+    ['-C', workspaceRoot, 'check-ignore', '-q', '.dsh/review-learning'],
+    { stdio: 'ignore', env },
+  )
+  if (check.status === 0) return
+  if (check.status === 1) {
+    throw new LessonStoreError(
+      'the lesson store path .dsh/review-learning is not git-ignored; add ".dsh/" to .gitignore so review data is never tracked',
+      'validation',
+    )
+  }
+  const inside = spawnSync('git', ['-C', workspaceRoot, 'rev-parse', '--is-inside-work-tree'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+    env,
+  })
+  if (inside.error !== undefined || inside.status === null) {
+    throw new LessonStoreError(
+      'git is unavailable, so the lesson store cannot verify that .dsh/review-learning is ignored; install git or run outside a repository',
+      'validation',
+    )
+  }
+  if (inside.status === 0 && String(inside.stdout).trim() === 'true') {
+    throw new LessonStoreError(
+      `git could not verify that .dsh/review-learning is ignored in this repository (${clip(String(inside.stderr ?? '').trim() || `git status ${check.status ?? 'unknown'}`, 200)}); fix git and retry`,
+      'validation',
+    )
+  }
+  const stderr = String(inside.stderr ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!/not a git repository/iu.test(stderr)) {
+    throw new LessonStoreError(
+      `git could not establish that this workspace is outside a repository (${clip(stderr || `status ${String(inside.status)}`, 200)}); the lesson store refuses unverifiable scratch`,
+      'validation',
+    )
+  }
+  // Established outside a repository: there is nothing to track.
+}
+
+/**
  * Cross-process lock for the read-prune-rename sequence: an atomic directory
  * create with an owner token. A crashed writer leaves the lock behind; the
  * bounded wait then fails with the lock path and a manual next action rather
@@ -252,6 +306,7 @@ async function removeOwnedLock(lock: string, owner: string): Promise<void> {
  */
 async function withStoreProcessLock<T>(path: string, work: () => Promise<T>): Promise<T> {
   const lock = `${path}.lock`
+  assertStoreIgnored(dirname(dirname(dirname(path))))
   await mkdir(dirname(path), { recursive: true })
   const owner = randomUUID()
   const deadline = Date.now() + STORE_LOCK_TIMEOUT_MS

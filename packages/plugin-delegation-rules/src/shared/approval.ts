@@ -215,8 +215,8 @@ export function hasMachinePath(text: string): boolean {
     /[A-Za-z]:[\\/]/.test(text) ||
     /\\\\/.test(text) ||
     /file:\/\//i.test(text) ||
-    /(?:^|[\s"'([{<`])\/[^\s"'`)\]}>]+/.test(text) ||
-    /(?:^|[\s"'([{<`])~[/\\]/.test(text)
+    /(?:^|[\s"'=([{<`])\/[^\s"'`)\]}>]+/.test(text) ||
+    /(?:^|[\s"'=([{<`])~[/\\]/.test(text)
   )
 }
 
@@ -251,7 +251,7 @@ export function sanitizeText(text: string, maximum = MAX_SANITIZE_CHARS): string
       '[secret]',
     )
     .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
       '[secret]',
     )
   return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`

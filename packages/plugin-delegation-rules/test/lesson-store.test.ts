@@ -276,15 +276,47 @@ describe('lesson store', () => {
     expect(lessons[0]?.body.length).toBeLessThanOrEqual(2_000)
   })
 
-  it('refuses to store a machine path or a credential', async () => {
+  it('refuses to store credentials and assignment-delimited machine paths', async () => {
     const root = await workspace()
     await expect(
       proposeLesson(root, proposal({ body: `See ${WINDOWS_SECRET} for the fix.` })),
     ).rejects.toThrow(/machine path/)
     await expect(
-      proposeLesson(root, proposal({ body: `Use sk-${'ABCDEFGH12345678'} for auth.` })),
+      proposeLesson(
+        root,
+        proposal({ body: 'log=/home/owner/private.txt and path=~/.config/private.txt' }),
+      ),
+    ).rejects.toThrow(/machine path/)
+    await expect(
+      proposeLesson(root, proposal({ body: '{"password":"example-secret-value"}' })),
+    ).rejects.toThrow(/credential/)
+    await expect(
+      proposeLesson(root, proposal({ body: 'Authorization: Bearer example-access-token' })),
+    ).rejects.toThrow(/credential/)
+    const openingMarker = ['-----BEGIN', 'OPENSSH PRIVATE KEY-----'].join(' ')
+    await expect(
+      proposeLesson(root, proposal({ body: `${openingMarker}\nkey material without a footer` })),
     ).rejects.toThrow(/credential/)
     expect((await readLessons(root)).lessons).toHaveLength(0)
+  })
+
+  it('fails closed when git cannot verify the workspace', async () => {
+    const root = await workspace()
+    const originalPath = process.env.PATH
+    process.env.PATH = ''
+    try {
+      await expect(proposeLesson(root, proposal())).rejects.toThrow(/git is unavailable/)
+    } finally {
+      process.env.PATH = originalPath
+    }
+    expect(await readLessons(root)).toEqual({ lessons: [], skipped: 0 })
+  })
+
+  it('refuses to create the store in a git repository that does not ignore .dsh', async () => {
+    const root = await workspace()
+    await run('git', ['init'], { cwd: root })
+    await expect(proposeLesson(root, proposal())).rejects.toThrow(/not git-ignored/)
+    expect(await readLessons(root)).toEqual({ lessons: [], skipped: 0 })
   })
 
   it('updates the existing proposed revision on repeated proposals after acceptance', async () => {
