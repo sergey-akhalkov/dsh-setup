@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { inject, skillDescription, toolDescriptions } from '../src/index.js'
+import { FINDING_CLASSES } from '../src/shared/approval.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const assets = join(packageDir, 'assets', 'delegation-rules')
@@ -197,6 +198,14 @@ describe('bundled prompts', () => {
     expect(text).toContain('whole')
     expect(text).toContain('worktree')
     expect(text).toMatch(/exactly one fenced ```json block/)
+  })
+
+  it('requests the finding class vocabulary in all three review instructions', () => {
+    for (const name of ['review-spec.md', 'review-task.md', 'review-integration.md']) {
+      const text = read(name)
+      expect(text).toContain('"class"')
+      for (const findingClass of FINDING_CLASSES) expect(text).toContain(findingClass)
+    }
   })
 
   it('shapes a blocker consultation with recommendation, evidence, and next action', () => {

@@ -32,6 +32,13 @@ Report nothing below P1. Style, wording, and speculative improvements are out of
 Every finding names the file and line or symbol, the current behavior, and the concrete
 failure. A finding without evidence is dropped.
 
+## Finding class
+
+Every finding also carries a `class` naming the failure type, one of: `spec-ambiguity`,
+`missing-test`, `path-boundary`, `state-persistence`, `stale-input`, `api-contract`, `plan-shape`,
+`docs-drift`, `security`, `other`. Pick the closest class; the class is a learning label, so a
+missing or unknown value is stored as `other` and never rejects the verdict.
+
 ## Output
 
 Return exactly one fenced ```json block and no other fenced block:
@@ -54,6 +61,7 @@ blocking finding:
   "findings": [
     {
       "severity": "P0",
+      "class": "api-contract",
       "title": "Short failure title",
       "evidence": "file:line and the concrete current failure",
       "fix": "the smallest change that resolves it"
@@ -62,4 +70,5 @@ blocking finding:
 }
 ```
 
-`severity` is `P0` or `P1`; all three text fields are non-empty. Only the one block is parsed.
+`severity` is `P0` or `P1`; `class` is one of the listed vocabulary; all text fields are
+non-empty. Only the one block is parsed.
