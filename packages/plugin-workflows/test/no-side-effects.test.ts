@@ -1,7 +1,45 @@
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const mutation = vi.hoisted(() => ({ paths: [] as string[] }))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const record = (path: unknown): void => {
+    mutation.paths.push(String(path))
+  }
+  return {
+    ...actual,
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      record(args[0])
+      return actual.writeFile(...args)
+    },
+    appendFile: async (...args: Parameters<typeof actual.appendFile>) => {
+      record(args[0])
+      return actual.appendFile(...args)
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      record(args[0])
+      record(args[1])
+      return actual.rename(...args)
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      record(args[0])
+      return actual.unlink(...args)
+    },
+    truncate: async (...args: Parameters<typeof actual.truncate>) => {
+      record(args[0])
+      return actual.truncate(...args)
+    },
+    mkdir: async (...args: Parameters<typeof actual.mkdir>) => {
+      record(args[0])
+      return actual.mkdir(...args)
+    },
+  }
+})
+
 import { apply } from '../src/host/index.ts'
 
 type Listener = (...args: unknown[]) => unknown
@@ -181,6 +219,7 @@ describe('read-only safety', () => {
     })
 
     await waitFor(async () => (await walk(workspace)).some((path) => path.endsWith('.jsonl')))
+    await new Promise((resolve) => setTimeout(resolve, 50))
     expect(host.steers).toEqual([])
     expect(host.injects).toEqual([])
     expect(host.registered).not.toContain('tools/pre-execute')
@@ -189,6 +228,15 @@ describe('read-only safety', () => {
     const paths = await walk(workspace)
     expect(paths.length).toBeGreaterThan(0)
     expect(paths.every((path) => path.startsWith('.dsh/workflows/'))).toBe(true)
+    const allowed = resolve(workspace, '.dsh', 'workflows')
+    const inside = (target: string): boolean => {
+      const rel = relative(allowed, resolve(target))
+      return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+    }
+    expect(mutation.paths.length).toBeGreaterThan(0)
+    expect(mutation.paths.every(inside)).toBe(true)
+    expect(inside(join(workspace, '.dsh', 'workflows-escaped-probe'))).toBe(false)
+    expect(inside(join(workspace, '.dsh', 'workflows', '..', '.escaped-probe'))).toBe(false)
     host.dispose()
     await new Promise((resolve) => setTimeout(resolve, 50))
   })

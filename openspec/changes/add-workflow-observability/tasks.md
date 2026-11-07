@@ -42,7 +42,7 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 
 ## 7. Safety and inertness (lane 3, owns `packages/plugin-workflows/test/no-side-effects.test.ts`, `packages/plugin-workflows/test/inert.test.ts`, `packages/plugin-workflows/test/live-harness.test.ts`)
 
-- [ ] 7.1 Add a harness test that dispatches a turn start, a tool result, a subagent start/end, and a turn stop; assert zero `agent.steer`, zero `agent.inject`, zero `tools/pre-execute` registrations, and no write outside `.dsh/workflows/`.
+- [x] 7.1 Add a harness test that dispatches a turn start, a tool result, a subagent start/end, and a turn stop; assert zero `agent.steer`, zero `agent.inject`, zero `tools/pre-execute` registrations, and no write outside `.dsh/workflows/`.
 - [ ] 7.2 Add an inert-host test for missing conversation, resources, locale, and filesystem services; assert no registration, one bounded diagnostic, and no thrown host boot error.
 - [ ] 7.3 Add a live-harness check with a real session: open the Workflows view, run one turn with a checkpoint and a delegate, and confirm the timeline, the Why-not reason, and the health state; record the exact steps and result in the change.
 
