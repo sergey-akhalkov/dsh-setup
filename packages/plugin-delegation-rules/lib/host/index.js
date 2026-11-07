@@ -2695,21 +2695,25 @@ class DelegationEngine {
             return this.runHandleText(run, 'settled');
         return this.runHandleText(run, admission.phase);
     }
+    /** Re-read the selected task and refuse a task that is gone or unchecked. */
+    async validateSelectedTask(run) {
+        const tasks = await readTasks(run.context.change.dir);
+        const task = run.context.task;
+        if (task === undefined)
+            return;
+        const current = tasks.find((entry) => entry.id === task.id);
+        if (current === undefined || !current.checked) {
+            fail(`task "${task.number} ${task.text}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`);
+        }
+        run.context.task = current;
+    }
     /**
      * Re-read the selected task, build the immutable digest/inputs, and reuse a
      * matching authoritative record. Returns the reused text when no target is
      * needed; the caller admits the run otherwise.
      */
     async prepareReviewRun(run) {
-        const tasks = await readTasks(run.context.change.dir);
-        const task = run.context.task;
-        if (task !== undefined) {
-            const current = tasks.find((entry) => entry.id === task.id);
-            if (current === undefined || !current.checked) {
-                fail(`task "${task.number} ${task.text}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`);
-            }
-            run.context.task = current;
-        }
+        await this.validateSelectedTask(run);
         const prepared = await this.prepareReview(run);
         run.prepared = prepared;
         // This inspection decides cached reuse, not the publication baseline: a
@@ -2792,6 +2796,7 @@ class DelegationEngine {
      * duplicate and the incumbent proceeds.
      */
     async reprepareQueuedRun(run) {
+        await this.validateSelectedTask(run);
         await this.discardSnapshot(run);
         const next = await this.prepareReview(run);
         run.prepared = next;
@@ -2811,6 +2816,9 @@ class DelegationEngine {
             const task = run.context.task;
             if (task === undefined)
                 fail(`rule "${rule.id}": a task-scoped review needs a task`);
+            // Capture the source signature before the snapshot so a mutation during
+            // snapshot creation can never be hidden behind a newer signature.
+            const queueInputs = await reviewedInputs(cwd, rule, change, this.services, signal);
             let fallbackReason;
             const snapshot = await createReviewSnapshot(cwd, change, run.file.id, this.services.git.runGit, signal, undefined, (reason) => {
                 fallbackReason = reason;
@@ -2824,9 +2832,8 @@ class DelegationEngine {
                 if (!frozen.checked) {
                     fail(`task "${frozen.number} ${frozen.text}" is not checked in the frozen snapshot of change "${change.name}"; re-run the review`);
                 }
-                // The source set is tracked even for a frozen snapshot so a queued run
-                // can re-prepare when the live inputs moved while it waited.
-                const queueInputs = await reviewedInputs(cwd, rule, change, this.services, signal);
+                // The source set was tracked before the snapshot so a queued run can
+                // re-prepare when the live inputs moved while it waited.
                 return {
                     digest: hashParts([
                         'task-review-v2',

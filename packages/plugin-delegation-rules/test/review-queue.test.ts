@@ -63,6 +63,24 @@ function fakeRun(id: string, key: string, identity: string): QueueRun {
   return { file: { id, key, identity, state: 'queued' } }
 }
 
+function taskReviewConfig(reviewQueue?: BundleConfigLike['reviewQueue']): BundleConfigLike {
+  return {
+    targets: { codex: { provider: 'codex-subagent' } },
+    rules: [
+      {
+        id: 'task-review',
+        when: 'spec-task-ready',
+        to: 'codex',
+        contract: 'review',
+        scope: 'task',
+        gate: 'strict',
+        instruction: 'bundled:review-task',
+      },
+    ],
+    ...(reviewQueue === undefined ? {} : { reviewQueue }),
+  }
+}
+
 describe('review queue admission', () => {
   it('admits up to the concurrency limit and promotes queued runs in FIFO order', async () => {
     const root = await workspace()
@@ -826,6 +844,115 @@ describe('review queue admission', () => {
     ) as { digest: string }
     expect(record.digest).toBe(await specDigest(join(root, 'openspec', 'changes', 'change-a')))
     expect(subagents.startCalls).toBe(2)
+  })
+
+  it('re-prepares a queued frozen snapshot when the source changes during preparation', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Shared task', checked: true }])
+    await writeChange(root, 'change-b', [{ number: '1.1', text: 'Shared task', checked: true }])
+    await writeChange(root, 'change-c', [{ number: '1.1', text: 'Holds the slot', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'one\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const git = new FakeGit()
+    git.files = ['src/engine.ts']
+    const harness = await harnessFor(root, taskReviewConfig({ concurrency: 1 }), subagents, git)
+    const task = taskIdFor('Shared task')
+    const recordFor = async (change: string) =>
+      JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'task-review', change, 'tasks', `${task}.json`),
+          'utf8',
+        ),
+      ) as { digest: string; verdict: string }
+
+    // Control: a review prepared entirely in the final state.
+    git.status = 'M src/engine.ts'
+    await writeFile(join(root, 'src', 'engine.ts'), 'two\n', 'utf8')
+    const controlRun = await harness.startReview({ rule: 'task-review', change: 'change-b', task })
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(controlRun)).toContain('state=completed')
+    const control = await recordFor('change-b')
+
+    // Scenario: reset, then mutate after the snapshot tree was written but
+    // before preparation returned, so a late signature read would look stable.
+    git.status = ''
+    await writeFile(join(root, 'src', 'engine.ts'), 'one\n', 'utf8')
+    const holder = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-c',
+      task: taskIdFor('Holds the slot'),
+    })
+    let mutated = false
+    git.beforeReturn = async (args) => {
+      if (mutated || args[0] !== 'worktree' || args[1] !== 'add') return
+      mutated = true
+      git.status = 'M src/engine.ts'
+      await writeFile(join(root, 'src', 'engine.ts'), 'two\n', 'utf8')
+    }
+    const queued = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task,
+    })
+    const queuedRun = runIdFrom(queued)
+    expect(queued).toContain('review queued')
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(holder)).toContain('state=completed')
+    await subagents.waitForStarts(3)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(queuedRun)).toContain('state=completed')
+    const record = await recordFor('change-a')
+    expect(record.verdict).toBe('PASS')
+    expect(record.digest).toBe(control.digest)
+  })
+
+  it('fails a queued live-fallback review when its task is unchecked while waiting', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Queued task', checked: true }])
+    await writeChange(root, 'change-b', [{ number: '1.1', text: 'Holds the slot', checked: true }])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const git = new FakeGit()
+    git.failSnapshot = true
+    const harness = await harnessFor(root, taskReviewConfig({ concurrency: 1 }), subagents, git)
+    const queuedTask = taskIdFor('Queued task')
+
+    const holder = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-b',
+      task: taskIdFor('Holds the slot'),
+    })
+    const queued = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task: queuedTask,
+    })
+    const queuedRun = runIdFrom(queued)
+    expect(queued).toContain('review queued')
+
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'tasks.md'),
+      '# Tasks\n\n- [ ] 1.1 Queued task\n',
+      'utf8',
+    )
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(holder)).toContain('state=completed')
+    expect(await harness.waitForRun(queuedRun)).toContain('state=failed')
+
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${queuedTask}.json`),
+        'utf8',
+      ),
+    ) as { verdict: string; error: string }
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('no longer a checked task')
+    expect(subagents.startCalls).toBe(1)
   })
 })
 
