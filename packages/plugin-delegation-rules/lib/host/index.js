@@ -122,6 +122,15 @@ class TimeoutError extends DelegationError {
         this.name = 'TimeoutError';
     }
 }
+/** The provider returned an unsuccessful result; classify its diagnostic alone. */
+class ProviderResultError extends DelegationError {
+    providerMessage;
+    constructor(message, providerMessage) {
+        super(message);
+        this.providerMessage = providerMessage;
+        this.name = 'ProviderResultError';
+    }
+}
 function fail(message) {
     throw new DelegationError(message);
 }
@@ -1120,7 +1129,7 @@ function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
         .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
         .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
-        .replace(/\b(?:Authorization|authorization)\s*:\s*(?:Bearer|Basic)\s+[^\s"',;]+/g, '[secret]')
+        .replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^"',;}\s]+["']?/gi, '[secret]')
         .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*["'][^"']*["']/gi, '[secret]')
         .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*[^\s"',;}]+/gi, '[secret]')
         .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
@@ -2469,8 +2478,11 @@ async function finishTarget(started) {
         await started.activation.dispose().catch(() => undefined);
     }
     if (result.stopReason !== 'completed') {
-        const diagnostic = result.diagnostic === undefined ? '' : `: ${sanitizeText(result.diagnostic, MAX_ERROR_CHARS)}`;
-        fail(`rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`);
+        const providerMessage = result.diagnostic === undefined
+            ? `stopped with "${result.stopReason}"`
+            : `stopped with "${result.stopReason}": ${result.diagnostic}`;
+        const diagnostic = result.diagnostic === undefined ? '' : `: ${boundedMessage(result.diagnostic)}`;
+        throw new ProviderResultError(`rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`, providerMessage);
     }
     const text = outputText(result);
     if (text === '') {

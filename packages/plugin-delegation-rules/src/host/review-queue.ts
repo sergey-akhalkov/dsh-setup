@@ -163,6 +163,20 @@ export function classifyFailure(error: unknown, phase: 'start' | 'run'): Classif
     if (matchesCause(PERMISSION_PATTERN)) return { failureClass: 'permission', transient: false }
     return { failureClass: 'provider-not-started', transient: true, ...retryEvidence(retryAfterMs) }
   }
+  if (name === 'ProviderResultError') {
+    const providerMessage = (error as { providerMessage?: unknown }).providerMessage
+    const cause = typeof providerMessage === 'string' ? providerMessage : message
+    const matchesCause = (pattern: RegExp): boolean => pattern.test(cause)
+    if (matchesCause(PERMISSION_PATTERN)) return { failureClass: 'permission', transient: false }
+    if (matchesCause(CONFIG_PATTERN)) return { failureClass: 'config', transient: false }
+    if (matchesCause(CHILD_LIMIT_PATTERN)) {
+      return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) }
+    }
+    if (matchesCause(TIMEOUT_PATTERN)) {
+      return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) }
+    }
+    return { failureClass: 'unknown', transient: false, ...retryEvidence(retryAfterMs) }
+  }
   // Untyped text is untrusted and may embed rule ids or payload keywords, so
   // the permanent checks run before the transient keyword checks.
   if (matched(CHILD_LIMIT_PATTERN)) {

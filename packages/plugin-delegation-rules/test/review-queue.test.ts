@@ -1526,7 +1526,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     subagents.startError = new Error(
-      `permission denied: Authorization: Bearer synthetic-example-value api_key=sk-proj-${'a'.repeat(40)} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
+      `permission denied: authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
     )
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
 
@@ -1632,13 +1632,56 @@ describe('review failure classification', () => {
     }
   })
 
+  it('classifies a provider result failure independently of the rule name', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, () => ({
+      output: [],
+      stopReason: 'error' as const,
+      diagnostic: 'request timed out',
+    }))
+    const rule = (id: string, phase: string, gate: 'strict' | 'soft') => ({
+      id,
+      when: 'spec-ready' as const,
+      to: 'codex',
+      contract: 'review' as const,
+      phase,
+      scope: 'whole' as const,
+      gate,
+      instruction: 'bundled:review-spec',
+    })
+    const harness = await harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          rule('spec-review', 'spec', 'strict'),
+          rule('approval-review', 'approval', 'soft'),
+          rule('unsupported-review', 'unsupported', 'soft'),
+        ],
+        reviewQueue: { concurrency: 1, maxAttempts: 1 },
+      },
+      subagents,
+    )
+    const byRule = new Map<string, unknown>()
+    for (const id of ['spec-review', 'approval-review', 'unsupported-review']) {
+      const runId = await harness.startReview({ rule: id, change: 'change-a' })
+      expect(await harness.waitForRun(runId)).toContain('state=failed')
+      byRule.set(id, (await readRun(root, runId)).failureClass)
+    }
+    for (const id of ['spec-review', 'approval-review', 'unsupported-review']) {
+      expect(byRule.get(id)).toBe('timeout')
+    }
+  })
+
   it('records a bounded, redacted failure class on the run and record', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)

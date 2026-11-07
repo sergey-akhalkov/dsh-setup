@@ -321,6 +321,17 @@ class TimeoutError extends DelegationError {
   }
 }
 
+/** The provider returned an unsuccessful result; classify its diagnostic alone. */
+class ProviderResultError extends DelegationError {
+  constructor(
+    message: string,
+    readonly providerMessage: string,
+  ) {
+    super(message)
+    this.name = 'ProviderResultError'
+  }
+}
+
 function fail(message: string): never {
   throw new DelegationError(message)
 }
@@ -1624,7 +1635,7 @@ function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
     .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
     .replace(/\\\\[^\s"'`)]+/g, '[path]')
     .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
-    .replace(/\b(?:Authorization|authorization)\s*:\s*(?:Bearer|Basic)\s+[^\s"',;]+/g, '[secret]')
+    .replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^"',;}\s]+["']?/gi, '[secret]')
     .replace(
       /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*["'][^"']*["']/gi,
       '[secret]',
@@ -3195,10 +3206,15 @@ async function finishTarget(started: StartedTarget): Promise<RunResult> {
     await started.activation.dispose().catch(() => undefined)
   }
   if (result.stopReason !== 'completed') {
+    const providerMessage =
+      result.diagnostic === undefined
+        ? `stopped with "${result.stopReason}"`
+        : `stopped with "${result.stopReason}": ${result.diagnostic}`
     const diagnostic =
-      result.diagnostic === undefined ? '' : `: ${sanitizeText(result.diagnostic, MAX_ERROR_CHARS)}`
-    fail(
+      result.diagnostic === undefined ? '' : `: ${boundedMessage(result.diagnostic)}`
+    throw new ProviderResultError(
       `rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`,
+      providerMessage,
     )
   }
   const text = outputText(result)
