@@ -180,6 +180,7 @@ export function apply(ctx) {
         watchers.clear();
         watching.clear();
     });
+    const sessionEventAt = new Map();
     const record = (workspace, input, event) => {
         const health = healthFor(workspace);
         activeSession.set(workspace, input.session);
@@ -192,6 +193,7 @@ export function apply(ctx) {
         });
         // The event was observed even if its record cannot be written.
         health.markEvent(bounded.at);
+        sessionEventAt.set(input.session, bounded.at);
         void journal.append(workspace, bounded).then((result) => {
             if (result.ok)
                 return;
@@ -485,6 +487,7 @@ export function apply(ctx) {
         workingDirectory: services.workingDirectory,
         journal,
         healthFor,
+        lastEventAtFor: (session) => sessionEventAt.get(session),
         triggers,
     });
 }

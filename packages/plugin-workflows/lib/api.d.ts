@@ -37,6 +37,8 @@ export interface WorkflowApiServices {
     };
     readonly journal: Journal;
     readonly healthFor: (workspace: string) => WorkflowHealth;
+    /** The requesting session's own last observed event time, if any. */
+    readonly lastEventAtFor?: (session: string) => number | undefined;
     readonly triggers: readonly Trigger[];
 }
 /** Build the four read-only routes. */

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isInside } from './fs-change.js';
 import { redactPayload, redactText } from './redact.js';
 export const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints');
 export const DELEGATION_DIR = join('.dsh', 'delegation');
@@ -33,17 +34,34 @@ function parseTime(value) {
         return value;
     return 0;
 }
-async function readJson(file) {
+/** Canonical target when it stays inside the workspace; undefined otherwise. */
+async function containedFile(workspace, file) {
+    const root = await realpath(workspace).catch(() => undefined);
+    if (root === undefined)
+        return undefined;
+    const target = await realpath(file).catch(() => undefined);
+    if (target === undefined || !isInside(root, target))
+        return undefined;
+    return target;
+}
+async function readJson(workspace, file) {
     try {
-        return { value: JSON.parse(await readFile(file, 'utf8')) };
+        const target = await containedFile(workspace, file);
+        if (target === undefined)
+            return { error: 'the record path escapes the workspace or is unreadable' };
+        return { value: JSON.parse(await readFile(target, 'utf8')) };
     }
     catch (error) {
         return { error: errorMessage(error) };
     }
 }
-async function listFiles(directory) {
+async function listFiles(workspace, directory) {
     try {
-        return await readdir(directory);
+        const target = await realpath(directory);
+        const root = await realpath(workspace);
+        if (!isInside(root, target))
+            return [];
+        return await readdir(target);
     }
     catch {
         return [];
@@ -93,12 +111,12 @@ function laneSteps(value) {
 export async function checkpointRuns(workspace, sessionId) {
     const directory = join(workspace, WORK_CHECKPOINT_DIR, hashSession(sessionId));
     const runs = [];
-    for (const name of await listFiles(directory)) {
+    for (const name of await listFiles(workspace, directory)) {
         if (!name.endsWith('.json'))
             continue;
         const file = join(directory, name);
         const turn = name.slice(0, -'.json'.length);
-        const parsed = await readJson(file);
+        const parsed = await readJson(workspace, file);
         if ('error' in parsed) {
             runs.push(errorRun(`checkpoint:${turn}`, 'checkpoint', workspace, file, 'local', sessionId, parsed.error));
             continue;
@@ -300,24 +318,24 @@ export async function readLocalReviewRecords(workspace) {
     const delegation = join(workspace, DELEGATION_DIR);
     const records = [];
     const failures = [];
-    for (const rule of await listFiles(delegation)) {
+    for (const rule of await listFiles(workspace, delegation)) {
         if (LOCAL_SKIP.has(rule))
             continue;
         const ruleDirectory = join(delegation, rule);
-        for (const change of await listFiles(ruleDirectory)) {
+        for (const change of await listFiles(workspace, ruleDirectory)) {
             const changeDirectory = join(ruleDirectory, change);
-            for (const name of await listFiles(changeDirectory)) {
+            for (const name of await listFiles(workspace, changeDirectory)) {
                 const candidates = [];
                 if (name.endsWith('.json'))
                     candidates.push(join(changeDirectory, name));
                 if (name === 'tasks') {
-                    for (const task of await listFiles(join(changeDirectory, name))) {
+                    for (const task of await listFiles(workspace, join(changeDirectory, name))) {
                         if (task.endsWith('.json'))
                             candidates.push(join(changeDirectory, name, task));
                     }
                 }
                 for (const file of candidates) {
-                    const parsed = await readJson(file);
+                    const parsed = await readJson(workspace, file);
                     if ('error' in parsed) {
                         failures.push({ file, error: parsed.error });
                         continue;
@@ -361,12 +379,12 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
             byRunId.set(local.record.runId, local);
     }
     const runs = [];
-    for (const name of await listFiles(directory)) {
+    for (const name of await listFiles(workspace, directory)) {
         if (!name.endsWith('.json'))
             continue;
         const file = join(directory, name);
         const id = name.slice(0, -'.json'.length);
-        const parsed = await readJson(file);
+        const parsed = await readJson(workspace, file);
         if ('error' in parsed) {
             runs.push(errorRun(`delegation:${id}`, 'delegation', workspace, file, 'unattributed', undefined, parsed.error));
             continue;
@@ -447,14 +465,14 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
 export async function portableReviewRuns(workspace, localRecords) {
     const changesDirectory = join(workspace, 'openspec', 'changes');
     const runs = [];
-    for (const change of await listFiles(changesDirectory)) {
+    for (const change of await listFiles(workspace, changesDirectory)) {
         const reviews = join(changesDirectory, change, 'reviews');
-        for (const name of await listFiles(reviews)) {
+        for (const name of await listFiles(workspace, reviews)) {
             if (!name.endsWith('.json'))
                 continue;
             const file = join(reviews, name);
             const taskId = name.slice(0, -'.json'.length);
-            const parsed = await readJson(file);
+            const parsed = await readJson(workspace, file);
             if ('error' in parsed) {
                 runs.push(errorRun(`review:${change}/${taskId}`, 'review', workspace, file, 'unattributed', undefined, parsed.error));
                 continue;
@@ -514,12 +532,15 @@ export async function portableReviewRuns(workspace, localRecords) {
 export async function delegationObservations(workspace) {
     const directory = join(workspace, WORKFLOW_EVENTS_DIR);
     const observed = new Map();
-    for (const name of await listFiles(directory)) {
+    for (const name of await listFiles(workspace, directory)) {
         if (!/\.jsonl(?:\.1)?$/u.test(name))
             continue;
         let raw = '';
         try {
-            raw = await readFile(join(directory, name), 'utf8');
+            const target = await containedFile(workspace, join(directory, name));
+            if (target === undefined)
+                continue;
+            raw = await readFile(target, 'utf8');
         }
         catch {
             continue;

@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto'
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +34,11 @@ import {
 
 const fixtures = fileURLToPath(new URL('./fixtures', import.meta.url))
 const TEMP_DIRECTORIES: string[] = []
+
+function linkPermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'EPERM' || code === 'EACCES' || code === 'UNKNOWN'
+}
 
 async function tempWorkspace(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'workflows-projection-'))
@@ -951,6 +965,90 @@ describe('merged session timeline', () => {
     await writeFile(join(workspace, WORKFLOW_EVENTS_DIR, 'session-1.jsonl.1'), `${line}\n`, 'utf8')
     const runs = await sessionRuns(workspace, 'session-1')
     expect(runs.some((run) => run.id === 'delegation:run-mw6abcde-1234abce')).toBe(true)
+  })
+
+  it('does not follow record links that escape the workspace', async () => {
+    const workspace = await tempWorkspace()
+    const external = await tempWorkspace()
+    await writeJson(external, `${DELEGATION_DIR}/runs/run-mw6abcde-1234abcd.json`, {
+      id: 'run-mw6abcde-1234abcd',
+      rule: 'task-review',
+      change: 'add-x',
+      key: 'k',
+      identity: 'i',
+      state: 'running',
+      record: '.dsh/delegation/task-review/add-x/tasks/x.json',
+      startedAt: '2026-11-07T10:00:00.000Z',
+    })
+    await writeJson(external, `${'.dsh/work-checkpoints'}/${hashSession('session-1')}/1.json`, {
+      version: 2,
+      checkpoint: 'external',
+      revision: 1,
+      turn: 1,
+      outcome: 'done',
+      verified: [],
+      lanes: [],
+      laneAges: [],
+      derivedRemaining: [],
+      parallelComputed: false,
+      next: 'x',
+      time: '2026-11-07T10:00:00.000Z',
+      session: '[REDACTED]',
+    })
+    await mkdir(join(workspace, '.dsh'), { recursive: true })
+    try {
+      await symlink(
+        join(external, '.dsh', 'delegation'),
+        join(workspace, '.dsh', 'delegation'),
+        'junction',
+      )
+      await symlink(
+        join(external, '.dsh', 'work-checkpoints'),
+        join(workspace, '.dsh', 'work-checkpoints'),
+        'junction',
+      )
+    } catch {
+      return
+    }
+    expect(
+      (await workspaceRuns(workspace)).some((run) => run.id === 'delegation:run-mw6abcde-1234abcd'),
+    ).toBe(false)
+    expect(await sessionRuns(workspace, 'session-1')).toEqual([])
+  })
+
+  it('does not attribute a run from a linked journal file', async () => {
+    const workspace = await tempWorkspace()
+    const external = await tempWorkspace()
+    const runId = 'run-mw6abcde-99999999'
+    await writeJson(workspace, `${DELEGATION_DIR}/runs/${runId}.json`, {
+      id: runId,
+      rule: 'task-review',
+      change: 'add-x',
+      key: 'k',
+      identity: 'i',
+      state: 'running',
+      record: `.dsh/delegation/task-review/add-x/tasks/${runId}.json`,
+      startedAt: '2026-11-07T10:00:00.000Z',
+    })
+    await mkdir(join(external, WORKFLOW_EVENTS_DIR), { recursive: true })
+    await writeFile(
+      join(external, WORKFLOW_EVENTS_DIR, 'session-1.jsonl'),
+      `${JSON.stringify({ v: 1, at: 1, session: 'session-1', kind: 'tools/result', subject: 'delegate', summary: `delegate review started; run: ${runId}`, bytes: 50, truncated: false })}\n`,
+      'utf8',
+    )
+    const events = join(workspace, WORKFLOW_EVENTS_DIR)
+    await mkdir(events, { recursive: true })
+    try {
+      await symlink(
+        join(external, WORKFLOW_EVENTS_DIR, 'session-1.jsonl'),
+        join(events, 'session-1.jsonl'),
+        'file',
+      )
+    } catch (error) {
+      if (linkPermissionError(error)) return
+      throw error
+    }
+    expect(await sessionRuns(workspace, 'session-1')).toEqual([])
   })
 
   it('reads only the requesting workspace', async () => {

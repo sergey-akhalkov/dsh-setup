@@ -6,6 +6,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -15,6 +16,11 @@ import { apply } from '../src/host/index.ts'
 import { eventsDirectory, Journal } from '../src/host/journal.ts'
 
 type Listener = (...args: unknown[]) => unknown
+
+function linkPermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'EPERM' || code === 'EACCES' || code === 'UNKNOWN'
+}
 
 interface FakeAgent {
   id: string
@@ -1123,6 +1129,56 @@ describe('workflow event recorder', () => {
     expect(records[0]?.triggers?.map((evaluation) => evaluation.id)).toEqual(
       triggers.map((trigger) => trigger.id),
     )
+  })
+
+  it('does not read a session journal through a link that escapes the workspace', async () => {
+    const workspace = await tempWorkspace()
+    const external = await tempWorkspace()
+    const { record } = new Journal().record({
+      at: 1,
+      session: 'session-1',
+      kind: 'tools/result',
+      subject: 'read',
+      summary: 'read ok',
+      bytes: 3,
+      truncated: false,
+    })
+    await writeFile(join(external, 'session-1.jsonl'), `${JSON.stringify(record)}\n`, 'utf8')
+    await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
+    try {
+      await symlink(external, join(workspace, '.dsh', 'workflows', 'events'), 'junction')
+    } catch (error) {
+      if (linkPermissionError(error)) return
+      throw error
+    }
+    const { records } = await new Journal().read(workspace, 'session-1', 0, 10)
+    expect(records).toEqual([])
+  })
+
+  it('does not read a single linked .jsonl file or its rotation', async () => {
+    const workspace = await tempWorkspace()
+    const external = await tempWorkspace()
+    const { record } = new Journal().record({
+      at: 1,
+      session: 'session-1',
+      kind: 'tools/result',
+      subject: 'delegate',
+      summary: 'delegate review started; run: run-mw6abcde-1234abcd',
+      bytes: 3,
+      truncated: false,
+    })
+    await writeFile(join(external, 'session-1.jsonl'), `${JSON.stringify(record)}\n`, 'utf8')
+    await writeFile(join(external, 'session-1.jsonl.1'), `${JSON.stringify(record)}\n`, 'utf8')
+    const events = join(workspace, '.dsh', 'workflows', 'events')
+    await mkdir(events, { recursive: true })
+    try {
+      await symlink(join(external, 'session-1.jsonl'), join(events, 'session-1.jsonl'), 'file')
+      await symlink(join(external, 'session-1.jsonl.1'), join(events, 'session-1.jsonl.1'), 'file')
+    } catch (error) {
+      if (linkPermissionError(error)) return
+      throw error
+    }
+    expect(await new Journal().read(workspace, 'session-1', 0, 10)).toEqual({ records: [] })
   })
 
   it('contains a listener whose journal write fails', async () => {

@@ -3,6 +3,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  realpath,
   rename,
   stat,
   truncate,
@@ -10,6 +11,7 @@ import {
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { isInside } from './fs-change.js'
 import { redactPayload, redactValue } from './redact.js'
 
 /**
@@ -418,12 +420,16 @@ export class Journal {
 
   /** One page of a session's records; the rotation and current file are one log. */
   async read(workspace: string, session: string, cursor = 0, limit = 50): Promise<JournalPage> {
+    const root = await realpath(workspace).catch(() => undefined)
+    if (root === undefined) return { records: [] }
     const file = join(eventsDirectory(workspace), `${sessionFileName(session)}.jsonl`)
     const records: JournalRecord[] = []
     for (const candidate of [`${file}.1`, file]) {
       let raw = ''
       try {
-        raw = await this.readText(candidate)
+        const target = await realpath(candidate)
+        if (!isInside(root, target)) continue
+        raw = await this.readText(target)
       } catch {
         continue
       }

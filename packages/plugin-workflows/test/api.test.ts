@@ -54,6 +54,17 @@ async function setup(): Promise<Setup> {
     write: async () => {},
   })
   health.setListenerCount(5)
+  const healthTwo = new WorkflowHealth({
+    root: join(workspaceTwo, '.dsh', 'workflows'),
+    triggerCount: 3,
+    probe: async () => true,
+    write: async () => {},
+  })
+  healthTwo.setListenerCount(5)
+  const lastEvents = new Map([
+    ['s1', 1_111],
+    ['s3', 3_333],
+  ])
   const services: WorkflowApiServices = {
     agents: {
       get: (id) => {
@@ -68,7 +79,8 @@ async function setup(): Promise<Setup> {
       },
     },
     journal,
-    healthFor: () => health,
+    healthFor: (workspace) => (workspace === workspaceTwo ? healthTwo : health),
+    lastEventAtFor: (session) => lastEvents.get(session),
     triggers: loadCatalog(),
   }
   return {
@@ -401,6 +413,65 @@ describe('workflows read API', () => {
     expect((two.body as { events: unknown[] }).events).toHaveLength(1)
     expect((three.body as { events: unknown[] }).events).toHaveLength(1)
     expect((await request(value, EVENTS_ROUTE, { session: 'unknown' })).status).toBe(400)
+    expect((await request(value, EVENTS_ROUTE, { session: '../../etc' })).status).toBe(400)
+
+    await mkdir(join(value.workspaceOne, '.dsh', 'delegation', 'runs'), { recursive: true })
+    for (const [session, reason] of [
+      ['s1', 'would-fire'],
+      ['s2', 'event-mismatch'],
+    ] as const) {
+      const record = value.journal.record(
+        input({
+          session,
+          summary: `read ${session}`,
+          triggers: [{ id: 'openspec-tasks-checked', matched: reason === 'would-fire', reason }],
+        }),
+      )
+      await value.journal.append(value.workspaceOne, record.record)
+      const runId = `run-mw6abcde-${session === 's1' ? '11111111' : '22222222'}`
+      const runRecord = value.journal.record(
+        input({ session, subject: 'delegate', summary: `delegate review started; run: ${runId}` }),
+      )
+      await value.journal.append(value.workspaceOne, runRecord.record)
+      await writeFile(
+        join(value.workspaceOne, '.dsh', 'delegation', 'runs', `${runId}.json`),
+        JSON.stringify({
+          id: runId,
+          rule: 'task-review',
+          change: 'add-x',
+          key: 'k',
+          identity: 'i',
+          state: 'running',
+          record: `.dsh/delegation/task-review/add-x/tasks/${runId}.json`,
+          startedAt: '2026-11-07T10:00:00.000Z',
+        }),
+        'utf8',
+      )
+    }
+    const triggersOne = await request(value, TRIGGERS_ROUTE, { session: 's1' })
+    const triggersTwo = await request(value, TRIGGERS_ROUTE, { session: 's2' })
+    const lastOf = (body: unknown): unknown =>
+      (body as { triggers: Array<{ id: string; last?: { reason: string } }> }).triggers.find(
+        (trigger) => trigger.id === 'openspec-tasks-checked',
+      )?.last?.reason
+    expect(lastOf(triggersOne.body)).toBe('would-fire')
+    expect(lastOf(triggersTwo.body)).toBe('event-mismatch')
+    const runsOne = await request(value, RUNS_ROUTE, { session: 's1' })
+    const runsTwo = await request(value, RUNS_ROUTE, { session: 's2' })
+    expect((runsOne.body as { runs: Array<{ id: string }> }).runs.map((run) => run.id)).toEqual([
+      'delegation:run-mw6abcde-11111111',
+    ])
+    expect((runsTwo.body as { runs: Array<{ id: string }> }).runs.map((run) => run.id)).toEqual([
+      'delegation:run-mw6abcde-22222222',
+    ])
+    value.health.markEvent(1_111)
+    value.services.healthFor(value.workspaceTwo).markEvent(3_333)
+    const healthOne = await request(value, HEALTH_ROUTE, { session: 's1' })
+    const healthTwo = await request(value, HEALTH_ROUTE, { session: 's2' })
+    const healthThree = await request(value, HEALTH_ROUTE, { session: 's3' })
+    expect((healthOne.body as { lastEventAt: number }).lastEventAt).toBe(1_111)
+    expect((healthTwo.body as { lastEventAt?: number }).lastEventAt).toBeUndefined()
+    expect((healthThree.body as { triggerCount: number }).triggerCount).toBe(3)
   })
 
   it('rejects a non-GET and bounds an internal error body', async () => {

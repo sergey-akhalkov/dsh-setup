@@ -236,6 +236,8 @@ export function apply(ctx: Context): void {
     watching.clear()
   })
 
+  const sessionEventAt = new Map<string, number>()
+
   const record = (workspace: string, input: JournalInput, event: ObservedEvent): void => {
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
@@ -248,6 +250,7 @@ export function apply(ctx: Context): void {
     })
     // The event was observed even if its record cannot be written.
     health.markEvent(bounded.at)
+    sessionEventAt.set(input.session, bounded.at)
     void journal.append(workspace, bounded).then((result) => {
       if (result.ok) return
       health.setJournalWritable(false)
@@ -563,6 +566,7 @@ export function apply(ctx: Context): void {
     workingDirectory: services.workingDirectory as { get(session: unknown): string },
     journal,
     healthFor,
+    lastEventAtFor: (session) => sessionEventAt.get(session),
     triggers,
   })
 }

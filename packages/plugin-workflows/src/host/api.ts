@@ -40,6 +40,8 @@ export interface WorkflowApiServices {
   readonly workingDirectory: { get(session: unknown): string }
   readonly journal: Journal
   readonly healthFor: (workspace: string) => WorkflowHealth
+  /** The requesting session's own last observed event time, if any. */
+  readonly lastEventAtFor?: (session: string) => number | undefined
   readonly triggers: readonly Trigger[]
 }
 
@@ -208,10 +210,13 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       if ('response' in resolved) return resolved.response
       const health = services.healthFor(resolved.workspace)
       const matched = await sessionHasMatched(services, resolved.workspace, resolved.session)
+      const lastEventAt = services.lastEventAtFor?.(resolved.session)
+      const { lastEventAt: _workspaceLastEvent, ...snapshot } = health.snapshot()
       return json(200, {
         session: resolved.session,
         state: health.stateFor(matched, true),
-        ...health.snapshot(),
+        ...snapshot,
+        ...(lastEventAt === undefined ? {} : { lastEventAt }),
       })
     }),
   ]

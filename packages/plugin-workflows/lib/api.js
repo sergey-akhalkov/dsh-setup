@@ -164,10 +164,13 @@ export function createWorkflowRoutes(services) {
                 return resolved.response;
             const health = services.healthFor(resolved.workspace);
             const matched = await sessionHasMatched(services, resolved.workspace, resolved.session);
+            const lastEventAt = services.lastEventAtFor?.(resolved.session);
+            const { lastEventAt: _workspaceLastEvent, ...snapshot } = health.snapshot();
             return json(200, {
                 session: resolved.session,
                 state: health.stateFor(matched, true),
-                ...health.snapshot(),
+                ...snapshot,
+                ...(lastEventAt === undefined ? {} : { lastEventAt }),
             });
         }),
     ];

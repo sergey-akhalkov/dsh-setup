@@ -1,5 +1,6 @@
-import { appendFile, mkdir, readdir, readFile, rename, stat, truncate, unlink, } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, realpath, rename, stat, truncate, unlink, } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isInside } from './fs-change.js';
 import { redactPayload, redactValue } from './redact.js';
 /**
  * Bounded per-session event journal: one JSONL line per observed process
@@ -313,12 +314,18 @@ export class Journal {
     }
     /** One page of a session's records; the rotation and current file are one log. */
     async read(workspace, session, cursor = 0, limit = 50) {
+        const root = await realpath(workspace).catch(() => undefined);
+        if (root === undefined)
+            return { records: [] };
         const file = join(eventsDirectory(workspace), `${sessionFileName(session)}.jsonl`);
         const records = [];
         for (const candidate of [`${file}.1`, file]) {
             let raw = '';
             try {
-                raw = await this.readText(candidate);
+                const target = await realpath(candidate);
+                if (!isInside(root, target))
+                    continue;
+                raw = await this.readText(target);
             }
             catch {
                 continue;

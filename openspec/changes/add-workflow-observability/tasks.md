@@ -31,7 +31,7 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 
 - [ ] 5.1 Register the routes through the carrier-neutral `ctx.connection.fetch` pattern used by the OpenSpec panel, with the standard admission check; verify the desktop Fetch carrier and the browser both receive 200, 401/403, 405 for a non-GET, and a bounded error body.
 - [x] 5.2 Implement cursor pagination with a default 50 and a max 200 limit, and a `next` cursor; verify an oversized `limit` is clamped, an invalid cursor is a 400, and a long session is returned page by page.
-- [ ] 5.3 Enforce workspace and session scoping in every route; require a session selector on the triggers and health routes, resolve its workspace, and verify two workspaces and two sessions in one workspace receive their own state and no path outside the workspace is read.
+- [x] 5.3 Enforce workspace and session scoping in every route; require a session selector on the triggers and health routes, resolve its workspace, and verify two workspaces and two sessions in one workspace receive their own state and no path outside the workspace is read.
 
 ## 6. Client Workflows view (lane 2, owns `packages/plugin-workflows/src/client/view.tsx`, `packages/plugin-workflows/src/client/panel.ts`, `packages/plugin-workflows/test/client.test.tsx`)
 
