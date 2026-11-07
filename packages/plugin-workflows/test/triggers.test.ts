@@ -2,7 +2,18 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { EVENT_KINDS, loadCatalog, validateCatalog } from '../src/host/triggers.ts'
+import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import {
+  type DefinitionEvent,
+  EVENT_KINDS,
+  evaluateDefinitions,
+  evaluateDefinitionTrigger,
+  evaluateIntents,
+  type IntentClassification,
+  loadCatalog,
+  obligationDedupeKey,
+  validateCatalog,
+} from '../src/host/triggers.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
@@ -95,5 +106,300 @@ describe('shadow trigger catalog', () => {
         ],
       }),
     ).toThrow(/field "id"/u)
+  })
+})
+
+/** A one-step definition whose only trigger is the test trigger. */
+function obligation(id: string, trigger: Record<string, unknown>): Definition {
+  return validateDefinition({
+    v: 1,
+    id,
+    name: id,
+    version: 1,
+    trigger,
+    settings: {
+      allowModelStart: false,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+    },
+    steps: [
+      {
+        id: 'only',
+        title: 'Only step',
+        executor: 'main',
+        prompt: 'Do the work.',
+        evidence: { kind: 'file', path: 'out.md' },
+        next: 'end',
+      },
+    ],
+  })
+}
+
+function stopEvent(overrides: Partial<DefinitionEvent> = {}): DefinitionEvent {
+  return {
+    kind: 'turn.stopping',
+    subject: 'stop-attempt',
+    session: 'session-1',
+    turn: 3,
+    ...overrides,
+  }
+}
+
+describe('definition triggers', () => {
+  it('records a shadow match without creating a run', () => {
+    const definition = obligation('shadow-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'shadow',
+      dedupe: 'turn',
+    })
+    const runs: string[] = []
+    const rows = evaluateDefinitions([definition], stopEvent(), {
+      isDuplicate: () => false,
+      startRun: (matched) => {
+        runs.push(matched.id)
+        return { ok: true }
+      },
+    })
+    expect(rows).toEqual([
+      { definition: 'shadow-def', trigger: 'turn.stopping', matched: true, reason: 'would-fire' },
+    ])
+    expect(runs).toEqual([])
+  })
+
+  it('creates one run for an active match and suppresses a duplicate', () => {
+    const definition = obligation('active-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'active',
+      dedupe: 'turn',
+    })
+    const seen = new Map<string, number>()
+    const runs: string[] = []
+    const context = {
+      isDuplicate: (key: string) => seen.has(key),
+      markKey: (key: string) => seen.set(key, 1),
+      startRun: () => {
+        runs.push('created')
+        return { ok: true }
+      },
+    }
+    expect(evaluateDefinitions([definition], stopEvent(), context)[0]).toMatchObject({
+      matched: true,
+      reason: 'run-created',
+    })
+    expect(evaluateDefinitions([definition], stopEvent(), context)[0]).toEqual({
+      definition: 'active-def',
+      trigger: 'turn.stopping',
+      matched: false,
+      reason: 'dedupe',
+    })
+    expect(runs).toEqual(['created'])
+  })
+
+  it('honors the repeat flag for the same subject', () => {
+    const definition = obligation('repeat-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'active',
+      dedupe: 'turn',
+      repeat: true,
+    })
+    const seen = new Map<string, number>()
+    let created = 0
+    const context = {
+      isDuplicate: (key: string) => seen.has(key),
+      markKey: (key: string) => seen.set(key, 1),
+      startRun: () => {
+        created += 1
+        return { ok: true }
+      },
+    }
+    expect(evaluateDefinitions([definition], stopEvent(), context)[0]?.reason).toBe('run-created')
+    expect(evaluateDefinitions([definition], stopEvent(), context)[0]?.reason).toBe('run-created')
+    expect(created).toBe(2)
+  })
+
+  it('records a filter mismatch and a non-applicable evaluation', () => {
+    const filtered = obligation('tasks-def', {
+      kind: 'fs.change',
+      match: { path: 'openspec/changes/**/tasks.md' },
+      mode: 'active',
+      dedupe: 'path+content-hash',
+    })
+    const mismatch = evaluateDefinitionTrigger(
+      filtered,
+      {
+        kind: 'fs.change',
+        subject: 'openspec/changes/auth/design.md',
+        path: 'openspec/changes/auth/design.md',
+      },
+      { isDuplicate: () => false },
+    )
+    expect(mismatch).toMatchObject({
+      matched: false,
+      reason: 'filter-mismatch',
+      path: 'openspec/changes/auth/design.md',
+      filter: 'path: openspec/changes/**/tasks.md',
+    })
+    const retro = obligation('retro-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'shadow',
+      dedupe: 'turn',
+      applicability: 'checkpoint-required',
+    })
+    const rows = evaluateDefinitions([retro], stopEvent(), {
+      isDuplicate: () => false,
+      resolveApplicability: () => false,
+    })
+    expect(rows[0]).toMatchObject({ matched: false, reason: 'not-applicable' })
+    const unknown = evaluateDefinitions([retro], stopEvent(), { isDuplicate: () => false })
+    expect(unknown[0]).toMatchObject({ matched: false, reason: 'not-ready' })
+  })
+
+  it('reports a suppressed run with its bounded cause and an engine off switch', () => {
+    const definition = obligation('active-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'active',
+      dedupe: 'turn',
+    })
+    const suppressed = evaluateDefinitions([definition], stopEvent(), {
+      isDuplicate: () => false,
+      startRun: () => ({ ok: false, reason: 'maxRuns reached' }),
+    })
+    expect(suppressed[0]).toMatchObject({
+      matched: true,
+      reason: 'run-suppressed',
+      detail: 'maxRuns reached',
+    })
+    const disabled = evaluateDefinitionTrigger(definition, stopEvent(), {
+      enabled: false,
+      isDuplicate: () => false,
+    })
+    expect(disabled).toMatchObject({ matched: false, reason: 'disabled' })
+  })
+
+  it('keys dedupe by definition, policy, session, and subject', () => {
+    const definition = obligation('key-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'shadow',
+      dedupe: 'turn',
+    })
+    const key = obligationDedupeKey(definition.id, definition.trigger, stopEvent())
+    expect(key).toContain('key-def')
+    expect(key).toContain('session-1')
+    expect(key).toContain('turn')
+    expect(key).toContain('3')
+    const other = obligationDedupeKey(definition.id, definition.trigger, stopEvent({ turn: 4 }))
+    expect(other).not.toBe(key)
+    const fsTrigger = obligation('path-def', {
+      kind: 'fs.change',
+      match: {},
+      mode: 'shadow',
+      dedupe: 'path+content-hash',
+    })
+    const pathKey = obligationDedupeKey(fsTrigger.id, fsTrigger.trigger, {
+      kind: 'fs.change',
+      subject: 'openspec/changes/a/tasks.md',
+      path: 'openspec/changes/a/tasks.md',
+      hash: 'abc',
+      session: 'session-1',
+    })
+    expect(pathKey).toContain('openspec/changes/a/tasks.md')
+    expect(pathKey).toContain('abc')
+  })
+})
+
+const INTENT: IntentClassification = {
+  intent: 'new-change',
+  confidence: 0.82,
+  reason: 'the user asks to start a new change',
+  classifier: 'heuristic-v1',
+}
+
+function intentDefinition(mode: 'shadow' | 'active'): Definition {
+  return obligation('intent-def', {
+    kind: 'intent',
+    match: { intent: 'new-change', classifier: 'heuristic-v1' },
+    mode,
+    dedupe: 'none',
+  })
+}
+
+describe('intent trigger', () => {
+  it('records the classifier, confidence, and reason while staying shadow', () => {
+    let created = 0
+    const rows = evaluateIntents([intentDefinition('active')], INTENT, {
+      allowIntent: false,
+      confirmed: false,
+      isDuplicate: () => false,
+      startRun: () => {
+        created += 1
+        return { ok: true }
+      },
+    })
+    expect(created).toBe(0)
+    expect(rows[0]).toMatchObject({
+      definition: 'intent-def',
+      trigger: 'intent',
+      matched: true,
+      reason: 'would-fire',
+    })
+    expect(rows[0]?.detail).toContain('classifier=heuristic-v1')
+    expect(rows[0]?.detail).toContain('confidence=0.82')
+    expect(rows[0]?.detail).toContain('reason=the user asks to start a new change')
+    expect(rows[0]?.detail).toContain('allowIntent is false')
+  })
+
+  it('refuses an active run without a user-confirmed definition', () => {
+    let created = 0
+    const rows = evaluateIntents([intentDefinition('active')], INTENT, {
+      allowIntent: true,
+      confirmed: false,
+      isDuplicate: () => false,
+      startRun: () => {
+        created += 1
+        return { ok: true }
+      },
+    })
+    expect(created).toBe(0)
+    expect(rows[0]?.reason).toBe('would-fire')
+    expect(rows[0]?.detail).toContain('user-confirmed')
+  })
+
+  it('starts one run for a confirmed, opted-in definition', () => {
+    let created = 0
+    const rows = evaluateIntents([intentDefinition('active')], INTENT, {
+      allowIntent: true,
+      confirmed: true,
+      isDuplicate: () => false,
+      startRun: () => {
+        created += 1
+        return { ok: true }
+      },
+    })
+    expect(created).toBe(1)
+    expect(rows[0]?.reason).toBe('run-created')
+  })
+
+  it('records a classifier or intent mismatch as a filter mismatch', () => {
+    const shadow = evaluateIntents([intentDefinition('shadow')], INTENT, {
+      allowIntent: false,
+      confirmed: false,
+      isDuplicate: () => false,
+    })
+    expect(shadow[0]?.reason).toBe('would-fire')
+    const other = evaluateIntents(
+      [intentDefinition('shadow')],
+      { ...INTENT, intent: 'bug-fix' },
+      { allowIntent: false, confirmed: false, isDuplicate: () => false },
+    )
+    expect(other[0]).toMatchObject({ matched: false, reason: 'filter-mismatch' })
+    expect(other[0]?.filter).toBe('intent: new-change')
   })
 })

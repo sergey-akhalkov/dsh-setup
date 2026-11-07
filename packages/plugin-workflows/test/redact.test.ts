@@ -261,8 +261,7 @@ describe('redaction', () => {
   })
 
   it('redacts prefixed serialized credentials and encoded structures', () => {
-    const prefixed =
-      'Result: ' + JSON.stringify(JSON.stringify(JSON.stringify({ password: 'HUNTER-secret' })))
+    const prefixed = `Result: ${JSON.stringify(JSON.stringify(JSON.stringify({ password: 'HUNTER-secret' })))}`
     expect(summarize(prefixed, 4000).summary).toBe(REDACTED_PAYLOAD)
     const escaped = 'Result: {"pass\\u0077ord":"HUNTER-secret"}'
     expect(summarize(escaped, 4000).summary).toBe(REDACTED_PAYLOAD)

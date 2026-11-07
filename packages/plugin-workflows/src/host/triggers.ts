@@ -1,5 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import type {
+  Definition,
+  DefinitionTrigger,
+  DefinitionTriggerKind,
+  ObligationEventKind,
+  TriggerCommand,
+} from './definitions.js'
+import { globMatches } from './evaluate.js'
 
 /**
  * The shipped shadow trigger catalog. Triggers are data only: loading,
@@ -148,4 +156,392 @@ export function catalogPath(): string {
 /** Load the shipped catalog from this package's assets. */
 export function loadCatalog(): Trigger[] {
   return readCatalog(catalogPath())
+}
+
+/**
+ * Obligation triggers evaluate a definition's single declarative trigger. The
+ * reason vocabulary extends the shadow catalog's with the run outcomes; the
+ * two vocabularies share a journal table but not the same typed union.
+ */
+export const OBLIGATION_REASONS = [
+  'would-fire',
+  'run-created',
+  'run-suppressed',
+  'not-applicable',
+  'event-mismatch',
+  'filter-mismatch',
+  'dedupe',
+  'disabled',
+  'not-ready',
+  'error',
+] as const
+
+export type ObligationReason = (typeof OBLIGATION_REASONS)[number]
+
+/** The shell tool names a `tool: shell` filter accepts. */
+const SHELL_TOOL_NAMES = new Set(['shell', 'pwsh', 'bash', 'terminal_send'])
+
+/** One normalized event an obligation trigger may observe. */
+export interface DefinitionEvent {
+  readonly kind: ObligationEventKind
+  readonly subject: string
+  readonly workspace?: string
+  readonly session?: string
+  readonly turn?: number
+  readonly tool?: string
+  readonly command?: TriggerCommand
+  /** The parsed change name for `openspec new change` and archive events. */
+  readonly name?: string
+  readonly path?: string
+  readonly verdict?: string
+  readonly hash?: string
+  readonly callId?: string
+  readonly classifier?: string
+}
+
+/** One definition trigger's stored evaluation row. */
+export interface DefinitionEvaluation {
+  readonly definition: string
+  readonly trigger: DefinitionTriggerKind
+  readonly matched: boolean
+  readonly reason: ObligationReason
+  readonly path?: string
+  readonly filter?: string
+  readonly detail?: string
+}
+
+export interface DefinitionEvaluationContext {
+  /** The engine is enabled; `false` stops evaluation with `disabled`. */
+  readonly enabled?: boolean
+  /** The catalog and engine are ready; `false` records `not-ready`. */
+  readonly ready?: boolean
+  /** The resolved applicability of a trigger that declares one. */
+  readonly applicability?: boolean
+  readonly isDuplicate: (key: string) => boolean
+}
+
+function toolMatches(filter: string, event: DefinitionEvent): boolean {
+  if (filter === 'shell') return event.tool !== undefined && SHELL_TOOL_NAMES.has(event.tool)
+  return filter === event.tool
+}
+
+function filterMismatch(
+  trigger: DefinitionTrigger,
+  event: DefinitionEvent,
+): { readonly path?: string; readonly filter: string } | undefined {
+  const match = trigger.match
+  if (match.workspace !== undefined && !globMatches(match.workspace, event.workspace ?? '')) {
+    return { path: event.workspace, filter: `workspace: ${match.workspace}` }
+  }
+  if (match.session !== undefined && match.session !== event.session) {
+    return { path: event.session, filter: `session: ${match.session}` }
+  }
+  if (match.tool !== undefined && !toolMatches(match.tool, event)) {
+    return { path: event.tool, filter: `tool: ${match.tool}` }
+  }
+  if (match.command !== undefined && match.command !== event.command) {
+    return { path: event.command, filter: `command: ${match.command}` }
+  }
+  if (match.path !== undefined && !globMatches(match.path, event.path ?? event.subject)) {
+    return { path: event.path ?? event.subject, filter: `path: ${match.path}` }
+  }
+  if (match.subject !== undefined && match.subject !== event.subject) {
+    return { path: event.subject, filter: `subject: ${match.subject}` }
+  }
+  if (match.verdict !== undefined && match.verdict !== event.verdict) {
+    return { path: event.verdict, filter: `verdict: ${match.verdict}` }
+  }
+  if (match.classifier !== undefined && match.classifier !== event.classifier) {
+    return { path: event.classifier, filter: `classifier: ${match.classifier}` }
+  }
+  return undefined
+}
+
+/**
+ * The de-duplication identity for one definition trigger and event. It always
+ * includes the definition, the trigger policy, and the session; the subject is
+ * the turn, the path and content hash, the call id, or the parsed name.
+ */
+export function obligationDedupeKey(
+  definition: string,
+  trigger: DefinitionTrigger,
+  event: DefinitionEvent,
+): string | undefined {
+  const session = event.session ?? ''
+  switch (trigger.dedupe) {
+    case 'none':
+      return undefined
+    case 'turn':
+      return `${definition}\u0000turn\u0000${session}\u0000${String(event.turn ?? -1)}`
+    case 'path+content-hash':
+      return `${definition}\u0000path\u0000${session}\u0000${event.path ?? event.subject}\u0000${event.hash ?? ''}`
+    case 'callId':
+      return `${definition}\u0000call\u0000${session}\u0000${event.callId ?? ''}`
+    case 'name':
+      return `${definition}\u0000name\u0000${session}\u0000${event.name ?? ''}`
+  }
+}
+
+/** Evaluate one definition's trigger against one event. Pure and contained. */
+export function evaluateDefinitionTrigger(
+  definition: Definition,
+  event: DefinitionEvent,
+  context: DefinitionEvaluationContext,
+): DefinitionEvaluation {
+  const trigger = definition.trigger
+  const base = { definition: definition.id, trigger: trigger.kind }
+  try {
+    if (context.enabled === false) return { ...base, matched: false, reason: 'disabled' }
+    if (context.ready === false) return { ...base, matched: false, reason: 'not-ready' }
+    if (trigger.applicability !== undefined) {
+      if (context.applicability === undefined)
+        return { ...base, matched: false, reason: 'not-ready' }
+      if (!context.applicability) return { ...base, matched: false, reason: 'not-applicable' }
+    }
+    if (trigger.kind !== event.kind) return { ...base, matched: false, reason: 'event-mismatch' }
+    const mismatch = filterMismatch(trigger, event)
+    if (mismatch !== undefined) {
+      return {
+        ...base,
+        matched: false,
+        reason: 'filter-mismatch',
+        ...(mismatch.path === undefined ? {} : { path: mismatch.path }),
+        filter: mismatch.filter,
+      }
+    }
+    const key = obligationDedupeKey(definition.id, trigger, event)
+    if (key !== undefined && trigger.repeat !== true && context.isDuplicate(key)) {
+      return { ...base, matched: false, reason: 'dedupe' }
+    }
+    return { ...base, matched: true, reason: 'would-fire' }
+  } catch (error) {
+    return {
+      ...base,
+      matched: false,
+      reason: 'error',
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+export interface StartRunOutcome {
+  readonly ok: boolean
+  readonly reason?: string
+}
+
+export interface DefinitionRouterContext extends DefinitionEvaluationContext {
+  readonly resolveApplicability?: (
+    definition: Definition,
+    event: DefinitionEvent,
+  ) => boolean | undefined
+  readonly markKey?: (key: string) => void
+  readonly startRun?: (definition: Definition, event: DefinitionEvent) => StartRunOutcome
+}
+
+/**
+ * Evaluate every loaded definition for one event. A shadow match records
+ * `would-fire` and starts nothing; an active match asks the run starter and
+ * records `run-created`, or `run-suppressed` with the bounded cause.
+ */
+export function evaluateDefinitions(
+  definitions: readonly Definition[],
+  event: DefinitionEvent,
+  context: DefinitionRouterContext,
+): DefinitionEvaluation[] {
+  const rows: DefinitionEvaluation[] = []
+  for (const definition of definitions) {
+    const applicability = context.resolveApplicability?.(definition, event)
+    const row = evaluateDefinitionTrigger(definition, event, {
+      ...(context.enabled === undefined ? {} : { enabled: context.enabled }),
+      ...(context.ready === undefined ? {} : { ready: context.ready }),
+      ...(applicability === undefined ? {} : { applicability }),
+      isDuplicate: context.isDuplicate,
+    })
+    if (!row.matched) {
+      rows.push(row)
+      continue
+    }
+    const key = obligationDedupeKey(definition.id, definition.trigger, event)
+    if (key !== undefined) context.markKey?.(key)
+    if (definition.trigger.mode === 'shadow') {
+      rows.push({ ...row, reason: 'would-fire' })
+      continue
+    }
+    const outcome = context.startRun?.(definition, event)
+    if (outcome === undefined) {
+      rows.push({
+        ...row,
+        reason: 'run-suppressed',
+        detail: 'no run starter is registered for the trigger',
+      })
+      continue
+    }
+    if (outcome.ok) {
+      rows.push({ ...row, reason: 'run-created' })
+    } else {
+      rows.push({
+        ...row,
+        reason: 'run-suppressed',
+        detail: outcome.reason ?? 'the run was not started',
+      })
+    }
+  }
+  return rows
+}
+
+/** The bounded result a classifier returns; it is data, never a command. */
+export interface IntentClassification {
+  readonly intent: string
+  readonly confidence: number
+  readonly reason: string
+  readonly classifier: string
+}
+
+export interface IntentEvaluationContext extends DefinitionEvaluationContext {
+  /** The engine opt-in; without it every active intent stays shadow. */
+  readonly allowIntent: boolean
+  /** The definition was installed through the user-confirmed host path. */
+  readonly confirmed: boolean
+  readonly session?: string
+  readonly markKey?: (key: string) => void
+  readonly startRun?: (
+    definition: Definition,
+    classification: IntentClassification,
+  ) => StartRunOutcome
+}
+
+/** The classification fields a recorded intent evaluation must name. */
+export function classificationDetail(classification: IntentClassification): string {
+  return [
+    `classifier=${classification.classifier}`,
+    `confidence=${classification.confidence.toFixed(2)}`,
+    `reason=${classification.reason.slice(0, 160)}`,
+    `intent=${classification.intent}`,
+  ].join('; ')
+}
+
+function intentKey(
+  definition: string,
+  event: IntentClassification,
+  context: IntentEvaluationContext,
+): string | undefined {
+  if (definition === '') return undefined
+  return `${definition}\u0000intent\u0000${context.session ?? ''}\u0000${event.intent}`
+}
+
+/** Evaluate one intent definition against one classification. */
+export function evaluateIntentDefinition(
+  definition: Definition,
+  classification: IntentClassification,
+  context: IntentEvaluationContext,
+): DefinitionEvaluation {
+  const base = { definition: definition.id, trigger: definition.trigger.kind }
+  try {
+    if (context.enabled === false) return { ...base, matched: false, reason: 'disabled' }
+    if (context.ready === false) return { ...base, matched: false, reason: 'not-ready' }
+    if (definition.trigger.kind !== 'intent') {
+      return { ...base, matched: false, reason: 'event-mismatch' }
+    }
+    const match = definition.trigger.match
+    const detail = classificationDetail(classification)
+    if (match.classifier !== undefined && match.classifier !== classification.classifier) {
+      return {
+        ...base,
+        matched: false,
+        reason: 'filter-mismatch',
+        filter: `classifier: ${match.classifier}`,
+        detail,
+      }
+    }
+    if (match.intent !== undefined && match.intent !== classification.intent) {
+      return {
+        ...base,
+        matched: false,
+        reason: 'filter-mismatch',
+        filter: `intent: ${match.intent}`,
+        detail,
+      }
+    }
+    if (match.subject !== undefined && match.subject !== classification.intent) {
+      return {
+        ...base,
+        matched: false,
+        reason: 'filter-mismatch',
+        filter: `subject: ${match.subject}`,
+        detail,
+      }
+    }
+    const key = intentKey(definition.id, classification, context)
+    if (key !== undefined && definition.trigger.repeat !== true && context.isDuplicate(key)) {
+      return { ...base, matched: false, reason: 'dedupe', detail }
+    }
+    return { ...base, matched: true, reason: 'would-fire', detail }
+  } catch (error) {
+    return {
+      ...base,
+      matched: false,
+      reason: 'error',
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/**
+ * Evaluate every intent definition. A shadow classification records the
+ * classifier, confidence, and reason and starts nothing; an active run needs
+ * both `allowIntent` and a user-confirmed definition.
+ */
+export function evaluateIntents(
+  definitions: readonly Definition[],
+  classification: IntentClassification,
+  context: IntentEvaluationContext,
+): DefinitionEvaluation[] {
+  const rows: DefinitionEvaluation[] = []
+  for (const definition of definitions) {
+    if (definition.trigger.kind !== 'intent') continue
+    const row = evaluateIntentDefinition(definition, classification, context)
+    if (!row.matched) {
+      rows.push(row)
+      continue
+    }
+    const key = intentKey(definition.id, classification, context)
+    if (key !== undefined) context.markKey?.(key)
+    if (definition.trigger.mode !== 'active') {
+      rows.push({ ...row, reason: 'would-fire' })
+      continue
+    }
+    if (!context.allowIntent) {
+      rows.push({
+        ...row,
+        reason: 'would-fire',
+        detail: `${row.detail ?? ''}; active intent stays shadow because allowIntent is false`,
+      })
+      continue
+    }
+    if (!context.confirmed) {
+      rows.push({
+        ...row,
+        reason: 'would-fire',
+        detail: `${row.detail ?? ''}; active intent refused until the definition is installed and user-confirmed`,
+      })
+      continue
+    }
+    const outcome = context.startRun?.(definition, classification)
+    if (outcome === undefined) {
+      rows.push({
+        ...row,
+        reason: 'run-suppressed',
+        detail: 'no run starter is registered for the intent trigger',
+      })
+    } else if (outcome.ok) {
+      rows.push({ ...row, reason: 'run-created' })
+    } else {
+      rows.push({
+        ...row,
+        reason: 'run-suppressed',
+        detail: outcome.reason ?? 'the run was not started',
+      })
+    }
+  }
+  return rows
 }

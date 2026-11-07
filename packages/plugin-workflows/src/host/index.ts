@@ -1,12 +1,21 @@
+import { readdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SubagentRunEndInfo, SubagentRunInfo } from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { registerWorkflowRoutes } from './api.js'
+import { loadApprovedDefinitions } from './approval-store.js'
+import {
+  type Definition,
+  KNOWN_LEGACY_SOURCES,
+  loadShippedDefinitions,
+  workspaceDefinitionsDirectory,
+} from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
 import { WorkflowHealth } from './health.js'
+import { HostAuth } from './host-auth.js'
 import {
   Journal,
   type JournalInput,
@@ -14,7 +23,13 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
-import { loadCatalog } from './triggers.js'
+import { createRun, runFailure, writeRun } from './runs.js'
+import {
+  type DefinitionEvent,
+  evaluateDefinitions,
+  loadCatalog,
+  type StartRunOutcome,
+} from './triggers.js'
 
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows'
@@ -24,6 +39,70 @@ export const name = '@dsh-setup/plugin-workflows'
  * registering half a surface; the Client half independently checks its own.
  */
 export const inject = ['agents', 'workingDirectory', 'fs', 'connection']
+
+/**
+ * The tools whose presence means a legacy activation plugin is installed. The
+ * row itself is not readable from a plugin, so its registered tools are the
+ * mechanical proof the gate is live.
+ */
+const LEGACY_TOOL_NAMES: Readonly<Record<string, readonly string[]>> = {
+  'delegation-rules': ['delegate', 'task_progress', 'delegation_status'],
+  'goal-continuity': ['work_checkpoint'],
+}
+
+/** Whether a workspace carries any installed local definition file. */
+async function hasLocalDefinitionFiles(workspace: string): Promise<boolean> {
+  try {
+    const names = await readdir(workspaceDefinitionsDirectory(workspace))
+    return names.some((name) => name.endsWith('.json'))
+  } catch {
+    return false
+  }
+}
+
+/** Normalize one observed plugin event into definition trigger events. */
+function definitionEventsOf(input: JournalInput, event: ObservedEvent): DefinitionEvent[] {
+  const base = {
+    session: input.session,
+    ...(input.turn === undefined ? {} : { turn: input.turn }),
+  }
+  switch (event.kind) {
+    case 'agent.turn-stop':
+      return [{ kind: 'turn.stopping', subject: 'stop-attempt', ...base }]
+    case 'tool.result':
+      return event.tool === undefined
+        ? []
+        : [
+            {
+              kind: 'tool.result',
+              subject: event.tool,
+              tool: event.tool,
+              ...(input.callId === undefined ? {} : { callId: input.callId }),
+              ...base,
+            },
+          ]
+    case 'fs.change': {
+      const path = event.subject
+      const events: DefinitionEvent[] = [
+        {
+          kind: 'fs.change',
+          subject: path,
+          path,
+          ...(event.hash === undefined ? {} : { hash: event.hash }),
+          ...base,
+        },
+      ]
+      if (/(?:^|\/)reviews\/[^/]+\.json$/u.test(path)) {
+        events.push({ kind: 'review.record', subject: path, path, ...base })
+      }
+      return events
+    }
+    case 'subagent.end':
+      return [{ kind: 'subagent.end', subject: event.subject, ...base }]
+    default:
+      return []
+  }
+}
 
 /** The Agent registry as far as the recorder reads it. */
 interface AgentsService {
@@ -145,6 +224,8 @@ function toolSummary(name: string, isError: boolean, text: string): string {
 export function apply(ctx: Context): void {
   // A malformed shipped trigger refuses the plugin load, naming the field.
   const triggers = loadCatalog()
+  // A malformed or duplicate shipped definition refuses the plugin load too.
+  loadShippedDefinitions()
   const services = hostServices(ctx)
   if (services === undefined) {
     console.error('workflows: required Host services are unavailable; the recorder is inert')
@@ -214,6 +295,86 @@ export function apply(ctx: Context): void {
       // Health reporting never breaks dispatch.
     }
   }
+  /** Approved definitions per workspace, loaded once on first observation. */
+  const definitionsByWorkspace = new Map<string, readonly Definition[]>()
+  const definitionsLoading = new Set<string>()
+  let storedAuth: HostAuth | undefined
+  /** The legacy sources the installed profile proves through its tools. */
+  const installedLegacySources = (): Set<string> => {
+    const installed = new Set<string>()
+    try {
+      const tools = ctx.get('tools') as { get?: (name: string) => unknown } | undefined
+      for (const plugin of KNOWN_LEGACY_SOURCES) {
+        const names = LEGACY_TOOL_NAMES[plugin] ?? []
+        if (names.some((name) => tools?.get?.(name) !== undefined)) installed.add(plugin)
+      }
+    } catch {
+      // An unreadable tool registry proves nothing; ownership then refuses defer.
+    }
+    return installed
+  }
+  /** Load the shipped set plus the approved local overrides for one workspace. */
+  const loadDefinitions = (workspace: string): void => {
+    if (
+      pluginDisposed ||
+      definitionsByWorkspace.has(workspace) ||
+      definitionsLoading.has(workspace)
+    ) {
+      return
+    }
+    definitionsLoading.add(workspace)
+    void (async () => {
+      try {
+        if ((await hasLocalDefinitionFiles(workspace)) && storedAuth === undefined) {
+          storedAuth = await HostAuth.load()
+        }
+        const loaded = await loadApprovedDefinitions(workspace, {
+          ...(storedAuth === undefined ? {} : { auth: storedAuth }),
+          installedLegacy: installedLegacySources(),
+        })
+        if (pluginDisposed) return
+        definitionsByWorkspace.set(workspace, loaded.definitions)
+        // Definition-load refusals are diagnostics, not listener failures: they
+        // must not overwrite the health strip's single last-error slot.
+        for (const message of loaded.errors) {
+          console.error(`workflows: ${message.slice(0, 300)}`)
+        }
+      } catch (error) {
+        if (!pluginDisposed) {
+          definitionsByWorkspace.set(workspace, [])
+          console.error(
+            `workflows: the definitions could not be loaded (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
+          )
+        }
+      } finally {
+        definitionsLoading.delete(workspace)
+      }
+    })()
+  }
+  /** Start one run for an active trigger; the writer settles in the background. */
+  const startDefinitionRun = (
+    workspace: string,
+    definition: Definition,
+    event: DefinitionEvent,
+  ): StartRunOutcome => {
+    try {
+      const run = createRun({
+        definition: definition.id,
+        trigger: definition.trigger.kind,
+        session: event.session ?? '',
+        workspace,
+        ...(event.name === undefined ? {} : { context: { name: event.name } }),
+        steps: definition.steps.map((step) => step.id),
+        now: journal.time(),
+      })
+      void writeRun(workspace, run).catch((error: unknown) => {
+        healthFor(workspace).recordError(error)
+      })
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, reason: runFailure(error) }
+    }
+  }
   /** Begin health for a session workspace as soon as the session is known. */
   const observeSession = (session: Session): void => {
     try {
@@ -222,6 +383,7 @@ export function apply(ctx: Context): void {
         activeSession.set(workspace, String(session.id))
         healthFor(workspace)
         watchChanges(workspace)
+        loadDefinitions(workspace)
       }
     } catch {
       // A session without a usable workspace keeps the rest of the host working.
@@ -243,10 +405,26 @@ export function apply(ctx: Context): void {
     activeSession.set(workspace, input.session)
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
+    loadDefinitions(workspace)
     const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
+    const definitionRows = definitionEventsOf(input, event).flatMap((definitionEvent) =>
+      evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
+        isDuplicate: (key) => sessionSeen.has(key),
+        markKey: (key) => sessionSeen.set(key, input.at),
+        startRun: (definition, matched) => startDefinitionRun(workspace, definition, matched),
+      }).map((row) => ({
+        id: `definition:${row.definition}`,
+        matched: row.matched,
+        reason: row.reason,
+        ...(row.path === undefined ? {} : { path: row.path }),
+        ...(row.filter === undefined ? {} : { filter: row.filter }),
+        ...(row.detail === undefined ? {} : { detail: row.detail }),
+      })),
+    )
+    const evaluations = [...records, ...definitionRows]
     const { record: bounded } = journal.record({
       ...input,
-      ...(records.length === 0 ? {} : { triggers: records }),
+      ...(evaluations.length === 0 ? {} : { triggers: evaluations }),
     })
     // The event was observed even if its record cannot be written.
     health.markEvent(bounded.at)

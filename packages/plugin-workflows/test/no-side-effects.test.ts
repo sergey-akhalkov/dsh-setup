@@ -49,7 +49,7 @@ interface FakeHost {
   readonly workspace: string
   readonly agent: {
     id: string
-    session: { id: string; header: { origin?: 'subagent' } }
+    session: { id: string; header: { origin?: 'root' | 'subagent' } }
     ctx: { on(name: string, listener: Listener): () => void }
     steer(message: unknown): void
     inject(message: unknown): void
@@ -75,7 +75,7 @@ function createHost(workspace: string): FakeHost {
   }
   const agent = {
     id: 'session-1',
-    session: { id: 'session-1', header: { origin: 'root' } },
+    session: { id: 'session-1', header: { origin: 'root' as const } },
     ctx: {
       on(name: string, listener: Listener): () => void {
         add(name, listener)
