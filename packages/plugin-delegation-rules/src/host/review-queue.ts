@@ -151,11 +151,16 @@ export function classifyFailure(error: unknown, phase: 'start' | 'run'): Classif
     return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) }
   }
   if (name === 'ProviderStartError') {
-    if (matched(CHILD_LIMIT_PATTERN)) {
+    // Classify the provider cause alone: rule ids and explanatory text must not
+    // turn a transient rejection into config/permission or the reverse.
+    const providerMessage = (error as { providerMessage?: unknown }).providerMessage
+    const cause = typeof providerMessage === 'string' ? providerMessage : message
+    const matchesCause = (pattern: RegExp): boolean => pattern.test(cause)
+    if (matchesCause(CHILD_LIMIT_PATTERN)) {
       return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) }
     }
-    if (matched(CONFIG_PATTERN)) return { failureClass: 'config', transient: false }
-    if (matched(PERMISSION_PATTERN)) return { failureClass: 'permission', transient: false }
+    if (matchesCause(CONFIG_PATTERN)) return { failureClass: 'config', transient: false }
+    if (matchesCause(PERMISSION_PATTERN)) return { failureClass: 'permission', transient: false }
     return { failureClass: 'provider-not-started', transient: true, ...retryEvidence(retryAfterMs) }
   }
   // Untyped text is untrusted and may embed rule ids or payload keywords, so

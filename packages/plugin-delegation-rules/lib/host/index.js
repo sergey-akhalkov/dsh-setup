@@ -106,8 +106,12 @@ class ConfigError extends DelegationError {
 }
 /** The provider rejected a start before any child existed; retryable. */
 class ProviderStartError extends DelegationError {
-    constructor(message) {
+    providerMessage;
+    constructor(message, 
+    /** The provider's own text, separated from rule/target identifiers. */
+    providerMessage) {
         super(message);
+        this.providerMessage = providerMessage;
         this.name = 'ProviderStartError';
     }
 }
@@ -1117,7 +1121,8 @@ function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
         .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
         .replace(/\b(?:Authorization|authorization)\s*:\s*(?:Bearer|Basic)\s+[^\s"',;]+/g, '[secret]')
-        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)\s*[=:]\s*[^\s"',;]+/gi, '[secret]')
+        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*["'][^"']*["']/gi, '[secret]')
+        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*[^\s"',;}]+/gi, '[secret]')
         .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
         .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[secret]');
     return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`;
@@ -2428,7 +2433,8 @@ async function startTarget(services, request) {
         });
     }
     catch (error) {
-        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`);
+        const providerMessage = boundedMessage(error);
+        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${providerMessage}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`, providerMessage);
     }
     const model = target.model ?? agentOptions?.model;
     const reasoningEffort = target.reasoningEffort ?? agentOptions?.reasoningEffort;

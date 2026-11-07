@@ -303,7 +303,11 @@ class ConfigError extends DelegationError {
 
 /** The provider rejected a start before any child existed; retryable. */
 class ProviderStartError extends DelegationError {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** The provider's own text, separated from rule/target identifiers. */
+    readonly providerMessage: string,
+  ) {
     super(message)
     this.name = 'ProviderStartError'
   }
@@ -1622,7 +1626,11 @@ function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
     .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
     .replace(/\b(?:Authorization|authorization)\s*:\s*(?:Bearer|Basic)\s+[^\s"',;]+/g, '[secret]')
     .replace(
-      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)\s*[=:]\s*[^\s"',;]+/gi,
+      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*["'][^"']*["']/gi,
+      '[secret]',
+    )
+    .replace(
+      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*[^\s"',;}]+/gi,
       '[secret]',
     )
     .replace(
@@ -3145,8 +3153,10 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
       delivery: 'caller',
     })
   } catch (error) {
+    const providerMessage = boundedMessage(error)
     throw new ProviderStartError(
-      `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
+      `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${providerMessage}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
+      providerMessage,
     )
   }
   const model = target.model ?? agentOptions?.model

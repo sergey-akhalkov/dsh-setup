@@ -22,12 +22,17 @@ export function classifyFailure(error, phase) {
         return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) };
     }
     if (name === 'ProviderStartError') {
-        if (matched(CHILD_LIMIT_PATTERN)) {
+        // Classify the provider cause alone: rule ids and explanatory text must not
+        // turn a transient rejection into config/permission or the reverse.
+        const providerMessage = error.providerMessage;
+        const cause = typeof providerMessage === 'string' ? providerMessage : message;
+        const matchesCause = (pattern) => pattern.test(cause);
+        if (matchesCause(CHILD_LIMIT_PATTERN)) {
             return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) };
         }
-        if (matched(CONFIG_PATTERN))
+        if (matchesCause(CONFIG_PATTERN))
             return { failureClass: 'config', transient: false };
-        if (matched(PERMISSION_PATTERN))
+        if (matchesCause(PERMISSION_PATTERN))
             return { failureClass: 'permission', transient: false };
         return { failureClass: 'provider-not-started', transient: true, ...retryEvidence(retryAfterMs) };
     }

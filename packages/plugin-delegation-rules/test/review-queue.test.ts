@@ -1585,13 +1585,60 @@ describe('review failure classification', () => {
     expect((await readRun(root, second)).failureClass).toBe('invalid-output')
   })
 
+  it('classifies a provider start failure independently of the rule name', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error('provider unavailable')
+    const rule = (id: string, phase: string, gate: 'strict' | 'soft') => ({
+      id,
+      when: 'spec-ready' as const,
+      to: 'codex',
+      contract: 'review' as const,
+      phase,
+      scope: 'whole' as const,
+      gate,
+      instruction: 'bundled:review-spec',
+    })
+    const harness = await harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          rule('spec-review', 'spec', 'strict'),
+          rule('approval-review', 'approval', 'soft'),
+          rule('unsupported-review', 'unsupported', 'soft'),
+        ],
+        reviewQueue: { concurrency: 1, maxAttempts: 1 },
+      },
+      subagents,
+    )
+    for (const id of ['spec-review', 'approval-review', 'unsupported-review']) {
+      await expect(harness.startReview({ rule: id, change: 'change-a' })).rejects.toThrow(
+        /could not start/,
+      )
+    }
+
+    const byRule = new Map<string, unknown>()
+    for (const name of await readdir(join(root, '.dsh', 'delegation', 'runs'))) {
+      const run = JSON.parse(
+        await readFile(join(root, '.dsh', 'delegation', 'runs', name), 'utf8'),
+      ) as { rule: string; failureClass: string }
+      byRule.set(run.rule, run.failureClass)
+    }
+    for (const id of ['spec-review', 'approval-review', 'unsupported-review']) {
+      expect(byRule.get(id)).toBe('provider-not-started')
+    }
+  })
+
   it('records a bounded, redacted failure class on the run and record', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value api_key=sk-proj-${'a'.repeat(40)} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1612,6 +1659,8 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('sk-abcdefgh12345678')
     expect(record.error).not.toContain('synthetic-example-value')
     expect(record.error).not.toContain('sk-proj-')
+    expect(record.error).not.toContain('synthetic-secret-value')
+    expect(record.error).not.toContain('another-secret-value')
     expect(record.error).not.toContain('/tmp/review')
     expect(record.error).not.toContain('C:\\Users')
     expect(record.error.length).toBe(4_000)
