@@ -2,7 +2,7 @@ const CHILD_LIMIT_PATTERN = /active child limit|subagent limit reached/i;
 const REVIEWED_CHANGED_PATTERN = /reviewed inputs changed/i;
 const INVALID_OUTPUT_PATTERN = /no fenced JSON verdict|fenced verdict|fenced blocks|returned no text output|verdict digest does not match|verdict must|findings must|requires zero P0\/P1 findings|requires at least one P0\/P1 finding|finding #/i;
 const CONFIG_PATTERN = /not registered|not configured|unknown rule|unknown trigger|unknown contract|unknown gate|must be|does not support|unsupported|invalid configuration|configuration must|target options/i;
-const PERMISSION_PATTERN = /permission|authori[sz]ation|access-policy|access denied|unauthorized|forbidden|approval/i;
+const PERMISSION_PATTERN = /permission|authori[sz]ation|not authori[sz]ed|access-policy|access denied|unauthorized|forbidden|approval/i;
 const TIMEOUT_PATTERN = /did not finish within|timed out|timeout/i;
 const START_REJECTION_PATTERN = /could not start|failed to start|start rejected|unavailable|capacity|limit reached/i;
 /** Provider/result classification shared with the start path. */

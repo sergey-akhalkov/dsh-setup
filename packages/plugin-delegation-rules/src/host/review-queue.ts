@@ -132,7 +132,7 @@ const INVALID_OUTPUT_PATTERN =
 const CONFIG_PATTERN =
   /not registered|not configured|unknown rule|unknown trigger|unknown contract|unknown gate|must be|does not support|unsupported|invalid configuration|configuration must|target options/i
 const PERMISSION_PATTERN =
-  /permission|authori[sz]ation|access-policy|access denied|unauthorized|forbidden|approval/i
+  /permission|authori[sz]ation|not authori[sz]ed|access-policy|access denied|unauthorized|forbidden|approval/i
 const TIMEOUT_PATTERN = /did not finish within|timed out|timeout/i
 const START_REJECTION_PATTERN =
   /could not start|failed to start|start rejected|unavailable|capacity|limit reached/i

@@ -1133,6 +1133,7 @@ async function captureSnapshot(cwd, changes, services, signal) {
 }
 function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
     const redacted = text
+        .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
         .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
         .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')

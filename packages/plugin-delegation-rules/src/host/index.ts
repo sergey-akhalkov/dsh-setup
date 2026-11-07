@@ -1640,6 +1640,7 @@ async function captureSnapshot(
 
 function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
   const redacted = text
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
     .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
     .replace(/\\\\[^\s"'`)]+/g, '[path]')
     .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')

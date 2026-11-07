@@ -1526,7 +1526,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     subagents.startError = new Error(
-      `permission denied: authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} {"path":"/home/alice/private/review.txt"} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
+      `permission denied: authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
     )
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
 
@@ -1595,6 +1595,36 @@ describe('review failure classification', () => {
       failureClass: 'reviewed-inputs-changed',
       transient: false,
     })
+  })
+
+  it('classifies an explicit not-authorized start denial as permanent', () => {
+    const denial = Object.assign(new Error('rule "x": could not start: not authorized'), {
+      name: 'ProviderStartError',
+      providerMessage: 'not authorized',
+    })
+    expect(classifyFailure(denial, 'start')).toEqual({
+      failureClass: 'permission',
+      transient: false,
+    })
+  })
+
+  it('does not retry a provider not-authorized start', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error('not authorized')
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+    await expect(harness.startReview({ rule: 'spec-review', change: 'change-a' })).rejects.toThrow(
+      /not authorized/,
+    )
+    const runs = await readdir(join(root, '.dsh', 'delegation', 'runs'))
+    expect(runs).toHaveLength(1)
+    const run = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', runs[0] as string), 'utf8'),
+    ) as { failureClass: string; attempts: number }
+    expect(run.failureClass).toBe('permission')
+    expect(run.attempts).toBe(1)
   })
 
   it('records an input mutation named like a child limit as reviewed-inputs-changed', async () => {
@@ -1719,7 +1749,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1742,6 +1772,7 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('sk-proj-')
     expect(record.error).not.toContain('synthetic-secret-value')
     expect(record.error).not.toContain('another-secret-value')
+    expect(record.error).not.toContain('synthetic-password')
     expect(record.error).not.toContain('/tmp/review')
     expect(record.error).not.toContain('/home/alice')
     expect(record.error).not.toContain('C:\\Users')
