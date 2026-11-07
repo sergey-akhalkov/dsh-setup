@@ -4530,6 +4530,11 @@ class DelegationEngine {
   }
 
   /** Reconcile crashed run files from the authoritative records once per workspace. */
+  async recoverWorkspace(workspaceRoot: string): Promise<void> {
+    await this.ensureRecovered(workspaceRoot)
+  }
+
+  /** Reconcile crashed run files from the authoritative records once per workspace. */
   private async ensureRecovered(workspaceRoot: string): Promise<void> {
     if (this.recoveredWorkspaces.has(workspaceRoot)) return
     this.recoveredWorkspaces.add(workspaceRoot)
@@ -5043,6 +5048,8 @@ interface GateDeps {
   services: EngineServices
   /** Visible worker-start tools for one agent; undefined keeps the lane gate enabled. */
   workerToolVisible?: (agent: Agent) => boolean | undefined
+  /** Once-per-workspace durable-run reconciliation, run before gate evaluation. */
+  recover?: (workspaceRoot: string) => Promise<void>
 }
 
 /** Per-turn steering once for a soft issue, keyed by rule/digest/task. */
@@ -5269,6 +5276,7 @@ async function evaluateGate(
   const cwd = deps.services.workingDirectory.get(agent.session)
   const openspecRoot = await findOpenSpecRoot(cwd)
   const workspaceRoot = openspecRoot === undefined ? undefined : dirname(openspecRoot)
+  if (workspaceRoot !== undefined) await deps.recover?.(workspaceRoot)
   const changes = openspecRoot === undefined ? [] : await listActiveChanges(openspecRoot)
   // All active changes are snapshotted so a new or newly edited change is
   // detectable; only the session's involved changes are evaluated.
@@ -6009,6 +6017,7 @@ function attachGate({ ctx, deps }: GateWiring): void {
       if (!deps.state.beginTurn(agentId, payload.turn)) return decision
       const cwd = deps.services.workingDirectory.get(payload.agent.session)
       const root = await findOpenSpecRoot(cwd)
+      if (root !== undefined) await deps.recover?.(dirname(root))
       const changes = root === undefined ? [] : await listActiveChanges(root)
       deps.state.setBaseline(
         agentId,
@@ -6287,6 +6296,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
       state,
       services,
       workerToolVisible: workerToolVisibility(ctx),
+      recover: (workspaceRoot) => engine.recoverWorkspace(workspaceRoot),
     },
   })
 }

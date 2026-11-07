@@ -3512,6 +3512,10 @@ class DelegationEngine {
         }
     }
     /** Reconcile crashed run files from the authoritative records once per workspace. */
+    async recoverWorkspace(workspaceRoot) {
+        await this.ensureRecovered(workspaceRoot);
+    }
+    /** Reconcile crashed run files from the authoritative records once per workspace. */
     async ensureRecovered(workspaceRoot) {
         if (this.recoveredWorkspaces.has(workspaceRoot))
             return;
@@ -4129,6 +4133,8 @@ async function evaluateGate(deps, agent, turn, signal) {
     const cwd = deps.services.workingDirectory.get(agent.session);
     const openspecRoot = await findOpenSpecRoot(cwd);
     const workspaceRoot = openspecRoot === undefined ? undefined : dirname(openspecRoot);
+    if (workspaceRoot !== undefined)
+        await deps.recover?.(workspaceRoot);
     const changes = openspecRoot === undefined ? [] : await listActiveChanges(openspecRoot);
     // All active changes are snapshotted so a new or newly edited change is
     // detectable; only the session's involved changes are evaluated.
@@ -4723,6 +4729,8 @@ function attachGate({ ctx, deps }) {
                 return decision;
             const cwd = deps.services.workingDirectory.get(payload.agent.session);
             const root = await findOpenSpecRoot(cwd);
+            if (root !== undefined)
+                await deps.recover?.(dirname(root));
             const changes = root === undefined ? [] : await listActiveChanges(root);
             deps.state.setBaseline(agentId, await captureSnapshot(cwd, changes, deps.services.git, payload.signal));
         }
@@ -4984,6 +4992,7 @@ export function apply(ctx, config = {}, options = {}) {
             state,
             services,
             workerToolVisible: workerToolVisibility(ctx),
+            recover: (workspaceRoot) => engine.recoverWorkspace(workspaceRoot),
         },
     });
 }

@@ -4334,15 +4334,29 @@ describe('restart recovery', () => {
       config: defaultTestConfig(),
       agents: new FakeSubagents(),
     })
-    const status = await fresh.toolText('delegation_status', {})
+    // Recovery runs during session initialization, before delegate or status.
+    await fresh.preStep(1)
+    const readRunState = async (runId: string): Promise<string> => {
+      const run = JSON.parse(await readFile(join(runsDir, `${runId}.json`), 'utf8')) as {
+        state: string
+      }
+      return run.state
+    }
     for (const testCase of cases) {
       const runId = testCase.runId as string
-      expect(status).toMatch(new RegExp(`run ${runId}: .*state=${testCase.state}`))
+      expect(await readRunState(runId)).toBe(testCase.state)
       expect(await readFile(testCase.recordPath as string, 'utf8')).toBe(records.get(runId))
     }
-    expect(status).toMatch(/run run-no-record: .*state=interrupted/)
-    expect(status).toMatch(/run run-bad-record: .*state=interrupted/)
-    expect(status).toMatch(/run run-nested: .*state=interrupted/)
-    expect(status).toMatch(/run run-rerun: .*state=interrupted/)
+    expect(await readRunState('run-no-record')).toBe('interrupted')
+    expect(await readRunState('run-bad-record')).toBe('interrupted')
+    expect(await readRunState('run-nested')).toBe('interrupted')
+    expect(await readRunState('run-rerun')).toBe('interrupted')
+
+    const status = await fresh.toolText('delegation_status', {})
+    for (const testCase of cases) {
+      expect(status).toMatch(
+        new RegExp(`run ${testCase.runId as string}: .*state=${testCase.state}`),
+      )
+    }
   })
 })
