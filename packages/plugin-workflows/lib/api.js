@@ -13,6 +13,8 @@ export const HEALTH_ROUTE = '/api/workflows/health';
 /** Default and maximum page sizes. */
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 200;
+/** Every method the carrier must dispatch so a non-GET reaches the 405 guard. */
+export const ROUTE_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 function json(status, body, headers = {}) {
     return Response.json(body, { status, headers });
 }
@@ -89,7 +91,7 @@ async function sessionHasMatched(services, workspace, session) {
 function route(path, handler) {
     return {
         path,
-        methods: ['GET'],
+        methods: [...ROUTE_METHODS],
         requestBody: 'buffered',
         async fetch(request) {
             if (request.method !== 'GET')

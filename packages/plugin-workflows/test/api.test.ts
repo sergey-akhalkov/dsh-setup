@@ -1,7 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createWorkflowRoutes,
   EVENTS_ROUTE,
@@ -112,12 +113,12 @@ async function request(
 }
 
 describe('workflows read API', () => {
-  it('registers four GET-only buffered Fetch routes through the carrier', async () => {
+  it('registers four buffered Fetch routes with a GET guard through the carrier', async () => {
     const value = await setup()
     const paths = value.routes.map((route) => route.path)
     expect(paths).toEqual([EVENTS_ROUTE, RUNS_ROUTE, TRIGGERS_ROUTE, HEALTH_ROUTE])
     for (const route of value.routes) {
-      expect(route.methods).toEqual(['GET'])
+      expect(route.methods).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
       expect(route.requestBody).toBe('buffered')
     }
     const registered: FetchRoute[] = []
@@ -143,6 +144,111 @@ describe('workflows read API', () => {
     expect(
       registerWorkflowRoutes({ get: () => undefined, effect: () => () => {} }, value.services),
     ).toBe(false)
+  })
+
+  it('admits owner requests and refuses unauthenticated, forbidden, and non-GET requests', async () => {
+    const value = await setup()
+    const target = value.routes.find((route) => route.path === EVENTS_ROUTE)
+    if (target === undefined) throw new Error('the events route is missing')
+    const original = target.fetch.bind(target)
+    const handler = vi.fn(original)
+    target.fetch = handler
+    const dispatch = async (
+      kind: 'owner' | 'unauthenticated' | 'forbidden',
+      method = 'GET',
+    ): Promise<Response> => {
+      if (kind === 'unauthenticated')
+        return new Response('{"error":"unauthorized"}', { status: 401 })
+      if (kind === 'forbidden') return new Response('{"error":"forbidden"}', { status: 403 })
+      if (!target.methods.includes(method)) return new Response('not found', { status: 404 })
+      return target.fetch(new Request(`http://localhost${EVENTS_ROUTE}?session=s1`, { method }))
+    }
+    for (const carrier of ['desktop', 'browser']) {
+      expect(carrier).toBeTruthy()
+      handler.mockClear()
+      const admitted = await dispatch('owner')
+      expect(admitted.status).toBe(200)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect((await dispatch('unauthenticated')).status).toBe(401)
+      expect((await dispatch('forbidden')).status).toBe(403)
+      expect(handler).toHaveBeenCalledTimes(1)
+      const refused = await dispatch('owner', 'POST')
+      expect(refused.status).toBe(405)
+      expect(refused.headers.get('allow')).toBe('GET')
+      expect(handler).toHaveBeenCalledTimes(2)
+    }
+  })
+
+  it('serves the response matrix over the browser HTTP and desktop in-process transports', async () => {
+    const value = await setup()
+    const dispatch = async (request: Request): Promise<Response> => {
+      if (request.headers.get('origin') === 'http://evil.example') {
+        return new Response('{"error":"forbidden"}', { status: 403 })
+      }
+      if (request.headers.get('authorization') !== 'Bearer owner') {
+        return new Response('{"error":"unauthorized"}', { status: 401 })
+      }
+      const route = value.routes.find(
+        (candidate) => candidate.path === new URL(request.url).pathname,
+      )
+      if (route === undefined || !route.methods.includes(request.method)) {
+        return new Response('{"error":"not found"}', { status: 404 })
+      }
+      return route.fetch(request)
+    }
+    const url = `http://127.0.0.1${EVENTS_ROUTE}?session=s1`
+    const server = createServer(async (incoming, outgoing) => {
+      const response = await dispatch(
+        new Request(new URL(incoming.url ?? '/', 'http://127.0.0.1'), {
+          method: incoming.method,
+          headers: incoming.headers as Record<string, string>,
+        }),
+      )
+      outgoing.statusCode = response.status
+      for (const [name, header] of response.headers) outgoing.setHeader(name, header)
+      outgoing.end(Buffer.from(await response.arrayBuffer()))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('no server address')
+    try {
+      const browser = (method: string, headers: Record<string, string>): Promise<Response> =>
+        fetch(`http://127.0.0.1:${String(address.port)}${EVENTS_ROUTE}?session=s1`, {
+          method,
+          headers,
+        })
+      const desktop = (method: string, headers: Record<string, string>): Promise<Response> =>
+        dispatch(new Request(url, { method, headers }))
+      for (const transport of ['desktop', 'browser'] as const) {
+        const call = transport === 'desktop' ? desktop : browser
+        expect((await call('GET', { authorization: 'Bearer owner' })).status).toBe(200)
+        expect((await call('GET', {})).status).toBe(401)
+        expect(
+          (await call('GET', { authorization: 'Bearer owner', origin: 'http://evil.example' }))
+            .status,
+        ).toBe(403)
+        const refused = await call('POST', { authorization: 'Bearer owner' })
+        expect(refused.status).toBe(405)
+        expect(refused.headers.get('allow')).toBe('GET')
+      }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+    const throwing = createWorkflowRoutes({
+      ...value.services,
+      healthFor: () => {
+        throw new Error('x'.repeat(1000))
+      },
+    }).find((route) => route.path === HEALTH_ROUTE)
+    if (throwing === undefined) throw new Error('the health route is missing')
+    const bounded = await throwing.fetch(
+      new Request(`http://localhost${HEALTH_ROUTE}?session=s1`, {
+        headers: { authorization: 'Bearer owner' },
+      }),
+    )
+    expect(bounded.status).toBe(500)
+    const body = (await bounded.json()) as { error: string }
+    expect(body.error.length).toBeLessThanOrEqual(330)
   })
 
   it('pages a long session with a clamped limit and a next cursor', async () => {

@@ -15,6 +15,8 @@ export declare const HEALTH_ROUTE = "/api/workflows/health";
 /** Default and maximum page sizes. */
 export declare const DEFAULT_LIMIT = 50;
 export declare const MAX_LIMIT = 200;
+/** Every method the carrier must dispatch so a non-GET reaches the 405 guard. */
+export declare const ROUTE_METHODS: readonly ["GET", "POST", "PUT", "PATCH", "DELETE"];
 /** One exact Fetch route of the Host Connection service. */
 export interface FetchRoute {
     readonly path: string;

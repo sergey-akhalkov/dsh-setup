@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-11-07T16:35:58.205Z",
+  "url": "http://127.0.0.1:59730",
+  "route": "/api/plugins/dsh-setup-openspec/changes?session=carrier-probe",
+  "results": [
+    {
+      "name": "anonymous-get",
+      "method": "GET",
+      "headers": {},
+      "status": 401
+    },
+    {
+      "name": "anonymous-post",
+      "method": "POST",
+      "headers": {},
+      "status": 401
+    },
+    {
+      "name": "foreign-origin",
+      "method": "GET",
+      "headers": {
+        "origin": "http://evil.example"
+      },
+      "status": 403
+    }
+  ]
+}
