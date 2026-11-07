@@ -552,12 +552,12 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/index.tsx
     var import_jsx_runtime3 = require("react/jsx-runtime");
     var ENTRY_LIMITATION = "The host exposes no command that opens a conversation view; the Workflows tab is the entry.";
-    var inject = ["slots", "locale"];
+    var inject = ["slots", "locale", "resources"];
     var NS = "dsh-setup-workflows";
     function apply(ctx) {
       try {
-        if (ctx.slots === void 0 || ctx.locale === void 0) {
-          throw new Error("the conversation, slot, or locale services are unavailable");
+        if (ctx.slots === void 0 || ctx.locale === void 0 || ctx.get?.("resources") === void 0) {
+          throw new Error("the conversation, slot, locale, or resource services are unavailable");
         }
         const slots = ctx.slots;
         const locale = ctx.locale;

@@ -164,6 +164,7 @@ describe('Workflows Client half', () => {
     const locales: Array<{ namespace: string; dictionary: Record<string, string> }> = []
     const registrations: Array<{ options: Record<string, unknown>; component: unknown }> = []
     module.apply?.({
+      get: (name: string) => (name === 'resources' ? {} : undefined),
       effect(callback: () => () => void) {
         callback()
         return () => {}
@@ -186,7 +187,7 @@ describe('Workflows Client half', () => {
         },
       },
     })
-    expect(module.inject).toEqual(['slots', 'locale'])
+    expect(module.inject).toEqual(['slots', 'locale', 'resources'])
     expect(locales[0]?.namespace).toBe('dsh-setup-workflows')
     expect(locales[0]?.dictionary['view.label']).toBe('Workflows')
     expect(registrations).toHaveLength(1)

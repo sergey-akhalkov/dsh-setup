@@ -109,17 +109,101 @@ describe('inert without host services', () => {
     errors.mockRestore()
   })
 
-  it('stays inert when only the filesystem service is missing', () => {
+  it('stays inert when only the filesystem service is missing and registers no route', () => {
+    const routes: string[] = []
     const host = inertHost({
       agents: { get: () => undefined, list: () => [] },
       workingDirectory: { get: () => '/tmp' },
-      connection: { fetch: { register: () => () => {} } },
+      connection: {
+        fetch: {
+          register: (route: { path: string }) => {
+            routes.push(route.path)
+            return () => {}
+          },
+        },
+      },
     })
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(() => apply(host.ctx as never)).not.toThrow()
     expect(host.registered).toEqual([])
+    expect(routes).toEqual([])
     expect(errors).toHaveBeenCalledTimes(1)
     errors.mockRestore()
+  })
+
+  it('registers no Workflows tab when only the resource service is missing', () => {
+    const module = loadClient()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const locales: string[] = []
+    const slots: string[] = []
+    expect(() =>
+      module.apply?.({
+        get: () => undefined,
+        effect: (callback: () => () => void) => callback(),
+        locale: {
+          register: (namespace: string) => {
+            locales.push(namespace)
+            return () => {}
+          },
+          bind: () => () => 'label',
+        },
+        slots: {
+          inject: (key: string, callback: () => () => void) => {
+            slots.push(key)
+            callback()
+            return () => {}
+          },
+          register: () => () => {},
+        },
+      }),
+    ).not.toThrow()
+    expect(locales).toEqual([])
+    expect(slots).toEqual([])
+    expect(errors).toHaveBeenCalledTimes(1)
+    errors.mockRestore()
+  })
+
+  it('stays inert with slots or locale missing independently while resources exist', () => {
+    const module = loadClient()
+    const cases = ['slots', 'locale'] as const
+    for (const missing of cases) {
+      const locales: string[] = []
+      const slots: string[] = []
+      const views: string[] = []
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const locale = {
+        register: (namespace: string) => {
+          locales.push(namespace)
+          return () => {}
+        },
+        bind: () => () => 'label',
+      }
+      const slotService = {
+        inject: (key: string, callback: () => () => void) => {
+          slots.push(key)
+          callback()
+          return () => {}
+        },
+        register: (options: { id: string }) => {
+          views.push(options.id)
+          return () => {}
+        },
+      }
+      expect(() =>
+        module.apply?.({
+          get: () => ({}),
+          effect: (callback: () => () => void) => callback(),
+          ...(missing === 'locale' ? {} : { locale }),
+          ...(missing === 'slots' ? {} : { slots: slotService }),
+        }),
+      ).not.toThrow()
+      expect(locales).toEqual([])
+      expect(slots).toEqual([])
+      expect(views).toEqual([])
+      expect(errors).toHaveBeenCalledTimes(1)
+      expect(String(errors.mock.calls[0]?.[0]).length).toBeLessThan(200)
+      errors.mockRestore()
+    }
   })
 
   it('registers no Workflows tab without the conversation or locale services', () => {
