@@ -26,7 +26,11 @@ The first real use is the front of the OpenSpec flow: a new change must not star
 
 ### Modified Capabilities
 
-None.
+- `workflow-observability`: the observability surface stays read-only and the shadow trigger catalog
+  stays non-acting, while the same plugin hosts the workflow engine. The engine acts only through
+  owned or deferred definition steps, and it adds the `turn.stopping`, `tool.pre-execute` and
+  `review.record` trigger kinds plus the `run-created`, `run-suppressed` and `not-applicable` outcomes
+  to the same Why-not table.
 
 ## Impact
 
