@@ -3865,6 +3865,7 @@ class DelegationEngine {
     }
     run.file.failureClass = 'queue-timeout'
     await this.markRun(run, 'failed', this.withFallbackDetail(prepared, message))
+    await this.discardSnapshot(run)
   }
 
   /** Persist the current run-file state without a state transition. */

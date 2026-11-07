@@ -66,6 +66,7 @@ export class ReviewQueue {
     keys = new Map();
     waiting = [];
     active = new Set();
+    persistChains = new Map();
     sequence = 0;
     constructor(limits, hooks) {
         this.limits = limits;
@@ -278,20 +279,32 @@ export class ReviewQueue {
             this.persistEntry(entry.run);
     }
     persistEntry(run) {
-        try {
-            void Promise.resolve(this.hooks.persist(run)).catch(() => undefined);
-        }
-        catch {
-            // Queue facts are local scratch; a failed write must not block admission.
-        }
+        void this.enqueuePersist(run);
     }
     async persistNow(run) {
-        try {
-            await this.hooks.persist(run);
-        }
-        catch {
-            // Queue facts are local scratch; a failed write must not block settlement.
-        }
+        await this.enqueuePersist(run);
+    }
+    /**
+     * Serialize one run's writes so a terminal state can never be overwritten by
+     * an earlier queued-state write that resolves late. Unrelated runs stay
+     * independent.
+     */
+    enqueuePersist(run) {
+        const previous = this.persistChains.get(run.file.id) ?? Promise.resolve();
+        const next = previous.then(async () => {
+            try {
+                await this.hooks.persist(run);
+            }
+            catch {
+                // Queue facts are local scratch; a failed write must not block admission.
+            }
+        });
+        this.persistChains.set(run.file.id, next);
+        void next.finally(() => {
+            if (this.persistChains.get(run.file.id) === next)
+                this.persistChains.delete(run.file.id);
+        });
+        return next;
     }
     startEligible(entry) {
         return !entry.finished && entry.phase === 'queued' && entry.head;

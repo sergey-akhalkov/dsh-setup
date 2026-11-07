@@ -92,6 +92,7 @@ export declare class ReviewQueue<T extends QueueRun> {
     private readonly keys;
     private waiting;
     private readonly active;
+    private readonly persistChains;
     private sequence;
     constructor(limits: QueueLimits, hooks: ReviewQueueHooks<T>);
     /** Stop every pending timer; the engine calls this when the plugin unloads. */
@@ -135,6 +136,12 @@ export declare class ReviewQueue<T extends QueueRun> {
     private syncPositions;
     private persistEntry;
     private persistNow;
+    /**
+     * Serialize one run's writes so a terminal state can never be overwritten by
+     * an earlier queued-state write that resolves late. Unrelated runs stay
+     * independent.
+     */
+    private enqueuePersist;
     private startEligible;
     /**
      * Claim every available slot synchronously and launch each start on its own.

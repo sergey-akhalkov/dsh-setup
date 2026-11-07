@@ -201,6 +201,7 @@ export class ReviewQueue<T extends QueueRun> {
   private readonly keys = new Map<string, KeyState<T>>()
   private waiting: QueueEntry<T>[] = []
   private readonly active = new Set<QueueEntry<T>>()
+  private readonly persistChains = new Map<string, Promise<void>>()
   private sequence = 0
 
   constructor(
@@ -413,19 +414,32 @@ export class ReviewQueue<T extends QueueRun> {
   }
 
   private persistEntry(run: T): void {
-    try {
-      void Promise.resolve(this.hooks.persist(run)).catch(() => undefined)
-    } catch {
-      // Queue facts are local scratch; a failed write must not block admission.
-    }
+    void this.enqueuePersist(run)
   }
 
   private async persistNow(run: T): Promise<void> {
-    try {
-      await this.hooks.persist(run)
-    } catch {
-      // Queue facts are local scratch; a failed write must not block settlement.
-    }
+    await this.enqueuePersist(run)
+  }
+
+  /**
+   * Serialize one run's writes so a terminal state can never be overwritten by
+   * an earlier queued-state write that resolves late. Unrelated runs stay
+   * independent.
+   */
+  private enqueuePersist(run: T): Promise<void> {
+    const previous = this.persistChains.get(run.file.id) ?? Promise.resolve()
+    const next = previous.then(async () => {
+      try {
+        await this.hooks.persist(run)
+      } catch {
+        // Queue facts are local scratch; a failed write must not block admission.
+      }
+    })
+    this.persistChains.set(run.file.id, next)
+    void next.finally(() => {
+      if (this.persistChains.get(run.file.id) === next) this.persistChains.delete(run.file.id)
+    })
+    return next
   }
 
   private startEligible(entry: QueueEntry<T>): boolean {

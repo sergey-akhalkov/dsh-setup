@@ -1,16 +1,18 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type QueueRun, ReviewQueue } from '../src/host/review-queue.js'
 import {
   type BundleConfigLike,
   defaultTestConfig,
+  FakeGit,
   FakeSubagents,
   Harness,
   makeWorkspace,
   passResponder,
   type RunRecord,
   runIdFrom,
+  taskIdFor,
   writeChange,
 } from './helpers.js'
 
@@ -34,8 +36,9 @@ async function harnessFor(
   root: string,
   config: BundleConfigLike,
   agents: FakeSubagents,
+  git?: FakeGit,
 ): Promise<Harness> {
-  return new Harness({ cwd: root, config, agents })
+  return new Harness({ cwd: root, config, agents, ...(git === undefined ? {} : { git }) })
 }
 
 async function readRun(root: string, runId: string): Promise<Record<string, unknown>> {
@@ -258,6 +261,61 @@ describe('review queue admission', () => {
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
     expect(await harness.waitForRun(secondRun)).toContain('state=completed')
   })
+
+  it('removes a queued task-review snapshot when its wait times out', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [
+      { number: '1.1', text: 'First task', checked: true },
+      { number: '1.2', text: 'Second task', checked: true },
+    ])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const git = new FakeGit()
+    git.files = ['src/engine.ts']
+    const harness = await harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+        ],
+        reviewQueue: { concurrency: 1, waitTimeoutMs: 40 },
+      },
+      subagents,
+      git,
+    )
+
+    const first = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-a',
+      task: taskIdFor('First task'),
+    })
+    const queued = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-a',
+      task: taskIdFor('Second task'),
+    })
+    expect(await harness.waitForRun(queued)).toContain('state=failed')
+    const snapshots = join(root, '.dsh', 'delegation', 'snapshots')
+    const entries = await readdir(snapshots)
+    expect(entries).not.toContain(queued)
+    expect(entries).toContain(first)
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(first)).toContain('state=completed')
+    expect(await readdir(snapshots)).toEqual([])
+  })
 })
 
 describe('review queue cancellation', () => {
@@ -346,6 +404,50 @@ describe('review queue cancellation', () => {
     await Promise.all([submitSecond, submitThird, cancelling])
     expect(second.file.state).toBe('discarded')
     expect(third.file.queuePosition).toBe(1)
+    queue.dispose()
+  })
+
+  it('serializes persistence so an earlier queued write cannot overwrite a terminal state', async () => {
+    let releasePersist: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      releasePersist = resolve
+    })
+    const writes: Array<{ id: string; state: string }> = []
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(async (run: QueueRun) => {
+        const state = run.file.state
+        if (run.file.id === 'run-b' && state === 'queued') await gate
+        writes.push({ id: run.file.id, state })
+      }),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 3,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    expect(await queue.submit(fakeRun('run-a', 'key-a', 'identity-a'))).toEqual({
+      kind: 'accepted',
+      phase: 'running',
+    })
+    const second = fakeRun('run-b', 'key-b', 'identity-b')
+    expect(await queue.submit(second)).toEqual({ kind: 'accepted', phase: 'queued' })
+    const cancelling = queue.cancel('run-b')
+    releasePersist()
+    await cancelling
+    expect(writes.at(-1)).toEqual({ id: 'run-b', state: 'discarded' })
+    expect(second.file.state).toBe('discarded')
     queue.dispose()
   })
 })
