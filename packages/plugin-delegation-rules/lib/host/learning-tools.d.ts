@@ -1,4 +1,4 @@
-import { type Lesson } from './lesson-store.js';
+export { lessonRevision } from './lesson-store.js';
 /** Structural copy of the DSH user-questions service; these are not a type dependency. */
 export interface UserQuestionOption {
     label: string;
@@ -35,8 +35,6 @@ export interface LessonToolContext {
     agent?: unknown;
     signal?: AbortSignal;
 }
-/** The exact revision an answer is bound to; any field change changes this hash. */
-export declare function lessonRevision(lesson: Lesson): string;
 /**
  * Run one `review_lesson` action. The model never supplies the answer: accept,
  * reject, and apply read it from the user-questions service, and a lesson that

@@ -5208,7 +5208,9 @@ function createSkillProvider(note) {
 function registerReviewRetroCommand(ctx, config, services) {
     if (!config.reviewLearning.enabled)
         return;
-    const commands = ctx.commands;
+    // Read the optional service without declaring a Cordis inject dependency, so
+    // the plugin still loads in a profile that has no command registry.
+    const commands = ctx.get?.('commands');
     if (commands === undefined)
         return;
     const definition = {
@@ -5247,7 +5249,9 @@ function registerReviewRetroCommand(ctx, config, services) {
 export function apply(ctx, config = {}, options = {}) {
     const validated = validateConfig(config);
     const state = new DelegationState();
-    const userQuestions = ctx.userQuestions;
+    // Optional services are read through ctx.get(), not the service property: a
+    // hard inject would stop the plugin loading in a profile without them.
+    const userQuestions = ctx.get?.('userQuestions');
     const services = {
         subagents: ctx.subagents,
         workingDirectory: ctx.workingDirectory,

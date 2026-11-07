@@ -23,28 +23,33 @@ export function buildRetroReport(entries, options = {}) {
     const counts = new Map();
     const examples = new Map();
     const seen = new Map();
-    const repeatedHashes = new Set();
+    const repeatedHashes = new Map();
+    const repeatedSources = new Map();
     let findings = 0;
-    let repeatedSource;
     for (const entry of entries) {
         if (entry.kind !== 'run')
             continue;
+        const currentHashes = new Map();
         for (const finding of entry.findings) {
             findings += 1;
             const key = findingTitleHash(finding);
+            // Only earlier records make a finding a repeat; duplicates inside one
+            // record are first occurrences of that record.
             const previous = seen.get(key) ?? 0;
-            seen.set(key, previous + 1);
+            currentHashes.set(key, (currentHashes.get(key) ?? 0) + 1);
             const bucket = counts.get(finding.class) ?? { count: 0, repeats: 0 };
             bucket.count += 1;
             if (previous > 0) {
                 bucket.repeats += 1;
-                repeatedHashes.add(key);
-                if (repeatedSource === undefined) {
-                    repeatedSource = {
+                const hashes = repeatedHashes.get(finding.class) ?? new Set();
+                hashes.add(key);
+                repeatedHashes.set(finding.class, hashes);
+                if (!repeatedSources.has(finding.class)) {
+                    repeatedSources.set(finding.class, {
                         change: entry.change,
                         ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
                         time: entry.time,
-                    };
+                    });
                 }
             }
             counts.set(finding.class, bucket);
@@ -62,6 +67,8 @@ export function buildRetroReport(entries, options = {}) {
                 examples.set(finding.class, list);
             }
         }
+        for (const [key, count] of currentHashes)
+            seen.set(key, (seen.get(key) ?? 0) + count);
     }
     const classes = [...counts.entries()]
         .map(([findingClass, bucket]) => ({
@@ -77,15 +84,16 @@ export function buildRetroReport(entries, options = {}) {
     let draft;
     if (top !== undefined && top.repeats > 0 && topClass !== undefined) {
         const example = topExamples[0];
-        const hashes = [...repeatedHashes].sort();
+        const hashes = [...(repeatedHashes.get(topClass) ?? new Set())].sort();
+        const source = repeatedSources.get(topClass);
         draft = {
             class: topClass,
             title: `Check for ${topClass} findings earlier`,
             body: `${top.count} ${topClass} finding(s), ${top.repeats} repeated in the last ${window} settled reviews. Example: ${example?.title ?? 'none'}. Before returning PASS, check this class explicitly.`,
             appliesTo: { rules: ['*'], capabilities: [] },
             source: {
-                ...(repeatedSource?.change === undefined ? {} : { change: repeatedSource.change }),
-                ...(repeatedSource?.taskId === undefined ? {} : { taskId: repeatedSource.taskId }),
+                ...(source?.change === undefined ? {} : { change: source.change }),
+                ...(source?.taskId === undefined ? {} : { taskId: source.taskId }),
                 findingHashes: hashes.slice(0, 20),
             },
         };
@@ -104,10 +112,11 @@ export function buildRetroReport(entries, options = {}) {
         if (topExamples.length > 0) {
             lines.push('examples:');
             for (const example of topExamples) {
-                const source = [example.change, example.taskId, example.time]
+                const source = [example.rule, example.change, example.taskId, example.time]
                     .filter((part) => part !== undefined)
                     .join(' ');
                 lines.push(`- [${example.class}] ${example.title} (${source})`);
+                lines.push(`  evidence: ${example.evidence}`);
             }
         }
         lines.push(draft === undefined
@@ -126,8 +135,19 @@ export function buildRetroReport(entries, options = {}) {
         ...(topClass === undefined ? {} : { topClass }),
         examples: topExamples,
         ...(draft === undefined ? {} : { draft }),
-        text: text.length <= maximum ? text : `${text.slice(0, maximum - 20)}\n… (truncated)`,
+        text: boundReport(text, maximum),
     };
+}
+const REPORT_MARKER = '… (truncated)';
+/** The smallest accepted bound still fits the marker plus a short prefix. */
+export const MIN_REPORT_CHARS = REPORT_MARKER.length + 10;
+function boundReport(text, maximum) {
+    if (!Number.isSafeInteger(maximum) || maximum < MIN_REPORT_CHARS) {
+        throw new Error(`report character bound must be a whole number of at least ${MIN_REPORT_CHARS}; it must fit the truncation marker`);
+    }
+    if (text.length <= maximum)
+        return text;
+    return `${text.slice(0, maximum - REPORT_MARKER.length - 1)}\n${REPORT_MARKER}`;
 }
 /** Read the windowed history and build the deterministic report. */
 export async function reviewRetro(workspaceRoot, options = {}) {
@@ -152,11 +172,10 @@ export async function executeReviewRetro(value, context) {
     const report = await reviewRetro(context.workspaceRoot, {
         ...(context.window === undefined ? {} : { window: context.window }),
     });
-    const bounded = context.maxChars === undefined || report.text.length <= context.maxChars
-        ? report.text
-        : `${report.text.slice(0, context.maxChars - 20)}\n… (truncated)`;
-    if (action === 'report' || report.draft === undefined)
-        return bounded;
+    const maximum = context.maxChars ?? MAX_REPORT_CHARS;
+    if (action === 'report' || report.draft === undefined) {
+        return boundReport(report.text, maximum);
+    }
     const created = await proposeLesson(context.workspaceRoot, {
         class: report.draft.class,
         title: report.draft.title,
@@ -166,5 +185,5 @@ export async function executeReviewRetro(value, context) {
         now: context.now().getTime(),
         ...(context.maxLessons === undefined ? {} : { maxLessons: context.maxLessons }),
     });
-    return `${bounded}\n\nproposed lesson ${created.lesson.id} [${created.lesson.class}] "${created.lesson.title}"; a user must accept it before it is injected`;
+    return boundReport(`${report.text}\n\nproposed lesson ${created.lesson.id} [${created.lesson.class}] "${created.lesson.title}"; a user must accept it before it is injected`, maximum);
 }

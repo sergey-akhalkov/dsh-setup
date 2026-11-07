@@ -52,6 +52,8 @@ export declare function buildRetroReport(entries: readonly HistoryEntry[], optio
     skipped?: number;
     maxChars?: number;
 }): RetroReport;
+/** The smallest accepted bound still fits the marker plus a short prefix. */
+export declare const MIN_REPORT_CHARS: number;
 /** Read the windowed history and build the deterministic report. */
 export declare function reviewRetro(workspaceRoot: string, options?: {
     window?: number;

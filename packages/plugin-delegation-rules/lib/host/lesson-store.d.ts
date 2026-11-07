@@ -8,6 +8,8 @@ import { type FindingClass } from '../shared/approval.js';
 export declare const DEFAULT_MAX_LESSONS = 200;
 export declare const MAX_STORE_BYTES = 1000000;
 export type LessonStatus = 'proposed' | 'accepted' | 'rejected' | 'applied';
+/** The exact revision an answer is bound to; any field change changes this hash. */
+export declare function lessonRevision(lesson: Lesson): string;
 export interface LessonScope {
     /** Rule ids, or `*`; an empty list matches any rule. */
     rules: string[];
@@ -35,10 +37,10 @@ export interface Lesson {
     /** The accepted lesson a proposed revision would replace. */
     supersedes?: string;
 }
-/** A validation problem or the bounded-store refusal; `code` is stable for callers. */
+/** A validation problem, the bounded-store refusal, or a held store lock. */
 export declare class LessonStoreError extends Error {
-    readonly code: 'validation' | 'capacity' | 'not-found' | 'transition';
-    constructor(message: string, code: 'validation' | 'capacity' | 'not-found' | 'transition');
+    readonly code: 'validation' | 'capacity' | 'not-found' | 'transition' | 'locked';
+    constructor(message: string, code: 'validation' | 'capacity' | 'not-found' | 'transition' | 'locked');
 }
 /** Lowercase, whitespace-collapsed, punctuation-trimmed class + title. */
 export declare function lessonDedupeKey(lesson: Pick<Lesson, 'class' | 'title'>): string;
@@ -73,10 +75,17 @@ export interface ProposeLessonResult {
  * revision with a `supersedes` link and never changes the accepted content.
  */
 export declare function proposeLesson(workspaceRoot: string, input: ProposeLessonInput): Promise<ProposeLessonResult>;
+export interface LessonWriteOptions {
+    maxLessons?: number;
+    /** Reject the transition unless the record still matches this revision. */
+    expectedRevision?: string;
+}
 /** Apply a direct user decision; the caller supplies the answer, never the model. */
-export declare function decideLesson(workspaceRoot: string, id: string, decision: 'accepted' | 'rejected', now: number): Promise<Lesson>;
+export declare function decideLesson(workspaceRoot: string, id: string, decision: 'accepted' | 'rejected', now: number, options?: LessonWriteOptions): Promise<Lesson>;
+/** Validate and bound an application target before any question or write. */
+export declare function validateLessonTarget(target: unknown): string;
 /** Mark an accepted lesson applied against a named target. */
-export declare function applyLesson(workspaceRoot: string, id: string, target: string, now: number): Promise<Lesson>;
+export declare function applyLesson(workspaceRoot: string, id: string, target: string, now: number, options?: LessonWriteOptions): Promise<Lesson>;
 /** Accepted and applied lessons only; proposed and rejected are never injected. */
 export declare function injectableLessons(lessons: readonly Lesson[]): Lesson[];
 /** Delta capability directory names a change declares under `specs/`. */
