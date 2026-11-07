@@ -83,6 +83,8 @@ export interface WorkflowRun {
   readonly updatedAt: number
   /** A bounded explanation for an interrupted or blocked run. */
   readonly reason?: string
+  /** Turn-close refusals since the last visible violation. */
+  readonly turnBlocks?: number
   readonly context: Readonly<Record<string, unknown>>
   readonly steps: readonly RunStep[]
   readonly violations: readonly RunViolation[]
@@ -335,6 +337,16 @@ export function addViolation(
       },
     ],
   }
+}
+
+/** Count one turn-close refusal on the run. Pure. */
+export function incrementTurnBlocks(run: WorkflowRun, now = Date.now()): WorkflowRun {
+  return { ...run, updatedAt: now, turnBlocks: (run.turnBlocks ?? 0) + 1 }
+}
+
+/** Reset the refusal count after the visible violation allows one close. Pure. */
+export function resetTurnBlocks(run: WorkflowRun, now = Date.now()): WorkflowRun {
+  return { ...run, updatedAt: now, turnBlocks: 0 }
 }
 
 /** Retention defaults: 30 days and 20 MB of run files. */

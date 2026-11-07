@@ -228,17 +228,34 @@ export async function installDefinition(
 }
 
 /**
+ * Refuse any linked ancestor between the canonical workspace root and the
+ * target components. A `.dsh` or `.dsh/workflows` junction can otherwise point
+ * the install at the shipped assets while every final-path check still passes.
+ */
+async function unlinkedAncestors(root: string, segments: readonly string[]): Promise<boolean> {
+  for (let index = 1; index <= segments.length; index += 1) {
+    const candidate = join(root, ...segments.slice(0, index))
+    const info = await lstat(candidate).catch(() => undefined)
+    if (info === undefined) return true
+    if (info.isSymbolicLink()) return false
+  }
+  return true
+}
+
+const DEFINITION_SEGMENTS = ['.dsh', 'workflows', 'definitions'] as const
+
+/**
  * The definitions directory, proven to stay inside the workspace. A symlinked
  * directory that points elsewhere is refused instead of followed.
  */
 async function ensureDefinitionsDirectory(workspace: string): Promise<string> {
   const root = await realpath(workspace)
+  if (!(await unlinkedAncestors(root, DEFINITION_SEGMENTS.slice(0, 2)))) {
+    throw new Error('a workflow directory ancestor is a link; the definitions directory is refused')
+  }
   const directory = workspaceDefinitionsDirectory(workspace)
   await mkdir(directory, { recursive: true })
-  // A junction or symlink can point the writable definitions directory at the
-  // shipped assets or the drafts directory; only a real directory is accepted.
-  const info = await lstat(directory)
-  if (info.isSymbolicLink()) {
+  if (!(await unlinkedAncestors(root, DEFINITION_SEGMENTS))) {
     throw new Error(
       'the workspace definitions directory is a link; remove it and use a real directory',
     )
@@ -279,6 +296,15 @@ export async function loadApprovedDefinitions(
   const local = new Map<string, Definition>()
   const directory = workspaceDefinitionsDirectory(workspace)
   const root = await realpath(workspace).catch(() => undefined)
+  if (root !== undefined && !(await unlinkedAncestors(root, DEFINITION_SEGMENTS))) {
+    return {
+      definitions: shipped,
+      errors: [
+        ...errors,
+        'a workflow directory ancestor is a link; the workspace definitions are refused',
+      ],
+    }
+  }
   const directoryInfo = await lstat(directory).catch(() => undefined)
   if (directoryInfo?.isSymbolicLink() === true) {
     return {

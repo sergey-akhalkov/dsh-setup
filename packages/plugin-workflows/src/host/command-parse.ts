@@ -63,3 +63,76 @@ export function parseOpenspecCommand(command: string): OpenspecIntent | undefine
   }
   return undefined
 }
+
+export interface ArchiveIntent {
+  readonly kind: 'archive'
+  readonly change: string
+  readonly form: 'openspec' | 'mv' | 'Move-Item' | 'git'
+}
+
+/** The archive directory a move must target. */
+export const ARCHIVE_DIR = 'openspec/changes/archive'
+
+function unquotedPath(token: string | undefined): string | undefined {
+  if (token === undefined) return undefined
+  const withoutQuotes = token.replace(/^['"]|['"]$/gu, '')
+  return withoutQuotes.replaceAll('\\', '/').replace(/\/+$/u, '')
+}
+
+function changeUnderChanges(path: string): string | undefined {
+  const match = /^openspec\/changes\/([^/]+)$/u.exec(path)
+  const name = match?.[1]
+  return name !== undefined && CHANGE_NAME.test(name) ? name : undefined
+}
+
+function targetsArchive(destination: string, name: string): boolean {
+  return destination === ARCHIVE_DIR || destination === `${ARCHIVE_DIR}/${name}`
+}
+
+/**
+ * Parse an archive action: the documented `openspec archive <name>` form, or a
+ * move of `openspec/changes/<name>` into `openspec/changes/archive/` through
+ * `mv`, PowerShell `Move-Item`, or `git mv`. A compound command, another
+ * destination, or an unparseable name is not an archive.
+ */
+export function parseArchiveCommand(command: string): ArchiveIntent | undefined {
+  const trimmed = command.trim()
+  if (trimmed === '' || CONTROL.test(trimmed) || trimmed.includes('$')) return undefined
+  const openspec = parseOpenspecCommand(trimmed)
+  if (openspec?.kind === 'archive') {
+    return { kind: 'archive', change: openspec.change, form: 'openspec' }
+  }
+  const tokens = trimmed.split(/\s+/u)
+  const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
+  if (mvIndex > 0) {
+    if (tokens.length !== mvIndex + 2) return undefined
+    const source = unquotedPath(tokens[mvIndex])
+    const destination = unquotedPath(tokens[mvIndex + 1])
+    const name = source === undefined ? undefined : changeUnderChanges(source)
+    if (name === undefined || destination === undefined || !targetsArchive(destination, name)) {
+      return undefined
+    }
+    return { kind: 'archive', change: name, form: mvIndex === 2 ? 'git' : 'mv' }
+  }
+  if (/^move-item$/iu.test(tokens[0] ?? '')) {
+    let source: string | undefined
+    let destination: string | undefined
+    if (tokens.length === 3) {
+      source = unquotedPath(tokens[1])
+      destination = unquotedPath(tokens[2])
+    } else if (tokens.length === 5) {
+      const flags = new Map<string, string>()
+      for (let index = 1; index + 1 < tokens.length; index += 2) {
+        flags.set((tokens[index] ?? '').toLowerCase(), tokens[index + 1] ?? '')
+      }
+      source = unquotedPath(flags.get('-path'))
+      destination = unquotedPath(flags.get('-destination') ?? flags.get('-dest'))
+    }
+    const name = source === undefined ? undefined : changeUnderChanges(source)
+    if (name === undefined || destination === undefined || !targetsArchive(destination, name)) {
+      return undefined
+    }
+    return { kind: 'archive', change: name, form: 'Move-Item' }
+  }
+  return undefined
+}

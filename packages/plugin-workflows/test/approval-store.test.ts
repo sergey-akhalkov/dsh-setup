@@ -245,7 +245,7 @@ describe('local definitions and the host approval store', () => {
     await mkdir(dirname(definitions), { recursive: true })
     await symlink(drafts, definitions, process.platform === 'win32' ? 'junction' : 'dir')
     const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
-    expect(loaded.errors.join('\n')).toMatch(/definitions directory is a link and is refused/u)
+    expect(loaded.errors.join('\n')).toMatch(/ancestor is a link/u)
     const draft = await writeDefinitionFile(
       workspace,
       drafts,
@@ -253,7 +253,7 @@ describe('local definitions and the host approval store', () => {
       definitionFor('aliased'),
     )
     await expect(installDefinition(workspace, draft, auth())).rejects.toThrow(
-      /definitions directory is a link/u,
+      /ancestor is a link|definitions directory is a link/u,
     )
   })
 
@@ -276,4 +276,31 @@ describe('local definitions and the host approval store', () => {
     expect(installed.definitions.map((definition) => definition.id)).toEqual(['local-intent'])
     expect(installed.errors).toEqual([])
   })
+})
+
+it('refuses a linked ancestor before the install can overwrite shipped assets', async () => {
+  const workspace = await tempWorkspace()
+  const shipped = join(workspace, 'shipped-assets')
+  await mkdir(join(shipped, 'definitions'), { recursive: true })
+  const shippedPath = join(shipped, 'definitions', 'change-intake.json')
+  const original = `${JSON.stringify(definitionFor('change-intake', 'Shipped intake'), null, 2)}\n`
+  await writeFile(shippedPath, original, 'utf8')
+  await mkdir(join(workspace, '.dsh'), { recursive: true })
+  await symlink(
+    shipped,
+    join(workspace, '.dsh', 'workflows'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  )
+  const draft = await writeDefinitionFile(
+    workspace,
+    workspace,
+    'mine.json',
+    definitionFor('change-intake', 'Local intake'),
+  )
+  await expect(installDefinition(workspace, draft, auth())).rejects.toThrow(
+    /ancestor is a link|definitions directory is a link/u,
+  )
+  expect(await readFile(shippedPath, 'utf8')).toBe(original)
+  const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
+  expect(loaded.errors.join('\n')).toMatch(/ancestor is a link|definitions directory is a link/u)
 })

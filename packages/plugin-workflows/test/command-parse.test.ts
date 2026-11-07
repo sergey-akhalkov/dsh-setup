@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { CHANGE_NAME, parseOpenspecCommand } from '../src/host/command-parse.ts'
+import {
+  CHANGE_NAME,
+  parseArchiveCommand,
+  parseOpenspecCommand,
+} from '../src/host/command-parse.ts'
 
 describe('OpenSpec command parser', () => {
   it('accepts the three documented invocation forms', () => {
@@ -91,5 +95,60 @@ describe('OpenSpec command parser', () => {
     expect(CHANGE_NAME.test('Auth')).toBe(false)
     expect(CHANGE_NAME.test('-auth')).toBe(false)
     expect(CHANGE_NAME.test('auth/v2')).toBe(false)
+  })
+})
+
+describe('archive command parser', () => {
+  it('accepts the documented archive form and the three archive move forms', () => {
+    expect(parseArchiveCommand('openspec archive auth')).toEqual({
+      kind: 'archive',
+      change: 'auth',
+      form: 'openspec',
+    })
+    for (const command of [
+      'mv openspec/changes/auth openspec/changes/archive',
+      'mv openspec/changes/auth openspec/changes/archive/',
+      'mv "openspec/changes/auth" "openspec/changes/archive/"',
+    ]) {
+      expect(parseArchiveCommand(command), command).toEqual({
+        kind: 'archive',
+        change: 'auth',
+        form: 'mv',
+      })
+    }
+    expect(
+      parseArchiveCommand('git mv openspec/changes/auth openspec/changes/archive/auth'),
+    ).toEqual({
+      kind: 'archive',
+      change: 'auth',
+      form: 'git',
+    })
+    expect(parseArchiveCommand('Move-Item openspec/changes/auth openspec/changes/archive')).toEqual(
+      {
+        kind: 'archive',
+        change: 'auth',
+        form: 'Move-Item',
+      },
+    )
+    expect(
+      parseArchiveCommand(
+        'Move-Item -Path openspec/changes/auth -Destination openspec/changes/archive/',
+      ),
+    ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  })
+
+  it('rejects another destination, a compound move, and an unparseable name', () => {
+    for (const command of [
+      'mv openspec/changes/auth openspec/changes/other',
+      'mv openspec/changes/auth openspec/changes/archive/other',
+      'mv openspec/changes/auth openspec/changes/archive && echo done',
+      'git mv openspec/changes/auth openspec/changes/archive; rm -rf .',
+      'Move-Item openspec/changes/auth',
+      'Move-Item -Destination openspec/changes/archive',
+      'mv openspec/changes/Auth openspec/changes/archive',
+      'mv openspec/changes/auth openspec/changes/archive/ extra',
+    ]) {
+      expect(parseArchiveCommand(command), command).toBeUndefined()
+    }
   })
 })
