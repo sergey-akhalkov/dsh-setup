@@ -504,7 +504,9 @@ export function validateReviewQueue(raw: unknown): ReviewQueueConfig {
       value < minimum ||
       (maximum !== undefined && value > maximum)
     ) {
-      fail(`reviewQueue.${field} must be a whole number ${range}; use ${JSON.stringify(queue[field])}`)
+      fail(
+        `reviewQueue.${field} must be a whole number ${range}; use ${JSON.stringify(queue[field])}`,
+      )
     }
     queue[field] = value
   }

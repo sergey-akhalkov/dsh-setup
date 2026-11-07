@@ -57,9 +57,9 @@ describe('configuration validation', () => {
       maxDelayMs: 60_000,
       waitTimeoutMs: 300_000,
     })
-    expect(validateConfig({ reviewQueue: { concurrency: 4, maxAttempts: 5 } }).reviewQueue).toMatchObject(
-      { enabled: true, concurrency: 4, maxAttempts: 5 },
-    )
+    expect(
+      validateConfig({ reviewQueue: { concurrency: 4, maxAttempts: 5 } }).reviewQueue,
+    ).toMatchObject({ enabled: true, concurrency: 4, maxAttempts: 5 })
   })
 
   it('accepts an explicit empty rule list and the no-rules state', () => {
