@@ -240,7 +240,12 @@ export class ReviewQueue<T extends QueueRun> {
     if (existing !== undefined && !existing.finished) {
       return { kind: 'duplicate', run: existing.run }
     }
-    if (this.limits.enabled && this.waiting.length >= this.limits.maxQueued) {
+    // The waiting cap applies only when this run must actually wait. A new key
+    // head with a free slot starts immediately and consumes no waiting room.
+    const mustWait =
+      this.keys.has(run.file.key) ||
+      (this.limits.enabled && this.active.size >= this.limits.concurrency)
+    if (this.limits.enabled && mustWait && this.waiting.length >= this.limits.maxQueued) {
       return { kind: 'full', depth: this.waiting.length, maxQueued: this.limits.maxQueued }
     }
     const entry: QueueEntry<T> = {

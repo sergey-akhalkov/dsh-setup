@@ -58,6 +58,10 @@ async function workspace(): Promise<string> {
   return created.root
 }
 
+function fakeRun(id: string, key: string, identity: string): QueueRun {
+  return { file: { id, key, identity, state: 'queued' } }
+}
+
 describe('review queue admission', () => {
   it('admits up to the concurrency limit and promotes queued runs in FIFO order', async () => {
     const root = await workspace()
@@ -316,13 +320,52 @@ describe('review queue admission', () => {
     expect(await harness.waitForRun(first)).toContain('state=completed')
     expect(await readdir(snapshots)).toEqual([])
   })
+
+  it('admits an independent run into a free slot even when the waiting list is full', async () => {
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 2,
+        maxQueued: 1,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    expect(await queue.submit(fakeRun('run-a1', 'key-a', 'identity-a1'))).toEqual({
+      kind: 'accepted',
+      phase: 'running',
+    })
+    expect(await queue.submit(fakeRun('run-a2', 'key-a', 'identity-a2'))).toEqual({
+      kind: 'accepted',
+      phase: 'queued',
+    })
+    // Two slots, one running: an independent key may use the free slot even
+    // though the one-entry waiting list already holds A2.
+    expect(await queue.submit(fakeRun('run-b', 'key-b', 'identity-b'))).toEqual({
+      kind: 'accepted',
+      phase: 'running',
+    })
+    expect(await queue.submit(fakeRun('run-c', 'key-c', 'identity-c'))).toEqual({
+      kind: 'full',
+      depth: 1,
+      maxQueued: 1,
+    })
+    queue.dispose()
+  })
 })
 
 describe('review queue cancellation', () => {
-  function fakeRun(id: string, key: string, identity: string): QueueRun {
-    return { file: { id, key, identity, state: 'queued' } }
-  }
-
   it('settles a queued run discarded without starting a target', async () => {
     const hooks = {
       start: vi.fn(async () => undefined),
