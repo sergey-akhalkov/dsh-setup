@@ -2494,7 +2494,6 @@ async function finishTarget(started) {
     const { rule, target } = started;
     let timer;
     let graceTimer;
-    let timedOut = false;
     let result;
     let raceError;
     let disposeConfirmed = true;
@@ -2504,7 +2503,6 @@ async function finishTarget(started) {
             started.activation.result,
             new Promise((_resolve, reject) => {
                 timer = setTimeout(() => {
-                    timedOut = true;
                     reject(new TimeoutError(`rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`));
                 }, started.timeoutMs);
             }),
@@ -2534,24 +2532,26 @@ async function finishTarget(started) {
         if (graceTimer !== undefined)
             clearTimeout(graceTimer);
     }
-    const providerTimeout = result !== undefined &&
-        result.stopReason !== 'completed' &&
-        /timeout|timed out/i.test(`${result.stopReason} ${result.diagnostic ?? ''}`);
-    if ((timedOut || providerTimeout) && (!disposeConfirmed || disposePending)) {
+    // Classify the failure that will be thrown; any timeout class (local timer,
+    // rejected result, or provider diagnostic) needs confirmed cancellation.
+    let candidate = raceError;
+    if (candidate === undefined && result !== undefined && result.stopReason !== 'completed') {
+        const providerMessage = result.diagnostic === undefined
+            ? `stopped with "${result.stopReason}"`
+            : `stopped with "${result.stopReason}": ${result.diagnostic}`;
+        const diagnostic = result.diagnostic === undefined ? '' : `: ${boundedMessage(result.diagnostic)}`;
+        candidate = new ProviderResultError(`rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`, providerMessage);
+    }
+    const wasTimeout = candidate !== undefined && classifyFailure(candidate, 'run').failureClass === 'timeout';
+    if (wasTimeout && (!disposeConfirmed || disposePending)) {
         throw new UnconfirmedTimeoutError(`rule "${rule.id}": target "${targetLabel(target)}" timed out and the child could not be confirmed cancelled; check the provider before starting a fresh review`, started.activation);
     }
     if (raceError !== undefined)
         throw raceError;
     if (result === undefined)
         fail(`rule "${rule.id}": target "${targetLabel(target)}" returned no result`);
-    if (result.stopReason !== 'completed') {
-        // Classify the raw diagnostic; render a bounded, redacted public message.
-        const providerMessage = result.diagnostic === undefined
-            ? `stopped with "${result.stopReason}"`
-            : `stopped with "${result.stopReason}": ${result.diagnostic}`;
-        const diagnostic = result.diagnostic === undefined ? '' : `: ${boundedMessage(result.diagnostic)}`;
-        throw new ProviderResultError(`rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`, providerMessage);
-    }
+    if (result.stopReason !== 'completed')
+        throw candidate;
     const text = outputText(result);
     if (text === '') {
         throw new InvalidOutputError(`rule "${rule.id}": target "${targetLabel(target)}" returned no text output`);

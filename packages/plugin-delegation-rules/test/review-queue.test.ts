@@ -1732,7 +1732,7 @@ describe('review failure classification', () => {
     subagents.addProvider('codex-subagent', {}, () => ({
       output: [],
       stopReason: 'error' as const,
-      diagnostic: 'request timed out',
+      diagnostic: 'did not finish within 100 ms',
     }))
     const rule = (id: string, phase: string, gate: 'strict' | 'soft') => ({
       id,
@@ -2583,7 +2583,7 @@ describe('review timeout retry and quarantine', () => {
         return {
           output: [],
           stopReason: 'error' as const,
-          diagnostic: 'request timed out',
+          diagnostic: 'did not finish within 100 ms',
         }
       })
       const original = subagents.startActivation.bind(subagents)
@@ -2821,6 +2821,148 @@ describe('review timeout retry and quarantine', () => {
       await rm(recordPath, { recursive: true, force: true })
       releases.shift()?.()
       expect(await harness.waitForRun(followerRun)).toContain('state=completed')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+  it('classifies an unconfirmed timeout under a permission-like rule name', () => {
+    const error = Object.assign(
+      new Error('rule "permission-review": target timed out and could not be cancelled'),
+      { name: 'UnconfirmedTimeoutError' },
+    )
+    expect(classifyFailure(error, 'run')).toMatchObject({
+      failureClass: 'timeout',
+      transient: true,
+    })
+  })
+
+  it('quarantines a rejected timeout result after a failed teardown', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [{ number: '1.1', text: 'Shared task', checked: true }])
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        if (run.prompt.includes('task-review-extra')) return passResponder(run)
+        return Promise.reject(new Error('request timed out'))
+      })
+      const original = subagents.startActivation.bind(subagents)
+      let disposals = 0
+      subagents.startActivation = async (spec) => {
+        const activation = await original(spec)
+        return {
+          ...activation,
+          dispose: async () => {
+            disposals += 1
+            if (disposals <= 2) throw new Error('teardown unconfirmed')
+          },
+        }
+      }
+      const git = new FakeGit()
+      git.failSnapshot = true
+      const harness = new Harness({
+        cwd: root,
+        config: {
+          targets: { codex: { provider: 'codex-subagent' } },
+          rules: taskReviewRules(),
+          reviewQueue: {
+            concurrency: 1,
+            maxQueued: 2,
+            maxAttempts: 2,
+            baseDelayMs: 50,
+            maxDelayMs: 100,
+          },
+        },
+        agents: subagents,
+        git,
+      })
+      const task = taskIdFor('Shared task')
+      const first = await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        task,
+      })
+      const firstRun = runIdFrom(first)
+      const follower = await harness.toolText('delegate', {
+        rule: 'task-review-extra',
+        change: 'change-a',
+        task,
+      })
+      const followerRun = runIdFrom(follower)
+      expect(follower).toContain('review queued')
+
+      await flush()
+      await flush()
+      expect(await harness.waitForRun(firstRun)).toContain('state=failed')
+      expect((await readRun(root, firstRun)).failureClass).toBe('timeout')
+      expect(subagents.startCalls).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(50)
+      await flush()
+      await flush()
+      expect(subagents.startCalls).toBe(2)
+      expect(await harness.waitForRun(followerRun)).toContain('state=completed')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('retains a quarantined snapshot until teardown confirms', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+      await mkdir(join(root, 'src'), { recursive: true })
+      await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent', {}, () => new Promise(() => {}))
+      const original = subagents.startActivation.bind(subagents)
+      let disposals = 0
+      subagents.startActivation = async (spec) => {
+        const activation = await original(spec)
+        return {
+          ...activation,
+          dispose: async () => {
+            disposals += 1
+            if (disposals <= 2) throw new Error('teardown unconfirmed')
+          },
+        }
+      }
+      const git = new FakeGit()
+      git.files = ['src/engine.ts']
+      const harness = new Harness({
+        cwd: root,
+        config: {
+          targets: { codex: { provider: 'codex-subagent' } },
+          rules: taskReviewRules().slice(0, 1),
+          timeouts: { review: 20 },
+          reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 50, maxDelayMs: 100 },
+        },
+        agents: subagents,
+        git,
+      })
+      const runId = await harness.startReview({
+        rule: 'task-review',
+        change: 'change-a',
+        task: taskIdFor('Reviewed task'),
+      })
+      await vi.advanceTimersByTimeAsync(20)
+      await flush()
+      expect(await harness.waitForRun(runId)).toContain('state=failed')
+
+      const snapshots = join(root, '.dsh', 'delegation', 'snapshots')
+      const during = await readdir(snapshots)
+      expect(during.some((name) => name.startsWith(runId))).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(50)
+      await flush()
+      expect(await readdir(snapshots)).toEqual([])
       vi.clearAllTimers()
     } finally {
       vi.useRealTimers()

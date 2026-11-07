@@ -152,7 +152,7 @@ export function classifyFailure(error: unknown, phase: 'start' | 'run'): Classif
   }
   if (name === 'PermissionError') return { failureClass: 'permission', transient: false }
   if (name === 'ConfigError') return { failureClass: 'config', transient: false }
-  if (name === 'TimeoutError') {
+  if (name === 'TimeoutError' || name === 'UnconfirmedTimeoutError') {
     return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) }
   }
   if (name === 'ProviderStartError') {
