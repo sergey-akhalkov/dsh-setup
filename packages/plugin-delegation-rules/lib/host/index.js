@@ -1131,8 +1131,11 @@ async function captureSnapshot(cwd, changes, services, signal) {
     }
     return snapshot;
 }
+/** Match a whole Cookie/Set-Cookie header up to the next field or line end. */
+const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)["']?\s*[=:][\s\S]*?(?=["'}]|\r?\n|\s+(?:api[_-]?key|apikey|token|password|passwd|secret|authorization|private[_-]?key|x-api-key)\s*[=:]|$)/gi;
 function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
     const redacted = text
+        .replace(COOKIE_HEADER_PATTERN, '[secret]')
         .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
         .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
