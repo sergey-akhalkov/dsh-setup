@@ -200,6 +200,26 @@ describe('bundled prompts', () => {
     expect(text).toMatch(/exactly one fenced ```json block/)
   })
 
+  it('documents the review-learning vocabulary, store paths, bounds, and opt-out', () => {
+    const docs = readFileSync(docsPath, 'utf8')
+    for (const text of [
+      'review_retro',
+      'review_lesson',
+      '/review-retro',
+      '.dsh/review-learning/',
+      'reviewLearning.enabled',
+      'reviewLearning.window',
+      'reviewLearning.maxLessons',
+      '1200 characters',
+      '4000 characters',
+      'spec-ambiguity',
+      'path-boundary',
+      'security',
+    ]) {
+      expect(docs).toContain(text)
+    }
+  })
+
   it('requests the finding class vocabulary in all three review instructions', () => {
     for (const name of ['review-spec.md', 'review-task.md', 'review-integration.md']) {
       const text = read(name)

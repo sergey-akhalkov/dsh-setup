@@ -39,7 +39,7 @@ The change is one lane: every group edits the shared `packages/plugin-delegation
 
 - [x] 6.1 Register the `review_retro` and `review_lesson` tools and the `/review-retro` command with descriptions naming the user-approval rule; verify the tools are absent when `reviewLearning.enabled` is false.
 - [x] 6.2 Add `reviewLearning` config with `enabled`, `window`, and `maxLessons` defaults and fail-loud validation; verify defaults, an invalid window, and the disabled path.
-- [ ] 6.3 Document the class vocabulary, the store path, the user-approval transitions, the injection bound, the repeat metric, and the opt-out in `docs/delegation-rules.md`; verify the documented commands and paths.
+- [x] 6.3 Document the class vocabulary, the store path, the user-approval transitions, the injection bound, the repeat metric, and the opt-out in `docs/delegation-rules.md`; verify the documented commands and paths.
 - [ ] 6.4 Run `pnpm build` first, then add every emitted `lib/host/{lesson-store,learning-tools,retro,finding-history}.{js,d.ts}` to `files` in `packages/plugin-delegation-rules/package.json`, and run `pnpm gen` after the build so the vendored setup tree contains them. Verify the package's `files` list, the `pnpm pack` tarball, and `packages/setup/node_modules/@dsh-setup/plugin-delegation-rules/lib/host/` all contain the eight emitted files, and load the packed package from a temporary install outside the source checkout with the package's dependencies available, so a host module missing from the tarball fails to resolve.
 - [ ] 6.5 Run `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm test`, and `openspec validate learn-from-review-findings --strict`; verify all pass and the vendored setup tree still carries the new modules.
 
