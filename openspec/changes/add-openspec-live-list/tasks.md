@@ -10,7 +10,7 @@
 
 ## 2. Client watch wiring — `packages/plugin-openspec/src/client/panel.ts`, `packages/plugin-openspec/src/client/index.tsx`, `packages/plugin-openspec/test/panel.test.ts`
 
-- [ ] 2.1 Add the optional `deltaCapabilities` field to `ChangeRow` and use it to build the root's watch
+- [x] 2.1 Add the optional `deltaCapabilities` field to `ChangeRow` and use it to build the root's watch
       addresses through the existing `changeWatchPaths` and `fileAddress` helpers. Verify a unit test
       shows a row with two delta specs yields the proposal, design, tasks, and two delta addresses, while
       a row missing the field (older host) yields only the three fixed artifacts.

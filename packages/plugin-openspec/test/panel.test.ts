@@ -125,6 +125,7 @@ import {
   canOpenOpenSpec,
   capabilityAddress,
   changeAddress,
+  changeListWatchAddresses,
   type Delta,
   derivePhase,
   fileAddress,
@@ -1051,6 +1052,7 @@ describe('OpenSpec panel data layer', () => {
     expect(phaseOf(decoded.changes[0] as ChangeRow)).toBe('applying')
     expect(decoded.archived).toEqual([])
     expect(decoded.counts).toEqual({ active: 1, archived: 0, capabilities: 0 })
+    expect(decoded.changes[0]?.deltaCapabilities).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledWith(
       `${CHANGES_PATH}?session=s1`,
       expect.objectContaining({ credentials: 'same-origin' }),
@@ -1062,7 +1064,12 @@ describe('OpenSpec panel data layer', () => {
       'fetch',
       vi.fn(async () =>
         response({
-          changes: [row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, { phase: 'applying' })],
+          changes: [
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              deltaCapabilities: ['auth', 'identity/auth'],
+            }),
+          ],
           archived: [ARCHIVED_ROW],
           counts: { active: 2, archived: 34, capabilities: 19 },
         }),
@@ -1070,11 +1077,36 @@ describe('OpenSpec panel data layer', () => {
     )
     const decoded = await requestChangeList('s1')
     expect(decoded.changes).toHaveLength(1)
+    expect(decoded.changes[0]?.deltaCapabilities).toEqual(['auth', 'identity/auth'])
     expect(decoded.archived[0]?.name).toBe(ARCHIVED_ROW.name)
     expect(decoded.archived[0]?.archivedAt).toBe('2026-10-27')
     expect(decoded.archived[0]?.summary).toBe('Add the admin indicator to the app.')
     expect(decoded.archived[0]?.commit).toEqual(COMMIT)
     expect(decoded.counts).toEqual({ active: 2, archived: 34, capabilities: 19 })
+  })
+
+  it('builds the root watch addresses from a row and its delta capabilities', () => {
+    const active = row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+      deltaCapabilities: ['auth', 'identity/auth'],
+    })
+    expect(changeListWatchAddresses('s1', [active])).toEqual([
+      fileAddress('s1', 'openspec/changes/add-auth/proposal.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/design.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/tasks.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/specs/auth/spec.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/specs/identity/auth/spec.md'),
+    ])
+    expect(changeListWatchAddresses('s1', [active])[0]).toBe(
+      'dsh-resource://file/session/s1/openspec/changes/add-auth/proposal.md',
+    )
+    // An older host omits the field: only the three fixed artifacts are observed.
+    expect(changeListWatchAddresses('s1', [row('older', 'in-progress')])).toEqual([
+      fileAddress('s1', 'openspec/changes/older/proposal.md'),
+      fileAddress('s1', 'openspec/changes/older/design.md'),
+      fileAddress('s1', 'openspec/changes/older/tasks.md'),
+    ])
+    // Archived rows contribute no address.
+    expect(changeListWatchAddresses('s1', [ARCHIVED_ROW])).toEqual([])
   })
 
   it('derives every phase and prefers an explicit host phase', () => {
