@@ -3941,3 +3941,43 @@ describe('quarantined timeout supersession', () => {
     expect(record.verdict).toBe('PASS')
   })
 })
+
+describe('status queue facts', () => {
+  it('reports queue depth and bounded run facts without machine paths', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(
+      root,
+      { ...defaultTestConfig(), reviewQueue: { concurrency: 1 } },
+      subagents,
+    )
+    const firstRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    const queued = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-b' })
+    const queuedRun = runIdFrom(queued)
+    expect(queued).toContain('queue position: 1')
+
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toContain('Review queue: enabled=true concurrency=1 active=1 queued=1 depth=2')
+    expect(status).toMatch(new RegExp(`run ${firstRun}: .*attempts=1`))
+    expect(status).toMatch(new RegExp(`run ${queuedRun}: .*position=1`))
+    expect(status).toMatch(new RegExp(`run ${queuedRun}: .*queuedAt=\\d{4}-`))
+    expect(status).not.toContain(root)
+    expect(status).not.toMatch(/sk-[A-Za-z0-9]{20,}/)
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(firstRun)).toContain('state=completed')
+    for (let attempt = 0; attempt < 50 && subagents.startCalls < 2; attempt += 1) {
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 5)
+      })
+    }
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(queuedRun)).toContain('state=completed')
+    const finalStatus = await harness.toolText('delegation_status', {})
+    expect(finalStatus).toMatch(new RegExp(`run ${queuedRun}: .*attempts=1`))
+  })
+})

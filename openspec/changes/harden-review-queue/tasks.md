@@ -25,7 +25,7 @@ The change is one Host package with a shared start path; it is a single lane. Te
 
 - [x] 4.1 Make only the settled attempt call `publishRecord()`, and only while it owns the current identity; discard a retry when an authoritative record exists and discard a superseded predecessor so it never overwrites its successor; refresh the publication baseline only before a run's first start, never before a retry; verify exactly one `PASS`/`FINDINGS`/`ERROR` record for a retried identity, a superseded late completion, and a retry that does not adopt a record published while it waited.
 - [x] 4.2 Wire the existing settlement observer so it fires once after the final attempt settles, not on queue admission or retry wait; verify queued, timeout, retried, and no-observer cases with a fake observer and no polling.
-- [ ] 4.3 Add bounded run fields (`queuePosition`, `queuedAt`, `waitMs`, `attempts`, `failureClass`, `lastRetryAt`) and the `delegation_status` queue summary; verify the status text and that no credential or machine path appears.
+- [x] 4.3 Add bounded run fields (`queuePosition`, `queuedAt`, `waitMs`, `attempts`, `failureClass`, `lastRetryAt`) and the `delegation_status` queue summary; verify the status text and that no credential or machine path appears.
 
 ## 5. Restart recovery and verification
 

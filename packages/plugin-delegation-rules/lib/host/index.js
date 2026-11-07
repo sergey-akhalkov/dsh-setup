@@ -3460,6 +3460,23 @@ class DelegationEngine {
             // Run state is local scratch; a write failure must not break the background run.
         }
     }
+    /** Bounded queue facts; never a path, credential, or provider message. */
+    runFacts(file) {
+        const facts = [];
+        if (file.queuePosition !== undefined)
+            facts.push(`position=${file.queuePosition}`);
+        if (file.queuedAt !== undefined)
+            facts.push(`queuedAt=${file.queuedAt}`);
+        if (file.waitMs !== undefined)
+            facts.push(`waitMs=${file.waitMs}`);
+        if (file.attempts !== undefined)
+            facts.push(`attempts=${file.attempts}`);
+        if (file.lastRetryAt !== undefined)
+            facts.push(`lastRetryAt=${file.lastRetryAt}`);
+        if (file.failureClass !== undefined)
+            facts.push(`failureClass=${file.failureClass}`);
+        return facts.length === 0 ? '' : ` ${facts.join(' ')}`;
+    }
     runHandleText(run, mode) {
         const label = mode === 'duplicate'
             ? 'already pending'
@@ -3479,14 +3496,18 @@ class DelegationEngine {
         if (run.file.taskId !== undefined)
             lines.push(`task id: ${run.file.taskId}`);
         lines.push(`record: ${run.file.record}`);
-        if (run.file.state === 'queued' && run.file.queuePosition !== undefined) {
+        if (run.file.queuePosition !== undefined) {
             lines.push(`queue position: ${run.file.queuePosition}`);
         }
+        if (run.file.waitMs !== undefined)
+            lines.push(`queue wait: ${run.file.waitMs} ms`);
         if (mode === 'retry-wait') {
             if (run.file.attempts !== undefined)
                 lines.push(`attempt: ${run.file.attempts}`);
             if (run.file.failureClass !== undefined)
                 lines.push(`failure class: ${run.file.failureClass}`);
+            if (run.file.lastRetryAt !== undefined)
+                lines.push(`last retry: ${run.file.lastRetryAt}`);
         }
         lines.push('', mode === 'duplicate'
             ? 'Returned the existing run; no second target was started. The turn can continue.'
@@ -3812,12 +3833,14 @@ class DelegationEngine {
                     lines.push('  progress note: none');
                 }
             }
+            const queue = this.queue.summary();
+            lines.push('', `Review queue: enabled=${queue.enabled} concurrency=${queue.concurrency} active=${queue.active} queued=${queue.queued} depth=${queue.active + queue.queued}`);
             const runs = await listRunFiles(workspaceRoot);
             lines.push('', 'Review runs:');
             if (runs.length === 0)
                 lines.push('- none');
             for (const run of runs) {
-                lines.push(`- run ${run.id}: rule=${run.rule} change=${run.change}${run.taskId === undefined ? '' : ` task=${run.taskId}`} state=${run.state} record=${run.record}${run.detail === undefined ? '' : ` detail="${run.detail}"`}`);
+                lines.push(`- run ${run.id}: rule=${run.rule} change=${run.change}${run.taskId === undefined ? '' : ` task=${run.taskId}`} state=${run.state} record=${run.record}${this.runFacts(run)}${run.detail === undefined ? '' : ` detail="${run.detail}"`}`);
             }
         }
         return lines.join('\n');
