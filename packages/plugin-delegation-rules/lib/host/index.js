@@ -122,6 +122,13 @@ class TimeoutError extends DelegationError {
         this.name = 'TimeoutError';
     }
 }
+/** The reviewed inputs were written during the run; terminal, never retried. */
+class InputMutationError extends DelegationError {
+    constructor(message) {
+        super(message);
+        this.name = 'InputMutationError';
+    }
+}
 /** The provider returned an unsuccessful result; classify its diagnostic alone. */
 class ProviderResultError extends DelegationError {
     providerMessage;
@@ -1129,6 +1136,7 @@ function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
         .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
         .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
+        .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
         .replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^"',;}\s]+["']?/gi, '[secret]')
         .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*["'][^"']*["']/gi, '[secret]')
         .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*[^\s"',;}]+/gi, '[secret]')
@@ -2968,7 +2976,7 @@ class DelegationEngine {
                 const changed = changedInputPaths(prepared.signature, current);
                 if (changed.length > 0) {
                     const sample = changed.slice(0, 5).join(', ');
-                    fail(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
+                    throw new InputMutationError(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
                 }
             }
             await this.publishRecord(run, {

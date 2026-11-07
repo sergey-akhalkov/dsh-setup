@@ -1526,7 +1526,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     subagents.startError = new Error(
-      `permission denied: authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
+      `permission denied: authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} {"path":"/home/alice/private/review.txt"} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
     )
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
 
@@ -1541,6 +1541,7 @@ describe('review failure classification', () => {
     expect(message).not.toContain('synthetic-example-value')
     expect(message).not.toContain('sk-proj-')
     expect(message).not.toContain('C:\\Users')
+    expect(message).not.toContain('/home/alice')
     expect(message).not.toContain('\n')
     expect(message.length).toBeLessThan(4_500)
   })
@@ -1583,6 +1584,43 @@ describe('review failure classification', () => {
     const second = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
     expect(await harness.waitForRun(second)).toContain('state=failed')
     expect((await readRun(root, second)).failureClass).toBe('invalid-output')
+  })
+
+  it('keeps a typed input mutation permanent despite filename keywords', () => {
+    const error = Object.assign(
+      new Error('reviewed inputs changed during the run (1 changed: subagent limit reached.md)'),
+      { name: 'InputMutationError' },
+    )
+    expect(classifyFailure(error, 'run')).toEqual({
+      failureClass: 'reviewed-inputs-changed',
+      transient: false,
+    })
+  })
+
+  it('records an input mutation named like a child limit as reviewed-inputs-changed', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'subagent limit reached.md'),
+      'changed\n',
+      'utf8',
+    )
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    expect((await readRun(root, runId)).failureClass).toBe('reviewed-inputs-changed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { error: string }
+    expect(record.error).toContain('subagent limit reached.md')
   })
 
   it('classifies a provider start failure independently of the rule name', async () => {
@@ -1681,7 +1719,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1705,6 +1743,7 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('synthetic-secret-value')
     expect(record.error).not.toContain('another-secret-value')
     expect(record.error).not.toContain('/tmp/review')
+    expect(record.error).not.toContain('/home/alice')
     expect(record.error).not.toContain('C:\\Users')
     expect(record.error.length).toBe(4_000)
   })

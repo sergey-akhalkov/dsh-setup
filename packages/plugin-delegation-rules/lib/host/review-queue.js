@@ -14,6 +14,9 @@ export function classifyFailure(error, phase) {
     // Engine-owned typed failures win over text from rules, targets, or payloads.
     if (name === 'InvalidOutputError')
         return { failureClass: 'invalid-output', transient: false };
+    if (name === 'InputMutationError') {
+        return { failureClass: 'reviewed-inputs-changed', transient: false };
+    }
     if (name === 'PermissionError')
         return { failureClass: 'permission', transient: false };
     if (name === 'ConfigError')
