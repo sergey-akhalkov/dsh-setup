@@ -96,14 +96,17 @@ export interface EvidenceContext {
 /** A validated checkpoint record path a host-computed context value may carry. */
 const CHECKPOINT_PATH = /^\.dsh\/work-checkpoints\/[a-f0-9]{16}\/[0-9]+\.json$/u
 
-/** An evidence-path interpolation value: a validated identifier or checkpoint path. */
+/** A portable review task id a host-computed context value may carry. */
+const TASK_ID = /^[a-f0-9]{16}$/u
+
+/** An evidence-path interpolation value: a validated identifier, task id, or checkpoint path. */
 function validContextValue(value: string): boolean {
-  return CHANGE_NAME.test(value) || CHECKPOINT_PATH.test(value)
+  return CHANGE_NAME.test(value) || CHECKPOINT_PATH.test(value) || TASK_ID.test(value)
 }
 
 /** An evidence-path interpolation value: a validated identifier. */
 function interpolate(value: string, context: EvidenceContext, item?: string): EvidenceCheck {
-  const replaced = value.replaceAll(/\{([a-z][a-z0-9-]*)\}/gu, (_match, key: string) => {
+  const replaced = value.replaceAll(/\{([a-zA-Z][a-zA-Z0-9-]*)\}/gu, (_match, key: string) => {
     const entry = context.values[key]
     return typeof entry === 'string' ? entry : '\u0000'
   })
@@ -117,7 +120,7 @@ function interpolate(value: string, context: EvidenceContext, item?: string): Ev
       },
     }
   }
-  for (const match of value.matchAll(/\{([a-z][a-z0-9-]*)\}/gu)) {
+  for (const match of value.matchAll(/\{([a-zA-Z][a-zA-Z0-9-]*)\}/gu)) {
     const key = match[1] ?? ''
     const entry = context.values[key]
     if (typeof entry !== 'string' || !validContextValue(entry)) {
@@ -463,29 +466,34 @@ async function recordCheck(
       },
     }
   }
+  const phase =
+    evidence.phase === undefined ? undefined : resolveEvidenceText(evidence.phase, context, item)
+  if (phase !== undefined && !phase.ok) return phase
+  const scope =
+    evidence.scope === undefined ? undefined : resolveEvidenceText(evidence.scope, context, item)
+  if (scope !== undefined && !scope.ok) return scope
+  const task =
+    evidence.task === undefined ? undefined : resolveEvidenceText(evidence.task, context, item)
+  if (task !== undefined && !task.ok) return task
   if (record.rule !== evidence.rule) {
     return mismatch(`the record rule is not "${evidence.rule}"`, path.text, item)
   }
   if (change !== undefined && record.change !== change.text) {
     return mismatch(`the record change is not "${change.text}"`, path.text, item)
   }
-  if (evidence.phase !== undefined && record.phase !== evidence.phase) {
-    return mismatch(`the record phase is not "${evidence.phase}"`, path.text, item)
+  if (phase !== undefined && record.phase !== phase.text) {
+    return mismatch(`the record phase is not "${phase.text}"`, path.text, item)
   }
-  if (evidence.scope !== undefined) {
-    if (evidence.scope === 'whole' && record.scope === 'task') {
+  if (scope !== undefined) {
+    if (scope.text === 'whole' && record.scope === 'task') {
       return mismatch('a task-scoped record is not whole-spec evidence', path.text, item)
     }
-    if (record.scope !== evidence.scope) {
-      return mismatch(`the record scope is not "${evidence.scope}"`, path.text, item)
+    if (record.scope !== scope.text) {
+      return mismatch(`the record scope is not "${scope.text}"`, path.text, item)
     }
   }
-  if (
-    evidence.task !== undefined &&
-    record.taskId !== evidence.task &&
-    record.task !== evidence.task
-  ) {
-    return mismatch(`the record task is not "${evidence.task}"`, path.text, item)
+  if (task !== undefined && record.taskId !== task.text && record.task !== task.text) {
+    return mismatch(`the record task is not "${task.text}"`, path.text, item)
   }
   if (record.verdict !== evidence.verdict) {
     return mismatch(`the record verdict is not "${evidence.verdict}"`, path.text, item)

@@ -1,0 +1,37 @@
+{
+  "v": 1,
+  "id": "retro",
+  "name": "Deferred review retro",
+  "version": 1,
+  "trigger": {
+    "kind": "turn.stopping",
+    "match": {},
+    "mode": "active",
+    "dedupe": "turn",
+    "applicability": "checkpoint-required"
+  },
+  "settings": {
+    "allowModelStart": false,
+    "risk": "low",
+    "gateOwnership": "defer",
+    "maxBlocks": 3,
+    "allowIntent": false,
+    "legacy": { "plugin": "goal-continuity", "signal": "work_checkpoint" }
+  },
+  "steps": [
+    {
+      "id": "read-checkpoint",
+      "title": "Read the work checkpoint",
+      "executor": "main",
+      "prompt": "Read the existing work_checkpoint record for this turn. Do not request a second checkpoint and do not steer.",
+      "evidence": {
+        "kind": "record",
+        "source": "checkpoint",
+        "rule": "goal-continuity",
+        "verdict": "recorded",
+        "path": "{checkpoint}"
+      },
+      "next": "end"
+    }
+  ]
+}

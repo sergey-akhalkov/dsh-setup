@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-workflow-obligations",
+  "scope": "task",
+  "taskId": "e3b228754b14ab8f",
+  "digest": "a671bbfec11a062e28b7dae86efba63b4d5a713b05a7cc4383052cf929ec01d6",
+  "worktreeDigest": "8dd561af763acfdb8b22a488662a9814f704bbc6cef2905830c3c9f66bf4dcb6",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-07T20:04:29.515Z"
+}

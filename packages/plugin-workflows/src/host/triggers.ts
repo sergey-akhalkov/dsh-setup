@@ -545,3 +545,26 @@ export function evaluateIntents(
   }
   return rows
 }
+
+/**
+ * The installed goal-continuity checkpoint applicability decision, replicated
+ * locally (the cross-package predicate is not exported): a turn needs the
+ * resolved tool-call minimum, must not end in a question, and, when required,
+ * must carry a write or a worker start.
+ */
+export interface CheckpointApplicabilityInput {
+  readonly toolCalls: number
+  readonly lastTool?: string
+  readonly written: number
+  readonly workers: number
+  readonly minToolCalls?: number
+  readonly requireWrite?: boolean
+}
+
+export function checkpointRequired(input: CheckpointApplicabilityInput): boolean {
+  const minToolCalls = input.minToolCalls ?? 4
+  if (input.toolCalls < minToolCalls) return false
+  if (input.lastTool === 'ask_user_question') return false
+  if ((input.requireWrite ?? true) && input.written === 0 && input.workers === 0) return false
+  return true
+}

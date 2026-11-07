@@ -349,6 +349,14 @@ export function resetTurnBlocks(run: WorkflowRun, now = Date.now()): WorkflowRun
   return { ...run, updatedAt: now, turnBlocks: 0 }
 }
 
+/**
+ * Terminally classify a run whose trigger later evaluates as not applicable.
+ * It is completed before evidence so retention can prune it; it is never a pass.
+ */
+export function completeNotApplicable(run: WorkflowRun, now = Date.now()): WorkflowRun {
+  return setRunStatus(run, 'completed', now, 'not-applicable')
+}
+
 /** Retention defaults: 30 days and 20 MB of run files. */
 export const RUN_RETENTION_DAYS = 30
 export const RUN_RETENTION_BYTES = 20 * 1024 * 1024

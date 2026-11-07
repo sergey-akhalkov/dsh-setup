@@ -123,7 +123,11 @@ describe('local definitions and the host approval store', () => {
     expect(loadShippedDefinitions().find((entry) => entry.id === 'change-intake')?.name).toBe(
       'OpenSpec change intake',
     )
-    expect(loaded.definitions.map((entry) => entry.id)).toEqual(['change-intake'])
+    expect(loaded.definitions.map((entry) => entry.id)).toEqual([
+      'change-intake',
+      'retro',
+      'task-review',
+    ])
   })
 
   it('refuses an unapproved local definition and never loads a draft', async () => {
