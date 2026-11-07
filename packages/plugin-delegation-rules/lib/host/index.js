@@ -97,6 +97,27 @@ class DelegationError extends Error {
         this.name = 'DelegationError';
     }
 }
+/** A rule/target/provider configuration problem; never transient. */
+class ConfigError extends DelegationError {
+    constructor(message) {
+        super(message);
+        this.name = 'ConfigError';
+    }
+}
+/** The provider rejected a start before any child existed; retryable. */
+class ProviderStartError extends DelegationError {
+    constructor(message) {
+        super(message);
+        this.name = 'ProviderStartError';
+    }
+}
+/** The review target did not finish inside its contract timeout. */
+class TimeoutError extends DelegationError {
+    constructor(message) {
+        super(message);
+        this.name = 'TimeoutError';
+    }
+}
 function fail(message) {
     throw new DelegationError(message);
 }
@@ -1094,10 +1115,16 @@ function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
     const redacted = text
         .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
-        .replace(/(?:^|\s)\/(?:Users|home)\/[^\s"'`)]+/g, ' [path]')
-        .replace(/\b(?:sk-[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
+        .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
+        .replace(/\b(?:Authorization|authorization)\s*:\s*(?:Bearer|Basic)\s+[^\s"',;]+/g, '[secret]')
+        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)\s*[=:]\s*[^\s"',;]+/gi, '[secret]')
+        .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
         .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[secret]');
     return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`;
+}
+/** One-line, redacted, bounded text for a public error message. */
+function boundedMessage(error, maximum = MAX_ERROR_CHARS) {
+    return sanitizeText(errorMessage(error), maximum).replace(/\s+/g, ' ').trim();
 }
 function relativePath(cwd, path) {
     return relative(cwd, path).split(sep).join('/');
@@ -2378,11 +2405,11 @@ async function startTarget(services, request) {
     const provider = services.subagents.getProvider(target.provider);
     if (provider === undefined) {
         const registered = services.subagents.list();
-        fail(`rule "${rule.id}": target "${rule.to}" names provider "${target.provider}", which is not registered; install or enable that provider, or point the rule's target at one of: ${registered.join(', ') || '(none registered)'}`);
+        throw new ConfigError(`rule "${rule.id}": target "${rule.to}" names provider "${target.provider}", which is not registered; install or enable that provider, or point the rule's target at one of: ${registered.join(', ') || '(none registered)'}`);
     }
     const agentOptions = resolveAgentOptions(target);
     if (agentOptions !== undefined && provider.capabilities.agentOptions !== true) {
-        fail(`rule "${rule.id}": target "${rule.to}" requests model/agent options, but provider "${provider.name}" does not support them; remove model/reasoningEffort/agentOptions from the target or choose a provider with agentOptions support`);
+        throw new ConfigError(`rule "${rule.id}": target "${rule.to}" requests model/agent options, but provider "${provider.name}" does not support them; remove model/reasoningEffort/agentOptions from the target or choose a provider with agentOptions support`);
     }
     const prompt = [{ type: 'text', text: request.prompt }];
     let activation;
@@ -2401,7 +2428,7 @@ async function startTarget(services, request) {
         });
     }
     catch (error) {
-        fail(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${errorMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`);
+        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`);
     }
     const model = target.model ?? agentOptions?.model;
     const reasoningEffort = target.reasoningEffort ?? agentOptions?.reasoningEffort;
@@ -2425,7 +2452,7 @@ async function finishTarget(started) {
             started.activation.result,
             new Promise((_resolve, reject) => {
                 timer = setTimeout(() => {
-                    reject(new DelegationError(`rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`));
+                    reject(new TimeoutError(`rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`));
                 }, started.timeoutMs);
             }),
         ]);

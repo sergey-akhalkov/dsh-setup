@@ -293,6 +293,30 @@ class DelegationError extends Error {
   }
 }
 
+/** A rule/target/provider configuration problem; never transient. */
+class ConfigError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConfigError'
+  }
+}
+
+/** The provider rejected a start before any child existed; retryable. */
+class ProviderStartError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProviderStartError'
+  }
+}
+
+/** The review target did not finish inside its contract timeout. */
+class TimeoutError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TimeoutError'
+  }
+}
+
 function fail(message: string): never {
   throw new DelegationError(message)
 }
@@ -1595,9 +1619,14 @@ function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
   const redacted = text
     .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
     .replace(/\\\\[^\s"'`)]+/g, '[path]')
-    .replace(/(?:^|\s)\/(?:Users|home)\/[^\s"'`)]+/g, ' [path]')
+    .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
+    .replace(/\b(?:Authorization|authorization)\s*:\s*(?:Bearer|Basic)\s+[^\s"',;]+/g, '[secret]')
     .replace(
-      /\b(?:sk-[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g,
+      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)\s*[=:]\s*[^\s"',;]+/gi,
+      '[secret]',
+    )
+    .replace(
+      /\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g,
       '[secret]',
     )
     .replace(
@@ -1605,6 +1634,11 @@ function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
       '[secret]',
     )
   return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`
+}
+
+/** One-line, redacted, bounded text for a public error message. */
+function boundedMessage(error: unknown, maximum = MAX_ERROR_CHARS): string {
+  return sanitizeText(errorMessage(error), maximum).replace(/\s+/g, ' ').trim()
 }
 
 function relativePath(cwd: string, path: string): string {
@@ -3085,13 +3119,13 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
   const provider: SubagentProvider | undefined = services.subagents.getProvider(target.provider)
   if (provider === undefined) {
     const registered = services.subagents.list()
-    fail(
+    throw new ConfigError(
       `rule "${rule.id}": target "${rule.to}" names provider "${target.provider}", which is not registered; install or enable that provider, or point the rule's target at one of: ${registered.join(', ') || '(none registered)'}`,
     )
   }
   const agentOptions = resolveAgentOptions(target)
   if (agentOptions !== undefined && provider.capabilities.agentOptions !== true) {
-    fail(
+    throw new ConfigError(
       `rule "${rule.id}": target "${rule.to}" requests model/agent options, but provider "${provider.name}" does not support them; remove model/reasoningEffort/agentOptions from the target or choose a provider with agentOptions support`,
     )
   }
@@ -3111,8 +3145,8 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
       delivery: 'caller',
     })
   } catch (error) {
-    fail(
-      `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${errorMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
+    throw new ProviderStartError(
+      `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
     )
   }
   const model = target.model ?? agentOptions?.model
@@ -3139,7 +3173,7 @@ async function finishTarget(started: StartedTarget): Promise<RunResult> {
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           reject(
-            new DelegationError(
+            new TimeoutError(
               `rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`,
             ),
           )

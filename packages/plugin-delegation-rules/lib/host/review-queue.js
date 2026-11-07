@@ -1,32 +1,54 @@
+const CHILD_LIMIT_PATTERN = /active child limit|subagent limit reached/i;
+const REVIEWED_CHANGED_PATTERN = /reviewed inputs changed/i;
+const INVALID_OUTPUT_PATTERN = /no fenced JSON verdict|fenced verdict|fenced blocks|returned no text output|verdict digest does not match|verdict must|findings must|requires zero P0\/P1 findings|requires at least one P0\/P1 finding|finding #/i;
+const CONFIG_PATTERN = /not registered|not configured|unknown rule|unknown trigger|unknown contract|unknown gate|must be|does not support|unsupported|invalid configuration|configuration must|target options/i;
+const PERMISSION_PATTERN = /permission|authori[sz]ation|access-policy|access denied|unauthorized|forbidden|approval/i;
+const TIMEOUT_PATTERN = /did not finish within|timed out|timeout/i;
+const START_REJECTION_PATTERN = /could not start|failed to start|start rejected|unavailable|capacity|limit reached/i;
 /** Provider/result classification shared with the start path. */
 export function classifyFailure(error, phase) {
     const message = error instanceof Error ? error.message : String(error);
     const retryAfterMs = retryAfterOf(error, message);
     const matched = (pattern) => pattern.test(message);
-    // Explicit reviewer-output rejections win over keywords inside the payload.
-    if (error instanceof Error && error.name === 'InvalidOutputError') {
+    const name = error instanceof Error ? error.name : '';
+    // Engine-owned typed failures win over text from rules, targets, or payloads.
+    if (name === 'InvalidOutputError')
         return { failureClass: 'invalid-output', transient: false };
-    }
-    if (matched(/active child limit|subagent limit reached/i)) {
-        return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) };
-    }
-    if (matched(/reviewed inputs changed/i)) {
-        return { failureClass: 'reviewed-inputs-changed', transient: false };
-    }
-    if (matched(/no fenced JSON verdict|fenced verdict|fenced blocks|returned no text output|verdict digest does not match|verdict must|findings must|requires zero P0\/P1 findings|requires at least one P0\/P1 finding|finding #/i)) {
-        return { failureClass: 'invalid-output', transient: false };
-    }
-    if (matched(/did not finish within|timed out|timeout/i)) {
+    if (name === 'PermissionError')
+        return { failureClass: 'permission', transient: false };
+    if (name === 'ConfigError')
+        return { failureClass: 'config', transient: false };
+    if (name === 'TimeoutError') {
         return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) };
     }
-    if (matched(/not registered|not configured|unknown rule|unknown trigger|unknown contract|unknown gate|must be|does not support|unsupported|invalid configuration|configuration must|target options/i)) {
+    if (name === 'ProviderStartError') {
+        if (matched(CHILD_LIMIT_PATTERN)) {
+            return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) };
+        }
+        if (matched(CONFIG_PATTERN))
+            return { failureClass: 'config', transient: false };
+        if (matched(PERMISSION_PATTERN))
+            return { failureClass: 'permission', transient: false };
+        return { failureClass: 'provider-not-started', transient: true, ...retryEvidence(retryAfterMs) };
+    }
+    // Untyped text is untrusted and may embed rule ids or payload keywords, so
+    // the permanent checks run before the transient keyword checks.
+    if (matched(CHILD_LIMIT_PATTERN)) {
+        return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) };
+    }
+    if (matched(REVIEWED_CHANGED_PATTERN)) {
+        return { failureClass: 'reviewed-inputs-changed', transient: false };
+    }
+    if (matched(INVALID_OUTPUT_PATTERN))
+        return { failureClass: 'invalid-output', transient: false };
+    if (matched(CONFIG_PATTERN))
         return { failureClass: 'config', transient: false };
-    }
-    if (matched(/permission|authori[sz]ation|approval denied|access denied|forbidden|not authorized/i)) {
+    if (matched(PERMISSION_PATTERN))
         return { failureClass: 'permission', transient: false };
+    if (matched(TIMEOUT_PATTERN)) {
+        return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) };
     }
-    if (phase === 'start' &&
-        matched(/could not start|failed to start|start rejected|unavailable|capacity|limit reached/i)) {
+    if (phase === 'start' && matched(START_REJECTION_PATTERN)) {
         return { failureClass: 'provider-not-started', transient: true, ...retryEvidence(retryAfterMs) };
     }
     return { failureClass: 'unknown', transient: false, ...retryEvidence(retryAfterMs) };

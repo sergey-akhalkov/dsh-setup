@@ -1461,6 +1461,90 @@ describe('review failure classification', () => {
     })
   })
 
+  it('classifies a missing provider as config even when the rule name contains timeout', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    const harness = await harnessFor(
+      root,
+      {
+        targets: { codex: { provider: 'missing-provider' } },
+        rules: [
+          {
+            id: 'timeout-review',
+            when: 'spec-ready',
+            to: 'codex',
+            contract: 'review',
+            phase: 'spec',
+            scope: 'whole',
+            gate: 'strict',
+            instruction: 'bundled:review-spec',
+          },
+        ],
+      },
+      subagents,
+    )
+    await expect(
+      harness.startReview({ rule: 'timeout-review', change: 'change-a' }),
+    ).rejects.toThrow(/not registered/)
+
+    const runs = await readdir(join(root, '.dsh', 'delegation', 'runs'))
+    expect(runs).toHaveLength(1)
+    const run = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', runs[0] as string), 'utf8'),
+    ) as { failureClass: string; attempts: number }
+    expect(run.failureClass).toBe('config')
+    expect(run.attempts).toBe(1)
+  })
+
+  it('maps a provider authorization diagnostic to permission', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, () => ({
+      output: [],
+      stopReason: 'error' as const,
+      diagnostic: 'category: access-policy',
+    }))
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const run = await readRun(root, runId)
+    expect(run.failureClass).toBe('permission')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { error: string }
+    expect(record.error).toContain('access-policy')
+  })
+
+  it('bounds and redacts an immediate start rejection', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error(
+      `permission denied: Authorization: Bearer synthetic-example-value api_key=sk-proj-${'a'.repeat(40)} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
+    )
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+
+    let thrown: Error | undefined
+    try {
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' })
+    } catch (error) {
+      thrown = error as Error
+    }
+    expect(thrown).toBeDefined()
+    const message = thrown?.message ?? ''
+    expect(message).not.toContain('synthetic-example-value')
+    expect(message).not.toContain('sk-proj-')
+    expect(message).not.toContain('C:\\Users')
+    expect(message).not.toContain('\n')
+    expect(message.length).toBeLessThan(4_500)
+  })
+
   it('classifies malformed provider output as invalid-output', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
@@ -1507,7 +1591,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 ${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value api_key=sk-proj-${'a'.repeat(40)} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1526,6 +1610,9 @@ describe('review failure classification', () => {
     expect(record.error).toContain('[path]')
     expect(record.error).toContain('[secret]')
     expect(record.error).not.toContain('sk-abcdefgh12345678')
+    expect(record.error).not.toContain('synthetic-example-value')
+    expect(record.error).not.toContain('sk-proj-')
+    expect(record.error).not.toContain('/tmp/review')
     expect(record.error).not.toContain('C:\\Users')
     expect(record.error.length).toBe(4_000)
   })
