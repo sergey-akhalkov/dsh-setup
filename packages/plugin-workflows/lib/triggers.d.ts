@@ -29,5 +29,11 @@ export interface Trigger {
 export declare function validateCatalog(raw: unknown): Trigger[];
 /** Read and validate one catalog file. */
 export declare function readCatalog(file: string): Trigger[];
+/**
+ * The shipped catalog path. It resolves from both layouts: `src/host` during a
+ * source test (two levels to the package root) and `lib` after compilation (one
+ * level), so the built plugin never points outside itself.
+ */
+export declare function catalogPath(): string;
 /** Load the shipped catalog from this package's assets. */
 export declare function loadCatalog(): Trigger[];

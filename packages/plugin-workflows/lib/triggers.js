@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 /**
  * The shipped shadow trigger catalog. Triggers are data only: loading,
@@ -98,7 +98,23 @@ export function readCatalog(file) {
     }
     return validateCatalog(raw);
 }
+/**
+ * The shipped catalog path. It resolves from both layouts: `src/host` during a
+ * source test (two levels to the package root) and `lib` after compilation (one
+ * level), so the built plugin never points outside itself.
+ */
+export function catalogPath() {
+    const candidates = [
+        fileURLToPath(new URL('../../assets/triggers/catalog.json', import.meta.url)),
+        fileURLToPath(new URL('../assets/triggers/catalog.json', import.meta.url)),
+    ];
+    const found = candidates.find((candidate) => existsSync(candidate));
+    if (found === undefined) {
+        throw new Error(`workflow trigger catalog was not found at ${candidates.join(' or ')}`);
+    }
+    return found;
+}
 /** Load the shipped catalog from this package's assets. */
 export function loadCatalog() {
-    return readCatalog(fileURLToPath(new URL('../../assets/triggers/catalog.json', import.meta.url)));
+    return readCatalog(catalogPath());
 }

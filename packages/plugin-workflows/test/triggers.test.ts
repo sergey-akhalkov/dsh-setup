@@ -1,5 +1,10 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { EVENT_KINDS, loadCatalog, validateCatalog } from '../src/host/triggers.ts'
+
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
 describe('shadow trigger catalog', () => {
   it('loads the shipped catalog with every supported event kind', () => {
@@ -18,6 +23,15 @@ describe('shadow trigger catalog', () => {
     expect(tasks?.filter.path).toBe('openspec/changes/**/tasks.md')
     expect(tasks?.filter.change).toBe('created-or-modified')
     expect(tasks?.dedupe).toBe('path+content-hash')
+  })
+
+  it('loads the catalog from the compiled lib layout too', async () => {
+    const compiled = join(packageDir, 'lib', 'triggers.js')
+    if (!existsSync(compiled)) throw new Error('run `pnpm build` before this test')
+    const module = (await import(pathToFileURL(compiled).href)) as {
+      loadCatalog(): unknown[]
+    }
+    expect(module.loadCatalog()).toHaveLength(loadCatalog().length)
   })
 
   it('accepts a valid trigger without a filter', () => {
