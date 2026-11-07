@@ -40,6 +40,54 @@ function proposal(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** A store just under the 1 MB cap: 199 applied lessons plus one last record. */
+async function writeNearCapStore(
+  root: string,
+  lastStatus: 'proposed' | 'accepted',
+): Promise<{ id: string; raw: string }> {
+  const path = lessonStorePath(root)
+  await mkdir(dirname(path), { recursive: true })
+  const filler = Array.from({ length: 199 }, (_, index) => ({
+    v: 1,
+    id: `lesson-${String(index).padStart(4, '0')}`,
+    class: 'other',
+    title: `Filler ${index}`,
+    body: 'x'.repeat(4_000),
+    appliesTo: { rules: [], capabilities: [] },
+    status: 'applied',
+    source: {},
+    createdAt: index,
+    decidedAt: index,
+    appliedIn: 'openspec/specs/filler/spec.md',
+  }))
+  const last = {
+    v: 1,
+    id: 'lesson-9999',
+    class: 'other',
+    title: 'Last lesson',
+    body: '',
+    appliesTo: { rules: [], capabilities: [] },
+    status: lastStatus,
+    source: {},
+    createdAt: 1_000,
+    ...(lastStatus === 'accepted' ? { decidedAt: 1_000 } : {}),
+  }
+  const base = [...filler, last]
+  const target = 999_990
+  const padding = Math.max(
+    target - Buffer.byteLength(`${base.map((r) => JSON.stringify(r)).join('\n')}\n`),
+    0,
+  )
+  const records = base.map((record, index) =>
+    index === base.length - 1 ? { ...record, body: 'x'.repeat(padding) } : record,
+  )
+  const raw = `${records.map((record) => JSON.stringify(record)).join('\n')}\n`
+  expect(Buffer.byteLength(raw)).toBeGreaterThan(990_000)
+  expect(Buffer.byteLength(raw)).toBeLessThan(1_000_000)
+  await writeFile(path, raw, 'utf8')
+  return { id: 'lesson-9999', raw }
+}
+
 describe('lesson store', () => {
   it('round-trips a proposed lesson and counts a malformed line', async () => {
     const root = await workspace()
@@ -158,6 +206,47 @@ describe('lesson store', () => {
     expect((await readLessons(root)).lessons).toHaveLength(1)
   })
 
+  it('evicts down to the byte cap when the count cap allows the write', async () => {
+    const root = await workspace()
+    const path = lessonStorePath(root)
+    await mkdir(dirname(path), { recursive: true })
+    const lines = Array.from({ length: 520 }, (_, index) =>
+      JSON.stringify({
+        v: 1,
+        id: `lesson-${String(index).padStart(4, '0')}`,
+        class: 'other',
+        title: `Filler ${index}`,
+        body: 'x'.repeat(1_900),
+        appliesTo: { rules: [], capabilities: [] },
+        status: 'proposed',
+        source: {},
+        createdAt: index,
+      }),
+    )
+    await writeFile(path, `${lines.join('\n')}\n`, 'utf8')
+    expect((await readFile(path, 'utf8')).length).toBeGreaterThan(1_000_000)
+
+    const created = await proposeLesson(
+      root,
+      proposal({ title: 'After byte cap', maxLessons: 1_000 }),
+    )
+    expect(created.kind).toBe('created')
+    const { lessons } = await readLessons(root)
+    expect(lessons.length).toBeLessThan(520)
+    expect(lessons.map((lesson) => lesson.title)).toContain('After byte cap')
+  })
+
+  it('keeps a machine path out of every stored field', async () => {
+    const root = await workspace()
+    await expect(proposeLesson(root, proposal({ title: `See ${WINDOWS_SECRET}` }))).rejects.toThrow(
+      /machine path/,
+    )
+    await expect(
+      proposeLesson(root, proposal({ source: { change: WINDOWS_SECRET } })),
+    ).rejects.toThrow(/machine path/)
+    expect((await readLessons(root)).lessons).toHaveLength(0)
+  })
+
   it('refuses an applied-only full store with capacity and leaves it unchanged', async () => {
     const root = await workspace()
     const first = await proposeLesson(root, proposal({ title: 'Applied one', now: 1 }))
@@ -196,6 +285,42 @@ describe('lesson store', () => {
       proposeLesson(root, proposal({ body: `Use sk-${'ABCDEFGH12345678'} for auth.` })),
     ).rejects.toThrow(/credential/)
     expect((await readLessons(root)).lessons).toHaveLength(0)
+  })
+
+  it('updates the existing proposed revision on repeated proposals after acceptance', async () => {
+    const root = await workspace()
+    const accepted = await proposeLesson(root, proposal())
+    await decideLesson(root, accepted.lesson.id, 'accepted', 2)
+    const revision = await proposeLesson(root, proposal({ body: 'Revision one.', now: 3 }))
+    expect(revision.kind).toBe('revision')
+    const repeated = await proposeLesson(root, proposal({ body: 'Revision two.', now: 4 }))
+    expect(repeated.kind).toBe('updated')
+    const { lessons } = await readLessons(root)
+    expect(lessons.filter((lesson) => lesson.status === 'proposed')).toHaveLength(1)
+    expect(lessons.find((lesson) => lesson.id === revision.lesson.id)?.body).toBe('Revision two.')
+    expect(lessons.find((lesson) => lesson.id === accepted.lesson.id)?.status).toBe('accepted')
+  })
+
+  it('refuses a decision that would exceed the byte cap and leaves the store unchanged', async () => {
+    const root = await workspace()
+    const { id, raw } = await writeNearCapStore(root, 'proposed')
+    await expect(decideLesson(root, id, 'accepted', 5_000)).rejects.toThrow(/capacity/)
+    expect(await readFile(lessonStorePath(root), 'utf8')).toBe(raw)
+    expect((await readLessons(root)).lessons.find((lesson) => lesson.id === id)?.status).toBe(
+      'proposed',
+    )
+  })
+
+  it('refuses an application that would exceed the byte cap and leaves the store unchanged', async () => {
+    const root = await workspace()
+    const { id, raw } = await writeNearCapStore(root, 'accepted')
+    await expect(applyLesson(root, id, 'openspec/specs/a/spec.md', 6_000)).rejects.toThrow(
+      /capacity/,
+    )
+    expect(await readFile(lessonStorePath(root), 'utf8')).toBe(raw)
+    expect((await readLessons(root)).lessons.find((lesson) => lesson.id === id)?.status).toBe(
+      'accepted',
+    )
   })
 
   it('writes only untracked local scratch under .dsh', async () => {

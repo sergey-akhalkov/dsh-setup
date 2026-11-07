@@ -369,7 +369,15 @@ export async function proposeLesson(
 
   return serialized(path, async () => {
     const { lessons } = await readLessons(workspaceRoot)
-    const existing = lessons.find((lesson) => lessonDedupeKey(lesson) === key)
+    const matches = lessons.filter((lesson) => lessonDedupeKey(lesson) === key)
+    // Prefer an existing proposed revision so repeated proposals keep updating
+    // one record instead of appending a new revision beside the accepted one.
+    const existing =
+      matches
+        .filter((lesson) => lesson.status === 'proposed')
+        .sort((left, right) => right.createdAt - left.createdAt)[0] ??
+      matches.find((lesson) => lesson.status === 'accepted' || lesson.status === 'applied') ??
+      matches[0]
     const record: Lesson = {
       v: 1,
       id: `lesson-${randomUUID().slice(0, 16)}`,
@@ -446,6 +454,7 @@ export async function decideLesson(
   id: string,
   decision: 'accepted' | 'rejected',
   now: number,
+  maxLessons = DEFAULT_MAX_LESSONS,
 ): Promise<Lesson> {
   const path = lessonStorePath(workspaceRoot)
   return serialized(path, async () => {
@@ -459,7 +468,11 @@ export async function decideLesson(
     const next: Lesson = { ...lesson, status: decision, decidedAt: now }
     await writeLessons(
       path,
-      lessons.map((entry) => (entry.id === id ? next : entry)),
+      enforceCapacity(
+        lessons.map((entry) => (entry.id === id ? next : entry)),
+        maxLessons,
+        id,
+      ),
     )
     return next
   })
@@ -471,6 +484,7 @@ export async function applyLesson(
   id: string,
   target: string,
   now: number,
+  maxLessons = DEFAULT_MAX_LESSONS,
 ): Promise<Lesson> {
   const appliedIn = requireText(target, 'lesson target', 300)
   const path = lessonStorePath(workspaceRoot)
@@ -485,7 +499,11 @@ export async function applyLesson(
     const next: Lesson = { ...lesson, status: 'applied', appliedIn, decidedAt: now }
     await writeLessons(
       path,
-      lessons.map((entry) => (entry.id === id ? next : entry)),
+      enforceCapacity(
+        lessons.map((entry) => (entry.id === id ? next : entry)),
+        maxLessons,
+        id,
+      ),
     )
     return next
   })
