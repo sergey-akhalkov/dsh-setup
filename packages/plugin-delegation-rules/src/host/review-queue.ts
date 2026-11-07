@@ -212,7 +212,14 @@ function retryAfterOf(error: unknown, message: string): number | undefined {
       return Math.round(value)
     }
   }
-  const match = /retry[- ]after[:= ]+([0-9]+)\s*(ms|s)?/i.exec(message)
+  // Provider details may be passed separately so the public message can stay
+  // bounded; the hint is still read from the untruncated diagnostic.
+  let text = message
+  if (typeof error === 'object' && error !== null) {
+    const full = (error as { providerMessage?: unknown }).providerMessage
+    if (typeof full === 'string') text = full
+  }
+  const match = /retry[- ]after[:= ]+([0-9]+)\s*(ms|s)?/i.exec(text)
   if (match === null) return undefined
   const value = Number(match[1])
   if (!Number.isFinite(value) || value <= 0) return undefined

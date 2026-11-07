@@ -88,7 +88,15 @@ function retryAfterOf(error, message) {
             return Math.round(value);
         }
     }
-    const match = /retry[- ]after[:= ]+([0-9]+)\s*(ms|s)?/i.exec(message);
+    // Provider details may be passed separately so the public message can stay
+    // bounded; the hint is still read from the untruncated diagnostic.
+    let text = message;
+    if (typeof error === 'object' && error !== null) {
+        const full = error.providerMessage;
+        if (typeof full === 'string')
+            text = full;
+    }
+    const match = /retry[- ]after[:= ]+([0-9]+)\s*(ms|s)?/i.exec(text);
     if (match === null)
         return undefined;
     const value = Number(match[1]);

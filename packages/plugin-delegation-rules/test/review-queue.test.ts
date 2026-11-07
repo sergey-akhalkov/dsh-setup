@@ -2247,4 +2247,77 @@ describe('review retry-after and run retries', () => {
       vi.restoreAllMocks()
     }
   })
+  it('honors retry-after from the untruncated provider detail on both paths', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0)
+      const detail = `${'x'.repeat(4_000)}; subagent limit reached (active child limit: 8); retry after 60 s`
+
+      const rootA = await workspace()
+      await writeChange(rootA, 'change-a', [])
+      const agentsA = new FakeSubagents()
+      agentsA.addProvider('codex-subagent')
+      const originalA = agentsA.startActivation.bind(agentsA)
+      let startsA = 0
+      agentsA.startActivation = async (spec) => {
+        startsA += 1
+        if (startsA === 1) throw new Error(detail)
+        return originalA(spec)
+      }
+      const harnessA = await harnessFor(
+        rootA,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+        },
+        agentsA,
+      )
+      const handleA = await harnessA.toolText('delegate', {
+        rule: 'spec-review',
+        change: 'change-a',
+      })
+      expect(handleA).toContain('review retrying')
+      await flush()
+      await vi.advanceTimersByTimeAsync(999)
+      await flush()
+      expect(startsA).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await flush()
+      expect(startsA).toBe(2)
+      expect(await harnessA.waitForRun(runIdFrom(handleA))).toContain('state=completed')
+
+      const rootB = await workspace()
+      await writeChange(rootB, 'change-a', [])
+      const agentsB = new FakeSubagents()
+      let callsB = 0
+      agentsB.addProvider('codex-subagent', {}, (run) => {
+        callsB += 1
+        if (callsB === 1) {
+          return { output: [], stopReason: 'error' as const, diagnostic: detail }
+        }
+        return passResponder(run)
+      })
+      const harnessB = await harnessFor(
+        rootB,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+        },
+        agentsB,
+      )
+      const runB = await harnessB.startReview({ rule: 'spec-review', change: 'change-a' })
+      await flush()
+      await vi.advanceTimersByTimeAsync(999)
+      await flush()
+      expect(callsB).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await flush()
+      expect(callsB).toBe(2)
+      expect(await harnessB.waitForRun(runB)).toContain('state=completed')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
 })
