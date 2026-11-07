@@ -250,6 +250,8 @@ export interface HarnessOptions {
   observeSettlements?: boolean
   /** Throws before admission to exercise the queue-internal-error fallback. */
   queueFault?: () => void
+  /** Delays the once-per-workspace recovery scan. */
+  recoverDelay?: () => Promise<void>
 }
 
 type ContextEvent = (...args: unknown[]) => unknown
@@ -326,6 +328,7 @@ export class Harness {
         ? {}
         : { onRunSettled: (runId, state) => this.recordSettlement(runId, state) }),
       ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
+      ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
     })
   }
 

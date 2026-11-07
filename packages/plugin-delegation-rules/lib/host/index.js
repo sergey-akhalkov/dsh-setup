@@ -2694,7 +2694,7 @@ class DelegationEngine {
     config;
     services;
     runs = new Map();
-    recoveredWorkspaces = new Set();
+    recoveryPromises = new Map();
     queue;
     constructor(config, services) {
         this.config = config;
@@ -3515,11 +3515,22 @@ class DelegationEngine {
     async recoverWorkspace(workspaceRoot) {
         await this.ensureRecovered(workspaceRoot);
     }
-    /** Reconcile crashed run files from the authoritative records once per workspace. */
+    /** Every caller waits for the same reconciliation before admitting new runs. */
     async ensureRecovered(workspaceRoot) {
-        if (this.recoveredWorkspaces.has(workspaceRoot))
-            return;
-        this.recoveredWorkspaces.add(workspaceRoot);
+        const existing = this.recoveryPromises.get(workspaceRoot);
+        if (existing !== undefined)
+            return existing;
+        const recovery = this.recoverOnce(workspaceRoot);
+        this.recoveryPromises.set(workspaceRoot, recovery);
+        try {
+            await recovery;
+        }
+        catch {
+            this.recoveryPromises.delete(workspaceRoot);
+        }
+    }
+    async recoverOnce(workspaceRoot) {
+        await this.services.recoverDelay?.();
         for (const run of await listAllRunFiles(workspaceRoot)) {
             if (!isActiveRunState(run.state))
                 continue;
@@ -4978,6 +4989,7 @@ export function apply(ctx, config = {}, options = {}) {
         timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
         ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
         ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
+        ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);

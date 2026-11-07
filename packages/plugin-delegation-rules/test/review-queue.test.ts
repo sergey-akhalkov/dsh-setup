@@ -4360,3 +4360,55 @@ describe('restart recovery', () => {
     }
   })
 })
+
+describe('recovery serialization', () => {
+  it('makes concurrent admission wait for the workspace scan', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const runsDir = join(root, '.dsh', 'delegation', 'runs')
+    await mkdir(runsDir, { recursive: true })
+    await writeFile(
+      join(runsDir, 'run-stale.json'),
+      JSON.stringify({
+        id: 'run-stale',
+        rule: 'spec-review',
+        change: 'change-a',
+        key: 'k-a',
+        identity: 'i-a',
+        state: 'running',
+        record: '.dsh/delegation/spec-review/change-a/spec.json',
+        startedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, passResponder)
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const harness = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: subagents,
+      recoverDelay: () => blocked,
+    })
+    const recovery = harness.preStep(1)
+    const admission = harness.startReview({ rule: 'spec-review', change: 'change-b' })
+    await new Promise((resolve) => {
+      realSetTimeout(resolve, 20)
+    })
+    expect(await readdir(runsDir)).toHaveLength(1)
+
+    release()
+    await recovery
+    const runId = await admission
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const stale = JSON.parse(await readFile(join(runsDir, 'run-stale.json'), 'utf8')) as {
+      state: string
+    }
+    expect(stale.state).toBe('interrupted')
+  })
+})

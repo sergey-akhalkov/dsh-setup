@@ -98,6 +98,8 @@ export interface ApplyOptions {
     onRunSettled?: (runId: string, state: SettledRunState) => void;
     /** Test seam: throws before admission to simulate an internal queue failure. */
     queueFault?: () => void;
+    /** Test seam: delays the once-per-workspace recovery scan. */
+    recoverDelay?: () => Promise<void>;
 }
 /** Terminal review-run states reported to the settlement observer. */
 export type SettledRunState = 'completed' | 'failed' | 'discarded';

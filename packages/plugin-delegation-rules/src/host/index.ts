@@ -266,6 +266,8 @@ export interface ApplyOptions {
   onRunSettled?: (runId: string, state: SettledRunState) => void
   /** Test seam: throws before admission to simulate an internal queue failure. */
   queueFault?: () => void
+  /** Test seam: delays the once-per-workspace recovery scan. */
+  recoverDelay?: () => Promise<void>
 }
 
 /** Terminal review-run states reported to the settlement observer. */
@@ -3125,6 +3127,8 @@ interface EngineServices {
   onRunSettled?: (runId: string, state: SettledRunState) => void
   /** Test seam: throws before admission to simulate an internal queue failure. */
   queueFault?: () => void
+  /** Test seam: delays the once-per-workspace recovery scan. */
+  recoverDelay?: () => Promise<void>
   /** Set by the engine after construction so the gate can see pending review runs. */
   pendingReview?: (
     workspaceRoot: string,
@@ -3489,7 +3493,7 @@ interface ToolAgentContext {
 /** The engine behind the three tools: validation, target runs, records, status. */
 class DelegationEngine {
   private readonly runs = new Map<string, ManagedRun>()
-  private readonly recoveredWorkspaces = new Set<string>()
+  private readonly recoveryPromises = new Map<string, Promise<void>>()
   private readonly queue: ReviewQueue<ManagedRun>
 
   constructor(
@@ -4534,10 +4538,21 @@ class DelegationEngine {
     await this.ensureRecovered(workspaceRoot)
   }
 
-  /** Reconcile crashed run files from the authoritative records once per workspace. */
+  /** Every caller waits for the same reconciliation before admitting new runs. */
   private async ensureRecovered(workspaceRoot: string): Promise<void> {
-    if (this.recoveredWorkspaces.has(workspaceRoot)) return
-    this.recoveredWorkspaces.add(workspaceRoot)
+    const existing = this.recoveryPromises.get(workspaceRoot)
+    if (existing !== undefined) return existing
+    const recovery = this.recoverOnce(workspaceRoot)
+    this.recoveryPromises.set(workspaceRoot, recovery)
+    try {
+      await recovery
+    } catch {
+      this.recoveryPromises.delete(workspaceRoot)
+    }
+  }
+
+  private async recoverOnce(workspaceRoot: string): Promise<void> {
+    await this.services.recoverDelay?.()
     for (const run of await listAllRunFiles(workspaceRoot)) {
       if (!isActiveRunState(run.state)) continue
       const current = await inspectRecord(join(workspaceRoot, run.record))
@@ -6281,6 +6296,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
     timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
     ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
     ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
+    ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
   }
   const engine = new DelegationEngine(validated, services)
   services.pendingReview = (workspaceRoot, ruleId, change, taskId) =>
