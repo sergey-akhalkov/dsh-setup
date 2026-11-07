@@ -363,6 +363,51 @@ describe('review queue admission', () => {
     })
     queue.dispose()
   })
+
+  it('settles a retry that cannot re-enter the full waiting list', async () => {
+    let firstStart = true
+    const hooks = {
+      start: vi.fn(async (run: QueueRun) => {
+        if (run.file.id === 'run-a' && firstStart) {
+          firstStart = false
+          throw new Error('subagent limit reached (active child limit: 8)')
+        }
+      }),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 1,
+        maxAttempts: 3,
+        baseDelayMs: 5,
+        maxDelayMs: 10,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const retrying = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(retrying)).toEqual({ kind: 'accepted', phase: 'retry-wait' })
+    expect(await queue.submit(fakeRun('run-b', 'key-b', 'identity-b'))).toEqual({
+      kind: 'accepted',
+      phase: 'running',
+    })
+    const waiting = fakeRun('run-c', 'key-c', 'identity-c')
+    expect(await queue.submit(waiting)).toEqual({ kind: 'accepted', phase: 'queued' })
+
+    await vi.waitFor(() => {
+      expect(hooks.settled).toHaveBeenCalledWith(retrying, 'failed')
+    })
+    expect(hooks.fail).toHaveBeenCalledWith(retrying, expect.any(Error), 'queue-timeout')
+    expect(queue.summary().queued).toBe(1)
+    expect(waiting.file.queuePosition).toBe(1)
+    queue.dispose()
+  })
 })
 
 describe('review queue cancellation', () => {

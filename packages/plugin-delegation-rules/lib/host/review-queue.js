@@ -188,12 +188,13 @@ export class ReviewQueue {
      * Re-enter a transiently failed run after its backoff. The caller has already
      * persisted `retry-wait`; this releases the slot and arms the retry timer.
      */
-    scheduleRetry(run, failure) {
+    scheduleRetry(run, failure, error) {
         const entry = this.entries.get(run.file.id);
         if (entry === undefined || entry.finished)
             return;
         entry.failureClass = failure.failureClass;
         entry.retryAfterMs = failure.retryAfterMs;
+        entry.lastError = error;
         entry.phase = 'retry-wait';
         this.active.delete(entry);
         run.file.state = 'retry-wait';
@@ -204,15 +205,24 @@ export class ReviewQueue {
         const token = ++entry.retryToken;
         const delay = retryDelayMs(entry.attempts, this.limits, failure.retryAfterMs);
         entry.timer = setTimeout(() => {
-            if (entry.finished || entry.retryToken !== token)
-                return;
-            entry.phase = 'queued';
-            delete run.file.failureClass;
-            this.waiting.push(entry);
-            this.waiting.sort((left, right) => left.seq - right.seq);
-            this.syncPositions();
-            this.pump();
+            this.retryDue(entry, token);
         }, delay);
+        this.pump();
+    }
+    /** Re-enter the waiting list, or settle visibly when the waiting list is full. */
+    retryDue(entry, token) {
+        if (entry.finished || entry.retryToken !== token)
+            return;
+        if (this.limits.enabled && this.waiting.length >= this.limits.maxQueued) {
+            const cause = entry.lastError ?? new Error('the retry could not re-enter the full review queue');
+            void this.failEntry(entry, cause, 'queue-timeout');
+            return;
+        }
+        entry.phase = 'queued';
+        delete entry.run.file.failureClass;
+        this.waiting.push(entry);
+        this.waiting.sort((left, right) => left.seq - right.seq);
+        this.syncPositions();
         this.pump();
     }
     /** Attempts this run has already used, for the retry budget decision. */
@@ -352,7 +362,7 @@ export class ReviewQueue {
             const failure = classifyFailure(error, 'start');
             entry.failureClass = failure.failureClass;
             if (this.limits.enabled && failure.transient && entry.attempts < this.limits.maxAttempts) {
-                this.scheduleRetry(entry.run, failure);
+                this.scheduleRetry(entry.run, failure, error);
                 return;
             }
             entry.startError = error;
