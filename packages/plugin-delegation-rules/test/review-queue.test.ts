@@ -2,7 +2,12 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { specDigest } from '../src/host/index.js'
-import { classifyFailure, type QueueRun, ReviewQueue } from '../src/host/review-queue.js'
+import {
+  classifyFailure,
+  type QueueRun,
+  ReviewQueue,
+  retryDelayMs,
+} from '../src/host/review-queue.js'
 import {
   type BundleConfigLike,
   defaultTestConfig,
@@ -21,6 +26,9 @@ interface Workspace {
   root: string
   cleanup: () => Promise<void>
 }
+
+/** Captured before any fake timers: lets a test flush real I/O after advancing. */
+const realSetTimeout = globalThis.setTimeout
 
 function deferred() {
   const releases: Array<() => void> = []
@@ -1847,5 +1855,83 @@ describe('review failure classification', () => {
     expect(record.findings[0]?.fix).toBe(
       'Cookie handling must validate the session before redirect',
     )
+  })
+})
+
+describe('review retry policy', () => {
+  it('applies exponential backoff, full jitter, and the max delay cap', () => {
+    const limits = { baseDelayMs: 100, maxDelayMs: 1_000 }
+    expect(retryDelayMs(1, limits, undefined, () => 1)).toBe(100)
+    expect(retryDelayMs(1, limits, undefined, () => 0)).toBe(50)
+    expect(retryDelayMs(2, limits, undefined, () => 1)).toBe(200)
+    expect(retryDelayMs(3, limits, undefined, () => 1)).toBe(400)
+    expect(retryDelayMs(10, limits, undefined, () => 1)).toBe(1_000)
+    // A provider retry-after larger than the jittered delay wins, still capped.
+    expect(retryDelayMs(1, limits, 700, () => 0)).toBe(700)
+    expect(retryDelayMs(1, limits, 5_000, () => 1)).toBe(1_000)
+  })
+
+  it('retries a transient start failure up to maxAttempts on a fake clock', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent')
+      let attempts = 0
+      subagents.startActivation = async () => {
+        attempts += 1
+        throw new Error('subagent limit reached (active child limit: 8)')
+      }
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 200 },
+        },
+        subagents,
+      )
+      const handle = await harness.toolText('delegate', {
+        rule: 'spec-review',
+        change: 'change-a',
+      })
+      const runId = runIdFrom(handle)
+      expect(handle).toContain('review retrying')
+      expect(handle).toContain('failure class: child-limit')
+      expect(attempts).toBe(1)
+
+      // Fake timers drive the backoff; real I/O still needs a real tick.
+      const flush = (): Promise<void> =>
+        new Promise((resolve) => {
+          realSetTimeout(resolve, 5)
+        })
+      await vi.advanceTimersByTimeAsync(99)
+      expect(attempts).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await flush()
+      expect(attempts).toBe(2)
+      await vi.advanceTimersByTimeAsync(199)
+      expect(attempts).toBe(2)
+      await vi.advanceTimersByTimeAsync(1)
+      await flush()
+      expect(attempts).toBe(3)
+
+      expect(await harness.waitForRun(runId)).toContain('state=failed')
+      const run = await readRun(root, runId)
+      expect(run.attempts).toBe(3)
+      expect(run.failureClass).toBe('child-limit')
+      const record = JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+          'utf8',
+        ),
+      ) as { verdict: string }
+      expect(record.verdict).toBe('ERROR')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
   })
 })
