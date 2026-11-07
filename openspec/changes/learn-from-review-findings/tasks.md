@@ -25,7 +25,7 @@ The change is one lane: every group edits the shared `packages/plugin-delegation
 ## 4. Deterministic retro report and metric (owns `packages/plugin-delegation-rules/src/host/retro.ts`, `packages/plugin-delegation-rules/src/host/finding-history.ts`, `packages/plugin-delegation-rules/test/retro.test.ts`, `packages/plugin-delegation-rules/test/finding-history.test.ts`)
 
 - [x] 4.1 Add `review_retro` `report` reading the sanitized finding history (default 50, max 200), returning counts, top class, up to three bounded examples, and skipped/malformed and gap counts; verify a mixed window, an empty window, a malformed record, a gap marker, and a FINDINGS then PASS sequence that still sees the findings.
-- [ ] 4.2 Implement the normalized title hash, the repeat count and rate per class, and the 4000-character output bound; verify a repeated title counts, a first occurrence does not, and a long report is truncated with a marker.
+- [x] 4.2 Implement the normalized title hash, the repeat count and rate per class, and the 4000-character output bound; verify a repeated title counts, a first occurrence does not, and a long report is truncated with a marker.
 - [ ] 4.3 Add `propose` producing at most one draft with title, body, `appliesTo`, and source finding hashes; verify no model call, no file edit, and that a duplicate draft merges by the store key.
 - [ ] 4.4 Add a FINDINGS then PASS history fixture and verify the retro report counts the earlier finding once even though the current review record is PASS.
 

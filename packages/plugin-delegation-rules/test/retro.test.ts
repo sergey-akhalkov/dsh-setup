@@ -189,6 +189,35 @@ describe('retro report', () => {
     }
   })
 
+  it('does not count equivalent titles inside one record as a repeat', () => {
+    const report = buildRetroReport([
+      entry({
+        findings: [finding({ title: 'Same title' }), finding({ title: 'same  TITLE!' })],
+      }),
+    ])
+    expect(report.classes[0]).toMatchObject({ count: 2, repeats: 0, rate: 0 })
+  })
+
+  it('rejects a bound too small for the marker and keeps a valid small bound', async () => {
+    const root = await workspace()
+    await writeHistory(root, [
+      entry({ findings: [finding(), finding({ class: 'security', title: 'x'.repeat(300) })] }),
+    ])
+    expect(() => buildRetroReport([entry()], { maxChars: 16 })).toThrow(/at least/)
+    await expect(
+      executeReviewRetro(
+        { action: 'report' },
+        { workspaceRoot: root, now: () => new Date(1_000), maxChars: 16 },
+      ),
+    ).rejects.toThrow(/at least/)
+    const bounded = buildRetroReport(
+      [entry({ findings: [finding(), finding({ class: 'security', title: 'x'.repeat(300) })] })],
+      { maxChars: 40 },
+    )
+    expect(bounded.text.length).toBeLessThanOrEqual(40)
+    expect(bounded.text.endsWith('… (truncated)')).toBe(true)
+  })
+
   it('bounds the report and marks a truncated output', () => {
     const long = 'x'.repeat(300)
     const findings = FINDING_CLASSES.flatMap((findingClass) =>

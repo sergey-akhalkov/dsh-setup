@@ -84,11 +84,14 @@ export function buildRetroReport(
 
   for (const entry of entries) {
     if (entry.kind !== 'run') continue
+    const currentHashes = new Map<string, number>()
     for (const finding of entry.findings) {
       findings += 1
       const key = findingTitleHash(finding)
+      // Only earlier records make a finding a repeat; duplicates inside one
+      // record are first occurrences of that record.
       const previous = seen.get(key) ?? 0
-      seen.set(key, previous + 1)
+      currentHashes.set(key, (currentHashes.get(key) ?? 0) + 1)
       const bucket = counts.get(finding.class) ?? { count: 0, repeats: 0 }
       bucket.count += 1
       if (previous > 0) {
@@ -117,6 +120,7 @@ export function buildRetroReport(
         examples.set(finding.class, list)
       }
     }
+    for (const [key, count] of currentHashes) seen.set(key, (seen.get(key) ?? 0) + count)
   }
 
   const classes = [...counts.entries()]
@@ -187,8 +191,21 @@ export function buildRetroReport(
     ...(topClass === undefined ? {} : { topClass }),
     examples: topExamples,
     ...(draft === undefined ? {} : { draft }),
-    text: text.length <= maximum ? text : `${text.slice(0, maximum - 20)}\n… (truncated)`,
+    text: boundReport(text, maximum),
   }
+}
+
+const REPORT_MARKER = '… (truncated)'
+/** The smallest accepted bound still fits the marker plus a short prefix. */
+export const MIN_REPORT_CHARS = REPORT_MARKER.length + 10
+
+function boundReport(text: string, maximum: number): string {  if (!Number.isSafeInteger(maximum) || maximum < MIN_REPORT_CHARS) {
+    throw new Error(
+      `report character bound must be a whole number of at least ${MIN_REPORT_CHARS}; it must fit the truncation marker`,
+    )
+  }
+  if (text.length <= maximum) return text
+  return `${text.slice(0, maximum - REPORT_MARKER.length - 1)}\n${REPORT_MARKER}`
 }
 
 /** Read the windowed history and build the deterministic report. */
@@ -230,9 +247,7 @@ export async function executeReviewRetro(
     ...(context.window === undefined ? {} : { window: context.window }),
   })
   const bounded =
-    context.maxChars === undefined || report.text.length <= context.maxChars
-      ? report.text
-      : `${report.text.slice(0, context.maxChars - 20)}\n… (truncated)`
+    context.maxChars === undefined ? report.text : boundReport(report.text, context.maxChars)
   if (action === 'report' || report.draft === undefined) return bounded
   const created = await proposeLesson(context.workspaceRoot, {
     class: report.draft.class,
