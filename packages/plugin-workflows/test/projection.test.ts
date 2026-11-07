@@ -4,6 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import {
+  Harness as DelegationHarness,
+  defaultTestConfig,
+  FakeSubagents,
+  makeWorkspace,
+  runIdFrom,
+  writeChange,
+} from '../../plugin-delegation-rules/test/helpers.ts'
 import { CheckpointHarness } from '../../plugin-goal-continuity/test/checkpoint-harness.ts'
 import {
   DELEGATION_DIR,
@@ -369,6 +377,45 @@ describe('delegation and review projection', () => {
     expect(run?.steps.map((step) => step.id)).not.toContain('record')
   })
 
+  it('projects runs and records written by the real delegation harness', async () => {
+    const created = await makeWorkspace()
+    try {
+      await writeChange(created.root, 'change-a', [
+        { number: '1.1', text: 'Do the thing', checked: true },
+      ])
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent')
+      subagents.addProvider('codex-subagent-write')
+      const harness = new DelegationHarness({
+        cwd: created.root,
+        config: defaultTestConfig(),
+        agents: subagents,
+      })
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      await harness.waitForRun(runId)
+      const run = (await workspaceRuns(created.root)).find(
+        (candidate) => candidate.id === `delegation:${runId}`,
+      )
+      expect(run?.status).toBe('done')
+      expect(run?.attribution).toBe('local')
+      expect(run?.session).toBeTruthy()
+      expect(run?.steps.find((step) => step.id === 'record')?.state).toBe('PASS')
+      expect(run?.steps.find((step) => step.id === 'target')?.evidence).toContain('codex-subagent')
+
+      const handle = await harness.toolText('delegate', { rule: 'task-review', change: 'change-a' })
+      const taskRun = runIdFrom(handle)
+      await harness.waitForRun(taskRun)
+      const portable = (await workspaceRuns(created.root)).find(
+        (candidate) => candidate.source === 'review' && candidate.attribution === 'portable',
+      )
+      expect(portable).toBeDefined()
+      expect(portable?.session).toBeTruthy()
+      expect(portable?.status).toBe('done')
+    } finally {
+      await created.cleanup()
+    }
+  })
+
   it('shows malformed and incomplete delegation records as error rows naming the file', async () => {
     const workspace = await tempWorkspace()
     await writeRaw(workspace, `${DELEGATION_DIR}/runs/run-bad.json`, '{ broken json')
@@ -382,6 +429,214 @@ describe('delegation and review projection', () => {
     expect(malformed?.error).toContain('.dsh/delegation/runs/run-bad.json')
     const missing = runs.find((run) => run.id === 'delegation:run-missing')
     expect(missing?.error).toContain('state')
+
+    await writeRaw(
+      workspace,
+      `${DELEGATION_DIR}/runs/run-no-id.json`,
+      JSON.stringify({ rule: 'task-review', change: 'x', state: 'completed' }),
+    )
+    await writeRaw(
+      workspace,
+      `${DELEGATION_DIR}/task-review/change-x/tasks/bad.json`,
+      '{ broken local record',
+    )
+    await writeRaw(
+      workspace,
+      `${DELEGATION_DIR}/task-review/change-x/tasks/incomplete.json`,
+      JSON.stringify({ runId: 'run-x', session: 'session-1' }),
+    )
+    const second = await workspaceRuns(workspace)
+    expect(second.find((run) => run.id === 'delegation:run-no-id')?.error).toContain('field "id"')
+    const localFailures = second.filter((run) => run.id.startsWith('local-review:'))
+    expect(
+      localFailures.some((run) => run.error?.includes('bad.json') && run.error.includes('JSON')),
+    ).toBe(true)
+    expect(
+      localFailures.some(
+        (run) =>
+          run.error?.includes('incomplete.json') && run.error.includes('missing or invalid field'),
+      ),
+    ).toBe(true)
+  })
+
+  it('joins a valid FINDINGS record and rejects incomplete local records', async () => {
+    const workspace = await tempWorkspace()
+    const run = (id: string, record: string): Record<string, unknown> => ({
+      id,
+      rule: 'task-review',
+      change: 'add-workflow-observability',
+      key: 'k',
+      identity: 'i',
+      state: 'completed',
+      record,
+      startedAt: '2026-11-07T10:05:00.000Z',
+    })
+    await writeJson(
+      workspace,
+      `${DELEGATION_DIR}/runs/run-findings.json`,
+      run('run-mw6abcde-aaaaaaaa', '.dsh/delegation/task-review/x/tasks/a.json'),
+    )
+    await writeJson(
+      workspace,
+      `${DELEGATION_DIR}/runs/run-incomplete.json`,
+      run('run-mw6abcde-bbbbbbbb', '.dsh/delegation/task-review/x/tasks/b.json'),
+    )
+    await writeJson(workspace, `${DELEGATION_DIR}/task-review/x/tasks/a.json`, {
+      rule: 'task-review',
+      change: 'add-workflow-observability',
+      phase: 'task',
+      scope: 'task',
+      taskId: '0123456789abcdef',
+      digest: `${'a'.repeat(64)}`,
+      verdict: 'FINDINGS',
+      findings: [{ severity: 'P1', title: 't', evidence: 'e', fix: 'f' }],
+      target: { provider: 'codex-subagent' },
+      session: 'session-1',
+      runId: 'run-mw6abcde-aaaaaaaa',
+      time: '2026-11-07T10:10:00.000Z',
+    })
+    await writeJson(workspace, `${DELEGATION_DIR}/task-review/x/tasks/b.json`, {
+      runId: 'run-mw6abcde-bbbbbbbb',
+      session: 'session-1',
+    })
+    const runs = await workspaceRuns(workspace)
+    const findings = runs.find((candidate) => candidate.id === 'delegation:run-mw6abcde-aaaaaaaa')
+    expect(findings?.attribution).toBe('local')
+    expect(findings?.steps.find((step) => step.id === 'record')?.state).toBe('FINDINGS')
+    expect(findings?.steps.find((step) => step.id === 'target')?.evidence).toContain(
+      'codex-subagent',
+    )
+    const incomplete = runs.find((candidate) => candidate.id === 'delegation:run-mw6abcde-bbbbbbbb')
+    expect(incomplete?.attribution).toBe('unattributed')
+    expect(incomplete?.steps.map((step) => step.id)).not.toContain('record')
+    expect(
+      runs.some(
+        (candidate) =>
+          candidate.id.startsWith('local-review:') &&
+          candidate.error?.includes('missing or invalid field'),
+      ),
+    ).toBe(true)
+
+    // A snapshot checkout is ordinary scratch, not a review record.
+    await writeJson(workspace, `${DELEGATION_DIR}/snapshots/run-example/package.json`, {
+      name: 'checkout',
+    })
+    const withSnapshot = await workspaceRuns(workspace)
+    expect(
+      withSnapshot.some(
+        (candidate) =>
+          candidate.id.startsWith('local-review:') && candidate.id.includes('snapshots'),
+      ),
+    ).toBe(false)
+
+    // Invalid scopes and empty finding text cannot enrich or attribute a run.
+    await writeJson(workspace, `${DELEGATION_DIR}/task-review/x/tasks/c.json`, {
+      rule: 'task-review',
+      change: 'add-workflow-observability',
+      phase: 'task',
+      scope: 'invalid',
+      taskId: '0123456789abcdef',
+      digest: `${'a'.repeat(64)}`,
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      session: 'session-1',
+      runId: 'run-mw6abcde-bbbbbbbb',
+      time: '2026-11-07T10:10:00.000Z',
+    })
+    await writeJson(workspace, `${DELEGATION_DIR}/task-review/x/tasks/d.json`, {
+      rule: 'task-review',
+      change: 'add-workflow-observability',
+      phase: 'task',
+      scope: 'task',
+      taskId: '0123456789abcdef',
+      digest: `${'a'.repeat(64)}`,
+      verdict: 'FINDINGS',
+      findings: [{ severity: 'P1', title: ' ', evidence: '', fix: '' }],
+      target: { provider: 'codex-subagent' },
+      session: 'session-1',
+      runId: 'run-mw6abcde-bbbbbbbb',
+      time: '2026-11-07T10:10:00.000Z',
+    })
+    const invalidScopes = await workspaceRuns(workspace)
+    expect(
+      invalidScopes.filter(
+        (candidate) =>
+          candidate.id.startsWith('local-review:') && candidate.error?.includes('scope'),
+      ).length,
+    ).toBeGreaterThan(0)
+    expect(
+      invalidScopes.filter(
+        (candidate) =>
+          candidate.id.startsWith('local-review:') && candidate.error?.includes('findings'),
+      ).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('rejects an incomplete portable approval', async () => {
+    const workspace = await tempWorkspace()
+    await writeJson(
+      workspace,
+      'openspec/changes/add-workflow-observability/reviews/incomplete.json',
+      {
+        change: 'add-workflow-observability',
+        taskId: '0123456789abcdef',
+        digest: `${'a'.repeat(64)}`,
+        verdict: 'PASS',
+      },
+    )
+    const runs = await workspaceRuns(workspace)
+    const error = runs.find(
+      (candidate) => candidate.id === 'review:add-workflow-observability/incomplete',
+    )
+    expect(error?.error).toContain('missing or invalid field')
+    expect(
+      runs.some((candidate) => candidate.source === 'review' && candidate.status === 'done'),
+    ).toBe(false)
+
+    await writeJson(
+      workspace,
+      'openspec/changes/add-workflow-observability/reviews/whole-scope.json',
+      {
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        scope: 'whole',
+        taskId: '0123456789abcdef',
+        digest: `${'a'.repeat(64)}`,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-07T10:12:00.000Z',
+      },
+    )
+    const withWhole = await workspaceRuns(workspace)
+    expect(
+      withWhole.find(
+        (candidate) => candidate.id === 'review:add-workflow-observability/whole-scope',
+      )?.error,
+    ).toContain('"scope" must be "task"')
+
+    await writeJson(
+      workspace,
+      'openspec/changes/add-workflow-observability/reviews/secret-target.json',
+      {
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        scope: 'task',
+        taskId: '0123456789abcdef',
+        digest: `${'a'.repeat(64)}`,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent', model: '{"password":"SYNTHETIC-SECRET"}' },
+        time: '2026-11-07T10:12:00.000Z',
+      },
+    )
+    const secretTarget = (await workspaceRuns(workspace)).find(
+      (candidate) => candidate.id === 'review:add-workflow-observability/0123456789abcdef',
+    )
+    expect(secretTarget?.steps.find((step) => step.id === 'target')?.evidence).not.toContain(
+      'SYNTHETIC-SECRET',
+    )
   })
 
   it('attributes a portable review only through a matching local record', async () => {
@@ -392,7 +647,7 @@ describe('delegation and review projection', () => {
       'portable-review.json',
     )
     const unattributed = (await workspaceRuns(workspace)).find(
-      (run) => run.id === 'review:add-workflow-observability/abc123',
+      (run) => run.id === 'review:add-workflow-observability/0123456789abcdef',
     )
     expect(unattributed?.attribution).toBe('unattributed')
     expect(await sessionRuns(workspace, 'session-1')).toEqual([])
@@ -405,8 +660,8 @@ describe('delegation and review projection', () => {
         change: 'add-workflow-observability',
         phase: 'task',
         scope: 'task',
-        taskId: 'abc123',
-        digest: 'digest-abc123',
+        taskId: '0123456789abcdef',
+        digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         verdict: 'PASS',
         findings: [],
         target: { provider: 'codex-subagent' },
@@ -416,7 +671,7 @@ describe('delegation and review projection', () => {
       },
     )
     const attributed = (await workspaceRuns(workspace)).find(
-      (run) => run.id === 'review:add-workflow-observability/abc123',
+      (run) => run.id === 'review:add-workflow-observability/0123456789abcdef',
     )
     expect(attributed?.attribution).toBe('portable')
     expect(attributed?.session).toBe('session-1')
@@ -483,8 +738,8 @@ describe('merged session timeline', () => {
         change: 'add-workflow-observability',
         phase: 'task',
         scope: 'task',
-        taskId: 'abc123',
-        digest: 'digest-abc123',
+        taskId: '0123456789abcdef',
+        digest: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         verdict: 'PASS',
         findings: [],
         target: { provider: 'codex-subagent' },
@@ -529,6 +784,53 @@ describe('merged session timeline', () => {
     expect(await sessionRuns(workspace, 'session-1')).toEqual([])
     const runs = await workspaceRuns(workspace)
     expect(runs.find((run) => run.source === 'delegation')?.attribution).toBe('unattributed')
+  })
+
+  it('redacts credential-shaped run details without changing the source file', async () => {
+    const workspace = await tempWorkspace()
+    const file = await writeJson(workspace, `${DELEGATION_DIR}/runs/run-secret.json`, {
+      id: 'run-mw6abcde-cccccccc',
+      rule: 'task-review',
+      change: 'add-workflow-observability',
+      key: 'k',
+      identity: 'i',
+      state: 'failed',
+      record: '.dsh/delegation/task-review/x/tasks/x.json',
+      startedAt: '2026-11-07T10:05:00.000Z',
+      detail: 'Authorization: Bearer synthetic-review-credential; Basic dXNlcjpwYXNzd29yZA==',
+    })
+    const before = await fileHash(file)
+    const run = (await workspaceRuns(workspace)).find(
+      (candidate) => candidate.id === 'delegation:run-mw6abcde-cccccccc',
+    )
+    expect(run?.error).not.toContain('synthetic-review-credential')
+    expect(run?.error).not.toContain('dXNlcjpwYXNzd29yZA==')
+    expect(run?.error).toContain('REDACTED')
+    expect(await fileHash(file)).toBe(before)
+
+    for (const [name, detail] of [
+      ['digest', 'failed: Digest username="u", nonce="n", response="SYNTHETIC-SECRET"'],
+      ['structured', '{"password":{"value":"SYNTHETIC-SECRET"}}'],
+    ] as const) {
+      const detailFile = await writeJson(workspace, `${DELEGATION_DIR}/runs/run-${name}.json`, {
+        id: `run-mw6abcde-${name === 'digest' ? 'dddddddd' : 'eeeeeeee'}`,
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        key: 'k',
+        identity: 'i',
+        state: 'failed',
+        record: '.dsh/delegation/task-review/x/tasks/x.json',
+        startedAt: '2026-11-07T10:05:00.000Z',
+        detail,
+      })
+      const hash = await fileHash(detailFile)
+      const failed = (await workspaceRuns(workspace)).find(
+        (candidate) =>
+          candidate.id === `delegation:run-mw6abcde-${name === 'digest' ? 'dddddddd' : 'eeeeeeee'}`,
+      )
+      expect(failed?.error).not.toContain('SYNTHETIC-SECRET')
+      expect(await fileHash(detailFile)).toBe(hash)
+    }
   })
 
   it('reads only the requesting workspace', async () => {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { redactPayload, redactText } from './redact.js';
 export const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints');
 export const DELEGATION_DIR = join('.dsh', 'delegation');
 export const WORKFLOW_EVENTS_DIR = join('.dsh', 'workflows', 'events');
@@ -13,6 +14,14 @@ function isRecord(value) {
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
+}
+/** A record-derived display string with credential shapes removed. */
+function safeText(value) {
+    return value === undefined ? undefined : redactText(value);
+}
+/** A failure detail that may carry arbitrary structured credentials. */
+function safeError(value) {
+    return value === undefined ? undefined : redactPayload(value);
 }
 function parseTime(value) {
     if (typeof value === 'string') {
@@ -52,7 +61,7 @@ function errorRun(id, source, workspace, file, attribution, session, error) {
         startedAt: 0,
         status: 'unknown',
         steps: [],
-        error: `${displayPath(workspace, file)}: ${error}`,
+        error: safeError(`${displayPath(workspace, file)}: ${error}`),
         record: displayPath(workspace, file),
         ...(session === undefined ? {} : { session }),
     };
@@ -71,7 +80,7 @@ function laneSteps(value) {
             id: `lane:${entry.id}`,
             title: typeof entry.owner === 'string' ? `${entry.id} (${entry.owner})` : entry.id,
             state: typeof entry.state === 'string' ? entry.state : 'unknown',
-            ...(scope === undefined || scope === '' ? {} : { evidence: scope }),
+            ...(scope === undefined || scope === '' ? {} : { evidence: safeText(scope) }),
         });
     }
     return steps;
@@ -133,11 +142,16 @@ export async function checkpointRuns(workspace, sessionId) {
                 id: 'bottleneck',
                 title: `Bottleneck ${record.bottleneck.id}`,
                 state: typeof record.bottleneck.action === 'string' ? record.bottleneck.action : 'unknown',
-                ...(targets === undefined || targets === '' ? {} : { evidence: targets }),
+                ...(targets === undefined || targets === '' ? {} : { evidence: safeText(targets) }),
             });
         }
         if (typeof record.next === 'string') {
-            steps.push({ id: 'next', title: 'Next', state: 'next', evidence: record.next });
+            steps.push({
+                id: 'next',
+                title: 'Next',
+                state: 'next',
+                evidence: safeText(record.next),
+            });
         }
         runs.push({
             id: `checkpoint:${String(recordedTurn)}`,
@@ -189,11 +203,103 @@ function validBottleneck(value) {
     }
     return true;
 }
-const LOCAL_SKIP = new Set(['runs', 'sessions', 'task-progress', 'worktrees', 'owners']);
-/** Read every settled local review record; malformed files are not runs. */
+const LOCAL_SKIP = new Set([
+    'runs',
+    'sessions',
+    'task-progress',
+    'worktrees',
+    'owners',
+    'snapshots',
+]);
+const TASK_ID = /^[a-f0-9]{16}$/u;
+const DIGEST = /^[a-f0-9]{64}$/u;
+const VERDICTS = new Set(['PASS', 'FINDINGS', 'ERROR']);
+const LOCAL_SCOPES = new Set(['whole', 'task']);
+function nonEmpty(value) {
+    return typeof value === 'string' && value.trim() !== '';
+}
+function validFinding(value) {
+    return (isRecord(value) &&
+        (value.severity === 'P0' || value.severity === 'P1') &&
+        nonEmpty(value.title) &&
+        nonEmpty(value.evidence) &&
+        nonEmpty(value.fix));
+}
+function validTarget(value) {
+    if (!isRecord(value) || typeof value.provider !== 'string' || value.provider === '')
+        return false;
+    for (const field of ['model', 'reasoningEffort']) {
+        if (value[field] !== undefined && typeof value[field] !== 'string')
+            return false;
+    }
+    return true;
+}
+/** The producer contract for a settled local review record. */
+function localRecordError(record) {
+    for (const field of ['rule', 'change', 'phase', 'scope', 'digest', 'verdict', 'time']) {
+        if (typeof record[field] !== 'string' || record[field] === '') {
+            return `missing or invalid field "${field}"`;
+        }
+    }
+    if (!DIGEST.test(record.digest))
+        return 'field "digest" must be 64 hex characters';
+    if (!VERDICTS.has(record.verdict)) {
+        return 'field "verdict" must be PASS, FINDINGS, or ERROR';
+    }
+    if (!LOCAL_SCOPES.has(record.scope)) {
+        return 'field "scope" must be "whole" or "task"';
+    }
+    if (!Array.isArray(record.findings) || !record.findings.every(validFinding)) {
+        return 'field "findings" must be a list of P0/P1 findings';
+    }
+    if (record.verdict === 'PASS' && record.findings.length > 0) {
+        return 'a PASS record must have zero findings';
+    }
+    if (record.verdict === 'FINDINGS' && record.findings.length === 0) {
+        return 'a FINDINGS record must have at least one finding';
+    }
+    if (!validTarget(record.target))
+        return 'field "target" must carry a provider';
+    if (record.scope === 'task') {
+        if (typeof record.taskId !== 'string' || !TASK_ID.test(record.taskId)) {
+            return 'task-scoped record needs a 16-hex taskId';
+        }
+    }
+    if (record.session !== undefined && typeof record.session !== 'string') {
+        return 'field "session" must be a string';
+    }
+    if (record.runId !== undefined && typeof record.runId !== 'string') {
+        return 'field "runId" must be a string';
+    }
+    return undefined;
+}
+/** The producer contract for a portable task approval. */
+function portableRecordError(record) {
+    for (const field of ['rule', 'change', 'scope', 'taskId', 'digest', 'verdict', 'time']) {
+        if (typeof record[field] !== 'string' || record[field] === '') {
+            return `missing or invalid field "${field}"`;
+        }
+    }
+    if (record.scope !== 'task')
+        return 'field "scope" must be "task"';
+    if (!DIGEST.test(record.digest))
+        return 'field "digest" must be 64 hex characters';
+    if (!TASK_ID.test(record.taskId))
+        return 'field "taskId" must be 16 hex characters';
+    if (record.verdict !== 'PASS')
+        return 'a portable approval must be a PASS';
+    if (!Array.isArray(record.findings) || record.findings.length !== 0) {
+        return 'a portable approval must have zero findings';
+    }
+    if (!validTarget(record.target))
+        return 'field "target" must carry a provider';
+    return undefined;
+}
+/** Read every settled local review record; malformed and invalid files are reported. */
 export async function readLocalReviewRecords(workspace) {
     const delegation = join(workspace, DELEGATION_DIR);
     const records = [];
+    const failures = [];
     for (const rule of await listFiles(delegation)) {
         if (LOCAL_SKIP.has(rule))
             continue;
@@ -212,14 +318,25 @@ export async function readLocalReviewRecords(workspace) {
                 }
                 for (const file of candidates) {
                     const parsed = await readJson(file);
-                    if ('error' in parsed || !isRecord(parsed.value))
+                    if ('error' in parsed) {
+                        failures.push({ file, error: parsed.error });
                         continue;
+                    }
+                    if (!isRecord(parsed.value)) {
+                        failures.push({ file, error: 'the record is not an object' });
+                        continue;
+                    }
+                    const invalid = localRecordError(parsed.value);
+                    if (invalid !== undefined) {
+                        failures.push({ file, error: invalid });
+                        continue;
+                    }
                     records.push({ file, record: parsed.value });
                 }
             }
         }
     }
-    return records;
+    return { records, failures };
 }
 const RUN_STATES = new Set(['queued', 'running', 'completed', 'failed', 'discarded']);
 function runStatus(state) {
@@ -260,24 +377,28 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
         }
         const record = parsed.value;
         const runId = typeof record.id === 'string' ? record.id : id;
-        if (typeof record.rule !== 'string' ||
-            typeof record.change !== 'string' ||
-            !RUN_STATES.has(record.state)) {
-            runs.push(errorRun(`delegation:${id}`, 'delegation', workspace, file, 'unattributed', undefined, 'missing or invalid id, rule, change, or state'));
+        const invalidField = ['id', 'rule', 'change', 'state', 'record', 'startedAt'].find((field) => typeof record[field] !== 'string' || record[field] === '');
+        if (invalidField !== undefined ||
+            !RUN_STATES.has(record.state) ||
+            typeof record.id !== 'string') {
+            runs.push(errorRun(`delegation:${id}`, 'delegation', workspace, file, 'unattributed', undefined, `missing or invalid field "${invalidField ?? (typeof record.id !== 'string' ? 'id' : 'state')}"`));
             continue;
         }
         const joined = byRunId.get(runId);
         const session = observedSessions.get(runId) ??
             (typeof joined?.record.session === 'string' ? joined.record.session : undefined);
+        const rule = record.rule;
+        const change = record.change;
+        const state = record.state;
         const steps = [
-            { id: 'rule', title: record.rule, state: String(record.state) },
+            { id: 'rule', title: rule, state },
             {
                 id: 'change',
-                title: typeof record.taskId === 'string' ? record.taskId : record.change,
+                title: typeof record.taskId === 'string' ? record.taskId : change,
                 state: 'review',
-                evidence: record.change,
+                evidence: change,
             },
-            { id: 'state', title: 'Run state', state: String(record.state) },
+            { id: 'state', title: 'Run state', state },
         ];
         if (joined !== undefined) {
             const verdict = typeof joined.record.verdict === 'string' ? joined.record.verdict : 'unknown';
@@ -288,6 +409,21 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
                 at: parseTime(joined.record.time),
                 evidence: displayPath(workspace, joined.file),
             });
+            if (isRecord(joined.record.target)) {
+                const provider = joined.record.target.provider;
+                const model = joined.record.target.model;
+                const parts = [];
+                if (typeof provider === 'string')
+                    parts.push(provider);
+                if (typeof model === 'string')
+                    parts.push(model);
+                steps.push({
+                    id: 'target',
+                    title: 'Review target',
+                    state: 'target',
+                    evidence: safeError(parts.join(' / ')),
+                });
+            }
         }
         const status = runStatus(record.state);
         runs.push({
@@ -300,7 +436,7 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
             status,
             steps,
             ...(typeof record.detail === 'string' && (status === 'failed' || status === 'unknown')
-                ? { error: record.detail }
+                ? { error: safeError(record.detail) }
                 : {}),
             record: displayPath(workspace, file),
         });
@@ -328,11 +464,9 @@ export async function portableReviewRuns(workspace, localRecords) {
                 continue;
             }
             const record = parsed.value;
-            if (typeof record.change !== 'string' ||
-                typeof record.taskId !== 'string' ||
-                typeof record.digest !== 'string' ||
-                typeof record.verdict !== 'string') {
-                runs.push(errorRun(`review:${change}/${taskId}`, 'review', workspace, file, 'unattributed', undefined, 'missing or invalid change, taskId, digest, or verdict'));
+            const invalid = portableRecordError(record);
+            if (invalid !== undefined) {
+                runs.push(errorRun(`review:${change}/${taskId}`, 'review', workspace, file, 'unattributed', undefined, invalid));
                 continue;
             }
             const match = localRecords.find((local) => local.record.change === record.change &&
@@ -341,24 +475,28 @@ export async function portableReviewRuns(workspace, localRecords) {
                 typeof local.record.session === 'string');
             const session = match?.record.session;
             const startedAt = parseTime(record.time);
+            const changeName = record.change;
+            const stableTask = record.taskId;
+            const verdict = record.verdict;
+            const digest = record.digest;
             runs.push({
-                id: `review:${record.change}/${record.taskId}`,
+                id: `review:${changeName}/${stableTask}`,
                 source: 'review',
                 ...(session === undefined ? {} : { session }),
                 attribution: session === undefined ? 'unattributed' : 'portable',
-                title: `Review ${record.change} ${record.taskId}`,
+                title: `Review ${changeName} ${stableTask}`,
                 startedAt,
-                status: record.verdict === 'PASS' ? 'done' : record.verdict === 'ERROR' ? 'failed' : 'unknown',
+                status: verdict === 'PASS' ? 'done' : verdict === 'ERROR' ? 'failed' : 'unknown',
                 steps: [
-                    { id: 'verdict', title: 'Verdict', state: record.verdict },
+                    { id: 'verdict', title: 'Verdict', state: verdict },
                     {
                         id: 'target',
                         title: 'Target',
                         state: 'target',
-                        evidence: isRecord(record.target) ? JSON.stringify(record.target) : undefined,
+                        evidence: isRecord(record.target) ? safeError(JSON.stringify(record.target)) : undefined,
                     },
-                    { id: 'digest', title: 'Digest', state: 'digest', evidence: record.digest },
-                    { id: 'task', title: 'Task', state: record.taskId },
+                    { id: 'digest', title: 'Digest', state: 'digest', evidence: safeText(digest) },
+                    { id: 'task', title: 'Task', state: stableTask },
                 ],
                 record: displayPath(workspace, file),
             });
@@ -415,15 +553,16 @@ export async function delegationObservations(workspace) {
 }
 /** Every projected run in one workspace, unattributed runs included. */
 export async function workspaceRuns(workspace) {
-    const [observations, localRecords] = await Promise.all([
+    const [observations, local] = await Promise.all([
         delegationObservations(workspace),
         readLocalReviewRecords(workspace),
     ]);
     const [delegation, reviews] = await Promise.all([
-        delegationRuns(workspace, observations, localRecords),
-        portableReviewRuns(workspace, localRecords),
+        delegationRuns(workspace, observations, local.records),
+        portableReviewRuns(workspace, local.records),
     ]);
-    return [...delegation, ...reviews].sort(compareRuns);
+    const failures = local.failures.map((failure) => errorRun(`local-review:${displayPath(workspace, failure.file)}`, 'review', workspace, failure.file, 'unattributed', undefined, failure.error));
+    return [...delegation, ...reviews, ...failures].sort(compareRuns);
 }
 /** The requesting session's timeline: only attributed runs, in time order. */
 export async function sessionRuns(workspace, sessionId) {

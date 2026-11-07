@@ -44,8 +44,17 @@ export interface LocalReviewRecord {
     readonly file: string;
     readonly record: Record<string, unknown>;
 }
-/** Read every settled local review record; malformed files are not runs. */
-export declare function readLocalReviewRecords(workspace: string): Promise<LocalReviewRecord[]>;
+/** One unreadable or invalid local review record. */
+export interface LocalReviewFailure {
+    readonly file: string;
+    readonly error: string;
+}
+export interface LocalReviewRead {
+    readonly records: LocalReviewRecord[];
+    readonly failures: LocalReviewFailure[];
+}
+/** Read every settled local review record; malformed and invalid files are reported. */
+export declare function readLocalReviewRecords(workspace: string): Promise<LocalReviewRead>;
 /**
  * Delegation runs. Session attribution comes from an observed starting/queuing
  * result or a settled record whose `runId` equals the run id; the run's record

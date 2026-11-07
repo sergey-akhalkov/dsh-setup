@@ -118,6 +118,7 @@ export function redactText(text: string): string {
       },
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, `Bearer ${REDACTED}`)
+    .replace(/\b(Basic|Digest|Negotiate|Token)\s+[A-Za-z0-9._~+/=-]+/giu, `$1 ${REDACTED}`)
 }
 
 /** Redact one journal payload string. */

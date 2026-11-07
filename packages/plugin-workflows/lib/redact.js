@@ -99,7 +99,8 @@ export function redactText(text) {
         const value = quote === '' ? REDACTED : `${quote}${REDACTED}${quote}`;
         return `${key}${quote}${separator}${value}`;
     })
-        .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, `Bearer ${REDACTED}`);
+        .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, `Bearer ${REDACTED}`)
+        .replace(/\b(Basic|Digest|Negotiate|Token)\s+[A-Za-z0-9._~+/=-]+/giu, `$1 ${REDACTED}`);
 }
 /** Redact one journal payload string. */
 export function redactPayload(text) {
