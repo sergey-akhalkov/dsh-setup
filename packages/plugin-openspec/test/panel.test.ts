@@ -3173,6 +3173,7 @@ describe('OpenSpec live observation', () => {
   it('re-reads the change list once per observed file change and never polls', async () => {
     vi.useFakeTimers()
     try {
+      const interval = vi.spyOn(globalThis, 'setInterval')
       const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
         deltaCapabilities: ['auth'],
       })
@@ -3236,6 +3237,12 @@ describe('OpenSpec live observation', () => {
       vi.advanceTimersByTime(300)
       await settle()
       body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+      expect(vi.getTimerCount()).toBe(0)
+      // No polling timer exists; an idle segment issues no request.
+      expect(interval).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1500)
+      await settle()
       expect(fetchMock).toHaveBeenCalledTimes(5)
       expect(vi.getTimerCount()).toBe(0)
       mounted.destroy()

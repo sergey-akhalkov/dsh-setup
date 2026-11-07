@@ -22,7 +22,7 @@
       batch and cancels a pending debounce. Verify component tests assert the mounted watch set for a
       mixed active and archived response, no watch on the Specs and Archive segments, and that a
       loading re-render keeps the same observation alive.
-- [ ] 2.3 Cover the live loop in `panel.test.ts`: a version bump on one row's `tasks.md` schedules exactly
+- [x] 2.3 Cover the live loop in `panel.test.ts`: a version bump on one row's `tasks.md` schedules exactly
       one list re-read after the 300 ms debounce, an unchanged version schedules none, the first
       settlement of the initial set schedules one reconciliation read, an absent-then-live transition
       re-reads, leaving Changes with a pending debounce cancels the read, returning to Changes with an
