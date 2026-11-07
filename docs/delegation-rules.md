@@ -182,9 +182,11 @@ A target run is bounded by the per-contract timeout: 20 minutes for `review`, 5 
 `answer`, and 30 minutes for `patch`. A profile overrides them through `timeouts`; a timed-out
 review writes an `ERROR` record and the error names the contract to widen.
 
-Several reviews can run at once. A duplicate request is identified by rule + change + task/phase: a
-second call while that identity is pending returns the existing run handle. Different rules on the
-same change/task queue over one conversation key and each writes its own record. Task-scoped reviews
+Several reviews can run at once. A duplicate request is identified by rule + change + task/phase plus
+the prepared digest and the resolved reviewer: a second call while that identity is pending returns
+the existing run handle, and a changed input or reviewer is a distinct run that waits behind the same
+conversation key. Different rules on the same change/task queue over one conversation key and each
+writes its own record. Task-scoped reviews
 accept an explicit `task` (id or task text), so parallel task reviews for different tasks do not
 collapse onto the engine's next-task choice. A task-scoped run reviews an immutable snapshot of the
 worktree: a detached checkout under `.dsh/delegation/snapshots/<runId>` built from the exact review
@@ -204,7 +206,7 @@ invalidate another.
 
 | Option          | Default  | Meaning                                                                                                                                                         |
 | --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`       | `true`   | `false` restores the direct target start for every review (no admission, waiting, or retry).                                                                    |
+| `enabled`       | `true`   | `false` removes the global admission limit, the acceptance deadline, and automatic retries; deduplication and same-key waiting stay.                            |
 | `concurrency`   | `2`      | Live review targets per profile; a whole number from 1 to 4, below the DSH active-child limit.                                                                  |
 | `maxQueued`     | `16`     | Unique waiting runs allowed before admission is refused with `review queue full` and an `ERROR` record. A same-key follower behind an active review counts too. |
 | `maxAttempts`   | `3`      | Original attempt plus retries for transient failures.                                                                                                           |
@@ -212,29 +214,35 @@ invalidate another.
 | `maxDelayMs`    | `60000`  | Backoff cap; a provider `retry-after` is honored up to this cap.                                                                                                |
 | `waitTimeoutMs` | `300000` | Acceptance deadline for a queued run; expiry writes a `queue-timeout` `ERROR` without starting a target.                                                        |
 
-Admission is a bounded FIFO: an admitted run starts immediately, a same-key (one conversation) run
-waits behind its predecessor, and waiting runs settle in submission order. A duplicate request (same
-rule + change + task/phase) returns the existing run handle instead of starting another target. A
-queued `delegate` handle names the run, its state, and its queue position; `delegation_status` adds
+Admission is a bounded queue: an admitted run starts immediately and a same-key (one conversation)
+run waits behind its predecessor. The queue selects the first eligible run in submission order (FIFO
+among eligible runs), while runs under different conversation keys complete independently. A
+duplicate request (same rule + change + task/phase + prepared digest + resolved reviewer) returns the
+existing run handle instead of starting another target. A queued `delegate` handle names the run, its
+state, and its queue position; `delegation_status` adds
 the queue summary (`enabled`, `concurrency`, `active`, `queued`, `depth`) and bounded per-run facts
 (`position`, `queuedAt`, `waitMs`, `attempts`, `failureClass`, `lastRetryAt`) — never credentials,
 provider output, or machine paths.
 
 A failure is classified as `child-limit`, `provider-not-started`, `timeout`,
-`reviewed-inputs-changed`, `invalid-output`, `config`, `permission`, or `unknown`; only transient
-classes retry. `queue-full`, `queue-timeout`, and `queue-internal-error` are recorded as `ERROR`
-outcomes. A queue-internal fault starts one direct target when ownership is safe and otherwise
-reports an `ERROR` the task gate does not treat as a review. Only the settled attempt publishes a
-record: retries and timeouts publish no intermediate `PASS`/`FINDINGS`/`ERROR`, and a retry that
-finds a newer authoritative record is discarded instead of overwriting it.
+`reviewed-inputs-changed`, `invalid-output`, `config`, `permission`, or `unknown`. Transient classes
+are `child-limit`, `provider-not-started`, and `timeout`; the rest are permanent. A timeout retries
+only when cancellation is confirmed. An unconfirmed teardown settles a terminal `ERROR` while the run
+keeps its key, capacity slot, and snapshot until teardown succeeds, so same-key followers wait.
+`queue-full`, `queue-timeout`, and `queue-internal-error` are recorded as `ERROR` outcomes. A
+queue-internal fault starts one direct target when ownership is safe and otherwise reports an `ERROR`
+the task gate does not treat as a review. Only the settled attempt publishes a record: retries and
+timeouts publish no intermediate `PASS`/`FINDINGS`/`ERROR`, and a retry that finds a newer
+authoritative record is discarded instead of overwriting it.
 
 The settlement observer fires exactly once per run after it leaves the pending set; retries and
 queue admissions never fire it early. On restart, active run files are reconciled once per
 workspace from the records on disk: a matching `PASS`/`FINDINGS` completes, a matching `ERROR`
 fails, a newer record discards the older run, and a run without a matching record is marked
 `interrupted` — never synthesized as a `PASS`. The gate always reads records, not run status. To
-turn the queue off, set `reviewQueue: { enabled: false }`; the direct start, timeouts, and record
-rules stay in force.
+turn the queue off, set `reviewQueue: { enabled: false }`: deduplication and same-key waiting stay,
+while the global concurrency/shape limits, the acceptance deadline, and automatic retries are
+bypassed.
 
 **`answer`** is the read-only blocker/research/advisor contract. It returns the answer with evidence
 and, for research, sources and dates, and, for an advisor, a recommendation, the strongest
