@@ -3591,3 +3591,147 @@ describe('record integrity', () => {
     expect(record.verdict).toBe('PASS')
   })
 })
+
+describe('retry publication matrix', () => {
+  const findingsResult = (run: RunRecord) => {
+    const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
+    return {
+      output: [
+        {
+          type: 'text' as const,
+          text: `\`\`\`json\n${JSON.stringify({
+            digest,
+            verdict: 'FINDINGS',
+            findings: [{ severity: 'P1', title: 'Blocking', evidence: 'Observed', fix: 'Fix it' }],
+          })}\n\`\`\``,
+        },
+      ],
+      stopReason: 'completed' as const,
+    }
+  }
+
+  it('publishes only after the settled attempt for PASS, FINDINGS, and ERROR', async () => {
+    const cases: Array<{
+      verdict: 'PASS' | 'FINDINGS' | 'ERROR'
+      state: 'completed' | 'failed'
+      respond: (run: RunRecord) => unknown
+    }> = [
+      { verdict: 'PASS', state: 'completed', respond: passResponder },
+      { verdict: 'FINDINGS', state: 'completed', respond: findingsResult },
+      {
+        verdict: 'ERROR',
+        state: 'failed',
+        respond: () => ({ output: [], stopReason: 'completed' }),
+      },
+    ]
+    for (const testCase of cases) {
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const agents = new FakeSubagents()
+      let calls = 0
+      agents.addProvider('codex-subagent', {}, (run) => {
+        calls += 1
+        if (calls === 1) {
+          return {
+            output: [],
+            stopReason: 'error' as const,
+            diagnostic: 'subagent limit reached (active child limit: 8)',
+          }
+        }
+        return testCase.respond(run) as ReturnType<typeof passResponder>
+      })
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 100 },
+        },
+        agents,
+      )
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      const recordPath = join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json')
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const state = await readRun(root, runId)
+          .then((run) => run.state)
+          .catch(() => undefined)
+        if (state === 'retry-wait') break
+        await new Promise((resolve) => {
+          realSetTimeout(resolve, 5)
+        })
+      }
+      expect((await readRun(root, runId)).state).toBe('retry-wait')
+      await expect(readFile(recordPath)).rejects.toThrow()
+
+      expect(await harness.waitForRun(runId)).toContain(`state=${testCase.state}`)
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as { verdict: string }
+      expect(record.verdict).toBe(testCase.verdict)
+      expect(calls).toBe(2)
+    }
+  })
+})
+
+describe('retry snapshot cleanup', () => {
+  it('removes a frozen retry snapshot when a competing publication wins', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const config = {
+      targets: { codex: { provider: 'codex-subagent' } },
+      rules: [
+        {
+          id: 'task-review',
+          when: 'spec-task-ready' as const,
+          to: 'codex',
+          contract: 'review' as const,
+          scope: 'task' as const,
+          gate: 'strict' as const,
+          instruction: 'bundled:review-task',
+        },
+      ],
+      reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 400, maxDelayMs: 400 },
+    }
+    const aAgents = new FakeSubagents()
+    let aCalls = 0
+    aAgents.addProvider('codex-subagent', {}, (run) => {
+      aCalls += 1
+      if (aCalls === 1) {
+        return {
+          output: [],
+          stopReason: 'error' as const,
+          diagnostic: 'subagent limit reached (active child limit: 8)',
+        }
+      }
+      return passResponder(run)
+    })
+    const aGit = new FakeGit()
+    aGit.files = ['src/engine.ts']
+    const aHarness = await harnessFor(root, config, aAgents, aGit)
+    const task = taskIdFor('Reviewed task')
+    const aRun = await aHarness.startReview({ rule: 'task-review', change: 'change-a', task })
+    await new Promise((resolve) => {
+      realSetTimeout(resolve, 60)
+    })
+
+    const bAgents = new FakeSubagents()
+    bAgents.addProvider('codex-subagent', {}, passResponder)
+    const bGit = new FakeGit()
+    bGit.files = ['src/engine.ts']
+    const bHarness = await harnessFor(root, config, bAgents, bGit)
+    const bRun = await bHarness.startReview({ rule: 'task-review', change: 'change-a', task })
+    expect(await bHarness.waitForRun(bRun)).toContain('state=completed')
+
+    expect(await aHarness.waitForRun(aRun)).toContain('state=discarded')
+    expect(aCalls).toBe(1)
+    const snapshots = join(root, '.dsh', 'delegation', 'snapshots')
+    const scratch = join(root, '.dsh', 'delegation', 'scratch')
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if ((await readdir(snapshots)).length === 0) break
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 5)
+      })
+    }
+    expect(await readdir(snapshots)).toEqual([])
+    expect(await readdir(scratch)).toEqual([])
+  })
+})

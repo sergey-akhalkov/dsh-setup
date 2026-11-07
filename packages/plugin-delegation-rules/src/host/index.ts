@@ -3777,6 +3777,7 @@ class DelegationEngine {
           'discarded',
           'a newer review record was published while this run waited; its completion is discarded',
         )
+        await this.discardSnapshot(run)
         await this.settleReviewRun(run, 'discarded')
         return
       }

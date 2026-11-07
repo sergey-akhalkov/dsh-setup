@@ -2923,6 +2923,7 @@ class DelegationEngine {
                 current.record.runId !== run.file.id &&
                 fingerprint !== run.existingFingerprint) {
                 await this.markRun(run, 'discarded', 'a newer review record was published while this run waited; its completion is discarded');
+                await this.discardSnapshot(run);
                 await this.settleReviewRun(run, 'discarded');
                 return;
             }
