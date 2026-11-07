@@ -189,41 +189,30 @@ export class ReviewQueue {
                 throw error;
             const entry = this.entries.get(run.file.id);
             if (entry !== undefined) {
-                // Let an in-flight start settle before deciding whether it survived.
+                const message = error instanceof Error ? error.message : String(error);
+                // Record the fault before the in-flight start settles so any ERROR it
+                // publishes already carries the gate-recognized classification.
+                try {
+                    await this.hooks.internalFault?.(run, message);
+                }
+                catch {
+                    // Evidence persistence must not break recovery.
+                }
                 if (entry.startOutcome !== undefined) {
                     await entry.startOutcome.catch(() => undefined);
                 }
-                const message = error instanceof Error ? error.message : String(error);
                 if (entry.phase === 'running' && !entry.finished) {
                     // A live target survived the bookkeeping fault: keep ownership.
-                    try {
-                        await this.hooks.internalFault?.(run, message);
-                    }
-                    catch {
-                        // Evidence persistence must not break the surviving run.
-                    }
                     return { kind: 'accepted', phase: 'running' };
                 }
                 if (entry.finished || entry.phase === 'settled') {
                     // The start settled a terminal record before the fault: never replay it.
                     this.rollback(run.file.id);
-                    try {
-                        await this.hooks.internalFault?.(run, message);
-                    }
-                    catch {
-                        // Evidence persistence must not break the settled run.
-                    }
                     return { kind: 'settled' };
                 }
                 // A rejected or stranded start: release ownership and let the engine
                 // fall back to a single direct start.
                 this.rollback(run.file.id);
-                try {
-                    await this.hooks.internalFault?.(run, message);
-                }
-                catch {
-                    // Evidence persistence must not break the fallback.
-                }
                 throw new QueueInternalError(`review queue internal error: ${message}`, error);
             }
             this.rollback(run.file.id);

@@ -3416,3 +3416,50 @@ describe('fallback gate approval', () => {
     expect(steers).toContain('delegate(rule: "task-review"')
   })
 })
+
+describe('post-dispatch fault evidence', () => {
+  it('records the queue fault before a dispatched start failure is published', async () => {
+    const order: string[] = []
+    const internalFault = vi.fn(() => {
+      order.push('fault')
+    })
+    const fail = vi.fn(async () => {
+      order.push('fail')
+    })
+    const hooks = {
+      start: vi.fn(async () => {
+        throw new Error('boom')
+      }),
+      persist: vi.fn(),
+      fail,
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      internalFault,
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const internals = queue as unknown as { pump: () => void }
+    const originalPump = internals.pump.bind(queue)
+    internals.pump = () => {
+      originalPump()
+      throw new Error('injected pump fault')
+    }
+    const run = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(run)).toEqual({ kind: 'settled' })
+    expect(internalFault).toHaveBeenCalledTimes(1)
+    expect(fail).toHaveBeenCalledTimes(1)
+    expect(queue.owns('run-a')).toBe(false)
+    queue.dispose()
+  })
+})
