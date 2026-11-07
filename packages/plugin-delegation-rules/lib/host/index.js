@@ -2701,9 +2701,9 @@ class DelegationEngine {
         }
         const prepared = await this.prepareReview(run);
         run.prepared = prepared;
+        // This inspection decides cached reuse, not the publication baseline: a
+        // queued run re-inspects when it becomes start-eligible.
         const existing = await inspectRecord(prepared.path);
-        run.existingFingerprint =
-            existing.kind === 'record' ? JSON.stringify(existing.record) : undefined;
         const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)));
         if (existing.kind === 'record' &&
             recordIdentifies(existing.record, run.context.rule, run.context.change.name, run.context.task?.id)) {
@@ -2731,6 +2731,14 @@ class DelegationEngine {
         const prepared = run.prepared;
         if (prepared === undefined) {
             fail(`run ${run.file.id} reached the queue without a prepared review; start the review again`);
+        }
+        if (run.baselineCaptured !== true) {
+            // Start-eligible means the record's predecessor has settled: snapshot the
+            // authoritative record now, but never again before a retry.
+            const current = await inspectRecord(run.recordPath);
+            run.existingFingerprint =
+                current.kind === 'record' ? JSON.stringify(current.record) : undefined;
+            run.baselineCaptured = true;
         }
         const started = await startTarget(this.services, {
             rule: run.context.rule,

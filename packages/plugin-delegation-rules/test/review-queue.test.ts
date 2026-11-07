@@ -606,42 +606,97 @@ describe('review queue admission', () => {
     }
   })
 
-  it('treats a changed prepared digest as a new run instead of a duplicate', async () => {
+  it('does not discard a queued run whose predecessor publishes while it waits', async () => {
     const root = await workspace()
-    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await writeChange(root, 'change-b', [{ number: '1.1', text: 'Holds the slot', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
     const subagents = new FakeSubagents()
     const pending = deferred()
     subagents.addProvider('codex-subagent', {}, pending.responder)
+    const git = new FakeGit()
+    git.files = ['src/engine.ts']
     const harness = await harnessFor(
       root,
-      { ...defaultTestConfig(), reviewQueue: { concurrency: 2 } },
+      {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+        ],
+        reviewQueue: { concurrency: 1 },
+      },
       subagents,
+      git,
     )
+    const reviewedTask = taskIdFor('Reviewed task')
 
-    const first = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
-    const firstRun = runIdFrom(first)
-    await writeFile(
-      join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
-      '# Proposal\n\nChanged.\n',
-      'utf8',
-    )
-    const second = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
-    const secondRun = runIdFrom(second)
-
-    expect(secondRun).not.toBe(firstRun)
-    expect(second).not.toContain('already pending')
-    expect(second).toContain('review queued')
-    await vi.waitFor(async () => {
-      expect((await readRun(root, firstRun)).identity).not.toBe(
-        (await readRun(root, secondRun)).identity,
-      )
+    // One live-slot holder keeps the queue occupied while both D snapshots prepare.
+    const holder = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-b',
+      task: taskIdFor('Holds the slot'),
     })
+    const predecessor = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task: reviewedTask,
+    })
+    const predecessorRun = runIdFrom(predecessor)
+    expect(predecessor).toContain('review queued')
+
+    // A new frozen tree makes the successor's digest distinct from D1.
+    git.status = 'M src/engine.ts'
+    const successor = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task: reviewedTask,
+    })
+    const successorRun = runIdFrom(successor)
+    expect(successorRun).not.toBe(predecessorRun)
+    expect(successor).toContain('review queued')
 
     pending.releases.shift()?.()
-    await harness.waitForRun(firstRun)
+    expect(await harness.waitForRun(holder)).toContain('state=completed')
     await subagents.waitForStarts(2)
     pending.releases.shift()?.()
-    await harness.waitForRun(secondRun)
+    expect(await harness.waitForRun(predecessorRun)).toContain('state=completed')
+    const recordPath = join(
+      root,
+      '.dsh',
+      'delegation',
+      'task-review',
+      'change-a',
+      'tasks',
+      `${reviewedTask}.json`,
+    )
+    const first = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      runId: string
+      digest: string
+      verdict: string
+    }
+    expect(first.runId).toBe(predecessorRun)
+    expect(first.verdict).toBe('PASS')
+
+    await subagents.waitForStarts(3)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(successorRun)).toContain('state=completed')
+    const second = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      runId: string
+      digest: string
+      verdict: string
+    }
+    expect(second.runId).toBe(successorRun)
+    expect(second.digest).not.toBe(first.digest)
+    expect(second.verdict).toBe('PASS')
   })
 })
 
