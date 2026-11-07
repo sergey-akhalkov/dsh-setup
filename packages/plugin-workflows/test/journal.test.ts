@@ -286,6 +286,13 @@ describe('workflow event recorder', () => {
     expect(records[1]?.callId).toBe('call-1')
     expect(records[1]?.ok).toBe(true)
     expect(records[1]?.turn).toBe(2)
+    expect(records[1]?.triggers).toHaveLength(9)
+    expect(
+      records[1]?.triggers?.some(
+        (evaluation) =>
+          evaluation.id === 'delegate-result' && evaluation.reason === 'filter-mismatch',
+      ),
+    ).toBe(true)
     expect(records[3]?.subject).toBe('child-9')
     expect(records[3]?.turn).toBe(2)
     expect(records[4]?.subject).toBe('child-9')
@@ -894,6 +901,14 @@ describe('workflow event recorder', () => {
     expect(record?.subject).toContain('openspec/changes/add-x/tasks.md')
     expect(record?.summary).toContain('created')
     expect(record?.turn).toBe(1)
+    expect(
+      record?.triggers?.some(
+        (evaluation) =>
+          evaluation.id === 'openspec-tasks-checked' &&
+          evaluation.matched &&
+          evaluation.reason === 'would-fire',
+      ),
+    ).toBe(true)
   })
 
   it('fails the append when the repair read fails and preserves both records on retry', async () => {
@@ -1075,6 +1090,39 @@ describe('workflow event recorder', () => {
     host.resolveFsWatch()
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(host.fsClosed.length).toBeGreaterThan(0)
+  })
+
+  it('keeps every trigger evaluation when oversized metadata must be truncated', async () => {
+    const workspace = await tempWorkspace()
+    const journal = new Journal()
+    const long = `${'变更'.repeat(120)}2.5.json`
+    const triggers = Array.from({ length: 9 }, (_, index) => ({
+      id: `trigger-${String(index)}`,
+      matched: index < 2,
+      reason: index < 2 ? 'would-fire' : 'event-mismatch',
+      path: long,
+      filter: `path: ${long}`,
+    }))
+    const { record, truncated } = journal.record({
+      at: 1,
+      session: 'session-1',
+      kind: 'fs.change',
+      subject: `openspec/changes/${long}`,
+      summary: long,
+      bytes: long.length,
+      truncated: false,
+      triggers,
+    })
+    expect(truncated).toBe(true)
+    expect(record.triggers).toHaveLength(9)
+    expect(record.triggers?.filter((evaluation) => evaluation.matched)).toHaveLength(2)
+    expect(Buffer.byteLength(JSON.stringify(record), 'utf8')).toBeLessThanOrEqual(4096)
+    expect((await journal.append(workspace, record)).ok).toBe(true)
+    const { records } = await journal.read(workspace, 'session-1', 0, 10)
+    expect(records[0]?.triggers).toHaveLength(9)
+    expect(records[0]?.triggers?.map((evaluation) => evaluation.id)).toEqual(
+      triggers.map((trigger) => trigger.id),
+    )
   })
 
   it('contains a listener whose journal write fails', async () => {

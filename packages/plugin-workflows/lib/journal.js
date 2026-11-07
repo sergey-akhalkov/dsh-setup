@@ -110,6 +110,18 @@ export function capRecord(record, maxBytes = MAX_RECORD_BYTES) {
         if (fits(candidate))
             return { record: candidate, truncated: true };
     }
+    if (candidate.triggers !== undefined) {
+        // Evaluations are the Why-not data; keep every id/result/reason and drop
+        // only the optional evidence fields before falling back to a bare record.
+        const compact = candidate.triggers.map((evaluation) => ({
+            id: evaluation.id.slice(0, 60),
+            matched: evaluation.matched,
+            reason: evaluation.reason,
+        }));
+        candidate = { ...candidate, triggers: compact };
+        if (fits(candidate))
+            return { record: candidate, truncated: true };
+    }
     const minimal = {
         v: candidate.v,
         at: candidate.at,
@@ -120,6 +132,7 @@ export function capRecord(record, maxBytes = MAX_RECORD_BYTES) {
         summary: '',
         bytes: candidate.bytes,
         truncated: true,
+        ...(candidate.triggers === undefined ? {} : { triggers: candidate.triggers }),
     };
     if (!fits(minimal)) {
         throw new Error(`journal record metadata exceeds the ${String(maxBytes)}-byte cap`);

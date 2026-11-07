@@ -19,7 +19,7 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 
 - [x] 3.1 Define the shipped shadow trigger catalog for turn start, turn stop, tool result, subagent start/end, and OpenSpec file changes; validate id, event kind, filter, mode, and dedupe at load; verify a valid catalog loads and an invalid trigger fails with the field name.
 - [x] 3.2 Implement the pure evaluator returning `matched` plus the fixed reason vocabulary; verify one test per reason, including `would-fire`, event mismatch, path filter mismatch, debounce dedupe, disabled mode, and an internal error.
-- [ ] 3.3 Wire the evaluator into the journal so every event stores its trigger evaluations and the Why-not page can read them; verify a duplicate file event produces one `matched` row and one `dedupe` row and no action.
+- [x] 3.3 Wire the evaluator into the journal so every event stores its trigger evaluations and the Why-not page can read them; verify a duplicate file event produces one `matched` row and one `dedupe` row and no action.
 
 ## 4. Run projection (lane 1, owns `packages/plugin-workflows/src/host/projection.ts`, `packages/plugin-workflows/test/projection.test.ts`, `packages/plugin-workflows/test/fixtures/**`)
 
