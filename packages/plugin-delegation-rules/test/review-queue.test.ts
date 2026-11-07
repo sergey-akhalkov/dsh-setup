@@ -4017,3 +4017,58 @@ describe('run file validation', () => {
     expect(status).not.toMatch(/sk-secretcredential/)
   })
 })
+
+describe('queued wait visibility', () => {
+  it('shows elapsed wait for a still-queued run', async () => {
+    let clock = new Date('2026-01-01T00:00:00.000Z')
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = new Harness({
+      cwd: root,
+      config: { ...defaultTestConfig(), reviewQueue: { concurrency: 1 } },
+      agents: subagents,
+      now: () => clock,
+    })
+    await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    const queued = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-b' })
+    const queuedRun = runIdFrom(queued)
+    clock = new Date(clock.getTime() + 10_000)
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toMatch(new RegExp(`run ${queuedRun}: .*waitMs=10000`))
+  })
+
+  it('keeps a valid run with a long detail visible and truncated', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const runsDir = join(root, '.dsh', 'delegation', 'runs')
+    await mkdir(runsDir, { recursive: true })
+    await writeFile(
+      join(runsDir, 'run-long.json'),
+      JSON.stringify({
+        id: 'run-long',
+        rule: 'spec-review',
+        change: 'change-a',
+        key: 'k',
+        identity: 'i',
+        state: 'failed',
+        record: '.dsh/delegation/spec-review/change-a/spec.json',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        queuedAt: '2026-01-01T00:00:00.000Z',
+        waitMs: 5,
+        attempts: 1,
+        failureClass: 'timeout',
+        detail: 'x'.repeat(600),
+      }),
+      'utf8',
+    )
+    const harness = await harnessFor(root, defaultTestConfig(), new FakeSubagents())
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toContain('run-long')
+    expect(status).toContain('attempts=1')
+    expect(status).not.toContain('x'.repeat(501))
+  })
+})

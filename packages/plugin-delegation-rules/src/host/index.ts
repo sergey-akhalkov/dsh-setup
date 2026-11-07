@@ -2327,11 +2327,11 @@ function parseRunFile(value: unknown): RunFile | undefined {
     return undefined
   }
   if (value.taskId !== undefined && typeof value.taskId !== 'string') return undefined
-  if (
-    value.detail !== undefined &&
-    (typeof value.detail !== 'string' || value.detail.length > 500)
-  ) {
-    return undefined
+  if (value.detail !== undefined) {
+    if (typeof value.detail !== 'string') return undefined
+    // Normalize rather than discard an otherwise valid run: the engine bounds
+    // details to 4000 characters, the status shows a shorter excerpt.
+    value.detail = value.detail.slice(0, 500)
   }
   if (value.queuePosition !== undefined) {
     if (typeof value.queuePosition !== 'number' || !Number.isSafeInteger(value.queuePosition)) {
@@ -4508,11 +4508,20 @@ class DelegationEngine {
     const facts: string[] = []
     if (file.queuePosition !== undefined) facts.push(`position=${file.queuePosition}`)
     if (file.queuedAt !== undefined) facts.push(`queuedAt=${file.queuedAt}`)
-    if (file.waitMs !== undefined) facts.push(`waitMs=${file.waitMs}`)
+    const waitMs = file.waitMs ?? this.elapsedWaitMs(file)
+    if (waitMs !== undefined) facts.push(`waitMs=${waitMs}`)
     if (file.attempts !== undefined) facts.push(`attempts=${file.attempts}`)
     if (file.lastRetryAt !== undefined) facts.push(`lastRetryAt=${file.lastRetryAt}`)
     if (file.failureClass !== undefined) facts.push(`failureClass=${file.failureClass}`)
     return facts.length === 0 ? '' : ` ${facts.join(' ')}`
+  }
+
+  /** Elapsed wait for a still-queued run; bounded to 30 days. */
+  private elapsedWaitMs(file: RunFile): number | undefined {
+    if (file.state !== 'queued' || file.queuedAt === undefined) return undefined
+    const queuedAt = Date.parse(file.queuedAt)
+    if (!Number.isFinite(queuedAt)) return undefined
+    return Math.min(2_592_000_000, Math.max(0, this.services.now().getTime() - queuedAt))
   }
 
   private runHandleText(
