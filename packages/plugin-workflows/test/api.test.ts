@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -251,13 +251,74 @@ describe('workflows read API', () => {
     expect(body.error.length).toBeLessThanOrEqual(330)
   })
 
+  it('clamps an oversized limit to 200 and returns the remainder by cursor', async () => {
+    const value = await setup()
+    for (let index = 0; index < 250; index += 1) {
+      const { record } = value.journal.record(input({ at: index, turn: index }))
+      await value.journal.append(value.workspaceOne, record)
+    }
+    const first = await request(value, EVENTS_ROUTE, { session: 's1', query: 'limit=500' })
+    expect(first.status).toBe(200)
+    const firstBody = first.body as { events: unknown[]; next?: string }
+    expect(firstBody.events).toHaveLength(200)
+    expect(firstBody.next).toBe('200')
+    const second = await request(value, EVENTS_ROUTE, {
+      session: 's1',
+      query: 'cursor=200&limit=500',
+    })
+    expect(second.status).toBe(200)
+    const secondBody = second.body as { events: unknown[]; next?: string }
+    expect(secondBody.events).toHaveLength(50)
+    expect(secondBody.next).toBeUndefined()
+  })
+
+  it('pages runs with the default size and a cursor', async () => {
+    const value = await setup()
+    const runDirectory = join(value.workspaceOne, '.dsh', 'delegation', 'runs')
+    await mkdir(runDirectory, { recursive: true })
+    for (let index = 0; index < 60; index += 1) {
+      const id = `run-mw6abcde-${index.toString(16).padStart(8, '0')}`
+      await writeFile(
+        join(runDirectory, `${id}.json`),
+        JSON.stringify({
+          id,
+          rule: 'task-review',
+          change: 'add-x',
+          key: 'k',
+          identity: 'i',
+          state: 'running',
+          record: `.dsh/delegation/task-review/add-x/tasks/${id}.json`,
+          startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        }),
+        'utf8',
+      )
+      const { record } = value.journal.record(
+        input({
+          at: index,
+          subject: 'delegate',
+          summary: `delegate review started; run: ${id}`,
+        }),
+      )
+      await value.journal.append(value.workspaceOne, record)
+    }
+    const first = await request(value, RUNS_ROUTE, { session: 's1' })
+    expect(first.status).toBe(200)
+    const firstBody = first.body as { runs: unknown[]; next?: string }
+    expect(firstBody.runs).toHaveLength(50)
+    expect(firstBody.next).toBe('50')
+    const second = await request(value, RUNS_ROUTE, { session: 's1', query: 'cursor=50' })
+    const secondBody = second.body as { runs: unknown[]; next?: string }
+    expect(secondBody.runs).toHaveLength(10)
+    expect(secondBody.next).toBeUndefined()
+  })
+
   it('pages a long session with a clamped limit and a next cursor', async () => {
     const value = await setup()
     for (let index = 0; index < 120; index += 1) {
       const { record } = value.journal.record(input({ at: index, turn: index }))
       await value.journal.append(value.workspaceOne, record)
     }
-    const first = await request(value, EVENTS_ROUTE, { session: 's1', query: 'limit=50' })
+    const first = await request(value, EVENTS_ROUTE, { session: 's1' })
     expect(first.status).toBe(200)
     const firstBody = first.body as { events: unknown[]; next?: string }
     expect(firstBody.events).toHaveLength(50)
