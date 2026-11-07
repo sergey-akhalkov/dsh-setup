@@ -15,6 +15,14 @@
     }
   ],
   "laneAges": [{ "id": "lane-a", "checkpoints": 1 }],
+  "bottleneck": {
+    "id": "lane-a",
+    "owner": "lead",
+    "action": "lead_action",
+    "blockingLanes": [],
+    "targets": ["packages/plugin-workflows"]
+  },
+  "bottleneckKey": "e2d946de2649d514",
   "derivedRemaining": ["lane-a"],
   "parallelComputed": false,
   "next": "finish the projection test",

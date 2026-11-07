@@ -99,7 +99,20 @@ export async function checkpointRuns(workspace, sessionId) {
             continue;
         }
         const record = parsed.value;
-        const recordedTurn = typeof record.turn === 'number' ? record.turn : Number(turn);
+        if (typeof record.outcome !== 'string' ||
+            (record.outcome !== 'done' && record.outcome !== 'continue') ||
+            typeof record.turn !== 'number' ||
+            !validLanes(record.lanes) ||
+            typeof record.next !== 'string') {
+            runs.push(errorRun(`checkpoint:${turn}`, 'checkpoint', workspace, file, 'local', sessionId, 'missing or invalid outcome, turn, lanes, or next'));
+            continue;
+        }
+        if ((record.outcome === 'continue' && !validBottleneck(record.bottleneck)) ||
+            (record.bottleneck !== undefined && !validBottleneck(record.bottleneck))) {
+            runs.push(errorRun(`checkpoint:${turn}`, 'checkpoint', workspace, file, 'local', sessionId, 'missing or invalid bottleneck for the checkpoint outcome'));
+            continue;
+        }
+        const recordedTurn = record.turn;
         const startedAt = parseTime(record.time);
         const steps = [
             {
@@ -139,6 +152,42 @@ export async function checkpointRuns(workspace, sessionId) {
         });
     }
     return runs;
+}
+const LANE_STATES = new Set(['running', 'blocked', 'done']);
+/** Every required lane field the producer guarantees. */
+function validLanes(value) {
+    return (Array.isArray(value) &&
+        value.every((lane) => isRecord(lane) &&
+            typeof lane.id === 'string' &&
+            typeof lane.owner === 'string' &&
+            typeof lane.state === 'string' &&
+            LANE_STATES.has(lane.state) &&
+            Array.isArray(lane.scope) &&
+            lane.scope.every((entry) => typeof entry === 'string')));
+}
+const BOTTLENECK_ACTIONS = new Set(['worker_start', 'lead_action', 'user_decision']);
+function validBottleneck(value) {
+    if (!isRecord(value) ||
+        typeof value.id !== 'string' ||
+        typeof value.owner !== 'string' ||
+        typeof value.action !== 'string' ||
+        !BOTTLENECK_ACTIONS.has(value.action)) {
+        return false;
+    }
+    if (value.targets !== undefined &&
+        (!Array.isArray(value.targets) || !value.targets.every((entry) => typeof entry === 'string'))) {
+        return false;
+    }
+    if (value.action === 'lead_action') {
+        if (!Array.isArray(value.targets) || value.targets.length === 0)
+            return false;
+    }
+    if (value.blockingLanes !== undefined &&
+        (!Array.isArray(value.blockingLanes) ||
+            !value.blockingLanes.every((entry) => typeof entry === 'string'))) {
+        return false;
+    }
+    return true;
 }
 const LOCAL_SKIP = new Set(['runs', 'sessions', 'task-progress', 'worktrees', 'owners']);
 /** Read every settled local review record; malformed files are not runs. */
