@@ -33,7 +33,7 @@ The change is one lane: every group edits the shared `packages/plugin-delegation
 
 - [x] 5.1 Load matching accepted and applied lessons before `reviewPrompt` and append a bounded `## Lessons from prior reviews` section before the output contract; verify only matching rules and capabilities are included.
 - [x] 5.2 Enforce the three-lesson and 1200-character bounds, sanitize control characters, and add the judgment sentence; verify an oversized body is truncated and an injected instruction-shaped finding remains data.
-- [ ] 5.3 Verify that no matching lesson makes the prompt byte-identical to the classification-aware instruction with lesson injection disabled, and that proposed or rejected lessons are never injected.
+- [x] 5.3 Verify that no matching lesson makes the prompt byte-identical to the classification-aware instruction with lesson injection disabled, and that proposed or rejected lessons are never injected.
 
 ## 6. Interfaces, configuration, and verification (owns `packages/plugin-delegation-rules/src/host/index.ts`, `packages/plugin-delegation-rules/cordis.fragment.yml`, `packages/plugin-delegation-rules/package.json`, `packages/plugin-delegation-rules/test/config.test.ts`, `docs/delegation-rules.md`)
 
