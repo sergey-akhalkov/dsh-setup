@@ -1450,13 +1450,64 @@ describe('review failure classification', () => {
     expect(classifyFailure(withProperty, 'start').retryAfterMs).toBe(1_234)
   })
 
+  it('prefers the reviewer-output marker over keywords inside the payload', () => {
+    const error = Object.assign(
+      new Error('the fenced verdict is not valid JSON: unexpected timeout token'),
+      { name: 'InvalidOutputError' },
+    )
+    expect(classifyFailure(error, 'run')).toEqual({
+      failureClass: 'invalid-output',
+      transient: false,
+    })
+  })
+
+  it('classifies malformed provider output as invalid-output', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    let call = 0
+    subagents.addProvider('codex-subagent', {}, () => {
+      call += 1
+      if (call === 1) {
+        return {
+          output: [
+            {
+              type: 'text' as const,
+              text: '```json\n{}\n```\n```json\n{}\n```',
+            },
+          ],
+          stopReason: 'completed' as const,
+        }
+      }
+      return { output: [], stopReason: 'completed' as const }
+    })
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+
+    const first = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(first)).toContain('state=failed')
+    const firstRun = await readRun(root, first)
+    expect(firstRun.failureClass).toBe('invalid-output')
+    const firstRecord = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string; error: string }
+    expect(firstRecord.verdict).toBe('ERROR')
+    expect(firstRecord.error).toContain('fenced blocks')
+
+    const second = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(second)).toContain('state=failed')
+    expect((await readRun(root, second)).failureClass).toBe('invalid-output')
+  })
+
   it('records a bounded, redacted failure class on the run and record', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        'permission denied for C:\\Users\\me\\secret.txt with sk-abcdefgh12345678 token',
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1474,6 +1525,8 @@ describe('review failure classification', () => {
     expect(record.verdict).toBe('ERROR')
     expect(record.error).toContain('[path]')
     expect(record.error).toContain('[secret]')
-    expect(record.error.length).toBeLessThanOrEqual(4_000)
+    expect(record.error).not.toContain('sk-abcdefgh12345678')
+    expect(record.error).not.toContain('C:\\Users')
+    expect(record.error.length).toBe(4_000)
   })
 })

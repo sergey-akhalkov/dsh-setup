@@ -3,17 +3,21 @@ export function classifyFailure(error, phase) {
     const message = error instanceof Error ? error.message : String(error);
     const retryAfterMs = retryAfterOf(error, message);
     const matched = (pattern) => pattern.test(message);
+    // Explicit reviewer-output rejections win over keywords inside the payload.
+    if (error instanceof Error && error.name === 'InvalidOutputError') {
+        return { failureClass: 'invalid-output', transient: false };
+    }
     if (matched(/active child limit|subagent limit reached/i)) {
         return { failureClass: 'child-limit', transient: true, ...retryEvidence(retryAfterMs) };
     }
     if (matched(/reviewed inputs changed/i)) {
         return { failureClass: 'reviewed-inputs-changed', transient: false };
     }
+    if (matched(/no fenced JSON verdict|fenced verdict|fenced blocks|returned no text output|verdict digest does not match|verdict must|findings must|requires zero P0\/P1 findings|requires at least one P0\/P1 finding|finding #/i)) {
+        return { failureClass: 'invalid-output', transient: false };
+    }
     if (matched(/did not finish within|timed out|timeout/i)) {
         return { failureClass: 'timeout', transient: true, ...retryEvidence(retryAfterMs) };
-    }
-    if (matched(/no fenced JSON verdict|fenced verdict|verdict digest does not match|verdict must|findings must|requires zero P0\/P1 findings|requires at least one P0\/P1 finding|finding #/i)) {
-        return { failureClass: 'invalid-output', transient: false };
     }
     if (matched(/not registered|not configured|unknown rule|unknown trigger|unknown contract|unknown gate|must be|does not support|unsupported|invalid configuration|configuration must|target options/i)) {
         return { failureClass: 'config', transient: false };

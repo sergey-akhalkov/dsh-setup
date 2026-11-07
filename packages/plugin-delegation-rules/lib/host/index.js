@@ -2092,8 +2092,25 @@ async function changeApproval(config, change, openspecRoot, tasks) {
     });
     return { coverage };
 }
+/** A reviewer result that cannot be accepted as a verdict. */
+class InvalidOutputError extends DelegationError {
+    constructor(message) {
+        super(message);
+        this.name = 'InvalidOutputError';
+    }
+}
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
 function parseVerdict(text, expectedDigest) {
+    try {
+        return parseVerdictInner(text, expectedDigest);
+    }
+    catch (error) {
+        // Every rejection here is the reviewer's output, never a transient target
+        // failure: the classifier must not read keywords out of the payload.
+        throw new InvalidOutputError(errorMessage(error));
+    }
+}
+function parseVerdictInner(text, expectedDigest) {
     const blocks = [];
     const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/g;
     for (const match of text.matchAll(fence)) {
@@ -2423,8 +2440,9 @@ async function finishTarget(started) {
         fail(`rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`);
     }
     const text = outputText(result);
-    if (text === '')
-        fail(`rule "${rule.id}": target "${targetLabel(target)}" returned no text output`);
+    if (text === '') {
+        throw new InvalidOutputError(`rule "${rule.id}": target "${targetLabel(target)}" returned no text output`);
+    }
     return {
         text,
         provider: started.provider,
