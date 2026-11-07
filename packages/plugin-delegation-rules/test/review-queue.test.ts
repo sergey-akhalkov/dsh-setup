@@ -1935,3 +1935,121 @@ describe('review retry policy', () => {
     }
   })
 })
+
+describe('review retry-after and run retries', () => {
+  const flush = (): Promise<void> =>
+    new Promise((resolve) => {
+      realSetTimeout(resolve, 5)
+    })
+
+  it('honors a provider retry-after through the start path', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent')
+      const original = subagents.startActivation.bind(subagents)
+      let attempts = 0
+      subagents.startActivation = async (spec) => {
+        attempts += 1
+        if (attempts === 1) {
+          throw Object.assign(new Error('subagent limit reached (active child limit: 8)'), {
+            retryAfterMs: 700,
+          })
+        }
+        return original(spec)
+      }
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+        },
+        subagents,
+      )
+      const handle = await harness.toolText('delegate', {
+        rule: 'spec-review',
+        change: 'change-a',
+      })
+      const runId = runIdFrom(handle)
+      expect(handle).toContain('review retrying')
+      await flush()
+
+      // The provider hint (700 ms) exceeds the jittered 50 ms base delay.
+      await vi.advanceTimersByTimeAsync(699)
+      await flush()
+      expect(attempts).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await flush()
+      expect(attempts).toBe(2)
+      expect(await harness.waitForRun(runId)).toContain('state=completed')
+      const record = JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+          'utf8',
+        ),
+      ) as { verdict: string }
+      expect(record.verdict).toBe('PASS')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('retries a transient provider-result failure and publishes one record', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      let calls = 0
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        calls += 1
+        if (calls < 3) {
+          return {
+            output: [],
+            stopReason: 'error' as const,
+            diagnostic: 'subagent limit reached (active child limit: 8)',
+          }
+        }
+        return passResponder(run)
+      })
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 200 },
+        },
+        subagents,
+      )
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      await flush()
+
+      await vi.advanceTimersByTimeAsync(100)
+      await flush()
+      await vi.advanceTimersByTimeAsync(200)
+      await flush()
+      expect(await harness.waitForRun(runId)).toContain('state=completed')
+
+      const run = await readRun(root, runId)
+      expect(run.attempts).toBe(3)
+      expect(calls).toBe(3)
+      const record = JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+          'utf8',
+        ),
+      ) as { verdict: string; runId: string }
+      expect(record.verdict).toBe('PASS')
+      expect(record.runId).toBe(runId)
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+})

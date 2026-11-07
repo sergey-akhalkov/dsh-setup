@@ -307,6 +307,8 @@ class ProviderStartError extends DelegationError {
     message: string,
     /** The provider's own text, separated from rule/target identifiers. */
     readonly providerMessage: string,
+    /** A provider-supplied retry-after hint, preserved for the queue policy. */
+    readonly retryAfterMs?: number,
   ) {
     super(message)
     this.name = 'ProviderStartError'
@@ -3181,9 +3183,15 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
   } catch (error) {
     // Classify the untruncated cause; expose only the bounded, redacted text.
     const providerMessage = errorMessage(error)
+    const hint =
+      (error as { retryAfterMs?: unknown }).retryAfterMs ??
+      (error as { retryAfter?: unknown }).retryAfter
+    const retryAfterMs =
+      typeof hint === 'number' && Number.isFinite(hint) && hint > 0 ? Math.round(hint) : undefined
     throw new ProviderStartError(
       `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
       providerMessage,
+      retryAfterMs,
     )
   }
   const model = target.model ?? agentOptions?.model
@@ -3857,6 +3865,7 @@ class DelegationEngine {
     prepared: ReviewPreparation,
   ): Promise<void> {
     let outcome: SettledRunState = 'failed'
+    let skipCleanup = false
     try {
       const result = await finishTarget(started)
       const parsed = parseVerdict(result.text, prepared.digest)
@@ -3899,7 +3908,18 @@ class DelegationEngine {
         await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
         outcome = 'discarded'
       } else {
-        run.file.failureClass = classifyFailure(error, 'run').failureClass
+        const failure = classifyFailure(error, 'run')
+        run.file.failureClass = failure.failureClass
+        if (
+          this.config.reviewQueue.enabled &&
+          failure.transient &&
+          this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts
+        ) {
+          // A retry publishes no verdict and keeps its snapshot for the re-run.
+          skipCleanup = true
+          await this.queue.scheduleRetry(run, failure, error)
+          return
+        }
         try {
           await this.publishRecord(run, {
             digest: prepared.digest,
@@ -3937,8 +3957,10 @@ class DelegationEngine {
         }
       }
     } finally {
-      await this.discardSnapshot(run)
-      await this.settleReviewRun(run, outcome)
+      if (!skipCleanup) {
+        await this.discardSnapshot(run)
+        await this.settleReviewRun(run, outcome)
+      }
     }
   }
   /** Write a record under the publish lock; a newer writer wins and this run is discarded. */

@@ -107,11 +107,15 @@ class ConfigError extends DelegationError {
 /** The provider rejected a start before any child existed; retryable. */
 class ProviderStartError extends DelegationError {
     providerMessage;
+    retryAfterMs;
     constructor(message, 
     /** The provider's own text, separated from rule/target identifiers. */
-    providerMessage) {
+    providerMessage, 
+    /** A provider-supplied retry-after hint, preserved for the queue policy. */
+    retryAfterMs) {
         super(message);
         this.providerMessage = providerMessage;
+        this.retryAfterMs = retryAfterMs;
         this.name = 'ProviderStartError';
     }
 }
@@ -2460,7 +2464,10 @@ async function startTarget(services, request) {
     catch (error) {
         // Classify the untruncated cause; expose only the bounded, redacted text.
         const providerMessage = errorMessage(error);
-        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`, providerMessage);
+        const hint = error.retryAfterMs ??
+            error.retryAfter;
+        const retryAfterMs = typeof hint === 'number' && Number.isFinite(hint) && hint > 0 ? Math.round(hint) : undefined;
+        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`, providerMessage, retryAfterMs);
     }
     const model = target.model ?? agentOptions?.model;
     const reasoningEffort = target.reasoningEffort ?? agentOptions?.reasoningEffort;
@@ -2978,6 +2985,7 @@ class DelegationEngine {
     /** Background completion: verdict + mutation guard + authoritative publish. */
     async completeReviewRun(run, started, prepared) {
         let outcome = 'failed';
+        let skipCleanup = false;
         try {
             const result = await finishTarget(started);
             const parsed = parseVerdict(result.text, prepared.digest);
@@ -3007,7 +3015,16 @@ class DelegationEngine {
                 outcome = 'discarded';
             }
             else {
-                run.file.failureClass = classifyFailure(error, 'run').failureClass;
+                const failure = classifyFailure(error, 'run');
+                run.file.failureClass = failure.failureClass;
+                if (this.config.reviewQueue.enabled &&
+                    failure.transient &&
+                    this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts) {
+                    // A retry publishes no verdict and keeps its snapshot for the re-run.
+                    skipCleanup = true;
+                    await this.queue.scheduleRetry(run, failure, error);
+                    return;
+                }
                 try {
                     await this.publishRecord(run, {
                         digest: prepared.digest,
@@ -3033,8 +3050,10 @@ class DelegationEngine {
             }
         }
         finally {
-            await this.discardSnapshot(run);
-            await this.settleReviewRun(run, outcome);
+            if (!skipCleanup) {
+                await this.discardSnapshot(run);
+                await this.settleReviewRun(run, outcome);
+            }
         }
     }
     /** Write a record under the publish lock; a newer writer wins and this run is discarded. */
