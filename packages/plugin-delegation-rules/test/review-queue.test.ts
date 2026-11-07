@@ -2052,4 +2052,138 @@ describe('review retry-after and run retries', () => {
       vi.restoreAllMocks()
     }
   })
+  it('does not apply the admission deadline to an admitted run retry', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      let calls = 0
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        calls += 1
+        if (calls === 1) {
+          return {
+            output: [],
+            stopReason: 'error' as const,
+            diagnostic: 'subagent limit reached (active child limit: 8)',
+          }
+        }
+        return passResponder(run)
+      })
+      let clock = new Date('2026-01-01T00:00:00.000Z')
+      const harness = new Harness({
+        cwd: root,
+        config: {
+          ...defaultTestConfig(),
+          reviewQueue: {
+            concurrency: 1,
+            maxAttempts: 3,
+            baseDelayMs: 10,
+            maxDelayMs: 20,
+            waitTimeoutMs: 100,
+          },
+        },
+        agents: subagents,
+        now: () => clock,
+      })
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      await flush()
+      // Past the acceptance deadline, but the run was admitted long ago.
+      clock = new Date(clock.getTime() + 150)
+      await vi.advanceTimersByTimeAsync(10)
+      await flush()
+      expect(await harness.waitForRun(runId)).toContain('state=completed')
+      expect((await readRun(root, runId)).attempts).toBe(2)
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('lets a retrying head start when a follower fills the waiting list', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [{ number: '1.1', text: 'Shared task', checked: true }])
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent')
+      const original = subagents.startActivation.bind(subagents)
+      let firstStart = true
+      subagents.startActivation = async (spec) => {
+        if (firstStart) {
+          firstStart = false
+          throw new Error('subagent limit reached (active child limit: 8)')
+        }
+        return original(spec)
+      }
+      const git = new FakeGit()
+      git.failSnapshot = true
+      const harness = new Harness({
+        cwd: root,
+        config: {
+          targets: { codex: { provider: 'codex-subagent' } },
+          rules: [
+            {
+              id: 'task-review',
+              when: 'spec-task-ready',
+              to: 'codex',
+              contract: 'review',
+              scope: 'task',
+              gate: 'strict',
+              instruction: 'bundled:review-task',
+            },
+            {
+              id: 'task-review-extra',
+              when: 'spec-task-ready',
+              to: 'codex',
+              contract: 'review',
+              scope: 'task',
+              gate: 'soft',
+              instruction: 'bundled:review-task',
+            },
+          ],
+          reviewQueue: {
+            concurrency: 1,
+            maxQueued: 1,
+            maxAttempts: 3,
+            baseDelayMs: 10,
+            maxDelayMs: 20,
+          },
+        },
+        agents: subagents,
+        git,
+      })
+      const task = taskIdFor('Shared task')
+      const headHandle = await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        task,
+      })
+      const headRun = runIdFrom(headHandle)
+      expect(headHandle).toContain('review retrying')
+      await flush()
+
+      const follower = await harness.toolText('delegate', {
+        rule: 'task-review-extra',
+        change: 'change-a',
+        task,
+      })
+      const followerRun = runIdFrom(follower)
+      expect(follower).toContain('review queued')
+      expect(follower).toContain('queue position: 1')
+
+      await vi.advanceTimersByTimeAsync(10)
+      await flush()
+      expect(await harness.waitForRun(headRun)).toContain('state=completed')
+      expect(await harness.waitForRun(followerRun)).toContain('state=completed')
+      expect((await readRun(root, headRun)).attempts).toBe(2)
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
 })

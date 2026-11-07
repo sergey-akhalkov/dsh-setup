@@ -424,7 +424,9 @@ export class ReviewQueue<T extends QueueRun> {
       void this.settleWaitTimeout(entry)
       return
     }
-    if (this.limits.enabled && this.waiting.length >= this.limits.maxQueued) {
+    // A retry that can claim a free slot immediately needs no waiting room.
+    const mustWait = this.limits.enabled && this.active.size >= this.limits.concurrency
+    if (mustWait && this.waiting.length >= this.limits.maxQueued) {
       const cause =
         entry.lastError ?? new Error('the retry could not re-enter the full review queue')
       void this.failEntry(entry, cause, 'queue-timeout')
@@ -576,7 +578,9 @@ export class ReviewQueue<T extends QueueRun> {
         // settle the expired run instead of starting it.
         const expired = this.waiting.find(
           (candidate) =>
-            candidate.phase === 'queued' && this.hooks.now().getTime() >= candidate.waitDeadlineMs,
+            !candidate.admitted &&
+            candidate.phase === 'queued' &&
+            this.hooks.now().getTime() >= candidate.waitDeadlineMs,
         )
         if (expired !== undefined) {
           void this.settleWaitTimeout(expired)
