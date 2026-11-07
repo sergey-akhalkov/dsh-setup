@@ -2961,7 +2961,10 @@ describe('review timeout retry and quarantine', () => {
       expect(during.some((name) => name.startsWith(runId))).toBe(true)
 
       await vi.advanceTimersByTimeAsync(50)
-      await flush()
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if ((await readdir(snapshots)).length === 0) break
+        await flush()
+      }
       expect(await readdir(snapshots)).toEqual([])
       vi.clearAllTimers()
     } finally {
@@ -3211,5 +3214,47 @@ describe('queue-internal-error fallback', () => {
       ),
     ) as { verdict: string }
     expect(record.verdict).toBe('ERROR')
+  })
+})
+
+describe('queue fault during dispatch', () => {
+  it('keeps ownership when the pump faults after dispatching a start', async () => {
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const internals = queue as unknown as { pump: () => void }
+    const originalPump = internals.pump.bind(queue)
+    let inject = true
+    internals.pump = () => {
+      originalPump()
+      if (inject) {
+        inject = false
+        throw new Error('injected pump fault')
+      }
+    }
+    const run = fakeRun('run-a', 'key-a', 'identity-a')
+    const admission = await queue.submit(run)
+    expect(admission).toMatchObject({ kind: 'accepted', phase: 'running' })
+    expect(hooks.start).toHaveBeenCalledTimes(1)
+    expect(queue.owns('run-a')).toBe(true)
+    await queue.complete(run, 'completed')
+    queue.dispose()
   })
 })

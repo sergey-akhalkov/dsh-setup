@@ -2937,6 +2937,10 @@ class DelegationEngine {
     }
     /** Reserve fallback ownership, then start directly when it is safe. */
     async fallbackAfterQueueError(run, error) {
+        if (this.queue.owns(run.file.id)) {
+            // A start may already be in flight; never launch a second target.
+            return this.runHandleText(run, 'running');
+        }
         let reservation;
         try {
             reservation = await this.queue.reserve(run);

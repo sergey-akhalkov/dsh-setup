@@ -317,13 +317,35 @@ export class ReviewQueue<T extends QueueRun> {
     try {
       return await this.submitInner(run)
     } catch (error) {
+      // Deliberate engine failures (a permanent start rejection) surface as-is.
       if (error instanceof Error && EXPECTED_FAILURE_NAMES.has(error.name)) throw error
+      const entry = this.entries.get(run.file.id)
+      if (entry !== undefined && this.startDispatched(entry)) {
+        // A target start is already in flight: keep ownership and report its
+        // outcome instead of rolling back and starting a second target.
+        if (entry.startOutcome !== undefined) {
+          await entry.startOutcome.catch(() => undefined)
+        }
+        if (entry.finished || entry.phase === 'settled') return { kind: 'settled' }
+        if (entry.phase === 'retry-wait') return { kind: 'accepted', phase: 'retry-wait' }
+        if (entry.phase === 'queued') return { kind: 'accepted', phase: 'queued' }
+        return { kind: 'accepted', phase: 'running' }
+      }
       this.rollback(run.file.id)
       throw new QueueInternalError(
         `review queue internal error: ${error instanceof Error ? error.message : String(error)}`,
         error,
       )
     }
+  }
+
+  private startDispatched(entry: QueueEntry<T>): boolean {
+    return (
+      entry.startOutcome !== undefined ||
+      entry.phase === 'running' ||
+      entry.phase === 'retry-wait' ||
+      entry.finished
+    )
   }
 
   /** Remove an admission that failed before it could settle; never observe it. */
@@ -745,12 +767,15 @@ export class ReviewQueue<T extends QueueRun> {
   }
 
   private claim(entry: QueueEntry<T>): void {
+    // Read the clock before any state change: a fault here must not leave a
+    // half-claimed entry that never dispatches a start.
+    const waitMs = this.hooks.now().getTime() - entry.queuedAtMs
     this.removeWaiting(entry)
     entry.phase = 'starting'
     entry.attempts += 1
     entry.run.file.state = 'starting'
     entry.run.file.attempts = entry.attempts
-    entry.run.file.waitMs = this.hooks.now().getTime() - entry.queuedAtMs
+    entry.run.file.waitMs = waitMs
     delete entry.run.file.queuePosition
     if (entry.retryTimer !== undefined) {
       clearTimeout(entry.retryTimer)
