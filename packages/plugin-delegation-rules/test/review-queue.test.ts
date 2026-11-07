@@ -216,6 +216,9 @@ describe('review queue admission', () => {
     expect(timed).toContain('review queued')
 
     expect(await harness.waitForRun(timedRun)).toContain('state=failed')
+    expect(harness.settledRuns.filter((entry) => entry.runId === timedRun)).toEqual([
+      { runId: timedRun, state: 'failed' },
+    ])
     expect(subagents.startCalls).toBe(1)
     const run = await readRun(root, timedRun)
     expect(run.failureClass).toBe('queue-timeout')
@@ -2643,6 +2646,9 @@ describe('review timeout retry and quarantine', () => {
       await flush()
       await flush()
       expect(await harness.waitForRun(firstRun)).toContain('state=failed')
+      expect(harness.settledRuns.filter((entry) => entry.runId === firstRun)).toEqual([
+        { runId: firstRun, state: 'failed' },
+      ])
       expect((await readRun(root, firstRun)).failureClass).toBe('timeout')
       const record = JSON.parse(
         await readFile(
@@ -3663,6 +3669,9 @@ describe('retry publication matrix', () => {
       await expect(readFile(recordPath)).rejects.toThrow()
 
       expect(await harness.waitForRun(runId)).toContain(`state=${testCase.state}`)
+      expect(harness.settledRuns.filter((entry) => entry.runId === runId)).toEqual([
+        { runId, state: testCase.state },
+      ])
       const record = JSON.parse(await readFile(recordPath, 'utf8')) as { verdict: string }
       expect(record.verdict).toBe(testCase.verdict)
       expect(calls).toBe(2)
@@ -3787,5 +3796,63 @@ describe('retry deadline with a competing record', () => {
       ),
     ) as { runId: string }
     expect(record.runId).toBe(bRun)
+  })
+})
+
+describe('settlement observer timing', () => {
+  it('fires once, only after the final attempt', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      let attempts = 0
+      const hooks = {
+        start: vi.fn(async () => {
+          attempts += 1
+          if (attempts === 1) {
+            throw new Error('subagent limit reached (active child limit: 8)')
+          }
+        }),
+        persist: vi.fn(),
+        fail: vi.fn(async () => undefined),
+        timeout: vi.fn(async () => undefined),
+        settled: vi.fn(),
+        now: () => new Date('2026-01-01T00:00:00.000Z'),
+      }
+      const queue = new ReviewQueue<QueueRun>(
+        {
+          enabled: true,
+          concurrency: 1,
+          maxQueued: 2,
+          maxAttempts: 2,
+          baseDelayMs: 50,
+          maxDelayMs: 50,
+          waitTimeoutMs: 300_000,
+        },
+        hooks,
+      )
+      const run = fakeRun('run-a', 'key-a', 'identity-a')
+      expect(await queue.submit(run)).toEqual({ kind: 'accepted', phase: 'retry-wait' })
+      expect(hooks.settled).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(50)
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 5)
+      })
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 5)
+      })
+      expect(hooks.start).toHaveBeenCalledTimes(2)
+      expect(hooks.settled).not.toHaveBeenCalled()
+
+      await queue.complete(run, 'completed')
+      expect(hooks.settled).toHaveBeenCalledTimes(1)
+      await queue.complete(run, 'completed')
+      expect(hooks.settled).toHaveBeenCalledTimes(1)
+      queue.dispose()
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
   })
 })
