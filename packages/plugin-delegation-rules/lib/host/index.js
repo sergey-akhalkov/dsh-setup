@@ -3346,6 +3346,12 @@ class DelegationEngine {
                 }
             }
             await writeJsonAtomic(run.recordPath, record);
+            try {
+                this.services.onPublished?.(run.file.id, record);
+            }
+            catch {
+                // The observer is a seam; it must not change publication.
+            }
             return record;
         }
         finally {
@@ -4988,6 +4994,7 @@ export function apply(ctx, config = {}, options = {}) {
         now: options.now ?? (() => new Date()),
         timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
         ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
+        ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
         ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
         ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
     };

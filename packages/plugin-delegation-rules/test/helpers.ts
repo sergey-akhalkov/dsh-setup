@@ -288,6 +288,7 @@ export class Harness {
   readonly skillProviders: SkillProviderLike[] = []
   /** Terminal review-run states reported by the engine, in completion order. */
   readonly settledRuns: Array<{ runId: string; state: SettledRunState }> = []
+  readonly publishedRuns: Array<{ runId: string; verdict: string }> = []
   private readonly settlementWaiters = new Map<string, Array<(state: SettledRunState) => void>>()
   private readonly cwdByAgent: Record<string, string>
 
@@ -327,6 +328,7 @@ export class Harness {
       ...(options.observeSettlements === false
         ? {}
         : { onRunSettled: (runId, state) => this.recordSettlement(runId, state) }),
+      onPublished: (runId, record) => this.publishedRuns.push({ runId, verdict: record.verdict }),
       ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
       ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
     })

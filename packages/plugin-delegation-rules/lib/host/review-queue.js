@@ -280,16 +280,11 @@ export class ReviewQueue {
         if (existing !== undefined && !existing.finished) {
             return { kind: 'duplicate', run: existing.run };
         }
-        // The waiting cap applies only when this run must actually wait. A new key
-        // head with a free slot starts immediately and consumes no waiting room.
-        // A run behind an existing conversation key is a follower: it waits on the
-        // key head and never consumes the bounded waiting room.
-        const follower = this.keys.has(run.file.key);
-        const mustWait = follower || (this.limits.enabled && this.active.size >= this.limits.concurrency);
-        if (this.limits.enabled &&
-            mustWait &&
-            !follower &&
-            this.waiting.length >= this.limits.maxQueued) {
+        // The waiting cap applies only when this run must actually wait; a run
+        // behind an existing key occupies a waiting position too.
+        const mustWait = this.keys.has(run.file.key) ||
+            (this.limits.enabled && this.active.size >= this.limits.concurrency);
+        if (this.limits.enabled && mustWait && this.waiting.length >= this.limits.maxQueued) {
             return { kind: 'full', depth: this.waiting.length, maxQueued: this.limits.maxQueued };
         }
         const entry = {

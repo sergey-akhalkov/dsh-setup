@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { type ReviewFinding } from '../shared/approval.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -96,6 +97,8 @@ export interface ApplyOptions {
     now?: () => Date;
     /** Called once per review run after it settles; the run is no longer pending. */
     onRunSettled?: (runId: string, state: SettledRunState) => void;
+    /** Test seam: observes each published review record. */
+    onPublished?: (runId: string, record: ReviewRecord) => void;
     /** Test seam: throws before admission to simulate an internal queue failure. */
     queueFault?: () => void;
     /** Test seam: delays the once-per-workspace recovery scan. */
@@ -134,6 +137,29 @@ interface ChangeInfo {
     dir: string;
     reviewReady: boolean;
 }
+interface ReviewRecord {
+    rule: string;
+    change: string;
+    phase: string;
+    scope: ReviewScope;
+    taskId?: string;
+    digest: string;
+    worktreeDigest?: string;
+    verdict: Verdict;
+    findings: Finding[];
+    target: {
+        provider: string;
+        model?: string;
+        reasoningEffort?: string;
+    };
+    /** Owning DSH session id; absent on records written before thread scoping. */
+    session?: string;
+    /** Background review run that wrote this record; absent on older records. */
+    runId?: string;
+    time: string;
+    error?: string;
+}
+type Finding = ReviewFinding;
 /** Hash every change artifact, normalizing `tasks.md` checkbox state. */
 export declare function specDigest(changeDir: string, signal?: AbortSignal): Promise<string>;
 /** One immutable review checkout; the digest binds to `tree`. */

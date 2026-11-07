@@ -4419,6 +4419,7 @@ describe('queue integration', () => {
     await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
     await writeChange(root, 'change-b', [])
     await writeChange(root, 'change-c', [])
+    await writeChange(root, 'change-d', [])
     await mkdir(join(root, 'src'), { recursive: true })
     await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
     const subagents = new FakeSubagents()
@@ -4434,7 +4435,7 @@ describe('queue integration', () => {
       cwd: root,
       config: {
         ...defaultTestConfig(),
-        reviewQueue: { concurrency: 2, maxQueued: 1, maxAttempts: 1 },
+        reviewQueue: { concurrency: 2, maxQueued: 2, maxAttempts: 1 },
       },
       agents: subagents,
       git,
@@ -4468,13 +4469,21 @@ describe('queue integration', () => {
     const a2Run = runIdFrom(a2)
     expect(a2).toContain('review queued')
     expect(subagents.startCalls).toBe(2)
+    await expect(
+      harness.callTool('delegate', { rule: 'spec-review', change: 'change-d' }),
+    ).rejects.toThrow(/review queue full: 2 waiting run\(s\) at maxQueued=2/)
 
     // A settles while its queued successor still waits; C takes the free slot.
     starts[0]?.release()
     expect(await harness.waitForRun(aRun)).toContain('state=completed')
+    expect(harness.publishedRuns.filter((entry) => entry.runId === aRun)).toEqual([
+      { runId: aRun, verdict: 'PASS' },
+    ])
+    expect(harness.publishedRuns.filter((entry) => entry.verdict === 'ERROR')).toHaveLength(1)
     await subagents.waitForStarts(3)
     expect(starts[2]?.run.prompt).toContain('- Change: change-c')
     expect(subagents.startCalls).toBe(3)
+    expect((await readRun(root, a2Run)).state).toBe('queued')
 
     // B settles; the D2 successor starts and publishes.
     starts[1]?.release()
@@ -4494,6 +4503,13 @@ describe('queue integration', () => {
       'change-c',
       'change-a',
     ])
+    for (const runId of [aRun, b, cRun, a2Run]) {
+      expect(harness.publishedRuns.filter((entry) => entry.runId === runId)).toEqual([
+        { runId, verdict: 'PASS' },
+      ])
+    }
+    expect(harness.publishedRuns).toHaveLength(5)
+    expect(harness.publishedRuns.filter((entry) => entry.verdict === 'ERROR')).toHaveLength(1)
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${task}.json`),

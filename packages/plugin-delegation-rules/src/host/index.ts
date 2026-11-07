@@ -264,6 +264,8 @@ export interface ApplyOptions {
   now?: () => Date
   /** Called once per review run after it settles; the run is no longer pending. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
+  /** Test seam: observes each published review record. */
+  onPublished?: (runId: string, record: ReviewRecord) => void
   /** Test seam: throws before admission to simulate an internal queue failure. */
   queueFault?: () => void
   /** Test seam: delays the once-per-workspace recovery scan. */
@@ -3125,6 +3127,8 @@ interface EngineServices {
   timeoutsFor(rule: RuleConfig): number
   /** Test seam: fired once per review run after it leaves the pending set. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
+  /** Test seam: observes each published review record. */
+  onPublished?: (runId: string, record: ReviewRecord) => void
   /** Test seam: throws before admission to simulate an internal queue failure. */
   queueFault?: () => void
   /** Test seam: delays the once-per-workspace recovery scan. */
@@ -4320,6 +4324,11 @@ class DelegationEngine {
         }
       }
       await writeJsonAtomic(run.recordPath, record)
+      try {
+        this.services.onPublished?.(run.file.id, record)
+      } catch {
+        // The observer is a seam; it must not change publication.
+      }
       return record
     } finally {
       await release()
@@ -6295,6 +6304,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
     now: options.now ?? (() => new Date()),
     timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
     ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
+    ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
     ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
     ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
   }
