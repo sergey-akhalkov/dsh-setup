@@ -1640,7 +1640,7 @@ async function captureSnapshot(
 
 /** Match a whole Cookie/Set-Cookie header up to the next field or line end. */
 const COOKIE_HEADER_PATTERN =
-  /\b(?:cookie|set-cookie)["']?\s*[=:][\s\S]*?(?=["'}]|\r?\n|\s+(?:api[_-]?key|apikey|token|password|passwd|secret|authorization|private[_-]?key|x-api-key)\s*[=:]|$)/gi
+  /\b(?:cookie|set-cookie)["']?\s*[=:][\s\S]*?(?=\r?\n|\s+(?:api[_-]?key|apikey|token|password|passwd|secret|authorization|private[_-]?key|x-api-key)\s*[=:]|$)/gi
 
 function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
   const redacted = text
