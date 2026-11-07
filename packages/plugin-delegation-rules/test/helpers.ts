@@ -15,6 +15,7 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect, vi } from 'vitest'
+import type { UserQuestionsService } from '../src/host/learning-tools.ts'
 import { apply, type BundleConfig, type SettledRunState } from '../src/index.js'
 
 export type GitRunner = (
@@ -252,6 +253,8 @@ export interface HarnessOptions {
   queueFault?: () => void
   /** Delays the once-per-workspace recovery scan. */
   recoverDelay?: () => Promise<void>
+  /** Fake direct-user-answer service for lesson decisions. */
+  userQuestions?: UserQuestionsService
 }
 
 type ContextEvent = (...args: unknown[]) => unknown
@@ -284,6 +287,7 @@ export class Harness {
   readonly subagents: FakeSubagents
   readonly git: FakeGit
   readonly tools = new Map<string, ToolDefinition>()
+  readonly commands: Array<{ definitionId?: string; name: string }> = []
   readonly events = new Map<string, ContextEvent[]>()
   readonly skillProviders: SkillProviderLike[] = []
   /** Terminal review-run states reported by the engine, in completion order. */
@@ -315,6 +319,26 @@ export class Harness {
           return () => undefined
         },
       },
+      commands: {
+        register: (definition: { definitionId?: string; name: string }) => {
+          this.commands.push({ ...definition })
+          return () => undefined
+        },
+      },
+      get: (name: string) => {
+        if (name === 'userQuestions') return options.userQuestions
+        if (name === 'commands') {
+          return {
+            register: (definition: { definitionId?: string; name: string }) => {
+              this.commands.push({ ...definition })
+              return () => undefined
+            },
+          }
+        }
+        return undefined
+      },
+      effect: (work: () => unknown) => work(),
+      ...(options.userQuestions === undefined ? {} : { userQuestions: options.userQuestions }),
       on: (name: string, handler: ContextEvent) => {
         const list = events.get(name) ?? []
         list.push(handler)

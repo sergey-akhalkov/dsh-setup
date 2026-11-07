@@ -339,6 +339,58 @@ Audit commands:
 - `pnpm reviews:check --push` — the archived changes a push adds or modifies (read from stdin; the
   pre-push hook runs this and fails closed on an unknown range).
 
+### Review learning
+
+Every review finding carries a `class` from a fixed vocabulary: `spec-ambiguity`,
+`missing-test`, `path-boundary`, `state-persistence`, `stale-input`, `api-contract`,
+`plan-shape`, `docs-drift`, `security`, `other`. The review instructions request it, the verdict
+parser stores a valid class, and an absent or unknown class is stored as `other` — a malformed
+class never rejects a verdict. A PASS record carries no findings, so the portable approval is
+unchanged.
+
+The plugin keeps learning state under `.dsh/review-learning/` (local scratch, never tracked):
+
+- `<workspaceKey>.history.jsonl` — one bounded, sanitized entry per settled review
+  (`FINDINGS`/`PASS`, rule, change, task id, digest, findings, time), or a `gap` marker when the
+  append failed. The default window and history cap are 50 settled reviews; the maximum is 200.
+  A reused record appends nothing, and a later PASS never erases the earlier findings.
+- `<workspaceKey>.jsonl` — the lesson store, bounded to 200 lessons or 1 MB per workspace by
+  default. A lesson has a class, title, body, `appliesTo` rules/capabilities, source evidence,
+  and a state: `proposed`, `accepted`, `rejected`, or `applied`. The dedupe key is the normalized
+  class plus title; a duplicate of a proposed lesson updates it, and a duplicate of an accepted or
+  applied lesson creates a new proposed revision with a `supersedes` link while the accepted
+  content stays immutable. When the store is at its cap the oldest non-applied lesson is evicted
+  first; an applied-only full store refuses the write with `capacity` and changes nothing. Two
+  hosts writing the same workspace use a `<workspaceKey>.jsonl.lock` directory: a write waits
+  briefly, then fails with the lock path and asks you to remove it only when no other host is
+  writing.
+
+Only a direct user answer moves a lesson: a model may call `review_lesson` with `propose`, but
+`decide` (accept/reject) and `apply` go through the host user-questions service and the answer is
+bound to the exact lesson revision — an answer for a revision that changed while the question was
+open is refused and the current revision is named. `apply` requires a target: a change, spec,
+file, or test, recorded with the time; it is readable through `review_lesson` `list`.
+
+`review_retro` reads the finding history deterministically (no model call): counts per class, the
+top class, up to three bounded examples with their source records, the repeat count and rate per
+class, and the gap and malformed-line counts. A finding is repeated when the same normalized class
+and title hash appeared in an earlier entry in the window; the rate is the repeats divided by the
+class's findings. Its `propose` action stores at most one draft lesson (deduped by the store key);
+its output is bounded to 4000 characters. `/review-retro` prints the report and never accepts a
+lesson.
+
+At review start, up to three `accepted` or `applied` lessons whose `appliesTo` matches the rule
+and the change's delta capability names are injected as a `## Lessons from prior reviews` section
+before the output contract. The section is bounded to 1200 characters, is sanitized as data, and
+says to apply judgment — a lesson never changes the P0/P1 rule, the review contract, or the
+approval gate. No matching lesson means no section and a byte-identical prompt.
+
+Opt out with `reviewLearning.enabled: false`: the `review_retro` and `review_lesson` tools and the
+`/review-retro` command are not registered, no lesson is injected, and existing records stay
+readable. `reviewLearning.window` (default 50, 1–200) and `reviewLearning.maxLessons` (default
+200, 1–1000) are validated at plugin load; an invalid value fails the row with its range. The
+lesson store keeps its 1 MB cap regardless.
+
 ### Targets
 
 A target names a registered `ctx.subagents` provider and may add `model`, `reasoningEffort`, and

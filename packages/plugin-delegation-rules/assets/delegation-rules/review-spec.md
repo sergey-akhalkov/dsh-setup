@@ -41,6 +41,13 @@ sure something is wrong, it is not a finding.
 Every finding names the artifact and section, quotes or points at the exact text, and explains
 the concrete failure it causes. A finding without evidence is dropped.
 
+## Finding class
+
+Every finding also carries a `class` naming the failure type, one of: `spec-ambiguity`,
+`missing-test`, `path-boundary`, `state-persistence`, `stale-input`, `api-contract`, `plan-shape`,
+`docs-drift`, `security`, `other`. Pick the closest class; the class is a learning label, so a
+missing or unknown value is stored as `other` and never rejects the verdict.
+
 ## Output
 
 Return exactly one fenced ```json block and no other fenced block:
@@ -63,6 +70,7 @@ blocking finding:
   "findings": [
     {
       "severity": "P0",
+      "class": "spec-ambiguity",
       "title": "Short failure title",
       "evidence": "artifact.md section: exact text and why it fails",
       "fix": "the smallest change that resolves it"
@@ -71,5 +79,5 @@ blocking finding:
 }
 ```
 
-`severity` is `P0` or `P1`; all three text fields are non-empty. Prose outside the one block is
-ignored by the engine; only the block is parsed.
+`severity` is `P0` or `P1`; `class` is one of the listed vocabulary; all text fields are
+non-empty. Prose outside the one block is ignored by the engine; only the block is parsed.

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { inject, skillDescription, toolDescriptions } from '../src/index.js'
+import { FINDING_CLASSES } from '../src/shared/approval.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const assets = join(packageDir, 'assets', 'delegation-rules')
@@ -197,6 +198,34 @@ describe('bundled prompts', () => {
     expect(text).toContain('whole')
     expect(text).toContain('worktree')
     expect(text).toMatch(/exactly one fenced ```json block/)
+  })
+
+  it('documents the review-learning vocabulary, store paths, bounds, and opt-out', () => {
+    const docs = readFileSync(docsPath, 'utf8')
+    for (const text of [
+      'review_retro',
+      'review_lesson',
+      '/review-retro',
+      '.dsh/review-learning/',
+      'reviewLearning.enabled',
+      'reviewLearning.window',
+      'reviewLearning.maxLessons',
+      '1200 characters',
+      '4000 characters',
+      'spec-ambiguity',
+      'path-boundary',
+      'security',
+    ]) {
+      expect(docs).toContain(text)
+    }
+  })
+
+  it('requests the finding class vocabulary in all three review instructions', () => {
+    for (const name of ['review-spec.md', 'review-task.md', 'review-integration.md']) {
+      const text = read(name)
+      expect(text).toContain('"class"')
+      for (const findingClass of FINDING_CLASSES) expect(text).toContain(findingClass)
+    }
   })
 
   it('shapes a blocker consultation with recommendation, evidence, and next action', () => {
