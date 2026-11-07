@@ -3355,6 +3355,18 @@ class DelegationEngine {
         const prepared = run.prepared;
         const position = info.position === undefined ? '' : ` at position ${info.position}`;
         const message = `review queue wait timed out after ${info.waitMs} ms${position}; no target started. Shorten the running reviews or start this review again after the queue drains`;
+        // A newer publication during the wait decides this review; report the
+        // discard instead of a timeout that would hide the authoritative record.
+        const current = await inspectRecord(run.recordPath);
+        const fingerprint = current.kind === 'record' ? JSON.stringify(current.record) : undefined;
+        if (current.kind === 'record' &&
+            current.record.runId !== run.file.id &&
+            fingerprint !== run.existingFingerprint) {
+            await this.markRun(run, 'discarded', 'a newer review record was published while this run waited; its completion is discarded');
+            await this.discardSnapshot(run);
+            await this.settleReviewRun(run, 'discarded');
+            return;
+        }
         if (prepared !== undefined) {
             try {
                 const target = this.config.targets.get(run.context.rule.to ?? '');

@@ -3735,3 +3735,57 @@ describe('retry snapshot cleanup', () => {
     expect(await readdir(scratch)).toEqual([])
   })
 })
+
+describe('retry deadline with a competing record', () => {
+  it('reports discarded when the acceptance deadline expires after another publication', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const aAgents = new FakeSubagents()
+    let aCalls = 0
+    aAgents.addProvider('codex-subagent', {}, (run) => {
+      aCalls += 1
+      if (aCalls === 1) {
+        return {
+          output: [],
+          stopReason: 'error' as const,
+          diagnostic: 'subagent limit reached (active child limit: 8)',
+        }
+      }
+      return passResponder(run)
+    })
+    const aHarness = await harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        reviewQueue: {
+          concurrency: 1,
+          maxAttempts: 2,
+          baseDelayMs: 400,
+          maxDelayMs: 400,
+          waitTimeoutMs: 150,
+        },
+      },
+      aAgents,
+    )
+    const aRun = await aHarness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await new Promise((resolve) => {
+      realSetTimeout(resolve, 40)
+    })
+
+    const bAgents = new FakeSubagents()
+    bAgents.addProvider('codex-subagent', {}, passResponder)
+    const bHarness = await harnessFor(root, defaultTestConfig(), bAgents)
+    const bRun = await bHarness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await bHarness.waitForRun(bRun)).toContain('state=completed')
+
+    expect(await aHarness.waitForRun(aRun)).toContain('state=discarded')
+    expect(aCalls).toBe(1)
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { runId: string }
+    expect(record.runId).toBe(bRun)
+  })
+})
