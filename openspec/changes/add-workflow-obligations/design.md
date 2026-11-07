@@ -183,7 +183,7 @@ The deferred steps do not steer; they read the legacy record and update their ow
 - For an owned call (the call id is in the run's owned set), allow it. The owned set is host-generated and never exposed to the model.
 - Any other call is untouched.
 
-The gate does not inspect arbitrary `run_code` source; a manual directory creation or an obfuscated shell command can evade the command gate. That bypass is visible as a `fs.change` event without a matching intake run and is refused at the archive gate. For definitions, approvals, and receipts, an arbitrary write can create files but cannot fabricate a valid host HMAC, so the loader and archive gate refuse the record; the design states this boundary instead of claiming a sandbox.
+The gate does not inspect arbitrary `run_code` source; a manual directory creation or an obfuscated shell command can evade the command gate. That bypass is visible as a `fs.change` event without a matching intake run and is refused at the archive gate. For definitions, approvals, and receipts, an arbitrary write without access to the host key can create files but cannot fabricate a valid host HMAC, so the loader and archive gate refuse the record; a same-user program that reads the documented key path is outside this threat model (see §11), and the design states this boundary instead of claiming a sandbox.
 
 ### 7. The intake draft flow
 

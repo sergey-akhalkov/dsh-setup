@@ -8,7 +8,7 @@ The plugin SHALL contribute one `Workflows` view to the current conversation. Th
 
 #### Scenario: A turn closes unchanged
 
-- **WHEN** the plugin is active and a root turn runs and closes
+- **WHEN** only shadow triggers are active, no owned definition has an open step for the turn, and a root turn runs and closes
 - **THEN** no new steering, injection, tool decision, or turn refusal is attributable to the plugin
 
 #### Scenario: The view is available during work
@@ -71,3 +71,22 @@ For every observed event the plugin SHALL evaluate each trigger and record `matc
 
 - **WHEN** an applicability predicate rejects an active trigger for a session or turn
 - **THEN** the row records `not-applicable` and the engine creates no run
+
+### Requirement: Workspace scoping and privacy
+
+The plugin SHALL read only the requesting session's workspace and MUST NOT merge observed records from another workspace. The workflow engine MAY read its host key store at `<host home>/.dsh-setup/workflows-host.key` to verify approvals, runs, and receipts even though that file is outside the workspace; the key MUST NOT be copied into journals, run records, projections, or client responses. Journal and run payloads MUST be redacted, MUST NOT contain credentials, and MUST NOT include full file contents. The observability surface MUST NOT write tracked files.
+
+#### Scenario: Two workspaces stay separate
+
+- **WHEN** two sessions in different workspaces both have checkpoints
+- **THEN** each session's view lists only its own workspace records
+
+#### Scenario: Secret-shaped keys are redacted
+
+- **WHEN** a tool payload contains a token, password, or authorization field
+- **THEN** the journal stores a redaction marker instead of the value
+
+#### Scenario: Host key is not exposed
+
+- **WHEN** the engine verifies an approval, run, or receipt
+- **THEN** the host key is read from its host-owned path and never appears in the journal, a run record, the projection, or an API response

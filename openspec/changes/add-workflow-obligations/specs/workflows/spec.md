@@ -175,7 +175,7 @@ A whole-spec review record SHALL be read from `.dsh/delegation/spec-review/<chan
 
 ### Requirement: Host-authenticated authorization
 
-Approval and receipt files SHALL be authenticated records, not plain authority: each SHALL carry an HMAC-SHA256 signature made with a host key held outside `.dsh` and never exposed to the model. The loader and archive gate SHALL verify the signature and MUST refuse a forged, unsigned, or modified record, including after reload; an arbitrary shell or `run_code` write MUST NOT fabricate a valid record.
+Approval and receipt files SHALL be authenticated: each SHALL carry an HMAC-SHA256 signature made with a host key held outside `.dsh` and never exposed through a tool or output. The loader and archive gate SHALL verify it and MUST refuse a forged, unsigned, or modified record, including after reload. Without the key, an arbitrary shell or `run_code` write MUST NOT fabricate a valid record; a same-user program that can read the key path is outside this threat model (design §11).
 
 #### Scenario: Forged approval is refused
 
@@ -189,7 +189,7 @@ Approval and receipt files SHALL be authenticated records, not plain authority: 
 
 #### Scenario: Alternate write path cannot authorize
 
-- **WHEN** a model uses a shell or `run_code` path outside the file-write guard to write a definition and approval pair or a receipt
+- **WHEN** a model uses a shell or `run_code` path outside the file-write guard to write a definition and approval pair or a receipt without access to the host key
 - **THEN** the missing host signature still refuses the pair or receipt
 
 ### Requirement: Main-agent obligation
