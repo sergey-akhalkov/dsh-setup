@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { validateConfig } from '../lib/index.js'
+import { validateConfig } from '../src/index.js'
 import { defaultTestConfig } from './helpers.js'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
@@ -36,6 +36,30 @@ describe('configuration validation', () => {
     expect(config.targets.size).toBe(0)
     expect(config.failureStreak).toBe(3)
     expect(config.timeouts).toEqual({ review: 1_200_000, answer: 300_000, patch: 1_800_000 })
+    expect(config.reviewQueue).toEqual({
+      enabled: true,
+      concurrency: 2,
+      maxQueued: 16,
+      maxAttempts: 3,
+      baseDelayMs: 5_000,
+      maxDelayMs: 60_000,
+      waitTimeoutMs: 300_000,
+    })
+  })
+
+  it('merges a partial review queue block over the documented defaults', () => {
+    expect(validateConfig({ reviewQueue: { enabled: false } }).reviewQueue).toEqual({
+      enabled: false,
+      concurrency: 2,
+      maxQueued: 16,
+      maxAttempts: 3,
+      baseDelayMs: 5_000,
+      maxDelayMs: 60_000,
+      waitTimeoutMs: 300_000,
+    })
+    expect(
+      validateConfig({ reviewQueue: { concurrency: 4, maxAttempts: 5 } }).reviewQueue,
+    ).toMatchObject({ enabled: true, concurrency: 4, maxAttempts: 5 })
   })
 
   it('accepts an explicit empty rule list and the no-rules state', () => {
@@ -417,6 +441,36 @@ describe('configuration validation', () => {
       'an invalid failure streak',
       { rules: [], failureStreak: 1.5 },
       /failureStreak must be a positive integer/,
+    ],
+    [
+      'a review queue concurrency below the range',
+      { reviewQueue: { concurrency: 0 } },
+      /reviewQueue\.concurrency must be a whole number from 1 to 4/,
+    ],
+    [
+      'a review queue concurrency above the range',
+      { reviewQueue: { concurrency: 5 } },
+      /reviewQueue\.concurrency must be a whole number from 1 to 4/,
+    ],
+    [
+      'a negative review queue attempt budget',
+      { reviewQueue: { maxAttempts: -1 } },
+      /reviewQueue\.maxAttempts must be a whole number at least 1/,
+    ],
+    [
+      'an empty review queue waiting list',
+      { reviewQueue: { maxQueued: 0 } },
+      /reviewQueue\.maxQueued must be a whole number at least 1/,
+    ],
+    [
+      'a non-boolean review queue switch',
+      { reviewQueue: { enabled: 'yes' } },
+      /reviewQueue\.enabled must be true or false/,
+    ],
+    [
+      'an unknown review queue field',
+      { reviewQueue: { backlog: 2 } },
+      /reviewQueue: unknown field\(s\) backlog/,
     ],
   ]
 

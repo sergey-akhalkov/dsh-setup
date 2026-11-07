@@ -25,6 +25,8 @@
     "lib/index.d.ts",
     "lib/host/index.js",
     "lib/host/index.d.ts",
+    "lib/host/review-queue.js",
+    "lib/host/review-queue.d.ts",
     "lib/shared/approval.js",
     "lib/shared/approval.d.ts",
     "cordis.patch.yml",
