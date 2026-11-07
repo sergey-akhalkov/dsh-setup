@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   findingHistoryPath,
@@ -58,6 +58,20 @@ async function writeHistory(root: string, entries: readonly unknown[]): Promise<
   const path = findingHistoryPath(root)
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, `${entries.map((item) => JSON.stringify(item)).join('\n')}\n`, 'utf8')
+}
+
+/** Every file under the workspace, relative and by content. */
+async function snapshotWorkspace(root: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>()
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const full = join(directory, entry.name)
+      if (entry.isDirectory()) await walk(full)
+      else files.set(relative(root, full).replaceAll('\\', '/'), await readFile(full, 'utf8'))
+    }
+  }
+  await walk(root)
+  return files
 }
 
 describe('retro report', () => {
@@ -269,6 +283,81 @@ describe('retro propose', () => {
     ;({ lessons } = await readLessons(root))
     expect(lessons).toHaveLength(1)
     expect(lessons[0]?.createdAt).toBe(2_000)
+  })
+
+  it('bounds the complete propose response including the confirmation', async () => {
+    const root = await repeatedWorkspace()
+    const text = await executeReviewRetro(
+      { action: 'propose' },
+      { workspaceRoot: root, now: () => new Date(1_000), maxChars: 120 },
+    )
+    expect(text.length).toBeLessThanOrEqual(120)
+    expect(text.endsWith('… (truncated)')).toBe(true)
+    const { lessons } = await readLessons(root)
+    expect(lessons).toHaveLength(1)
+  })
+
+  it('selects draft source hashes and change from the top class only', () => {
+    const records: HistoryRunEntry[] = []
+    for (let index = 0; index < 40; index += 1) {
+      records.push(
+        entry({
+          change: 'missing-change',
+          taskId: 'missing-task',
+          time: `2026-11-01T00:${String(index).padStart(2, '0')}:00.000Z`,
+          findings: [finding({ class: 'missing-test', title: `Missing ${index}` })],
+        }),
+      )
+    }
+    records.push(
+      entry({
+        change: 'missing-change',
+        taskId: 'missing-task',
+        time: '2026-11-02T00:00:00.000Z',
+        findings: [finding({ class: 'missing-test', title: 'Missing 0' })],
+      }),
+    )
+    for (let index = 0; index < 10; index += 1) {
+      records.push(
+        entry({
+          change: 'path-change',
+          time: `2026-11-03T00:${String(index).padStart(2, '0')}:00.000Z`,
+          findings: [finding({ class: 'path-boundary', title: `Boundary ${index}` })],
+        }),
+      )
+      records.push(
+        entry({
+          change: 'path-change',
+          time: `2026-11-04T00:${String(index).padStart(2, '0')}:00.000Z`,
+          findings: [finding({ class: 'path-boundary', title: `Boundary ${index}` })],
+        }),
+      )
+    }
+    const report = buildRetroReport(records)
+    expect(report.topClass).toBe('missing-test')
+    expect(report.draft?.source.change).toBe('missing-change')
+    expect(report.draft?.source.taskId).toBe('missing-task')
+    expect(report.draft?.source.findingHashes).toHaveLength(1)
+    expect(report.draft?.source.findingHashes?.[0]).toBe(
+      findingTitleHash(finding({ class: 'missing-test', title: 'Missing 0' })),
+    )
+  })
+
+  it('propose writes only the local lesson store and no other workspace file', async () => {
+    const root = await repeatedWorkspace()
+    const before = await snapshotWorkspace(root)
+    // The context exposes no model/provider surface at all: propose has no way to run one.
+    const context = Object.freeze({ workspaceRoot: root, now: () => new Date(1_000) })
+    expect(Object.keys(context)).toEqual(['workspaceRoot', 'now'])
+    await executeReviewRetro({ action: 'propose' }, context)
+    const after = await snapshotWorkspace(root)
+    const changed = [...new Set([...before.keys(), ...after.keys()])].filter(
+      (path) => before.get(path) !== after.get(path),
+    )
+    expect(changed.length).toBeGreaterThan(0)
+    expect(changed.every((path) => path.startsWith('.dsh/review-learning/'))).toBe(true)
+    const historyPath = relative(root, findingHistoryPath(root)).replaceAll('\\', '/')
+    expect(after.get(historyPath)).toBe(before.get(historyPath))
   })
 
   it('proposes nothing when no finding repeats', async () => {

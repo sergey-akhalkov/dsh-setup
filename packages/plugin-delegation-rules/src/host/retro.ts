@@ -78,9 +78,9 @@ export function buildRetroReport(
   const counts = new Map<FindingClass, { count: number; repeats: number }>()
   const examples = new Map<FindingClass, RetroExample[]>()
   const seen = new Map<string, number>()
-  const repeatedHashes = new Set<string>()
+  const repeatedHashes = new Map<FindingClass, Set<string>>()
+  const repeatedSources = new Map<FindingClass, { change?: string; taskId?: string; time: string }>()
   let findings = 0
-  let repeatedSource: { change?: string; taskId?: string; time: string } | undefined
 
   for (const entry of entries) {
     if (entry.kind !== 'run') continue
@@ -96,13 +96,15 @@ export function buildRetroReport(
       bucket.count += 1
       if (previous > 0) {
         bucket.repeats += 1
-        repeatedHashes.add(key)
-        if (repeatedSource === undefined) {
-          repeatedSource = {
+        const hashes = repeatedHashes.get(finding.class) ?? new Set<string>()
+        hashes.add(key)
+        repeatedHashes.set(finding.class, hashes)
+        if (!repeatedSources.has(finding.class)) {
+          repeatedSources.set(finding.class, {
             change: entry.change,
             ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
             time: entry.time,
-          }
+          })
         }
       }
       counts.set(finding.class, bucket)
@@ -137,15 +139,16 @@ export function buildRetroReport(
   let draft: RetroDraft | undefined
   if (top !== undefined && top.repeats > 0 && topClass !== undefined) {
     const example = topExamples[0]
-    const hashes = [...repeatedHashes].sort()
+    const hashes = [...(repeatedHashes.get(topClass) ?? new Set<string>())].sort()
+    const source = repeatedSources.get(topClass)
     draft = {
       class: topClass,
       title: `Check for ${topClass} findings earlier`,
       body: `${top.count} ${topClass} finding(s), ${top.repeats} repeated in the last ${window} settled reviews. Example: ${example?.title ?? 'none'}. Before returning PASS, check this class explicitly.`,
       appliesTo: { rules: ['*'], capabilities: [] },
       source: {
-        ...(repeatedSource?.change === undefined ? {} : { change: repeatedSource.change }),
-        ...(repeatedSource?.taskId === undefined ? {} : { taskId: repeatedSource.taskId }),
+        ...(source?.change === undefined ? {} : { change: source.change }),
+        ...(source?.taskId === undefined ? {} : { taskId: source.taskId }),
         findingHashes: hashes.slice(0, 20),
       },
     }
@@ -246,9 +249,10 @@ export async function executeReviewRetro(
   const report = await reviewRetro(context.workspaceRoot, {
     ...(context.window === undefined ? {} : { window: context.window }),
   })
-  const bounded =
-    context.maxChars === undefined ? report.text : boundReport(report.text, context.maxChars)
-  if (action === 'report' || report.draft === undefined) return bounded
+  const maximum = context.maxChars ?? MAX_REPORT_CHARS
+  if (action === 'report' || report.draft === undefined) {
+    return boundReport(report.text, maximum)
+  }
   const created = await proposeLesson(context.workspaceRoot, {
     class: report.draft.class,
     title: report.draft.title,
@@ -258,5 +262,8 @@ export async function executeReviewRetro(
     now: context.now().getTime(),
     ...(context.maxLessons === undefined ? {} : { maxLessons: context.maxLessons }),
   })
-  return `${bounded}\n\nproposed lesson ${created.lesson.id} [${created.lesson.class}] "${created.lesson.title}"; a user must accept it before it is injected`
+  return boundReport(
+    `${report.text}\n\nproposed lesson ${created.lesson.id} [${created.lesson.class}] "${created.lesson.title}"; a user must accept it before it is injected`,
+    maximum,
+  )
 }
