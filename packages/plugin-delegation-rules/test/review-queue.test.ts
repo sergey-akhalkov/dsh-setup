@@ -4412,3 +4412,100 @@ describe('recovery serialization', () => {
     expect(stale.state).toBe('interrupted')
   })
 })
+
+describe('queue integration', () => {
+  it('serializes a queued successor while the concurrency ceiling holds', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await writeChange(root, 'change-b', [])
+    await writeChange(root, 'change-c', [])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const starts: Array<{ run: RunRecord; release: () => void }> = []
+    subagents.addProvider('codex-subagent', {}, (run) => {
+      return new Promise((resolve) => {
+        starts.push({ run, release: () => resolve(passResponder(run)) })
+      })
+    })
+    const git = new FakeGit()
+    git.files = ['src/engine.ts']
+    const harness = new Harness({
+      cwd: root,
+      config: {
+        ...defaultTestConfig(),
+        reviewQueue: { concurrency: 2, maxQueued: 1, maxAttempts: 1 },
+      },
+      agents: subagents,
+      git,
+    })
+    const task = taskIdFor('Reviewed task')
+
+    const a = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task,
+    })
+    const aRun = runIdFrom(a)
+    await subagents.waitForStarts(1)
+    const b = await harness.startReview({ rule: 'spec-review', change: 'change-b' })
+    await subagents.waitForStarts(2)
+    const c = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-c' })
+    const cRun = runIdFrom(c)
+    expect(c).toContain('review queued')
+    expect(c).toContain('queue position: 1')
+
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
+      '# Proposal\n\nNext.\n',
+      'utf8',
+    )
+    const a2 = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task,
+    })
+    const a2Run = runIdFrom(a2)
+    expect(a2).toContain('review queued')
+    expect(subagents.startCalls).toBe(2)
+
+    // A settles while its queued successor still waits; C takes the free slot.
+    starts[0]?.release()
+    expect(await harness.waitForRun(aRun)).toContain('state=completed')
+    await subagents.waitForStarts(3)
+    expect(starts[2]?.run.prompt).toContain('- Change: change-c')
+    expect(subagents.startCalls).toBe(3)
+
+    // B settles; the D2 successor starts and publishes.
+    starts[1]?.release()
+    expect(await harness.waitForRun(b)).toContain('state=completed')
+    await subagents.waitForStarts(4)
+    expect(starts[3]?.run.prompt).toContain('- Change: change-a')
+    starts[3]?.release()
+    expect(await harness.waitForRun(a2Run)).toContain('state=completed')
+    starts[2]?.release()
+    expect(await harness.waitForRun(cRun)).toContain('state=completed')
+
+    const changeOf = (run: RunRecord): string | undefined =>
+      /^- Change: (\S+)$/m.exec(run.prompt)?.[1]
+    expect(starts.map((start) => changeOf(start.run))).toEqual([
+      'change-a',
+      'change-b',
+      'change-c',
+      'change-a',
+    ])
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${task}.json`),
+        'utf8',
+      ),
+    ) as { runId: string; verdict: string }
+    expect(record.runId).toBe(a2Run)
+    expect(record.verdict).toBe('PASS')
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toContain('Review queue: enabled=true concurrency=2 active=0 queued=0 depth=0')
+    for (const runId of [aRun, b, cRun, a2Run]) {
+      expect(status).toMatch(new RegExp(`run ${runId}: .*state=completed`))
+    }
+  })
+})
