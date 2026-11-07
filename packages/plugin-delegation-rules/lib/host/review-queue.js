@@ -119,6 +119,7 @@ export class ReviewQueue {
             waitDeadlineMs: 0,
             head: false,
             finished: false,
+            settling: false,
             admitted: false,
             retryToken: 0,
         };
@@ -192,7 +193,7 @@ export class ReviewQueue {
      * Re-enter a transiently failed run after its backoff. The caller has already
      * persisted `retry-wait`; this releases the slot and arms the retry timer.
      */
-    scheduleRetry(run, failure, error) {
+    async scheduleRetry(run, failure, error) {
         const entry = this.entries.get(run.file.id);
         if (entry === undefined || entry.finished)
             return;
@@ -214,7 +215,7 @@ export class ReviewQueue {
             }
             const remaining = entry.waitDeadlineMs - this.hooks.now().getTime();
             if (remaining <= 0) {
-                void this.settleWaitTimeout(entry);
+                await this.settleWaitTimeout(entry);
                 return;
             }
             entry.waitTimer = setTimeout(() => {
@@ -286,7 +287,7 @@ export class ReviewQueue {
         }, this.limits.waitTimeoutMs);
     }
     async waitTimedOut(entry) {
-        if (entry.finished)
+        if (entry.finished || entry.settling)
             return;
         // A live or in-flight target is already admitted; the wait clock no longer applies.
         if (entry.phase === 'starting' || entry.phase === 'running')
@@ -295,10 +296,19 @@ export class ReviewQueue {
     }
     /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
     async settleWaitTimeout(entry) {
+        if (entry.finished || entry.settling)
+            return;
+        entry.settling = true;
         const position = this.positionOf(entry);
         const waitMs = this.hooks.now().getTime() - entry.queuedAtMs;
         this.removeWaiting(entry);
         entry.retryToken += 1;
+        // Clear both timers before awaiting the hook: a late dispatch must observe
+        // the in-progress settlement, never start a second one.
+        if (entry.waitTimer !== undefined) {
+            clearTimeout(entry.waitTimer);
+            delete entry.waitTimer;
+        }
         if (entry.retryTimer !== undefined) {
             clearTimeout(entry.retryTimer);
             delete entry.retryTimer;
@@ -418,7 +428,7 @@ export class ReviewQueue {
                     await this.settleWaitTimeout(entry);
                     return;
                 }
-                this.scheduleRetry(entry.run, failure, error);
+                await this.scheduleRetry(entry.run, failure, error);
                 return;
             }
             entry.startError = error;

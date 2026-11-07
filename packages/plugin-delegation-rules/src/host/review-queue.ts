@@ -106,6 +106,8 @@ interface QueueEntry<T extends QueueRun> {
   retryTimer?: ReturnType<typeof setTimeout>
   head: boolean
   finished: boolean
+  /** A timeout settlement owns the run until its terminal write completes. */
+  settling: boolean
   /** A target has started once; the acceptance wait clock no longer applies. */
   admitted: boolean
   /** Set while a retry timer owns eligibility, so a stale timer is ignored. */
@@ -266,6 +268,7 @@ export class ReviewQueue<T extends QueueRun> {
       waitDeadlineMs: 0,
       head: false,
       finished: false,
+      settling: false,
       admitted: false,
       retryToken: 0,
     }
@@ -334,7 +337,7 @@ export class ReviewQueue<T extends QueueRun> {
    * Re-enter a transiently failed run after its backoff. The caller has already
    * persisted `retry-wait`; this releases the slot and arms the retry timer.
    */
-  scheduleRetry(run: T, failure: ClassifiedFailure, error?: unknown): void {
+  async scheduleRetry(run: T, failure: ClassifiedFailure, error?: unknown): Promise<void> {
     const entry = this.entries.get(run.file.id)
     if (entry === undefined || entry.finished) return
     entry.failureClass = failure.failureClass
@@ -355,7 +358,7 @@ export class ReviewQueue<T extends QueueRun> {
       }
       const remaining = entry.waitDeadlineMs - this.hooks.now().getTime()
       if (remaining <= 0) {
-        void this.settleWaitTimeout(entry)
+        await this.settleWaitTimeout(entry)
         return
       }
       entry.waitTimer = setTimeout(() => {
@@ -431,7 +434,7 @@ export class ReviewQueue<T extends QueueRun> {
   }
 
   private async waitTimedOut(entry: QueueEntry<T>): Promise<void> {
-    if (entry.finished) return
+    if (entry.finished || entry.settling) return
     // A live or in-flight target is already admitted; the wait clock no longer applies.
     if (entry.phase === 'starting' || entry.phase === 'running') return
     await this.settleWaitTimeout(entry)
@@ -439,10 +442,18 @@ export class ReviewQueue<T extends QueueRun> {
 
   /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
   private async settleWaitTimeout(entry: QueueEntry<T>): Promise<void> {
+    if (entry.finished || entry.settling) return
+    entry.settling = true
     const position = this.positionOf(entry)
     const waitMs = this.hooks.now().getTime() - entry.queuedAtMs
     this.removeWaiting(entry)
     entry.retryToken += 1
+    // Clear both timers before awaiting the hook: a late dispatch must observe
+    // the in-progress settlement, never start a second one.
+    if (entry.waitTimer !== undefined) {
+      clearTimeout(entry.waitTimer)
+      delete entry.waitTimer
+    }
     if (entry.retryTimer !== undefined) {
       clearTimeout(entry.retryTimer)
       delete entry.retryTimer
@@ -568,7 +579,7 @@ export class ReviewQueue<T extends QueueRun> {
           await this.settleWaitTimeout(entry)
           return
         }
-        this.scheduleRetry(entry.run, failure, error)
+        await this.scheduleRetry(entry.run, failure, error)
         return
       }
       entry.startError = error

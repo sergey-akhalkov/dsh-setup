@@ -123,7 +123,7 @@ export declare class ReviewQueue<T extends QueueRun> {
      * Re-enter a transiently failed run after its backoff. The caller has already
      * persisted `retry-wait`; this releases the slot and arms the retry timer.
      */
-    scheduleRetry(run: T, failure: ClassifiedFailure, error?: unknown): void;
+    scheduleRetry(run: T, failure: ClassifiedFailure, error?: unknown): Promise<void>;
     /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
     private retryDue;
     /** Attempts this run has already used, for the retry budget decision. */

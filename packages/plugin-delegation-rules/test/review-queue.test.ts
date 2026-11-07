@@ -548,6 +548,63 @@ describe('review queue admission', () => {
     expect(queue.owns('run-a')).toBe(false)
     queue.dispose()
   })
+
+  it('settles a wait timeout exactly once when the timer dispatch races the slot release', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      let releaseTimeout: () => void = () => undefined
+      const timeoutGate = new Promise<void>((resolve) => {
+        releaseTimeout = resolve
+      })
+      const hooks = {
+        start: vi.fn(async () => undefined),
+        persist: vi.fn(),
+        fail: vi.fn(async () => undefined),
+        timeout: vi.fn(async () => {
+          await timeoutGate
+        }),
+        settled: vi.fn(),
+        now: () => new Date(),
+      }
+      const queue = new ReviewQueue<QueueRun>(
+        {
+          enabled: true,
+          concurrency: 1,
+          maxQueued: 2,
+          maxAttempts: 3,
+          baseDelayMs: 5_000,
+          maxDelayMs: 60_000,
+          waitTimeoutMs: 20,
+        },
+        hooks,
+      )
+      const running = fakeRun('run-a', 'key-a', 'identity-a')
+      expect(await queue.submit(running)).toEqual({ kind: 'accepted', phase: 'running' })
+      const waiting = fakeRun('run-b', 'key-b', 'identity-b')
+      expect(await queue.submit(waiting)).toEqual({ kind: 'accepted', phase: 'queued' })
+
+      // The slot frees after the deadline but before the timer dispatch: the
+      // pump starts the timeout settlement while the original timer is armed.
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.100Z'))
+      await queue.complete(running, 'completed')
+      expect(hooks.timeout).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(20)
+      expect(hooks.timeout).toHaveBeenCalledTimes(1)
+
+      releaseTimeout()
+      await vi.runAllTimersAsync()
+      expect(hooks.timeout).toHaveBeenCalledTimes(1)
+      const settledRunB = hooks.settled.mock.calls.filter(
+        (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-b',
+      )
+      expect(settledRunB).toEqual([[waiting, 'failed']])
+      expect(queue.owns('run-b')).toBe(false)
+      queue.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('review queue cancellation', () => {
