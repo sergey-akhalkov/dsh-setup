@@ -2289,6 +2289,7 @@ function isRunState(value: unknown): value is RunState {
 }
 
 const RUN_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
+const RUN_ID = /^[a-z0-9][a-z0-9-]{0,80}$/
 const FAILURE_CLASSES: ReadonlySet<string> = new Set<FailureClass>([
   'child-limit',
   'provider-not-started',
@@ -2319,13 +2320,16 @@ function parseRunFile(value: unknown): RunFile | undefined {
   if (!isRecord(value)) return undefined
   if (
     typeof value.id !== 'string' ||
-    value.id === '' ||
+    !RUN_ID.test(value.id) ||
     typeof value.rule !== 'string' ||
     typeof value.change !== 'string' ||
     typeof value.key !== 'string' ||
     typeof value.identity !== 'string' ||
     !isRunState(value.state) ||
     typeof value.record !== 'string' ||
+    !value.record.startsWith('.dsh/delegation/') ||
+    value.record.includes('..') ||
+    value.record.includes('\\') ||
     typeof value.startedAt !== 'string'
   ) {
     return undefined
@@ -2359,6 +2363,11 @@ function parseRunFile(value: unknown): RunFile | undefined {
 
 /** Recent review runs for one workspace, newest first; unreadable run files are ignored. */
 async function listRunFiles(workspaceRoot: string): Promise<RunFile[]> {
+  return (await listAllRunFiles(workspaceRoot)).slice(0, 30)
+}
+
+/** Every durable run, for reconciliation; status presentation applies its own limit. */
+async function listAllRunFiles(workspaceRoot: string): Promise<RunFile[]> {
   let names: string[]
   try {
     names = await readdir(runsDirectory(workspaceRoot))
@@ -2372,12 +2381,13 @@ async function listRunFiles(workspaceRoot: string): Promise<RunFile[]> {
       const run = parseRunFile(
         JSON.parse(await readFile(join(runsDirectory(workspaceRoot), name), 'utf8')),
       )
-      if (run !== undefined) runs.push(run)
+      // The durable id must match its file name so recovery can rewrite it safely.
+      if (run !== undefined && `${run.id}.json` === name) runs.push(run)
     } catch {
       // A stale/partial run file is scratch; ignore it in the status view.
     }
   }
-  return runs.sort((left, right) => right.startedAt.localeCompare(left.startedAt)).slice(0, 30)
+  return runs.sort((left, right) => right.startedAt.localeCompare(left.startedAt))
 }
 
 /** One owned review completion lost to an already-authoritative record. */
@@ -4513,7 +4523,7 @@ class DelegationEngine {
   private async ensureRecovered(workspaceRoot: string): Promise<void> {
     if (this.recoveredWorkspaces.has(workspaceRoot)) return
     this.recoveredWorkspaces.add(workspaceRoot)
-    for (const run of await listRunFiles(workspaceRoot)) {
+    for (const run of await listAllRunFiles(workspaceRoot)) {
       if (!isActiveRunState(run.state)) continue
       const current = await inspectRecord(join(workspaceRoot, run.record))
       if (current.kind === 'record' && current.record.runId === run.id) {

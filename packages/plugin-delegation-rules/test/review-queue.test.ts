@@ -4016,6 +4016,63 @@ describe('run file validation', () => {
     expect(status).not.toContain('C:\\Users\\secret')
     expect(status).not.toMatch(/sk-secretcredential/)
   })
+
+  it('rejects a crafted run id before recovery rewrites anything', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const packagePath = join(root, 'package.json')
+    await writeFile(packagePath, '{"name":"sentinel"}\n', 'utf8')
+    const runsDir = join(root, '.dsh', 'delegation', 'runs')
+    await mkdir(runsDir, { recursive: true })
+    await writeFile(
+      join(runsDir, 'run-escape.json'),
+      JSON.stringify({
+        id: '../../package',
+        rule: 'spec-review',
+        change: 'change-a',
+        key: 'k',
+        identity: 'i',
+        state: 'running',
+        record: '.dsh/delegation/spec-review/change-a/spec.json',
+        startedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    const harness = await harnessFor(root, defaultTestConfig(), new FakeSubagents())
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).not.toContain('run-escape')
+    expect(await readFile(packagePath, 'utf8')).toBe('{"name":"sentinel"}\n')
+  })
+
+  it('recovers active runs beyond the newest thirty', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const runsDir = join(root, '.dsh', 'delegation', 'runs')
+    await mkdir(runsDir, { recursive: true })
+    for (let index = 0; index < 31; index += 1) {
+      const suffix = String(index).padStart(2, '0')
+      await writeFile(
+        join(runsDir, `run-old-${suffix}.json`),
+        JSON.stringify({
+          id: `run-old-${suffix}`,
+          rule: 'spec-review',
+          change: 'change-a',
+          key: `k-${suffix}`,
+          identity: `i-${suffix}`,
+          state: 'running',
+          record: `.dsh/delegation/spec-review/change-${suffix}/spec.json`,
+          startedAt: `2026-01-01T00:00:${suffix}.000Z`,
+        }),
+        'utf8',
+      )
+    }
+    const harness = await harnessFor(root, defaultTestConfig(), new FakeSubagents())
+    await harness.toolText('delegation_status', {})
+    const oldest = JSON.parse(await readFile(join(runsDir, 'run-old-00.json'), 'utf8')) as {
+      state: string
+    }
+    expect(oldest.state).toBe('interrupted')
+  })
 })
 
 describe('queued wait visibility', () => {
