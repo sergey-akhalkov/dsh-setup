@@ -17,7 +17,7 @@ The change is one lane: every group edits the shared `packages/plugin-delegation
 
 ## 3. Lesson lifecycle and user approval (owns `packages/plugin-delegation-rules/src/host/learning-tools.ts`, `packages/plugin-delegation-rules/test/lesson-lifecycle.test.ts`)
 
-- [ ] 3.1 Add `review_lesson` with `list`, `propose`, `decide`, and `apply`; validate ids, classes, titles, bodies, targets, and transitions before effects; verify proposed to accepted, proposed to rejected, accepted to applied, and a refused invalid transition.
+- [x] 3.1 Add `review_lesson` with `list`, `propose`, `decide`, and `apply`; validate ids, classes, titles, bodies, targets, and transitions before effects; verify proposed to accepted, proposed to rejected, accepted to applied, and a refused invalid transition.
 - [ ] 3.2 Route accept, reject, and apply through `userQuestions.ask` with a bounded question naming the class, title, body preview, and source; verify a yes answer applies the transition, a no answer leaves the lesson unchanged, and a model-supplied answer cannot be used.
 - [ ] 3.3 Require an applied lesson to name a change, spec, file, or test and record the time; verify an application without a target is refused and a valid one is readable in `list`.
 - [ ] 3.4 Bind every accept, reject, and apply answer to the exact lesson revision; reject a stale answer and name the current revision; verify a duplicate proposal for an accepted lesson creates a proposed revision without changing the accepted content.

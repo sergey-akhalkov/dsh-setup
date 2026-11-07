@@ -533,6 +533,11 @@ export async function decideLesson(
   })
 }
 
+/** Validate and bound an application target before any question or write. */
+export function validateLessonTarget(target: unknown): string {
+  return requireText(target, 'lesson target', 300)
+}
+
 /** Mark an accepted lesson applied against a named target. */
 export async function applyLesson(
   workspaceRoot: string,
@@ -541,7 +546,7 @@ export async function applyLesson(
   now: number,
   maxLessons = DEFAULT_MAX_LESSONS,
 ): Promise<Lesson> {
-  const appliedIn = requireText(target, 'lesson target', 300)
+  const appliedIn = validateLessonTarget(target)
   const path = lessonStorePath(workspaceRoot)
   return serialized(path, async () => {
     const { lessons, lesson } = await findLesson(workspaceRoot, id)

@@ -6,6 +6,7 @@ import {
   LessonStoreError,
   proposeLesson,
   readLessons,
+  validateLessonTarget,
 } from './lesson-store.js'
 
 /** Structural copy of the DSH user-questions service; these are not a type dependency. */
@@ -247,6 +248,12 @@ export async function executeReviewLesson(
 
   if (args.action === 'decide') {
     const lesson = await lessonById(context.workspaceRoot, args.id)
+    if (lesson.status !== 'proposed') {
+      throw new LessonStoreError(
+        `lesson "${args.id}" is ${lesson.status}; only a proposed lesson can be accepted or rejected`,
+        'transition',
+      )
+    }
     const revision = lessonRevision(lesson)
     const selected = await ask(context, questionFor(lesson, 'decide'))
     const accepted = selected.includes('Accept')
@@ -273,6 +280,7 @@ export async function executeReviewLesson(
       args.id,
       accepted ? 'accepted' : 'rejected',
       context.now().getTime(),
+      context.maxLessons,
     )
     return `lesson ${updated.id} ${updated.status}`
   }
@@ -284,8 +292,9 @@ export async function executeReviewLesson(
       'transition',
     )
   }
+  const target = validateLessonTarget(args.target)
   const revision = lessonRevision(lesson)
-  const selected = await ask(context, questionFor(lesson, 'apply', args.target))
+  const selected = await ask(context, questionFor(lesson, 'apply', target))
   if (!selected.includes('Apply')) {
     return `lesson ${args.id} unchanged; the user did not confirm the target`
   }
@@ -299,8 +308,9 @@ export async function executeReviewLesson(
   const updated = await applyLesson(
     context.workspaceRoot,
     args.id,
-    args.target,
+    target,
     context.now().getTime(),
+    context.maxLessons,
   )
   return `lesson ${updated.id} applied in ${String(updated.appliedIn)}`
 }
