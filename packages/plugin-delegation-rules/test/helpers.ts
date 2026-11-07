@@ -325,6 +325,18 @@ export class Harness {
           return () => undefined
         },
       },
+      get: (name: string) => {
+        if (name === 'userQuestions') return options.userQuestions
+        if (name === 'commands') {
+          return {
+            register: (definition: { definitionId?: string; name: string }) => {
+              this.commands.push({ ...definition })
+              return () => undefined
+            },
+          }
+        }
+        return undefined
+      },
       effect: (work: () => unknown) => work(),
       ...(options.userQuestions === undefined ? {} : { userQuestions: options.userQuestions }),
       on: (name: string, handler: ContextEvent) => {

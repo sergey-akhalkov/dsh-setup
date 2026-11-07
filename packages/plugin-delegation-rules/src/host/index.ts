@@ -6574,7 +6574,11 @@ function registerReviewRetroCommand(
   services: EngineServices,
 ): void {
   if (!config.reviewLearning.enabled) return
-  const commands = (ctx as unknown as { commands?: CommandRegistry }).commands
+  // Read the optional service without declaring a Cordis inject dependency, so
+  // the plugin still loads in a profile that has no command registry.
+  const commands = (
+    ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }
+  ).get?.('commands') as CommandRegistry | undefined
   if (commands === undefined) return
   const definition = {
     definitionId: '@dsh-setup/plugin-delegation-rules/review-retro',
@@ -6614,7 +6618,11 @@ function registerReviewRetroCommand(
 export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOptions = {}): void {
   const validated = validateConfig(config)
   const state = new DelegationState()
-  const userQuestions = (ctx as unknown as { userQuestions?: UserQuestionsService }).userQuestions
+  // Optional services are read through ctx.get(), not the service property: a
+  // hard inject would stop the plugin loading in a profile without them.
+  const userQuestions = (
+    ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }
+  ).get?.('userQuestions') as UserQuestionsService | undefined
   const services: EngineServices = {
     subagents: ctx.subagents,
     workingDirectory: ctx.workingDirectory,
