@@ -1,9 +1,19 @@
-import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/host/index.ts'
-import { Journal, eventsDirectory } from '../src/host/journal.ts'
+import { eventsDirectory, Journal } from '../src/host/journal.ts'
+
 type Listener = (...args: unknown[]) => unknown
 
 interface FakeAgent {
@@ -20,14 +30,21 @@ interface FakeHost {
   readonly steers: unknown[]
   readonly fsWatchers: Array<(error?: Error) => void>
   readonly agent: FakeAgent
-  addAgent(id: string, origin?: 'subagent', parentSession?: string): FakeAgent
+  addAgent(id: string, origin?: 'subagent', parentSession?: string, failScoped?: boolean): FakeAgent
   emit(name: string, ...args: unknown[]): unknown
   fireFs(error?: Error): void
   dispose(): void
   calls(): { steers: number; injects: number; preExecute: number }
 }
 
-function createHost(workspace: string): FakeHost {
+function createHost(
+  workspace: string,
+  options: {
+    readonly failOn?: string
+    readonly failScopedOn?: string
+    readonly failFsWatch?: boolean
+  } = {},
+): FakeHost {
   const listeners = new Map<string, Listener[]>()
   const steers: unknown[] = []
   const agents = new Map<string, FakeAgent>()
@@ -45,12 +62,26 @@ function createHost(workspace: string): FakeHost {
     list.push(listener)
     listeners.set(name, list)
   }
-  const addAgent = (id: string, origin?: 'subagent', parentSession?: string): FakeAgent => {
+  const addAgent = (
+    id: string,
+    origin?: 'subagent',
+    parentSession?: string,
+    failScoped?: boolean,
+  ): FakeAgent => {
     const agent: FakeAgent = {
       id,
-      session: { id, header: { ...(origin === undefined ? {} : { origin }), ...(parentSession === undefined ? {} : { parentSession }) } },
+      session: {
+        id,
+        header: {
+          ...(origin === undefined ? {} : { origin }),
+          ...(parentSession === undefined ? {} : { parentSession }),
+        },
+      },
       ctx: {
         on(name: string, listener: Listener): () => void {
+          if (failScoped === true || name === options.failScopedOn) {
+            throw new Error('scoped registration failed')
+          }
           add(name, listener)
           return () => {
             remove(name, listener)
@@ -76,6 +107,7 @@ function createHost(workspace: string): FakeHost {
         return {
           resolve: async (path: string) => ({ targetKey: path, displayPath: path }),
           watch: async (_target: unknown, changed: (error?: Error) => void) => {
+            if (options.failFsWatch === true) throw new Error('watch failed')
             fsWatchers.push(changed)
             return async () => {}
           },
@@ -86,6 +118,7 @@ function createHost(workspace: string): FakeHost {
     },
     on(name: string, listener: Listener): () => void {
       if (name === 'tools/pre-execute') calls.preExecute += 1
+      if (name === options.failOn) throw new Error('registration failed')
       add(name, listener)
       const dispose = (): void => {
         remove(name, listener)
@@ -126,15 +159,24 @@ function createHost(workspace: string): FakeHost {
   }
 }
 
-const step = async (host: FakeHost, agent: FakeAgent, turn: number, number: number): Promise<unknown> =>
-  host.emit('agent/pre-step', {
-    agent,
-    turn,
-    step: number,
-    messages: [],
-    signal: new AbortController().signal,
-    modelSelection: { provider: 'p', model: 'm' },
-  }, async () => ({ kind: 'continue' }))
+const step = async (
+  host: FakeHost,
+  agent: FakeAgent,
+  turn: number,
+  number: number,
+): Promise<unknown> =>
+  host.emit(
+    'agent/pre-step',
+    {
+      agent,
+      turn,
+      step: number,
+      messages: [],
+      signal: new AbortController().signal,
+      modelSelection: { provider: 'p', model: 'm' },
+    },
+    async () => ({ kind: 'continue' }),
+  )
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 3000): Promise<void> {
   const started = Date.now()
@@ -156,7 +198,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
   await Promise.all(
     TEMP_DIRECTORIES.splice(0).map(async (directory) => {
-      await rm(directory, { recursive: true, force: true })
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
     }),
   )
 })
@@ -176,7 +218,11 @@ describe('workflow event recorder', () => {
       { agent: host.agent, callId: 'call-1', name: 'read', arguments: { path: 'notes.md' } },
       { isError: false, content: [{ type: 'text', text: 'contents' }] },
     )
-    host.emit('agent/turn-stopping', { agent: host.agent, turn: 2, signal: new AbortController().signal })
+    host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 2,
+      signal: new AbortController().signal,
+    })
     // The real DSH emitter calls a single-argument listener; the parent comes
     // from the child session's recorded direct parent, not a callback argument.
     host.emit('subagent/start', {
@@ -193,7 +239,9 @@ describe('workflow event recorder', () => {
       stopReason: 'completed',
     })
 
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 5)
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 5,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records.map((record) => record.kind)).toEqual([
       'agent/pre-step',
@@ -240,13 +288,19 @@ describe('workflow event recorder', () => {
       gateRefusals.push(candidate.turn)
       candidate.agent.steer({ text: 'gate refused the close' })
     })
-    host.emit('agent/turn-stopping', { agent: host.agent, turn: 1, signal: new AbortController().signal })
+    host.emit('agent/turn-stopping', {
+      agent: host.agent,
+      turn: 1,
+      signal: new AbortController().signal,
+    })
     expect(gateRefusals).toEqual([1])
     expect(host.steers).toHaveLength(1)
     // The refused turn is still open, so the loop runs another step.
     await step(host, host.agent, 1, 2)
 
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 3)
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 3,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records.map((record) => record.kind)).toEqual([
       'agent/pre-step',
@@ -274,9 +328,17 @@ describe('workflow event recorder', () => {
     await step(host, child, 1, 1)
     host.emit('subagent/start', { runId: 'run-b', provider: 'spawn', id: 'child-b', local: true })
     host.emit('subagent/start', { runId: 'run-c', provider: 'spawn', id: 'child-c', local: true })
-    host.emit('subagent/end', { runId: 'run-c', provider: 'spawn', id: 'child-c', local: true, stopReason: 'completed' })
+    host.emit('subagent/end', {
+      runId: 'run-c',
+      provider: 'spawn',
+      id: 'child-c',
+      local: true,
+      stopReason: 'completed',
+    })
 
-    await waitFor(async () => (await journal.read(workspace, 'child-b', 0, 50)).records.length === 3)
+    await waitFor(
+      async () => (await journal.read(workspace, 'child-b', 0, 50)).records.length === 3,
+    )
     const parent = await journal.read(workspace, 'session-1', 0, 50)
     const nested = await journal.read(workspace, 'child-b', 0, 50)
     // Only the immediate parent records the grandchild, once.
@@ -299,8 +361,15 @@ describe('workflow event recorder', () => {
     host.addAgent('child-9', 'subagent', 'session-1')
     apply(host.ctx as never)
     const journal = new Journal()
-    host.emit('subagent/start', { runId: 'run-existing', provider: 'spawn', id: 'child-9', local: true })
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    host.emit('subagent/start', {
+      runId: 'run-existing',
+      provider: 'spawn',
+      id: 'child-9',
+      local: true,
+    })
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records[0]?.kind).toBe('subagent/start')
     expect(records[0]?.subject).toBe('child-9')
@@ -312,8 +381,15 @@ describe('workflow event recorder', () => {
     host.addAgent('child-9', 'subagent', 'session-1')
     apply(host.ctx as never)
     const journal = new Journal()
-    host.emit('subagent/start', { runId: 'run-unload', provider: 'spawn', id: 'child-9', local: true })
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    host.emit('subagent/start', {
+      runId: 'run-unload',
+      provider: 'spawn',
+      id: 'child-9',
+      local: true,
+    })
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
     host.dispose()
     host.emit('subagent/end', {
       runId: 'run-unload',
@@ -336,27 +412,45 @@ describe('workflow event recorder', () => {
       throw new Error('boom')
     })
     let continued = 0
-    const result = host.emit('agent/pre-step', {
-      agent: host.agent,
-      turn: 1,
-      step: 1,
-      messages: [],
-      signal: new AbortController().signal,
-      modelSelection: { provider: 'p', model: 'm' },
-    }, async () => {
-      continued += 1
-      return { kind: 'continue' }
-    })
+    const result = host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => {
+        continued += 1
+        return { kind: 'continue' }
+      },
+    )
     await Promise.resolve(result)
     expect(continued).toBe(1)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () => String((await readHealth())?.lastError ?? '').includes('boom'))
+    expect(typeof (await readHealth())?.lastErrorAt).toBe('number')
     failure.mockRestore()
     host.emit(
       'tools/result',
       { agent: host.agent, callId: 'call-3', name: 'read', arguments: {} },
       { isError: false, content: [{ type: 'text', text: 'ok' }] },
     )
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
-    expect((await journal.read(workspace, 'session-1', 0, 50)).records[0]?.kind).toBe('tools/result')
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
+    expect((await journal.read(workspace, 'session-1', 0, 50)).records[0]?.kind).toBe(
+      'tools/result',
+    )
   })
 
   it('never stores tool output content, only a fixed identity summary', async () => {
@@ -372,7 +466,9 @@ describe('workflow event recorder', () => {
         content: [{ type: 'text', text: 'authorization: Bearer SECRET-TOKEN-123' }],
       },
     )
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records[0]?.summary).toBe('read ok; output omitted')
     expect(records[0]?.bytes).toBeGreaterThan(0)
@@ -397,7 +493,9 @@ describe('workflow event recorder', () => {
         ],
       },
     )
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records[0]?.summary).toBe('delegate review started; run: run-mw6abcde-1234abcd')
     expect(JSON.stringify(records)).not.toContain('HUNTER-secret')
@@ -421,7 +519,9 @@ describe('workflow event recorder', () => {
         ],
       },
     )
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records[0]?.summary).toBe('delegate ok; output omitted')
     expect(JSON.stringify(records)).not.toContain('HUNTER-secret')
@@ -440,7 +540,9 @@ describe('workflow event recorder', () => {
         content: [{ type: 'text', text: 'x'.repeat(5000) }],
       },
     )
-    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    await waitFor(
+      async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1,
+    )
     const { records } = await journal.read(workspace, 'session-1', 0, 50)
     expect(records[0]?.truncated).toBe(true)
     expect(records[0]?.bytes).toBe(5000)
@@ -753,7 +855,11 @@ describe('workflow event recorder', () => {
     await step(host, host.agent, 1, 1)
     await waitFor(() => host.fsWatchers.length > 0)
     await mkdir(join(workspace, 'openspec', 'changes', 'add-x'), { recursive: true })
-    await writeFile(join(workspace, 'openspec', 'changes', 'add-x', 'tasks.md'), '- [ ] 1.1\n', 'utf8')
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'add-x', 'tasks.md'),
+      '- [ ] 1.1\n',
+      'utf8',
+    )
     host.fireFs()
     await waitFor(async () =>
       (await journal.read(workspace, 'session-1', 0, 50)).records.some(
@@ -811,6 +917,108 @@ describe('workflow event recorder', () => {
     expect(records.map((record) => record.summary)).toEqual(['entry-1', 'entry-3'])
   })
 
+  it('publishes health for a live session without waiting for an event', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () => (await readHealth())?.listenerCount === 5)
+    const health = (await readHealth()) ?? {}
+    expect(health.listenerCount).toBe(5)
+    expect(health.triggerCount).toBe(9)
+    expect(health.journalWritable).toBe(true)
+    expect(health.lastEventAt).toBeUndefined()
+    expect(typeof health.lastCheckAt).toBe('number')
+    host.dispose()
+  })
+
+  it('reports a failed listener registration as listener-down', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace, { failOn: 'agent/turn-stopping' })
+    apply(host.ctx as never)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () =>
+      String((await readHealth())?.lastError ?? '').includes('registration failed'),
+    )
+    const health = (await readHealth()) ?? {}
+    expect(health.listenerCount).toBeLessThan(5)
+    expect(String(health.lastError)).toContain('registration failed')
+    host.dispose()
+  })
+
+  it('records a scoped listener registration failure in health', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace, { failScopedOn: 'subagent/start' })
+    apply(host.ctx as never)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () =>
+      String((await readHealth())?.lastError ?? '').includes('scoped registration failed'),
+    )
+    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
+    host.dispose()
+  })
+
+  it('reports a failed change-watcher registration as listener-down', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace, { failFsWatch: true })
+    apply(host.ctx as never)
+    await step(host, host.agent, 1, 1)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () => Number((await readHealth())?.listenerCount) < 5)
+    expect(String((await readHealth())?.lastError)).toContain('watch failed')
+    host.dispose()
+  })
+
+  it('keeps a post-boot scoped registration failure visible after the watcher starts', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const late = host.addAgent('late', undefined, undefined, true)
+    host.emit('agent/created', { agent: late, source: 'fresh' })
+    await step(host, host.agent, 1, 1)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () =>
+      String((await readHealth())?.lastError ?? '').includes('scoped registration failed'),
+    )
+    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
+    host.dispose()
+  })
+
   it('contains a listener whose journal write fails', async () => {
     const workspace = await tempWorkspace()
     await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
@@ -826,10 +1034,19 @@ describe('workflow event recorder', () => {
       )
     }).not.toThrow()
     await waitFor(() => errors.mock.calls.length > 0)
-    expect(String(errors.mock.calls[0]?.[0])).toContain('workflows: the session journal could not be written')
+    expect(String(errors.mock.calls[0]?.[0])).toContain(
+      'workflows: the session journal could not be written',
+    )
     expect(String(errors.mock.calls[0]?.[0]).length).toBeLessThan(300)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () => typeof (await readHealth())?.lastEventAt === 'number')
+    expect((await readHealth())?.journalWritable).toBe(false)
   })
 })
-
-
-

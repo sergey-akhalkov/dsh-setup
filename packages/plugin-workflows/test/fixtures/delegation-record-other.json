@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "add-workflow-observability",
+  "phase": "task",
+  "scope": "task",
+  "taskId": "abc124",
+  "digest": "digest-other",
+  "verdict": "ERROR",
+  "findings": [],
+  "target": { "provider": "codex-subagent" },
+  "session": "session-2",
+  "runId": "run-mw6abcde-99999999",
+  "time": "2026-11-07T10:11:00.000Z"
+}

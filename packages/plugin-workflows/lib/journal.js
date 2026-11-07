@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, stat, truncate, unlink, } from 'node:fs/promises';
 import { join } from 'node:path';
 import { redactPayload, redactValue } from './redact.js';
 /**
@@ -139,11 +139,16 @@ export class Journal {
     now;
     writeLine;
     readText;
+    truncateFile;
     listFiles;
     statFile;
     renameFile;
     removeFile;
     queues = new Map();
+    /** Session files whose last append left a torn line that must be repaired. */
+    repairNeeded = new Set();
+    /** Session files whose trailing boundary this instance has already validated. */
+    verified = new Set();
     constructor(options = {}) {
         this.maxRecordBytes = options.maxRecordBytes ?? MAX_RECORD_BYTES;
         this.maxSessionBytes = options.maxSessionBytes ?? MAX_SESSION_BYTES;
@@ -152,6 +157,7 @@ export class Journal {
         this.now = options.now ?? (() => Date.now());
         this.writeLine = options.writeLine ?? ((file, line) => appendFile(file, line, 'utf8'));
         this.readText = options.readText ?? ((file) => readFile(file, 'utf8'));
+        this.truncateFile = options.truncateFile ?? ((file, size) => truncate(file, size));
         this.listFiles = options.listFiles ?? listJournalFiles;
         this.statFile = options.statFile ?? statJournalFile;
         this.renameFile = options.renameFile ?? ((from, to) => rename(from, to));
@@ -173,6 +179,7 @@ export class Journal {
             // An oversized original payload is marked even when redaction replaced
             // its text with one marker and the stored line is short.
             truncated: input.truncated || input.bytes > this.maxRecordBytes,
+            ...(input.triggers === undefined ? {} : { triggers: input.triggers }),
         };
         // Whole-record redaction also covers any structured field a later producer
         // adds; a secret-named key never reaches the file even inside JSON text.
@@ -185,52 +192,106 @@ export class Journal {
         const directory = eventsDirectory(workspace);
         const file = join(directory, `${sessionFileName(record.session)}.jsonl`);
         const line = `${JSON.stringify(record)}\n`;
-        const previous = this.queues.get(file) ?? Promise.resolve();
+        // Writes and pruning are serialized per workspace, so a prune can never
+        // overlap another append and two passes cannot both remove the same file.
+        const previous = this.queues.get(directory) ?? Promise.resolve();
         // shortcut: one appendFile call is the atomic unit; a crash mid-write can
-        // leave a torn final line, which every reader skips.
+        // leave a torn final line, which the next append repairs.
         const write = previous.then(async () => {
             await mkdir(directory, { recursive: true });
-            await this.rotateIfNeeded(file, Buffer.byteLength(line, 'utf8'));
-            await this.writeLine(file, line);
+            // Validate or repair this session file's trailing boundary before its
+            // first append in this instance; a previous instance may have died, and
+            // another session's append must never clear this file's repair state.
+            if (this.repairNeeded.has(file) || !this.verified.has(file)) {
+                await this.repairTail(file);
+                this.repairNeeded.delete(file);
+                this.verified.add(file);
+            }
+            try {
+                await this.writeLine(file, line);
+            }
+            catch (error) {
+                this.verified.delete(file);
+                this.repairNeeded.add(file);
+                throw error;
+            }
+            // Rotation only after the record is durable, so a failed append can
+            // never remove a readable record.
+            await this.rotateIfNeeded(file).catch(() => undefined);
+            await this.prune(directory);
         });
-        this.queues.set(file, write.catch(() => undefined));
+        this.queues.set(directory, write.catch(() => undefined));
         try {
             await write;
-            // Retention runs after the record is durable and never fails the append.
-            await this.prune(workspace);
             return { ok: true };
         }
         catch (error) {
             return { ok: false, error: errorMessage(error) };
         }
     }
-    /** Rotate the current session file to `.1` when the next line would exceed its cap. */
-    async rotateIfNeeded(file, incoming) {
+    /** Drop only the torn suffix so every committed record stays readable. */
+    async repairTail(file) {
+        let raw = '';
+        try {
+            raw = await this.readText(file);
+        }
+        catch (error) {
+            // Only an absent file is a valid empty state; any other read failure
+            // must fail the append and keep the repair pending.
+            if (error.code === 'ENOENT')
+                return;
+            throw error;
+        }
+        if (raw === '' || raw.endsWith('\n'))
+            return;
+        const boundary = raw.lastIndexOf('\n');
+        const keep = boundary === -1 ? '' : raw.slice(0, boundary + 1);
+        await this.truncateFile(file, Buffer.byteLength(keep, 'utf8'));
+    }
+    /** Rotate the current file to `.1` once it exceeds its per-session cap. */
+    async rotateIfNeeded(file) {
         const current = await this.statFile(file);
-        if (current === undefined || current.size + incoming <= this.maxSessionBytes)
+        if (current === undefined || current.size <= this.maxSessionBytes)
             return;
         const rotated = `${file}.1`;
         await this.removeFile(rotated).catch(() => undefined);
         await this.renameFile(file, rotated);
     }
     /** Drop expired files, then the oldest files until the workspace cap holds. */
-    async prune(workspace) {
+    async prune(directory) {
         try {
-            const directory = eventsDirectory(workspace);
-            const cutoff = this.now() - this.retentionMs;
-            let files = (await this.listFiles(directory)).filter((file) => isJournalFile(file.name));
-            for (const file of files) {
-                if (file.mtimeMs >= cutoff)
-                    continue;
-                await this.removeFile(join(directory, file.name));
-                files = files.filter((candidate) => candidate !== file);
-            }
-            let total = files.reduce((sum, file) => sum + file.size, 0);
-            for (const file of [...files].sort((left, right) => left.mtimeMs - right.mtimeMs)) {
-                if (total <= this.maxWorkspaceBytes)
-                    break;
-                await this.removeFile(join(directory, file.name));
-                total -= file.size;
+            for (;;) {
+                const files = (await this.listFiles(directory)).filter((file) => isJournalFile(file.name));
+                const cutoff = this.now() - this.retentionMs;
+                let removed = false;
+                for (const file of files) {
+                    if (file.mtimeMs >= cutoff)
+                        continue;
+                    try {
+                        await this.removeFile(join(directory, file.name));
+                        removed = true;
+                    }
+                    catch {
+                        // A file that another pass already removed is fine.
+                    }
+                }
+                let total = files
+                    .filter((file) => file.mtimeMs >= cutoff)
+                    .reduce((sum, file) => sum + file.size, 0);
+                for (const file of [...files].sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+                    if (total <= this.maxWorkspaceBytes)
+                        break;
+                    try {
+                        await this.removeFile(join(directory, file.name));
+                        total -= file.size;
+                        removed = true;
+                    }
+                    catch {
+                        // Continue with the next-oldest file.
+                    }
+                }
+                if (!removed)
+                    return;
             }
         }
         catch {

@@ -1,8 +1,8 @@
 import {
   appendFile,
   mkdir,
-  readFile,
   readdir,
+  readFile,
   rename,
   stat,
   truncate,
@@ -384,10 +384,9 @@ export class Journal {
             // A file that another pass already removed is fine.
           }
         }
-        let total = (files.filter((file) => file.mtimeMs >= cutoff)).reduce(
-          (sum, file) => sum + file.size,
-          0,
-        )
+        let total = files
+          .filter((file) => file.mtimeMs >= cutoff)
+          .reduce((sum, file) => sum + file.size, 0)
         for (const file of [...files].sort((left, right) => left.mtimeMs - right.mtimeMs)) {
           if (total <= this.maxWorkspaceBytes) break
           try {
@@ -406,12 +405,7 @@ export class Journal {
   }
 
   /** One page of a session's records; the rotation and current file are one log. */
-  async read(
-    workspace: string,
-    session: string,
-    cursor = 0,
-    limit = 50,
-  ): Promise<JournalPage> {
+  async read(workspace: string, session: string, cursor = 0, limit = 50): Promise<JournalPage> {
     const file = join(eventsDirectory(workspace), `${sessionFileName(session)}.jsonl`)
     const records: JournalRecord[] = []
     for (const candidate of [`${file}.1`, file]) {
@@ -443,4 +437,3 @@ export class Journal {
     return this.now()
   }
 }
-

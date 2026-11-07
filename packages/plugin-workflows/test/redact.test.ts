@@ -2,7 +2,14 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { Journal, MAX_RECORD_BYTES, eventsDirectory, sessionFileName, summarize, toolResultText } from '../src/host/journal.ts'
+import {
+  eventsDirectory,
+  Journal,
+  MAX_RECORD_BYTES,
+  sessionFileName,
+  summarize,
+  toolResultText,
+} from '../src/host/journal.ts'
 import { REDACTED, REDACTED_PAYLOAD, redactText, redactValue } from '../src/host/redact.ts'
 
 const TEMP_DIRECTORIES: string[] = []
@@ -216,7 +223,7 @@ describe('redaction', () => {
         truncated: false,
       })
       expect(bounded.summary).not.toContain('HUNTER-secret')
-      }
+    }
   })
 
   it('redacts a secret object whose single-quoted brace looks like the end', () => {
@@ -354,9 +361,7 @@ describe('redaction', () => {
   })
 
   it('does not expand replacement patterns from a wrapped JSON string', () => {
-    const payload = JSON.stringify(
-      JSON.stringify({ token: 'tok-secret', note: "$& $` $' $1" }),
-    )
+    const payload = JSON.stringify(JSON.stringify({ token: 'tok-secret', note: "$& $` $' $1" }))
     const summary = summarize(payload, 4000).summary
     expect(summary).not.toContain('tok-secret')
   })
@@ -482,7 +487,9 @@ describe('redaction', () => {
     ]) {
       const { record: bounded, truncated } = journal.record(input)
       expect(truncated).toBe(true)
-      expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThanOrEqual(MAX_RECORD_BYTES)
+      expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThanOrEqual(
+        MAX_RECORD_BYTES,
+      )
     }
   })
 
@@ -513,4 +520,3 @@ describe('redaction', () => {
     expect(bounded.truncated).toBe(false)
   })
 })
-

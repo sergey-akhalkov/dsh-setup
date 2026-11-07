@@ -24,6 +24,15 @@ export declare function eventsDirectory(workspace: string): string;
  * substitution only matters for an unexpected id.
  */
 export declare function sessionFileName(session: string): string;
+/** One trigger's stored evaluation; the Why-not view reads these rows. */
+export interface TriggerEvaluationRecord {
+    readonly id: string;
+    readonly matched: boolean;
+    readonly reason: string;
+    readonly path?: string;
+    readonly filter?: string;
+    readonly detail?: string;
+}
 /** One journal record, as the read API and the Why-not view consume it. */
 export interface JournalRecord {
     readonly v: number;
@@ -37,6 +46,7 @@ export interface JournalRecord {
     readonly summary: string;
     readonly bytes: number;
     readonly truncated: boolean;
+    readonly triggers?: readonly TriggerEvaluationRecord[];
 }
 /** The fields a producer supplies; the journal stamps the rest. */
 export interface JournalInput {
@@ -50,6 +60,7 @@ export interface JournalInput {
     readonly summary: string;
     readonly bytes: number;
     readonly truncated: boolean;
+    readonly triggers?: readonly TriggerEvaluationRecord[];
 }
 export type AppendResult = {
     readonly ok: true;
@@ -77,6 +88,8 @@ export interface JournalOptions {
     /** Test seam: write one complete line. */
     readonly writeLine?: (file: string, line: string) => Promise<void>;
     readonly readText?: (file: string) => Promise<string>;
+    /** Test seam: truncate a file to a byte length. */
+    readonly truncateFile?: (file: string, size: number) => Promise<void>;
     /** Test seam: list the event directory. */
     readonly listFiles?: (directory: string) => Promise<JournalFileInfo[]>;
     /** Test seam: one file's size and age, or undefined when absent. */
@@ -122,11 +135,16 @@ export declare class Journal {
     private readonly now;
     private readonly writeLine;
     private readonly readText;
+    private readonly truncateFile;
     private readonly listFiles;
     private readonly statFile;
     private readonly renameFile;
     private readonly removeFile;
     private readonly queues;
+    /** Session files whose last append left a torn line that must be repaired. */
+    private readonly repairNeeded;
+    /** Session files whose trailing boundary this instance has already validated. */
+    private readonly verified;
     constructor(options?: JournalOptions);
     /** Build the redacted, bounded record a producer's fields describe. */
     record(input: JournalInput): {
@@ -135,7 +153,9 @@ export declare class Journal {
     };
     /** Append one record; returns a result instead of throwing. */
     append(workspace: string, record: JournalRecord): Promise<AppendResult>;
-    /** Rotate the current session file to `.1` when the next line would exceed its cap. */
+    /** Drop only the torn suffix so every committed record stays readable. */
+    private repairTail;
+    /** Rotate the current file to `.1` once it exceeds its per-session cap. */
     private rotateIfNeeded;
     /** Drop expired files, then the oldest files until the workspace cap holds. */
     private prune;

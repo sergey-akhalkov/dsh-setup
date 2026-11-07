@@ -1,0 +1,14 @@
+{
+  "rule": "task-review",
+  "change": "add-workflow-observability",
+  "phase": "task",
+  "scope": "task",
+  "taskId": "abc124",
+  "digest": "digest-abc124",
+  "verdict": "PASS",
+  "findings": [],
+  "target": { "provider": "codex-subagent", "model": "gpt-6-astra" },
+  "session": "session-1",
+  "runId": "run-mw6abcde-1234abce",
+  "time": "2026-11-07T10:10:00.000Z"
+}

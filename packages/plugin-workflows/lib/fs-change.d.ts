@@ -1,0 +1,42 @@
+/**
+ * Workspace file source for `openspec/changes/**`. The filesystem service owns
+ * the watch itself (directory watches see direct entries only), so this module
+ * watches the tree's directories and re-scans the files it cares about after a
+ * debounce; a watcher error triggers a rescan so a dropped event stays visible.
+ */
+/** Debounce window applied to coalesced watcher notifications. */
+export declare const FS_CHANGE_DEBOUNCE_MS = 250;
+/** The workspace-relative root this source observes. */
+export declare const CHANGES_ROOT = "openspec/changes";
+/** One relative file change; `hash` is absent for a deletion. */
+export interface FsChangeEvent {
+    readonly path: string;
+    readonly change: 'created' | 'modified' | 'deleted';
+    readonly hash?: string;
+}
+/** The filesystem service's observation seam. */
+export interface FsWatchService {
+    resolve(path: string, options?: {
+        cwd?: string;
+    }): Promise<unknown>;
+    watch(target: unknown, changed: (error?: Error) => void, signal: AbortSignal): Promise<() => Promise<void>>;
+}
+export interface FsChangeOptions {
+    readonly workspace: string;
+    readonly fs: FsWatchService;
+    onChange(event: FsChangeEvent): void;
+    onError(error: Error): void;
+    /** Called after a watcher error made the source re-scan the tree. */
+    onRescan?(reason: string): void;
+    readonly debounceMs?: number;
+}
+export interface FsChangeWatcher {
+    start(): Promise<void>;
+    dispose(): Promise<void>;
+}
+/**
+ * Start one workspace's change-tree watcher. The initial scan is a silent
+ * baseline; later scans emit ordered create/modify/delete events after the
+ * debounce window.
+ */
+export declare function startFsChangeWatcher(options: FsChangeOptions): Promise<FsChangeWatcher>;

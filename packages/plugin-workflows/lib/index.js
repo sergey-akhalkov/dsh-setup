@@ -1,4 +1,9 @@
-import { Journal, MAX_RECORD_BYTES, toolResultText } from './journal.js';
+import { registerWorkflowRoutes } from './api.js';
+import { evaluateEvent } from './evaluate.js';
+import { startFsChangeWatcher } from './fs-change.js';
+import { WorkflowHealth } from './health.js';
+import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
+import { loadCatalog } from './triggers.js';
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows';
 /**
@@ -76,6 +81,8 @@ function toolSummary(name, isError, text) {
  * contained so the turn is unaffected.
  */
 export function apply(ctx) {
+    // A malformed shipped trigger refuses the plugin load, naming the field.
+    const triggers = loadCatalog();
     const services = hostServices(ctx);
     if (services === undefined) {
         console.error('workflows: required Host services are unavailable; the recorder is inert');
@@ -84,18 +91,174 @@ export function apply(ctx) {
     const journal = new Journal();
     /** Latest turn per session, so a tool result belongs to a turn. */
     const turns = new Map();
-    const record = (workspace, input) => {
-        const { record: bounded } = journal.record(input);
-        void journal.append(workspace, bounded).then((result) => {
-            if (!result.ok) {
-                console.error(`workflows: the session journal could not be written (${result.error})`);
+    /** De-duplication identities already evaluated for one session. */
+    const seen = new Map();
+    /** One health writer per workspace, created on its first event. */
+    const healths = new Map();
+    /** The session most recently observed in each workspace. */
+    const activeSession = new Map();
+    /** One change-tree watcher per workspace, started on its first event. */
+    const watchers = new Map();
+    const watching = new Set();
+    /** Whether a workspace's change source started successfully. */
+    const watchHealthy = new Map();
+    let listenerCount = 0;
+    let scopedFailures = 0;
+    let registrationError;
+    const triggerCount = triggers.length;
+    /** The count every published health file must use right now. */
+    const publishedListenerCount = (workspace) => Math.max(0, listenerCount + (watchHealthy.get(workspace) === true ? 1 : 0) - scopedFailures);
+    const healthFor = (workspace) => {
+        const existing = healths.get(workspace);
+        if (existing !== undefined)
+            return existing;
+        const health = new WorkflowHealth({
+            root: workflowsDirectory(workspace),
+            triggerCount,
+        });
+        health.setListenerCount(publishedListenerCount(workspace));
+        if (registrationError !== undefined)
+            health.recordError(registrationError);
+        void health.start().catch((error) => {
+            console.error(`workflows: health could not start (${String(error)})`);
+        });
+        healths.set(workspace, health);
+        return health;
+    };
+    /** Register one required observer, publishing a failure instead of throwing. */
+    const listen = (register) => {
+        try {
+            register();
+            listenerCount += 1;
+        }
+        catch (error) {
+            registrationError ??= error;
+        }
+    };
+    /** A scoped per-agent registration failure is visible and lowers the count. */
+    const failScopedListener = (error) => {
+        scopedFailures += 1;
+        registrationError ??= error;
+        for (const [workspace, health] of healths) {
+            health.recordError(error);
+            health.setListenerCount(publishedListenerCount(workspace));
+        }
+    };
+    /** Publish one contained observer failure as the health's last error. */
+    const publishListenerError = (workspace, error) => {
+        if (workspace === undefined)
+            return;
+        try {
+            healthFor(workspace).recordError(error);
+        }
+        catch {
+            // Health reporting never breaks dispatch.
+        }
+    };
+    /** Begin health for a session workspace as soon as the session is known. */
+    const observeSession = (session) => {
+        try {
+            const workspace = workspaceFor(services, session);
+            if (workspace !== undefined) {
+                healthFor(workspace);
+                watchChanges(workspace);
             }
+        }
+        catch {
+            // A session without a usable workspace keeps the rest of the host working.
+        }
+    };
+    ctx.effect(() => () => {
+        for (const health of healths.values())
+            health.dispose();
+        healths.clear();
+        for (const watcher of watchers.values())
+            void watcher.dispose();
+        watchers.clear();
+        watching.clear();
+    });
+    const record = (workspace, input, event) => {
+        const health = healthFor(workspace);
+        activeSession.set(workspace, input.session);
+        const sessionSeen = seen.get(input.session) ?? new Set();
+        seen.set(input.session, sessionSeen);
+        const records = evaluateEvent(triggers, event, sessionSeen);
+        const { record: bounded } = journal.record({
+            ...input,
+            ...(records.length === 0 ? {} : { triggers: records }),
+        });
+        // The event was observed even if its record cannot be written.
+        health.markEvent(bounded.at);
+        void journal.append(workspace, bounded).then((result) => {
+            if (result.ok)
+                return;
+            health.setJournalWritable(false);
+            health.recordError(result.error);
+            console.error(`workflows: the session journal could not be written (${result.error})`);
+        });
+        watchChanges(workspace);
+    };
+    // One change-tree watcher per workspace; it starts on the workspace's first
+    // observed event and attributes a change to the session active there.
+    const watchChanges = (workspace) => {
+        if (watchers.has(workspace) || watching.has(workspace))
+            return;
+        watching.add(workspace);
+        let watchFailed = false;
+        void startFsChangeWatcher({
+            workspace,
+            fs: services.fs,
+            onChange: (event) => {
+                const session = activeSession.get(workspace);
+                if (session === undefined)
+                    return;
+                const summary = `${event.change} ${event.path}`;
+                record(workspace, {
+                    at: journal.time(),
+                    session,
+                    ...(turns.get(session) === undefined ? {} : { turn: turns.get(session) }),
+                    kind: 'fs.change',
+                    subject: event.path,
+                    summary,
+                    bytes: Buffer.byteLength(summary, 'utf8'),
+                    truncated: false,
+                }, {
+                    kind: 'fs.change',
+                    subject: event.path,
+                    change: event.change,
+                    ...(event.hash === undefined ? {} : { hash: event.hash }),
+                });
+            },
+            onError: (error) => {
+                watchFailed = true;
+                watchHealthy.set(workspace, false);
+                healthFor(workspace).recordError(error);
+                healthFor(workspace).setListenerCount(publishedListenerCount(workspace));
+                console.error(`workflows: the change watcher reported an error (${error.message})`);
+            },
+            onRescan: (reason) => {
+                healthFor(workspace).recordError(new Error(reason));
+            },
+        })
+            .then((watcher) => {
+            watching.delete(workspace);
+            watchers.set(workspace, watcher);
+            watchHealthy.set(workspace, !watchFailed);
+            healthFor(workspace).setListenerCount(publishedListenerCount(workspace));
+        })
+            .catch((error) => {
+            watching.delete(workspace);
+            watchHealthy.set(workspace, false);
+            healthFor(workspace).recordError(error);
+            healthFor(workspace).setListenerCount(publishedListenerCount(workspace));
+            console.error(`workflows: the change watcher could not start (${error instanceof Error ? error.message : String(error)})`);
         });
     };
-    ctx.on('agent/pre-step', (payload, next) => {
+    listen(() => ctx.on('agent/pre-step', (payload, next) => {
+        let workspace;
         try {
             const session = payload.agent.session;
-            const workspace = workspaceFor(services, session);
+            workspace = workspaceFor(services, session);
             if (workspace !== undefined) {
                 turns.set(String(session.id), payload.turn);
                 const origin = session.header.origin === 'subagent' ? 'subagent' : 'root';
@@ -109,18 +272,20 @@ export function apply(ctx) {
                     summary,
                     bytes: Buffer.byteLength(summary, 'utf8'),
                     truncated: false,
-                });
+                }, { kind: 'agent.turn-start', subject: origin });
             }
         }
-        catch {
-            // An observer never fails a step.
+        catch (error) {
+            // An observer never fails a step, but its failure stays visible.
+            publishListenerError(workspace, error);
         }
         return next();
-    });
-    ctx.on('agent/turn-stopping', (payload) => {
+    }));
+    listen(() => ctx.on('agent/turn-stopping', (payload) => {
+        let workspace;
         try {
             const session = payload.agent.session;
-            const workspace = workspaceFor(services, session);
+            workspace = workspaceFor(services, session);
             if (workspace === undefined)
                 return;
             turns.set(String(session.id), payload.turn);
@@ -134,19 +299,21 @@ export function apply(ctx) {
                 summary,
                 bytes: Buffer.byteLength(summary, 'utf8'),
                 truncated: false,
-            });
+            }, { kind: 'agent.turn-stop', subject: 'stop-attempt' });
         }
-        catch {
-            // An observer never fails a turn.
+        catch (error) {
+            // An observer never fails a turn, but its failure stays visible.
+            publishListenerError(workspace, error);
         }
-    });
-    ctx.on('tools/result', (exec, result) => {
+    }));
+    listen(() => ctx.on('tools/result', (exec, result) => {
+        let workspace;
         try {
             const agent = exec.agent;
             if (agent === undefined)
                 return;
             const session = agent.session;
-            const workspace = workspaceFor(services, session);
+            workspace = workspaceFor(services, session);
             if (workspace === undefined)
                 return;
             const text = toolResultText(result);
@@ -165,12 +332,13 @@ export function apply(ctx) {
                 summary,
                 bytes,
                 truncated: bytes > MAX_RECORD_BYTES,
-            });
+            }, { kind: 'tool.result', subject: exec.name, tool: exec.name });
         }
-        catch {
-            // Observability never breaks tool dispatch.
+        catch (error) {
+            // Observability never breaks tool dispatch; the failure is published.
+            publishListenerError(workspace, error);
         }
-    });
+    }));
     // DSH dispatches `subagent/start` and `subagent/end` inside the delegating
     // parent's scoped context and passes only the run info to listeners. A
     // listener bound to one agent's context sees that agent's own delegations;
@@ -220,6 +388,9 @@ export function apply(ctx) {
             summary,
             bytes: Buffer.byteLength(summary, 'utf8'),
             truncated: false,
+        }, {
+            kind: kind === 'subagent/start' ? 'subagent.start' : 'subagent.end',
+            subject: String(info.id),
         });
     };
     const bindings = [];
@@ -238,37 +409,67 @@ export function apply(ctx) {
         if (boundAgents.has(agent))
             return;
         boundAgents.add(agent);
-        bindings.push(agent.ctx.on('subagent/start', (info) => {
-            try {
-                recordSubagent(agent, 'subagent/start', info);
-            }
-            catch {
-                // An observer never fails a worker start.
-            }
-        }), agent.ctx.on('subagent/end', (info) => {
-            try {
-                recordSubagent(agent, 'subagent/end', info);
-            }
-            catch {
-                // An observer never fails a worker settlement.
-            }
-        }));
+        try {
+            bindings.push(agent.ctx.on('subagent/start', (info) => {
+                try {
+                    recordSubagent(agent, 'subagent/start', info);
+                }
+                catch (error) {
+                    publishListenerError(workspaceFor(services, agent.session), error);
+                }
+            }));
+        }
+        catch (error) {
+            failScopedListener(error);
+        }
+        try {
+            bindings.push(agent.ctx.on('subagent/end', (info) => {
+                try {
+                    recordSubagent(agent, 'subagent/end', info);
+                }
+                catch (error) {
+                    publishListenerError(workspaceFor(services, agent.session), error);
+                }
+            }));
+        }
+        catch (error) {
+            failScopedListener(error);
+        }
     };
-    ctx.on('agent/created', ({ agent }) => {
+    listen(() => ctx.on('agent/created', ({ agent }) => {
         try {
             bindLifecycle(agent);
+            observeSession(agent.session);
         }
         catch {
             // A listener that cannot bind leaves the rest of the host working.
         }
         return undefined;
-    });
-    // A reload or late mount keeps observing agents that are already live.
+    }));
+    // A reload or late mount keeps observing agents that are already live; a
+    // quiet workspace still gets its health file and self-check at boot.
     try {
-        for (const agent of services.agents.list())
+        for (const agent of services.agents.list()) {
             bindLifecycle(agent);
+            observeSession(agent.session);
+        }
     }
     catch {
         // An unreadable registry leaves the recorder inert for existing agents.
     }
+    // The four main observers are registered; the per-workspace change source is
+    // the fifth expected listener. A failed registration lowers the count so
+    // health reports listener-down instead of healthy.
+    for (const [workspace, health] of healths) {
+        health.setListenerCount(publishedListenerCount(workspace));
+    }
+    // The read-only API is optional at runtime but present on the Web host that
+    // also carries the Client view; a host without Fetch keeps recording only.
+    registerWorkflowRoutes(ctx, {
+        agents: services.agents,
+        workingDirectory: services.workingDirectory,
+        journal,
+        healthFor,
+        triggers,
+    });
 }
