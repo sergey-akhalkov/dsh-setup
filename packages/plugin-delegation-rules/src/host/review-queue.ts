@@ -104,6 +104,10 @@ interface QueueEntry<T extends QueueRun> {
   finished: boolean
   /** Set while a retry timer owns eligibility, so a stale timer is ignored. */
   retryToken: number
+  /** Settles when this run's first start attempt leaves `starting`. */
+  startOutcome?: Promise<void>
+  /** The permanent start failure this admission must surface to its caller. */
+  startError?: unknown
 }
 
 interface KeyState<T extends QueueRun> {
@@ -198,7 +202,6 @@ export class ReviewQueue<T extends QueueRun> {
   private waiting: QueueEntry<T>[] = []
   private readonly active = new Set<QueueEntry<T>>()
   private sequence = 0
-  private pumpChain: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly limits: QueueLimits,
@@ -264,8 +267,12 @@ export class ReviewQueue<T extends QueueRun> {
     this.waiting.push(entry)
     this.waiting.sort((left, right) => left.seq - right.seq)
     if (this.limits.enabled) this.armWaitTimer(entry)
-    await this.syncPositions()
-    await this.pump()
+    this.syncPositions()
+    this.pump()
+    if (entry.phase === 'starting' && entry.startOutcome !== undefined) {
+      await entry.startOutcome
+      if (entry.startError !== undefined) throw entry.startError
+    }
     if (entry.finished) return { kind: 'settled' }
     if (entry.phase === 'retry-wait') return { kind: 'accepted', phase: 'retry-wait' }
     if (entry.phase === 'queued') return { kind: 'accepted', phase: 'queued' }
@@ -321,7 +328,7 @@ export class ReviewQueue<T extends QueueRun> {
     run.file.failureClass = failure.failureClass
     run.file.lastRetryAt = this.hooks.now().toISOString()
     delete run.file.queuePosition
-    void this.hooks.persist(run)
+    this.persistEntry(run)
     const token = ++entry.retryToken
     const delay = retryDelayMs(entry.attempts, this.limits, failure.retryAfterMs)
     entry.timer = setTimeout(() => {
@@ -330,9 +337,10 @@ export class ReviewQueue<T extends QueueRun> {
       delete run.file.failureClass
       this.waiting.push(entry)
       this.waiting.sort((left, right) => left.seq - right.seq)
-      void this.syncPositions().then(() => this.pump())
+      this.syncPositions()
+      this.pump()
     }, delay)
-    void this.pump()
+    this.pump()
   }
 
   /** Attempts this run has already used, for the retry budget decision. */
@@ -395,12 +403,28 @@ export class ReviewQueue<T extends QueueRun> {
     this.waiting = this.waiting.filter((candidate) => candidate !== entry)
   }
 
-  private async syncPositions(): Promise<void> {
-    for (const [index, entry] of this.waiting.entries()) {
-      if (entry.phase !== 'queued') continue
-      if (entry.run.file.queuePosition === index + 1) continue
+  /** Apply every position before any persistence so a stale sweep cannot win. */
+  private syncPositions(): void {
+    const queued = this.waiting.filter((entry) => entry.phase === 'queued')
+    for (const [index, entry] of queued.entries()) {
       entry.run.file.queuePosition = index + 1
-      await this.hooks.persist(entry.run)
+    }
+    for (const entry of queued) this.persistEntry(entry.run)
+  }
+
+  private persistEntry(run: T): void {
+    try {
+      void Promise.resolve(this.hooks.persist(run)).catch(() => undefined)
+    } catch {
+      // Queue facts are local scratch; a failed write must not block admission.
+    }
+  }
+
+  private async persistNow(run: T): Promise<void> {
+    try {
+      await this.hooks.persist(run)
+    } catch {
+      // Queue facts are local scratch; a failed write must not block settlement.
     }
   }
 
@@ -408,21 +432,20 @@ export class ReviewQueue<T extends QueueRun> {
     return !entry.finished && entry.phase === 'queued' && entry.head
   }
 
-  private async pump(): Promise<void> {
-    const next = this.pumpChain.then(async () => this.drain())
-    this.pumpChain = next.catch(() => undefined)
-    return next
-  }
-
-  private async drain(): Promise<void> {
-    while (this.limits.enabled ? this.active.size < this.limits.concurrency : true) {
+  /**
+   * Claim every available slot synchronously and launch each start on its own.
+   * A slow target start must never delay an unrelated admission or handle.
+   */
+  private pump(): void {
+    const limit = this.limits.enabled ? this.limits.concurrency : Number.POSITIVE_INFINITY
+    while (this.active.size < limit) {
       const entry = this.waiting.find((candidate) => this.startEligible(candidate))
       if (entry === undefined) return
-      await this.startEntry(entry)
+      this.claim(entry)
     }
   }
 
-  private async startEntry(entry: QueueEntry<T>): Promise<void> {
+  private claim(entry: QueueEntry<T>): void {
     this.removeWaiting(entry)
     entry.phase = 'starting'
     entry.attempts += 1
@@ -431,27 +454,33 @@ export class ReviewQueue<T extends QueueRun> {
     entry.run.file.waitMs = this.hooks.now().getTime() - entry.queuedAtMs
     delete entry.run.file.queuePosition
     delete entry.timer
-    await this.syncPositions()
-    await this.hooks.persist(entry.run)
     this.active.add(entry)
+    this.syncPositions()
+    this.persistEntry(entry.run)
+    entry.startOutcome = this.runStart(entry)
+    void entry.startOutcome.catch(() => undefined)
+  }
+
+  private async runStart(entry: QueueEntry<T>): Promise<void> {
     try {
       await this.hooks.start(entry.run)
     } catch (error) {
       this.active.delete(entry)
-      if (entry.finished) throw error
+      if (entry.finished) return
       const failure = classifyFailure(error, 'start')
       entry.failureClass = failure.failureClass
       if (this.limits.enabled && failure.transient && entry.attempts < this.limits.maxAttempts) {
         this.scheduleRetry(entry.run, failure)
         return
       }
+      entry.startError = error
       await this.failEntry(entry, error, failure.failureClass)
-      throw error
+      return
     }
     if (entry.finished) return
     entry.phase = 'running'
     entry.run.file.state = 'running'
-    await this.hooks.persist(entry.run)
+    this.persistEntry(entry.run)
   }
 
   private async failEntry(
@@ -486,14 +515,13 @@ export class ReviewQueue<T extends QueueRun> {
     entry.run.file.state = state
     delete entry.run.file.queuePosition
     if (detail !== undefined) entry.run.file.detail = detail
-    await this.hooks.persist(entry.run)
-    await this.syncPositions()
+    await this.persistNow(entry.run)
+    this.syncPositions()
     try {
       this.hooks.settled(entry.run, state)
     } catch {
       // The observer is a seam; it must not change queue cleanup.
     }
-    // Never await the pump here: this finish may itself run inside a drain.
-    void this.pump().catch(() => undefined)
+    this.pump()
   }
 }

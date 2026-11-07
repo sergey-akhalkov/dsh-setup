@@ -197,6 +197,67 @@ describe('review queue admission', () => {
     pending.releases.shift()?.()
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
   })
+
+  it('does not serialize independent admissions behind a pending target start', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    await writeChange(root, 'change-c', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const originalStart = subagents.startActivation.bind(subagents)
+    let releaseStart: () => void = () => undefined
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    let holding = false
+    let enteredStart: () => void = () => undefined
+    const firstStarted = new Promise<void>((resolve) => {
+      enteredStart = resolve
+    })
+    subagents.startActivation = async (spec) => {
+      if (!holding) {
+        holding = true
+        enteredStart()
+        await startGate
+      }
+      return originalStart(spec)
+    }
+    const harness = await harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        reviewQueue: { concurrency: 2, waitTimeoutMs: 60 },
+      },
+      subagents,
+    )
+
+    const firstCall = harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    await firstStarted
+    const second = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-b' })
+    expect(second).toContain('review started')
+    const third = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-c' })
+    const thirdRun = runIdFrom(third)
+    expect(third).toContain('review queued')
+    expect(third).toContain('queue position: 1')
+
+    // The queued handle arrived and its timeout settles while A's start is still
+    // held open: no unrelated start may block admission or the wait timeout.
+    expect(await harness.waitForRun(thirdRun)).toContain('state=failed')
+    expect(subagents.startCalls).toBe(1)
+
+    releaseStart()
+    const first = await firstCall
+    expect(first).toContain('review started')
+    const firstRun = runIdFrom(first)
+    const secondRun = runIdFrom(second)
+    await subagents.waitForStarts(2)
+    pending.releases.shift()?.()
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(firstRun)).toContain('state=completed')
+    expect(await harness.waitForRun(secondRun)).toContain('state=completed')
+  })
 })
 
 describe('review queue cancellation', () => {
@@ -239,6 +300,52 @@ describe('review queue cancellation', () => {
     expect(waiting.file.state).toBe('discarded')
     expect(queue.owns('run-b')).toBe(false)
     expect(queue.summary()).toMatchObject({ active: 1, queued: 0 })
+    queue.dispose()
+  })
+
+  it('recomputes positions from the current waiting list after a cancellation', async () => {
+    let releasePersist: () => void = () => undefined
+    let gate: Promise<void> | undefined
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(async () => {
+        if (gate !== undefined) await gate
+      }),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 3,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const running = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(running)).toEqual({ kind: 'accepted', phase: 'running' })
+
+    gate = new Promise<void>((resolve) => {
+      releasePersist = resolve
+    })
+    const second = fakeRun('run-b', 'key-b', 'identity-b')
+    const third = fakeRun('run-c', 'key-c', 'identity-c')
+    const submitSecond = queue.submit(second)
+    const submitThird = queue.submit(third)
+    expect(third.file.queuePosition).toBe(2)
+
+    const cancelling = queue.cancel('run-b')
+    expect(queue.summary().queued).toBe(1)
+    releasePersist()
+    await Promise.all([submitSecond, submitThird, cancelling])
+    expect(second.file.state).toBe('discarded')
+    expect(third.file.queuePosition).toBe(1)
     queue.dispose()
   })
 })

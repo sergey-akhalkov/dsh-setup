@@ -93,7 +93,6 @@ export declare class ReviewQueue<T extends QueueRun> {
     private waiting;
     private readonly active;
     private sequence;
-    private pumpChain;
     constructor(limits: QueueLimits, hooks: ReviewQueueHooks<T>);
     /** Stop every pending timer; the engine calls this when the plugin unloads. */
     dispose(): void;
@@ -132,11 +131,18 @@ export declare class ReviewQueue<T extends QueueRun> {
     private waitTimedOut;
     private positionOf;
     private removeWaiting;
+    /** Apply every position before any persistence so a stale sweep cannot win. */
     private syncPositions;
+    private persistEntry;
+    private persistNow;
     private startEligible;
+    /**
+     * Claim every available slot synchronously and launch each start on its own.
+     * A slow target start must never delay an unrelated admission or handle.
+     */
     private pump;
-    private drain;
-    private startEntry;
+    private claim;
+    private runStart;
     private failEntry;
     private finish;
 }
