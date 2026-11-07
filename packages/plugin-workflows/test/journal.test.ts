@@ -29,6 +29,8 @@ interface FakeHost {
   readonly listeners: Map<string, Listener[]>
   readonly steers: unknown[]
   readonly fsWatchers: Array<(error?: Error) => void>
+  readonly fsClosed: number[]
+  resolveFsWatch(): void
   readonly agent: FakeAgent
   addAgent(id: string, origin?: 'subagent', parentSession?: string, failScoped?: boolean): FakeAgent
   emit(name: string, ...args: unknown[]): unknown
@@ -43,12 +45,15 @@ function createHost(
     readonly failOn?: string
     readonly failScopedOn?: string
     readonly failFsWatch?: boolean
+    readonly deferFsWatch?: boolean
   } = {},
 ): FakeHost {
   const listeners = new Map<string, Listener[]>()
   const steers: unknown[] = []
   const agents = new Map<string, FakeAgent>()
   const fsWatchers: Array<(error?: Error) => void> = []
+  const fsClosed: number[] = []
+  const pendingWatches: Array<(close: () => Promise<void>) => void> = []
   const effects: Array<() => void> = []
   const mainDisposers: Array<() => void> = []
   const remove = (name: string, listener: Listener): void => {
@@ -109,7 +114,15 @@ function createHost(
           watch: async (_target: unknown, changed: (error?: Error) => void) => {
             if (options.failFsWatch === true) throw new Error('watch failed')
             fsWatchers.push(changed)
-            return async () => {}
+            const close = async (): Promise<void> => {
+              fsClosed.push(1)
+            }
+            if (options.deferFsWatch === true) {
+              return new Promise<() => Promise<void>>((resolve) => {
+                pendingWatches.push((deferredClose) => resolve(deferredClose))
+              })
+            }
+            return close
           },
         }
       }
@@ -144,12 +157,20 @@ function createHost(
   const fireFs = (error?: Error): void => {
     for (const changed of fsWatchers) changed(error)
   }
+  const resolveFsWatch = (): void => {
+    const resolve = pendingWatches.shift()
+    resolve?.(async () => {
+      fsClosed.push(1)
+    })
+  }
   return {
     ctx,
     workspace,
     listeners,
     steers,
     fsWatchers,
+    fsClosed,
+    resolveFsWatch,
     agent,
     addAgent,
     emit,
@@ -1017,6 +1038,43 @@ describe('workflow event recorder', () => {
     )
     expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
     host.dispose()
+  })
+
+  it('attributes a file change made right after session boot without an agent event', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    await waitFor(() => host.fsWatchers.length > 0)
+    await mkdir(join(workspace, 'openspec', 'changes', 'add-boot'), { recursive: true })
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'add-boot', 'tasks.md'),
+      '- [ ] 1.1\n',
+      'utf8',
+    )
+    host.fireFs()
+    const journal = new Journal()
+    await waitFor(async () =>
+      (await journal.read(workspace, 'session-1', 0, 50)).records.some(
+        (record) => record.kind === 'fs.change',
+      ),
+    )
+    const record = (await journal.read(workspace, 'session-1', 0, 50)).records.find(
+      (entry) => entry.kind === 'fs.change',
+    )
+    expect(record?.session).toBe('session-1')
+    expect(record?.subject).toContain('add-boot/tasks.md')
+    host.dispose()
+  })
+
+  it('disposes a watcher that finishes initializing after plugin unload', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace, { deferFsWatch: true })
+    apply(host.ctx as never)
+    await waitFor(() => host.fsWatchers.length > 0)
+    host.dispose()
+    host.resolveFsWatch()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(host.fsClosed.length).toBeGreaterThan(0)
   })
 
   it('contains a listener whose journal write fails', async () => {

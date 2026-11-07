@@ -13,7 +13,7 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 - [x] 2.2 Implement redaction for secret-shaped keys, bearer tokens, and private-key blocks, plus the per-record 4 KB cap and truncation marker; verify with unit tests for a token, a password, an authorization header, a private key block, and an oversized payload.
 - [x] 2.3 Implement the per-session and workspace retention policy (30 days or 50 MB, tested with a small injected limit), the atomic append path, and the non-blocking prune; verify that a write over the limit removes the oldest file and that a failed write leaves the previous records intact.
 - [x] 2.4 Implement `health.json` with listener count, last event time, journal writability, trigger count, and last error; verify the three health states and the 60-second self-check with a fake clock.
-- [ ] 2.5 Implement the `fs.watch` source for `openspec/changes/**` with a 250 ms debounce, workspace/session attribution, a rescan on a watcher error, and disposal on unload; verify a real file create and modify, a watcher failure, and that unloading disposes the watcher.
+- [x] 2.5 Implement the `fs.watch` source for `openspec/changes/**` with a 250 ms debounce, workspace/session attribution, a rescan on a watcher error, and disposal on unload; verify a real file create and modify, a watcher failure, and that unloading disposes the watcher.
 
 ## 3. Shadow triggers and Why-not (lane 1, owns `packages/plugin-workflows/src/host/triggers.ts`, `packages/plugin-workflows/src/host/evaluate.ts`, `packages/plugin-workflows/assets/triggers/*.json`, `packages/plugin-workflows/test/triggers.test.ts`, `packages/plugin-workflows/test/evaluate.test.ts`)
 

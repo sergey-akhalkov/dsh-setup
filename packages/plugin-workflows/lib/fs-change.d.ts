@@ -2,7 +2,9 @@
  * Workspace file source for `openspec/changes/**`. The filesystem service owns
  * the watch itself (directory watches see direct entries only), so this module
  * watches the tree's directories and re-scans the files it cares about after a
- * debounce; a watcher error triggers a rescan so a dropped event stays visible.
+ * per-path debounce; a watcher error triggers a rescan so a dropped event stays
+ * visible. Every read is canonically checked against the workspace root, so a
+ * link cannot pull another workspace's files into this one.
  */
 /** Debounce window applied to coalesced watcher notifications. */
 export declare const FS_CHANGE_DEBOUNCE_MS = 250;
@@ -34,9 +36,12 @@ export interface FsChangeWatcher {
     start(): Promise<void>;
     dispose(): Promise<void>;
 }
+/** Whether a canonical target stays inside a canonical root. */
+export declare function isInside(root: string, target: string): boolean;
 /**
  * Start one workspace's change-tree watcher. The initial scan is a silent
- * baseline; later scans emit ordered create/modify/delete events after the
- * debounce window.
+ * baseline; watches attach, then one rescan catches an edit made while they were
+ * initializing. Later scans emit ordered create/modify/delete events after a
+ * per-directory debounce window.
  */
 export declare function startFsChangeWatcher(options: FsChangeOptions): Promise<FsChangeWatcher>;

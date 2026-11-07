@@ -157,6 +157,7 @@ export function apply(ctx: Context): void {
   const seen = new Map<string, Set<string>>()
   /** One health writer per workspace, created on its first event. */
   const healths = new Map<string, WorkflowHealth>()
+  let pluginDisposed = false
   /** The session most recently observed in each workspace. */
   const activeSession = new Map<string, string>()
   /** One change-tree watcher per workspace, started on its first event. */
@@ -218,6 +219,7 @@ export function apply(ctx: Context): void {
     try {
       const workspace = workspaceFor(services, session)
       if (workspace !== undefined) {
+        activeSession.set(workspace, String(session.id))
         healthFor(workspace)
         watchChanges(workspace)
       }
@@ -226,6 +228,7 @@ export function apply(ctx: Context): void {
     }
   }
   ctx.effect(() => () => {
+    pluginDisposed = true
     for (const health of healths.values()) health.dispose()
     healths.clear()
     for (const watcher of watchers.values()) void watcher.dispose()
@@ -264,6 +267,7 @@ export function apply(ctx: Context): void {
       workspace,
       fs: services.fs,
       onChange: (event) => {
+        if (pluginDisposed) return
         const session = activeSession.get(workspace)
         if (session === undefined) return
         const summary = `${event.change} ${event.path}`
@@ -288,6 +292,7 @@ export function apply(ctx: Context): void {
         )
       },
       onError: (error) => {
+        if (pluginDisposed) return
         watchFailed = true
         watchHealthy.set(workspace, false)
         healthFor(workspace).recordError(error)
@@ -295,16 +300,22 @@ export function apply(ctx: Context): void {
         console.error(`workflows: the change watcher reported an error (${error.message})`)
       },
       onRescan: (reason) => {
+        if (pluginDisposed) return
         healthFor(workspace).recordError(new Error(reason))
       },
     })
       .then((watcher) => {
+        if (pluginDisposed) {
+          void watcher.dispose()
+          return
+        }
         watching.delete(workspace)
         watchers.set(workspace, watcher)
         watchHealthy.set(workspace, !watchFailed)
         healthFor(workspace).setListenerCount(publishedListenerCount(workspace))
       })
       .catch((error: unknown) => {
+        if (pluginDisposed) return
         watching.delete(workspace)
         watchHealthy.set(workspace, false)
         healthFor(workspace).recordError(error)
