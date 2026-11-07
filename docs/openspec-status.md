@@ -166,7 +166,7 @@ budget, and the `work_checkpoint` observability attribution (19 tasks, 18/19 por
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
-was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for what it changed, and its
+was written (2026-11-07). Read the entry's `proposal.md` and `design.md` for what it changed, and its
 `tasks.md` for the open boxes.
 
 | Change                                                   | Recorded tasks |
@@ -217,6 +217,10 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-05-add-openspec-panel`                          | 18/18          |
 | `2026-11-05-widen-dsh-support-to-engine-range`           | 5/5            |
 | `2026-11-05-redesign-openspec-panel`                     | 14/14          |
+| `2026-11-07-add-workflow-observability`                  | 23/25          |
+| `2026-11-07-harden-review-queue`                         | 17/17          |
+| `2026-11-07-add-openspec-live-list`                      | 7/7            |
+| `2026-11-07-learn-from-review-findings`                  | 23/23          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -628,3 +632,21 @@ moved together, and the vendored setup was regenerated. The gate was green befor
 0.2.2-rc.1, whose composed profile contains every shipped bundle. Open owner follow-up: run the
 installer on the second machine from an external PowerShell with the app closed and confirm the
 Experimental plugins page shows the same on/off set.
+
+On 2026-11-07 four planned changes were archived together. `add-workflow-observability` created the
+`workflow-observability` capability and shipped `@dsh-setup/plugin-workflows`: a read-only Workflows
+conversation view, a bounded per-session event journal with redaction and retention, a shadow trigger
+catalog with a fixed Why-not vocabulary, a unified checkpoint/delegation/review timeline, and listener
+health. `harden-review-queue` added the queue, typed failure classification and retries, timeout
+quarantine, restart reconciliation and queue facts to `delegation-rules`. `add-openspec-live-list` made
+the OpenSpec panel's Changes segment follow its active rows' files through the shipped observation with
+one 300 ms debounced re-read. `learn-from-review-findings` added finding classes, the bounded finding
+history, the `review-learning` capability (lesson store, user-approved decisions, deterministic retro
+report) and bounded prompt injection. Their serial integration regenerated the setup and passed
+`pnpm check` (2247 tests), `pnpm build` with no diff, `pnpm gen:check` (365 files), `validate:repo`,
+`validate:composition` and `validate:installer`; the archived task counts are 23/25, 17/17, 7/7 and
+23/23. Open owner follow-ups: `add-workflow-observability` 5.1 real-carrier verification (the routes
+are unit-tested; the desktop Fetch carrier and browser admission matrix needs a throwaway installed
+host) and 7.3 live Workflows view smoke; `harden-review-queue` live queue-under-shortage smoke;
+`add-openspec-live-list` owner smoke on the installed setup; `learn-from-review-findings` one real
+classed review plus `/review-retro` acceptance. `add-workflow-obligations` remains active.

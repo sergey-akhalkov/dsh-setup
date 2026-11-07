@@ -1125,7 +1125,7 @@ describe('review queue admission', () => {
       root,
       {
         ...defaultTestConfig(),
-        reviewQueue: { concurrency: 1, maxAttempts: 4, baseDelayMs: 100, maxDelayMs: 200 },
+        reviewQueue: { concurrency: 1, maxAttempts: 4, baseDelayMs: 1000, maxDelayMs: 2000 },
       },
       subagents,
     )
