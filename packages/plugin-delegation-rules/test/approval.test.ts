@@ -6,10 +6,13 @@ import {
   type ApprovalRecordState,
   approvalSummaryLine,
   computeApprovalCoverage,
+  FINDING_CLASSES,
   formatApprovalGapLines,
+  isReviewFinding,
   laneOfTask,
   localTaskRecordPath,
   normalizeCheckboxes,
+  normalizeFindingClass,
   type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
   parseReviewApprovalMarker,
@@ -63,6 +66,24 @@ function recordFor(
     ...overrides,
   }
 }
+
+describe('finding classification', () => {
+  it('accepts the fixed vocabulary and normalizes everything else to other', () => {
+    expect(FINDING_CLASSES).toHaveLength(10)
+    expect(normalizeFindingClass('path-boundary')).toBe('path-boundary')
+    expect(normalizeFindingClass('security')).toBe('security')
+    expect(normalizeFindingClass(undefined)).toBe('other')
+    expect(normalizeFindingClass('made-up')).toBe('other')
+    expect(normalizeFindingClass(7)).toBe('other')
+  })
+
+  it('keeps a record with no class readable and rejects an invalid stored class', () => {
+    const finding = { severity: 'P1', title: 't', evidence: 'e', fix: 'f' }
+    expect(isReviewFinding(finding)).toBe(true)
+    expect(isReviewFinding({ ...finding, class: 'missing-test' })).toBe(true)
+    expect(isReviewFinding({ ...finding, class: 'made-up' })).toBe(false)
+  })
+})
 
 describe('numbered task parser', () => {
   it('parses checked, unchecked, and nested numbers with normalized text', () => {

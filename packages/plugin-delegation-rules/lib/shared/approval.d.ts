@@ -50,9 +50,16 @@ export interface UnparseableCheckedLine {
     text: string;
 }
 export declare function unparseableCheckedLines(markdown: string): UnparseableCheckedLine[];
+/** The fixed learning vocabulary; a finding is counted by its class. */
+export declare const FINDING_CLASSES: readonly ["spec-ambiguity", "missing-test", "path-boundary", "state-persistence", "stale-input", "api-contract", "plan-shape", "docs-drift", "security", "other"];
+export type FindingClass = (typeof FINDING_CLASSES)[number];
+/** A valid class passes through; an absent or unknown one is the safe `other`. */
+export declare function normalizeFindingClass(value: unknown): FindingClass;
 /** One review finding; the engine and the portable record share this shape. */
 export interface ReviewFinding {
     severity: 'P0' | 'P1';
+    /** Optional so records written before classification stay readable. */
+    class?: FindingClass;
     title: string;
     evidence: string;
     fix: string;

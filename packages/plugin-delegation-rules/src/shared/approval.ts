@@ -122,9 +122,36 @@ export function unparseableCheckedLines(markdown: string): UnparseableCheckedLin
   return lines
 }
 
+/** The fixed learning vocabulary; a finding is counted by its class. */
+export const FINDING_CLASSES = [
+  'spec-ambiguity',
+  'missing-test',
+  'path-boundary',
+  'state-persistence',
+  'stale-input',
+  'api-contract',
+  'plan-shape',
+  'docs-drift',
+  'security',
+  'other',
+] as const
+
+export type FindingClass = (typeof FINDING_CLASSES)[number]
+
+const FINDING_CLASS_SET: ReadonlySet<string> = new Set(FINDING_CLASSES)
+
+/** A valid class passes through; an absent or unknown one is the safe `other`. */
+export function normalizeFindingClass(value: unknown): FindingClass {
+  return typeof value === 'string' && FINDING_CLASS_SET.has(value)
+    ? (value as FindingClass)
+    : 'other'
+}
+
 /** One review finding; the engine and the portable record share this shape. */
 export interface ReviewFinding {
   severity: 'P0' | 'P1'
+  /** Optional so records written before classification stay readable. */
+  class?: FindingClass
   title: string
   evidence: string
   fix: string
@@ -200,6 +227,8 @@ export function isReviewFinding(value: unknown): value is ReviewFinding {
   if (!isRecord(value)) return false
   return (
     (value.severity === 'P0' || value.severity === 'P1') &&
+    (value.class === undefined ||
+      (typeof value.class === 'string' && FINDING_CLASS_SET.has(value.class))) &&
     isNonEmptyString(value.title) &&
     isNonEmptyString(value.evidence) &&
     isNonEmptyString(value.fix)

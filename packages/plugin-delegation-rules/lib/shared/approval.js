@@ -89,6 +89,26 @@ export function unparseableCheckedLines(markdown) {
     }
     return lines;
 }
+/** The fixed learning vocabulary; a finding is counted by its class. */
+export const FINDING_CLASSES = [
+    'spec-ambiguity',
+    'missing-test',
+    'path-boundary',
+    'state-persistence',
+    'stale-input',
+    'api-contract',
+    'plan-shape',
+    'docs-drift',
+    'security',
+    'other',
+];
+const FINDING_CLASS_SET = new Set(FINDING_CLASSES);
+/** A valid class passes through; an absent or unknown one is the safe `other`. */
+export function normalizeFindingClass(value) {
+    return typeof value === 'string' && FINDING_CLASS_SET.has(value)
+        ? value
+        : 'other';
+}
 const RECORD_KEYS = new Set([
     'rule',
     'change',
@@ -122,6 +142,8 @@ export function isReviewFinding(value) {
     if (!isRecord(value))
         return false;
     return ((value.severity === 'P0' || value.severity === 'P1') &&
+        (value.class === undefined ||
+            (typeof value.class === 'string' && FINDING_CLASS_SET.has(value.class))) &&
         isNonEmptyString(value.title) &&
         isNonEmptyString(value.evidence) &&
         isNonEmptyString(value.fix));
