@@ -37,7 +37,7 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 
 - [x] 6.1 Register the `conversation.view` entry with id `workflows`, order 30, and a localized label; verify it renders beside Chat/Trajectory/Observability and is inert when the conversation services are absent.
 - [x] 6.2 Render the Triggers, Session, Runs, Why-not, and Health sections from the read API with loading, empty, error, and paginated states; verify each state with a static render test and no style block that redefines shipped tokens.
-- [ ] 6.3 Render a run detail with step state, time, decision summary, evidence link, and error; verify a checkpoint run, a review run, and a malformed-record error row.
+- [x] 6.3 Render a run detail with step state, time, decision summary, evidence link, and error; verify a checkpoint run, a review run, and a malformed-record error row.
 - [ ] 6.4 Add the Start/command entry if the host exposes a command surface for a conversation view; if it does not, record the tab as the entry and add the limitation to the docs; verify the command opens the view or the limitation is documented.
 
 ## 7. Safety and inertness (lane 3, owns `packages/plugin-workflows/test/no-side-effects.test.ts`, `packages/plugin-workflows/test/inert.test.ts`, `packages/plugin-workflows/test/live-harness.test.ts`)

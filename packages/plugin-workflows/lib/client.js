@@ -38,6 +38,7 @@ window.__ModuleLoader__.load({
     var RUNS_PATH = "/api/workflows/runs";
     var TRIGGERS_PATH = "/api/workflows/triggers";
     var HEALTH_PATH = "/api/workflows/health";
+    var EVIDENCE_PATH = "/api/workflows/evidence";
     function pageUrl(path, session, cursor, limit) {
       const query = new URLSearchParams({ session });
       if (cursor !== void 0) query.set("cursor", cursor);
@@ -52,6 +53,14 @@ window.__ModuleLoader__.load({
     }
     function triggersUrl(session) {
       return pageUrl(TRIGGERS_PATH, session);
+    }
+    function isRecordEvidence(value) {
+      if (!value.endsWith(".json")) return false;
+      return value.startsWith(".dsh/delegation/") || value.startsWith(".dsh/work-checkpoints/") || value.startsWith("openspec/changes/");
+    }
+    function evidenceUrl(session, path) {
+      const search = new URLSearchParams({ session, path });
+      return `${EVIDENCE_PATH}?${search.toString()}`;
     }
     function healthUrl(session) {
       return pageUrl(HEALTH_PATH, session);
@@ -261,7 +270,10 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t(`runs.attribution.${run.attribution}`) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t(`runs.status.${run.status}`) })
         ] }),
-        run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-wf-muted", children: `${t("runs.record")}: ${run.record}` }),
+        run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "dsh-wf-muted", children: [
+          `${t("runs.record")}: `,
+          props.session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", { href: evidenceUrl(props.session, run.record), target: "_blank", rel: "noreferrer", children: run.record })
+        ] }),
         run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { className: "dsh-wf-table", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
@@ -274,7 +286,15 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.title }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.state }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.evidence ?? "\u2014" })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.evidence === void 0 ? "\u2014" : props.session === void 0 || !isRecordEvidence(step.evidence) ? step.evidence : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              "a",
+              {
+                href: evidenceUrl(props.session, step.evidence),
+                target: "_blank",
+                rel: "noreferrer",
+                children: step.evidence
+              }
+            ) })
           ] }, step.id)) })
         ] })
       ] });
@@ -519,7 +539,7 @@ window.__ModuleLoader__.load({
               ...pageProps("runs", loaded.runs.next)
             }
           ),
-          selectedRun === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(RunDetail, { run: selectedRun, t }),
+          selectedRun === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(RunDetail, { run: selectedRun, t, session: sessionId }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(WhyNotTable, { events: loaded.events.items, t })
         ] });
       }

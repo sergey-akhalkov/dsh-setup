@@ -279,7 +279,9 @@ export function WorkflowsView(props: {
           onLoad={mergeRuns}
           {...pageProps('runs', loaded.runs.next)}
         />
-        {selectedRun === undefined ? null : <RunDetail run={selectedRun} t={t} />}
+        {selectedRun === undefined ? null : (
+          <RunDetail run={selectedRun} t={t} session={sessionId} />
+        )}
         <WhyNotTable events={loaded.events.items} t={t} />
       </>
     )

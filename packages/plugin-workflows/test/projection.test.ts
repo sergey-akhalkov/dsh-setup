@@ -689,6 +689,9 @@ describe('delegation and review projection', () => {
     )
     expect(attributed?.attribution).toBe('portable')
     expect(attributed?.session).toBe('session-1')
+    expect(attributed?.steps.find((step) => step.id === 'verdict')?.at).toBe(
+      Date.parse('2026-11-07T10:12:00.000Z'),
+    )
     expect((await sessionRuns(workspace, 'session-1')).some((run) => run.source === 'review')).toBe(
       true,
     )

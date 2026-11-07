@@ -697,7 +697,7 @@ export async function portableReviewRuns(
         startedAt,
         status: verdict === 'PASS' ? 'done' : verdict === 'ERROR' ? 'failed' : 'unknown',
         steps: [
-          { id: 'verdict', title: 'Verdict', state: verdict },
+          { id: 'verdict', title: 'Verdict', state: verdict, at: startedAt },
           {
             id: 'target',
             title: 'Target',

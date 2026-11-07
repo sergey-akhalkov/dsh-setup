@@ -12,6 +12,7 @@ export declare const EVENTS_ROUTE = "/api/workflows/events";
 export declare const RUNS_ROUTE = "/api/workflows/runs";
 export declare const TRIGGERS_ROUTE = "/api/workflows/triggers";
 export declare const HEALTH_ROUTE = "/api/workflows/health";
+export declare const EVIDENCE_ROUTE = "/api/workflows/evidence";
 /** Default and maximum page sizes. */
 export declare const DEFAULT_LIMIT = 50;
 export declare const MAX_LIMIT = 200;
@@ -41,7 +42,7 @@ export interface WorkflowApiServices {
     readonly lastEventAtFor?: (session: string) => number | undefined;
     readonly triggers: readonly Trigger[];
 }
-/** Build the four read-only routes. */
+/** Build the read-only routes. */
 export declare function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[];
 /** Register the routes on the host's Fetch carrier; absent means no API. */
 export declare function registerWorkflowRoutes(ctx: {

@@ -61,6 +61,7 @@ interface LoadedModule {
   ErrorLine?: (props: Record<string, unknown>) => unknown
   LoadingLine?: (props: Record<string, unknown>) => unknown
   LoadMore?: (props: Record<string, unknown>) => unknown
+  formatTime?: (at: number | undefined, t: unknown) => string
   isStaleGeneration?: (requested: number, current: number) => boolean
   updatePageState?: (
     states: Record<string, unknown>,
@@ -373,6 +374,97 @@ describe('Workflows Client half', () => {
     const retry = elements(error).find((element) => element.type === 'button')
     ;(retry?.props.onClick as (() => void) | undefined)?.()
     expect(retried).toBe(1)
+  })
+
+  it('renders checkpoint and review run details with state, time, and evidence', () => {
+    const module = loadModule()
+    const checkpoint = renderTree(
+      module.RunDetail?.({
+        run: {
+          id: 'checkpoint:2',
+          source: 'checkpoint',
+          session: 'session-1',
+          attribution: 'local',
+          title: 'Checkpoint turn 2',
+          startedAt: 1_762_500_000_000,
+          status: 'running',
+          steps: [
+            { id: 'outcome', title: 'Outcome', state: 'continue' },
+            {
+              id: 'bottleneck',
+              title: 'Bottleneck',
+              state: 'lead_action',
+              at: 1_762_500_060_000,
+              evidence: 'packages/plugin-workflows',
+            },
+            {
+              id: 'lane',
+              title: 'Lane',
+              state: 'running',
+              evidence: 'openspec/changes/add-workflow-observability',
+            },
+            { id: 'next', title: 'Next', state: 'next', evidence: 'finish the change' },
+          ],
+        },
+        t: translate,
+        session: 'session-1',
+      }),
+    )
+    expect(childText(checkpoint)).toContain('Checkpoint turn 2')
+    expect(childText(checkpoint)).toContain('continue')
+    expect(childText(checkpoint)).toContain('lead_action')
+    expect(childText(checkpoint)).toContain('packages/plugin-workflows')
+    const expectedTime = module.formatTime?.(1_762_500_060_000, translate) ?? ''
+    expect(expectedTime).not.toBe('')
+    expect(childText(checkpoint)).toContain(expectedTime)
+    expect(childText(checkpoint)).toContain('—')
+    expect(childText(checkpoint)).toContain('openspec/changes/add-workflow-observability')
+    expect(childText(checkpoint)).toContain('finish the change')
+
+    expect(elements(checkpoint).filter((element) => element.type === 'a')).toHaveLength(0)
+    const review = renderTree(
+      module.RunDetail?.({
+        run: {
+          id: 'review:add-workflow-observability/0123456789abcdef',
+          source: 'review',
+          session: 'session-1',
+          attribution: 'portable',
+          title: 'Review add-workflow-observability 0123456789abcdef',
+          startedAt: 1_762_500_000_000,
+          status: 'done',
+          record: 'openspec/changes/add-workflow-observability/reviews/0123456789abcdef.json',
+          steps: [
+            {
+              id: 'record',
+              title: 'Review verdict',
+              state: 'PASS',
+              at: Date.parse('2026-11-07T10:12:00.000Z'),
+              evidence: '.dsh/record.json',
+            },
+            {
+              id: 'target',
+              title: 'Review target',
+              state: 'target',
+              evidence: 'codex-subagent / astra',
+            },
+          ],
+        },
+        t: translate,
+        session: 'session-1',
+      }),
+    )
+    const anchors = elements(review).filter((element) => element.type === 'a')
+    expect(anchors.length).toBeGreaterThan(0)
+    expect(String(anchors[0]?.props.href)).toContain(
+      '/api/workflows/evidence?session=session-1&path=',
+    )
+    expect(childText(review)).toContain('PASS')
+    expect(childText(review)).toContain(
+      module.formatTime?.(Date.parse('2026-11-07T10:12:00.000Z'), translate) ?? '',
+    )
+    expect(childText(review)).toContain('.dsh/record.json')
+    expect(childText(review)).toContain('codex-subagent / astra')
+    expect(childText(review)).toContain('runs.status.done')
   })
 
   it('discards responses from a previous session generation', () => {

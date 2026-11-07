@@ -85,6 +85,7 @@ export const EVENTS_PATH = '/api/workflows/events'
 export const RUNS_PATH = '/api/workflows/runs'
 export const TRIGGERS_PATH = '/api/workflows/triggers'
 export const HEALTH_PATH = '/api/workflows/health'
+export const EVIDENCE_PATH = '/api/workflows/evidence'
 
 function pageUrl(path: string, session: string, cursor?: string, limit?: number): string {
   const query = new URLSearchParams({ session })
@@ -103,6 +104,20 @@ export function runsUrl(session: string, cursor?: string, limit?: number): strin
 
 export function triggersUrl(session: string): string {
   return pageUrl(TRIGGERS_PATH, session)
+}
+
+export function isRecordEvidence(value: string): boolean {
+  if (!value.endsWith('.json')) return false
+  return (
+    value.startsWith('.dsh/delegation/') ||
+    value.startsWith('.dsh/work-checkpoints/') ||
+    value.startsWith('openspec/changes/')
+  )
+}
+
+export function evidenceUrl(session: string, path: string): string {
+  const search = new URLSearchParams({ session, path })
+  return `${EVIDENCE_PATH}?${search.toString()}`
 }
 
 export function healthUrl(session: string): string {
@@ -394,7 +409,7 @@ export function RunsList(props: {
 }
 
 /** One run's steps, evidence, and any recorded error. */
-export function RunDetail(props: { run: RunView; t: Translate }): ReactNode {
+export function RunDetail(props: { run: RunView; t: Translate; session?: string }): ReactNode {
   const { run, t } = props
   return (
     <Section id="run-detail" title={t('runs.detail')}>
@@ -405,7 +420,16 @@ export function RunDetail(props: { run: RunView; t: Translate }): ReactNode {
         <span>{t(`runs.status.${run.status}`)}</span>
       </div>
       {run.record === undefined ? null : (
-        <p className="dsh-wf-muted">{`${t('runs.record')}: ${run.record}`}</p>
+        <p className="dsh-wf-muted">
+          {`${t('runs.record')}: `}
+          {props.session === undefined ? (
+            run.record
+          ) : (
+            <a href={evidenceUrl(props.session, run.record)} target="_blank" rel="noreferrer">
+              {run.record}
+            </a>
+          )}
+        </p>
       )}
       {run.error === undefined ? null : (
         <p className="dsh-wf-error" role="alert">
@@ -427,7 +451,21 @@ export function RunDetail(props: { run: RunView; t: Translate }): ReactNode {
               <td>{step.title}</td>
               <td>{step.state}</td>
               <td>{step.at === undefined ? '—' : formatTime(step.at, t)}</td>
-              <td>{step.evidence ?? '—'}</td>
+              <td>
+                {step.evidence === undefined ? (
+                  '—'
+                ) : props.session === undefined || !isRecordEvidence(step.evidence) ? (
+                  step.evidence
+                ) : (
+                  <a
+                    href={evidenceUrl(props.session, step.evidence)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {step.evidence}
+                  </a>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

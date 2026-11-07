@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createWorkflowRoutes,
   EVENTS_ROUTE,
+  EVIDENCE_ROUTE,
   type FetchRoute,
   HEALTH_ROUTE,
   RUNS_ROUTE,
@@ -128,7 +129,7 @@ describe('workflows read API', () => {
   it('registers four buffered Fetch routes with a GET guard through the carrier', async () => {
     const value = await setup()
     const paths = value.routes.map((route) => route.path)
-    expect(paths).toEqual([EVENTS_ROUTE, RUNS_ROUTE, TRIGGERS_ROUTE, HEALTH_ROUTE])
+    expect(paths).toEqual([EVIDENCE_ROUTE, EVENTS_ROUTE, RUNS_ROUTE, TRIGGERS_ROUTE, HEALTH_ROUTE])
     for (const route of value.routes) {
       expect(route.methods).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
       expect(route.requestBody).toBe('buffered')
@@ -472,6 +473,82 @@ describe('workflows read API', () => {
     expect((healthOne.body as { lastEventAt: number }).lastEventAt).toBe(1_111)
     expect((healthTwo.body as { lastEventAt?: number }).lastEventAt).toBeUndefined()
     expect((healthThree.body as { triggerCount: number }).triggerCount).toBe(3)
+  })
+
+  it('serves settled evidence text only from the requesting workspace', async () => {
+    const value = await setup()
+    const record = '.dsh/delegation/task-review/add-x/runs/run-mw6abcde-1234abcd.json'
+    await mkdir(join(value.workspaceOne, '.dsh', 'delegation', 'task-review', 'add-x', 'runs'), {
+      recursive: true,
+    })
+    await writeFile(join(value.workspaceOne, record), 'review evidence', 'utf8')
+    await writeFile(join(value.workspaceOne, 'package.json'), '{}', 'utf8')
+    const evidenceRoute = value.routes.find((route) => route.path === EVIDENCE_ROUTE)
+    if (evidenceRoute === undefined) throw new Error('the evidence route is missing')
+    const secretRecord = '.dsh/delegation/task-review/add-x/runs/secret.json'
+    await writeFile(
+      join(value.workspaceOne, secretRecord),
+      '{"detail":"Authorization: Bearer synthetic-review-credential"}',
+      'utf8',
+    )
+    const secretResponse = await evidenceRoute.fetch(
+      new Request(
+        `http://localhost${EVIDENCE_ROUTE}?session=s1&path=${encodeURIComponent(secretRecord)}`,
+      ),
+    )
+    expect(await secretResponse.text()).not.toContain('synthetic-review-credential')
+
+    const structured = '.dsh/delegation/task-review/add-x/runs/structured.json'
+    await writeFile(
+      join(value.workspaceOne, structured),
+      JSON.stringify(
+        {
+          verdict: 'PASS',
+          detail: 'Authorization: Bearer synthetic-review-credential',
+          findings: [],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    const structuredResponse = await evidenceRoute.fetch(
+      new Request(
+        `http://localhost${EVIDENCE_ROUTE}?session=s1&path=${encodeURIComponent(structured)}`,
+      ),
+    )
+    const structuredBody = await structuredResponse.text()
+    expect(structuredBody).toContain('"verdict": "PASS"')
+    expect(structuredBody).not.toContain('synthetic-review-credential')
+    const served = await evidenceRoute.fetch(
+      new Request(
+        `http://localhost${EVIDENCE_ROUTE}?session=s1&path=${encodeURIComponent(record)}`,
+      ),
+    )
+    expect(served.status).toBe(200)
+    expect(await served.text()).toBe('review evidence')
+    const outside = await request(value, EVIDENCE_ROUTE, {
+      session: 's1',
+      query: 'path=../secret.txt',
+    })
+    expect(outside.status).toBe(400)
+    const traversal = await request(value, EVIDENCE_ROUTE, {
+      session: 's1',
+      query: 'path=.dsh%2Fdelegation%2F..%2F..%2Fpackage.json',
+    })
+    expect(traversal.status).toBe(400)
+    const direct = await request(value, EVIDENCE_ROUTE, {
+      session: 's1',
+      query: 'path=package.json',
+    })
+    expect(direct.status).toBe(400)
+    const missing = await request(value, EVIDENCE_ROUTE, {
+      session: 's1',
+      query: 'path=.dsh/delegation/none.json',
+    })
+    expect(missing.status).toBe(404)
+    const empty = await request(value, EVIDENCE_ROUTE, { session: 's1' })
+    expect(empty.status).toBe(400)
   })
 
   it('rejects a non-GET and bounds an internal error body', async () => {

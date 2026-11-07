@@ -1,4 +1,8 @@
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { join, relative } from 'node:path';
+import { isInside } from './fs-change.js';
 import { sessionRuns } from './projection.js';
+import { redactPayload, redactValue } from './redact.js';
 /**
  * The read-only Workflows API. Routes are registered through the carrier-neutral
  * `connection.fetch` registry the OpenSpec panel uses; the carrier owns owner
@@ -10,6 +14,7 @@ export const EVENTS_ROUTE = '/api/workflows/events';
 export const RUNS_ROUTE = '/api/workflows/runs';
 export const TRIGGERS_ROUTE = '/api/workflows/triggers';
 export const HEALTH_ROUTE = '/api/workflows/health';
+export const EVIDENCE_ROUTE = '/api/workflows/evidence';
 /** Default and maximum page sizes. */
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 200;
@@ -105,9 +110,54 @@ function route(path, handler) {
         },
     };
 }
-/** Build the four read-only routes. */
+/** Only settled record evidence inside the workspace may be served. */
+const EVIDENCE_PREFIXES = ['.dsh/delegation/', '.dsh/work-checkpoints/', 'openspec/changes/'];
+async function readEvidence(workspace, path) {
+    if (!EVIDENCE_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+        return json(400, { error: 'the evidence path is not a record path' });
+    }
+    try {
+        const root = await realpath(workspace);
+        const target = await realpath(join(workspace, path));
+        if (!isInside(root, target)) {
+            return json(400, { error: 'the evidence path is outside the workspace' });
+        }
+        const canonicalPath = relative(root, target).replaceAll('\\', '/');
+        if (!EVIDENCE_PREFIXES.some((prefix) => canonicalPath.startsWith(prefix))) {
+            return json(400, { error: 'the evidence path is not a record path' });
+        }
+        const info = await stat(target);
+        if (!info.isFile() || info.size > 256 * 1024)
+            return json(404, { error: 'the evidence file is missing' });
+        const text = await readFile(target, 'utf8');
+        let body;
+        try {
+            body = JSON.stringify(redactValue(JSON.parse(text)), null, 2);
+        }
+        catch {
+            body = redactPayload(text);
+        }
+        return new Response(body, {
+            status: 200,
+            headers: { 'content-type': 'text/plain; charset=utf-8' },
+        });
+    }
+    catch {
+        return json(404, { error: 'the evidence file is missing' });
+    }
+}
+/** Build the read-only routes. */
 export function createWorkflowRoutes(services) {
     return [
+        route(EVIDENCE_ROUTE, async (request) => {
+            const resolved = resolveSession(services, request);
+            if ('response' in resolved)
+                return resolved.response;
+            const path = new URL(request.url).searchParams.get('path');
+            if (path === null || path === '')
+                return json(400, { error: 'an evidence path is required' });
+            return readEvidence(resolved.workspace, path);
+        }),
         route(EVENTS_ROUTE, async (request) => {
             const resolved = resolveSession(services, request);
             if ('response' in resolved)
