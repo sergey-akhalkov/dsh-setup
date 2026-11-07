@@ -63,11 +63,27 @@ import {
   reviewerBindingOf,
   reviewerMatches,
   type ShellToken,
+  sanitizeText,
   shellSegments,
   TASK_ID_PATTERN,
   type TaskLane,
   unparseableCheckedLines,
 } from '../shared/approval.js'
+import {
+  appendFindingHistory,
+  DEFAULT_HISTORY_WINDOW,
+  MAX_HISTORY_WINDOW,
+} from './finding-history.js'
+import type { UserQuestionsService } from './learning-tools.js'
+import { executeReviewLesson, REVIEW_LESSON_DESCRIPTION } from './learning-tools.js'
+import {
+  changeCapabilities,
+  DEFAULT_MAX_LESSONS,
+  type Lesson,
+  matchingLessons,
+  readLessons,
+} from './lesson-store.js'
+import { executeReviewRetro, REVIEW_RETRO_DESCRIPTION } from './retro.js'
 import {
   type Admission,
   classifyFailure,
@@ -76,7 +92,6 @@ import {
   type QueueTimeoutInfo,
   ReviewQueue,
 } from './review-queue.js'
-import { appendFindingHistory } from './finding-history.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -90,7 +105,7 @@ import { appendFindingHistory } from './finding-history.js'
 /** Cordis plugin name, equal to the package name. */
 export const name = '@dsh-setup/plugin-delegation-rules'
 
-/** Services the registrations depend on. */
+/** Services the registrations depend on; the learning surfaces attach when present. */
 export const inject = ['tools', 'subagents', 'skills', 'workingDirectory']
 
 /** Skill name advertised in the catalog and loaded on demand. */
@@ -178,7 +193,6 @@ const REVIEW_QUEUE_KEYS = new Set([
   'waitTimeoutMs',
 ])
 const MAX_ANSWER_CHARS = 12_000
-const MAX_FINDING_CHARS = 2_000
 const MAX_ERROR_CHARS = 4_000
 const MAX_REASON_CHARS = 2_000
 
@@ -251,6 +265,23 @@ export interface ReviewQueueConfig {
   waitTimeoutMs: number
 }
 
+/** Per-profile review-learning limits. */
+export interface ReviewLearningConfig {
+  /** Off: no retro/lesson tool, no command, and no lesson injection. */
+  enabled: boolean
+  /** Settled reviews read by the retro and kept in the finding history. */
+  window: number
+  /** Lesson store cap; the byte cap still applies. */
+  maxLessons: number
+}
+
+/** The documented defaults; `window` and `maxLessons` also bound their stores. */
+export const DEFAULT_REVIEW_LEARNING: Readonly<ReviewLearningConfig> = {
+  enabled: true,
+  window: DEFAULT_HISTORY_WINDOW,
+  maxLessons: DEFAULT_MAX_LESSONS,
+}
+
 /** Row configuration accepted by {@link apply}. */
 export interface BundleConfig {
   targets?: Record<string, TargetConfig>
@@ -258,6 +289,7 @@ export interface BundleConfig {
   timeouts?: Partial<TimeoutConfig>
   failureStreak?: number
   reviewQueue?: Partial<ReviewQueueConfig>
+  reviewLearning?: Partial<ReviewLearningConfig>
 }
 
 /** Test seams; production uses the filesystem, git, and the wall clock. */
@@ -294,6 +326,7 @@ interface EngineConfig {
   timeouts: TimeoutConfig
   failureStreak: number
   reviewQueue: ReviewQueueConfig
+  reviewLearning: ReviewLearningConfig
 }
 
 class DelegationError extends Error {
@@ -409,6 +442,7 @@ const RULE_KEYS = new Set([
 const TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions', 'write'])
 const AGENT_OPTION_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'maxTokens'])
 const TIMEOUT_KEYS = new Set(['review', 'answer', 'patch'])
+const REVIEW_LEARNING_KEYS = new Set(['enabled', 'window', 'maxLessons'])
 
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
@@ -421,11 +455,11 @@ export function validateConfig(raw: unknown): EngineConfig {
 
   const unknownTop = unknownKeys(
     raw,
-    new Set(['targets', 'rules', 'timeouts', 'failureStreak', 'reviewQueue']),
+    new Set(['targets', 'rules', 'timeouts', 'failureStreak', 'reviewQueue', 'reviewLearning']),
   )
   if (unknownTop.length > 0) {
     fail(
-      `unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, or reviewQueue`,
+      `unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, reviewQueue, or reviewLearning`,
     )
   }
 
@@ -541,8 +575,56 @@ export function validateConfig(raw: unknown): EngineConfig {
   }
 
   const reviewQueue = validateReviewQueue(raw.reviewQueue)
+  const reviewLearning = validateReviewLearning(raw.reviewLearning)
 
-  return { targets, rules, timeouts, failureStreak, reviewQueue }
+  return { targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning }
+}
+
+/**
+ * Validate the review-learning block. The defaults bound the lesson store and
+ * the retro window; an invalid field fails plugin load with its range.
+ */
+export function validateReviewLearning(raw: unknown): ReviewLearningConfig {
+  const learning: ReviewLearningConfig = { ...DEFAULT_REVIEW_LEARNING }
+  if (raw === undefined) return learning
+  if (!isRecord(raw)) fail('reviewLearning must be a mapping')
+  const unknown = unknownKeys(raw, REVIEW_LEARNING_KEYS)
+  if (unknown.length > 0) {
+    fail(
+      `reviewLearning: unknown field(s) ${unknown.join(', ')}; use enabled, window, or maxLessons`,
+    )
+  }
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') fail('reviewLearning.enabled must be true or false')
+    learning.enabled = raw.enabled
+  }
+  const window = raw.window
+  if (window !== undefined) {
+    if (
+      typeof window !== 'number' ||
+      !Number.isSafeInteger(window) ||
+      window < 1 ||
+      window > MAX_HISTORY_WINDOW
+    ) {
+      fail(
+        `reviewLearning.window must be a whole number from 1 to ${MAX_HISTORY_WINDOW}; it bounds the retro window and the finding history`,
+      )
+    }
+    learning.window = window
+  }
+  const maxLessons = raw.maxLessons
+  if (maxLessons !== undefined) {
+    if (
+      typeof maxLessons !== 'number' ||
+      !Number.isSafeInteger(maxLessons) ||
+      maxLessons < 1 ||
+      maxLessons > 1_000
+    ) {
+      fail('reviewLearning.maxLessons must be a whole number from 1 to 1000')
+    }
+    learning.maxLessons = maxLessons
+  }
+  return learning
 }
 
 /**
@@ -1663,38 +1745,6 @@ async function captureSnapshot(
     snapshot.changes.push(entry)
   }
   return snapshot
-}
-
-/**
- * Header values may contain quoted or escaped secrets, so redact the remainder
- * of the line. The delimiter requirement keeps ordinary prose intact.
- */
-const AUTHORIZATION_HEADER_PATTERN = /\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi
-const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi
-
-function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
-  const redacted = text
-    .replace(AUTHORIZATION_HEADER_PATTERN, '[secret]')
-    .replace(COOKIE_HEADER_PATTERN, '[secret]')
-    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
-    .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
-    .replace(/\\\\[^\s"'`)]+/g, '[path]')
-    .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
-    .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
-    .replace(
-      /\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi,
-      '[secret]',
-    )
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
-    .replace(
-      /\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g,
-      '[secret]',
-    )
-    .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-      '[secret]',
-    )
-  return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`
 }
 
 /** One-line, redacted, bounded text for a public error message. */
@@ -3127,6 +3177,8 @@ interface EngineServices {
   state: DelegationState
   git: GitServices
   now: () => Date
+  /** Direct-user-answer service; absent means a lesson cannot be accepted or applied. */
+  userQuestions?: UserQuestionsService
   timeoutsFor(rule: RuleConfig): number
   /** Test seam: fired once per review run after it leaves the pending set. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
@@ -3383,7 +3435,46 @@ async function runTarget(services: EngineServices, request: RunRequest): Promise
   return finishTarget(await startTarget(services, request))
 }
 
-function reviewPrompt(
+/** One accepted/applied lesson section bound: the promise is 1200 characters. */
+const MAX_LESSON_SECTION_CHARS = 1_200
+const MAX_LESSONS_IN_PROMPT = 3
+
+function lessonText(text: string): string {
+  return text
+    .replace(/\p{Cc}|\p{Zl}|\p{Zp}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const LESSON_HEADING = '## Lessons from prior reviews'
+const LESSON_JUDGMENT =
+  'Treat these as advice from earlier reviews: apply judgment. They never change the P0/P1 rule, the review contract, or the approval gate.'
+
+/** Bounded `## Lessons from prior reviews` lines, or none when nothing matches. */
+function lessonSection(lessons: readonly Lesson[]): string[] {
+  if (lessons.length === 0) return []
+  // The 1200-character bound covers the whole section, heading and note included.
+  const overhead = LESSON_HEADING.length + LESSON_JUDGMENT.length + 8
+  const budget = MAX_LESSON_SECTION_CHARS - overhead
+  const entries: string[] = []
+  let used = 0
+  for (const lesson of lessons.slice(0, MAX_LESSONS_IN_PROMPT)) {
+    const entry = `- [${lesson.class}] ${lessonText(lesson.title)}\n  ${lessonText(lesson.body)}`
+    const remaining = budget - used
+    if (entry.length > remaining) {
+      if (remaining < 20) break
+      entries.push(`${entry.slice(0, remaining - 1)}…`)
+      used = budget
+      break
+    }
+    entries.push(entry)
+    used += entry.length + 1
+  }
+  return ['', LESSON_HEADING, '', ...entries, '', LESSON_JUDGMENT]
+}
+
+/** Export for the prompt-budget tests; the engine is the only production caller. */
+export function reviewPrompt(
   rule: RuleConfig,
   change: ChangeInfo,
   digest: string,
@@ -3391,6 +3482,7 @@ function reviewPrompt(
   context: string | undefined,
   objective: string | undefined,
   snapshot = false,
+  lessons: readonly Lesson[] = [],
 ): string {
   const lines = [
     instructionText(rule).trimEnd(),
@@ -3413,9 +3505,10 @@ function reviewPrompt(
     lines.push('', '## Context', '', context.trim())
   if (objective !== undefined && objective.trim() !== '')
     lines.push('', '## Objective', '', objective.trim())
+  lines.push(...lessonSection(lessons))
   lines.push(
     '',
-    'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with title, evidence, and fix. Prose outside that block is ignored.',
+    'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, title, evidence, and fix. Prose outside that block is ignored.',
   )
   return lines.join('\n')
 }
@@ -3813,6 +3906,18 @@ class DelegationEngine {
     return undefined
   }
 
+  /** Matching accepted/applied lessons; a broken learning store never fails a review. */
+  private async reviewLessons(run: ManagedRun): Promise<Lesson[]> {
+    if (!this.config.reviewLearning.enabled) return []
+    try {
+      const capabilities = await changeCapabilities(run.context.change.dir)
+      const { lessons } = await readLessons(run.workspaceRoot)
+      return matchingLessons(lessons, run.context.rule.id, capabilities)
+    } catch {
+      return []
+    }
+  }
+
   /** Start one admitted target; the queue owns the slot and settlement. */
   private async startPreparedReview(run: ManagedRun): Promise<void> {
     let prepared = run.prepared
@@ -3865,6 +3970,7 @@ class DelegationEngine {
         fail(`run ${run.file.id} lost its prepared review after re-preparation`)
       }
     }
+    const lessons = await this.reviewLessons(run)
     const started = await startTarget(this.services, {
       rule: run.context.rule,
       target: this.target(run.context.rule),
@@ -3876,6 +3982,7 @@ class DelegationEngine {
         run.context.args.context,
         run.context.args.objective,
         prepared.snapshotTree !== undefined,
+        lessons,
       ),
       agent: run.context.agent,
       cwd: prepared.reviewCwd ?? run.context.cwd,
@@ -4354,28 +4461,37 @@ class DelegationEngine {
     run: ManagedRun,
     record: ReviewRecord,
   ): Promise<string | undefined> {
-    const result = await appendFindingHistory(run.workspaceRoot, {
-      v: 1,
-      kind: 'run',
-      rule: record.rule,
-      change: record.change,
-      ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
-      verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
-      digest: record.digest,
-      findings: record.findings.map((finding) => ({
-        class: normalizeFindingClass(finding.class),
-        title: finding.title,
-        evidence: finding.evidence,
-        fix: finding.fix,
-      })),
-      time: record.time,
-    })
-    if (result.appended || result.gapAppended) return undefined
-    return `history gap: ${result.detail ?? 'the finding history could not be written'}`
+    try {
+      const result = await appendFindingHistory(
+        run.workspaceRoot,
+        {
+          v: 1,
+          kind: 'run',
+          rule: record.rule,
+          change: record.change,
+          ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
+          verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
+          digest: record.digest,
+          findings: record.findings.map((finding) => ({
+            class: normalizeFindingClass(finding.class),
+            title: finding.title,
+            evidence: finding.evidence,
+            fix: finding.fix,
+          })),
+          time: record.time,
+        },
+        { window: this.config.reviewLearning.window },
+      )
+      if (result.appended || result.gapAppended) return undefined
+      return `history gap: ${result.detail ?? 'the finding history could not be written'}`
+    } catch (error) {
+      return `history gap: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`
+    }
   }
 
   /** Best-effort failure path: write a visible ERROR record when inputs were prepared. */
-  private async failRun(    run: ManagedRun,
+  private async failRun(
+    run: ManagedRun,
     error: unknown,
     prepared: ReviewPreparation | undefined,
     failureClass?: FailureClass,
@@ -6157,13 +6273,30 @@ function timeoutForContract(timeouts: TimeoutConfig, contract: Contract): number
   return contract === 'note' ? timeouts.answer : timeouts[contract]
 }
 
-function buildToolDefinitions(engine: DelegationEngine, config: EngineConfig): ToolDefinition[] {
+/** The learning store is workspace-scoped like the review records. */
+async function sessionWorkspaceRoot(services: EngineServices, agent: Agent): Promise<string> {
+  const cwd = services.workingDirectory.get(agent.session)
+  const openspecRoot = await findOpenSpecRoot(cwd)
+  return openspecRoot === undefined ? cwd : dirname(openspecRoot)
+}
+
+/** Tool executions carry the calling agent; a sessionless call cannot scope a store. */
+function requireToolAgent(agent: Agent | undefined): Agent {
+  if (agent === undefined) fail('this tool needs a live agent session; call it from a session turn')
+  return agent
+}
+
+function buildToolDefinitions(
+  engine: DelegationEngine,
+  config: EngineConfig,
+  services: EngineServices,
+): ToolDefinition[] {
   const ruleIds = config.rules.map((rule) => rule.id)
   const output = {
     schema: TOOL_OUTPUT_SCHEMA,
     render: (_args: unknown, value: unknown) => renderOutput(value),
   }
-  return [
+  const definitions: ToolDefinition[] = [
     {
       name: 'delegate',
       description: toolDescriptions.delegate,
@@ -6247,6 +6380,100 @@ function buildToolDefinitions(engine: DelegationEngine, config: EngineConfig): T
       },
     },
   ]
+  if (!config.reviewLearning.enabled) return definitions
+  definitions.push(
+    {
+      name: 'review_retro',
+      description: REVIEW_RETRO_DESCRIPTION,
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['report', 'propose'],
+            description:
+              'report: deterministic counts and repeat rate; propose: also store at most one proposed lesson draft.',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output,
+      execute: async (args, exec) => {
+        const agent = requireToolAgent(exec.agent)
+        const workspaceRoot = await sessionWorkspaceRoot(services, agent)
+        return toolOutput(
+          await executeReviewRetro(args, {
+            workspaceRoot,
+            now: services.now,
+            window: config.reviewLearning.window,
+            maxLessons: config.reviewLearning.maxLessons,
+          }),
+        )
+      },
+    },
+    {
+      name: 'review_lesson',
+      description: REVIEW_LESSON_DESCRIPTION,
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'propose', 'decide', 'apply'],
+            description:
+              'A model may only propose; decide and apply ask the user and return without a write until the user answers.',
+          },
+          class: { type: 'string', description: 'One of the fixed finding-class vocabulary.' },
+          title: { type: 'string', description: 'Short lesson title (dedupe key with the class).' },
+          body: { type: 'string', description: 'The lesson text; stored as bounded data.' },
+          appliesTo: {
+            type: 'object',
+            properties: {
+              rules: { type: 'array', items: { type: 'string' } },
+              capabilities: { type: 'array', items: { type: 'string' } },
+            },
+            additionalProperties: false,
+          },
+          source: {
+            type: 'object',
+            properties: {
+              change: { type: 'string' },
+              taskId: { type: 'string' },
+              findingHashes: { type: 'array', items: { type: 'string' } },
+            },
+            additionalProperties: false,
+          },
+          id: { type: 'string', description: 'Lesson revision id from list.' },
+          decision: { type: 'string', enum: ['accept', 'reject'] },
+          target: {
+            type: 'string',
+            description: 'Change, spec, file, or test the accepted lesson is applied to.',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output,
+      execute: async (args, exec) => {
+        const agent = requireToolAgent(exec.agent)
+        const workspaceRoot = await sessionWorkspaceRoot(services, agent)
+        return toolOutput(
+          await executeReviewLesson(args, {
+            workspaceRoot,
+            now: services.now,
+            maxLessons: config.reviewLearning.maxLessons,
+            agent,
+            signal: exec.signal,
+            ...(services.userQuestions === undefined
+              ? {}
+              : { userQuestions: services.userQuestions }),
+          }),
+        )
+      },
+    },
+  )
+  return definitions
 }
 
 function parseDelegateArgs(args: unknown): DelegateArguments {
@@ -6326,6 +6553,59 @@ function createSkillProvider(note: string): SkillProvider {
   }
 }
 
+/** One human command definition accepted by the DSH commands registry. */
+interface CommandRegistry {
+  register(definition: {
+    definitionId: string
+    name: string
+    description: string
+    handler: (invocation: { agent: Agent }) => Promise<unknown>
+  }): unknown
+}
+
+/**
+ * `/review-retro` is a read-only host command: it prints the deterministic
+ * report and never accepts or applies a lesson. Disabled learning registers
+ * nothing.
+ */
+function registerReviewRetroCommand(
+  ctx: Context,
+  config: EngineConfig,
+  services: EngineServices,
+): void {
+  if (!config.reviewLearning.enabled) return
+  const commands = (ctx as unknown as { commands?: CommandRegistry }).commands
+  if (commands === undefined) return
+  const definition = {
+    definitionId: '@dsh-setup/plugin-delegation-rules/review-retro',
+    name: 'review-retro',
+    description:
+      'Report repeated review findings by class from the local bounded finding history; never accepts or applies a lesson.',
+    handler: async (invocation: { agent: Agent }) => {
+      try {
+        const workspaceRoot = await sessionWorkspaceRoot(services, invocation.agent)
+        const text = await executeReviewRetro(
+          { action: 'report' },
+          {
+            workspaceRoot,
+            now: services.now,
+            window: config.reviewLearning.window,
+          },
+        )
+        return { kind: 'success' as const, text }
+      } catch (error) {
+        return {
+          kind: 'error' as const,
+          text: `review retro failed: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`,
+        }
+      }
+    },
+  }
+  const effect = (ctx as unknown as { effect?: (work: () => unknown) => unknown }).effect
+  if (typeof effect === 'function') effect(() => commands.register(definition))
+  else commands.register(definition)
+}
+
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools
@@ -6334,12 +6614,14 @@ function createSkillProvider(note: string): SkillProvider {
 export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOptions = {}): void {
   const validated = validateConfig(config)
   const state = new DelegationState()
+  const userQuestions = (ctx as unknown as { userQuestions?: UserQuestionsService }).userQuestions
   const services: EngineServices = {
     subagents: ctx.subagents,
     workingDirectory: ctx.workingDirectory,
     state,
     git: { runGit: options.runGit ?? defaultGit },
     now: options.now ?? (() => new Date()),
+    ...(userQuestions === undefined ? {} : { userQuestions }),
     timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
     ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
     ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
@@ -6349,9 +6631,10 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
   const engine = new DelegationEngine(validated, services)
   services.pendingReview = (workspaceRoot, ruleId, change, taskId) =>
     engine.pendingReview(workspaceRoot, ruleId, change, taskId)
-  for (const definition of buildToolDefinitions(engine, validated)) {
+  for (const definition of buildToolDefinitions(engine, validated, services)) {
     ctx.tools.register(definition)
   }
+  registerReviewRetroCommand(ctx, validated, services)
   ctx.skills.registerProvider(() => createSkillProvider(skillAdapterNote()))
   attachGate({
     ctx,

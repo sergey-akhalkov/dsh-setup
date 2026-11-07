@@ -20,7 +20,11 @@ function finding(overrides: Record<string, unknown> = {}): Record<string, unknow
 describe('verdict finding class', () => {
   it('stores a valid class with the finding', () => {
     const parsed = parseVerdict(
-      fenced({ digest: DIGEST, verdict: 'FINDINGS', findings: [finding({ class: 'path-boundary' })] }),
+      fenced({
+        digest: DIGEST,
+        verdict: 'FINDINGS',
+        findings: [finding({ class: 'path-boundary' })],
+      }),
       DIGEST,
     )
     expect(parsed.verdict).toBe('FINDINGS')

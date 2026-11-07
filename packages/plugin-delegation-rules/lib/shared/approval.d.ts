@@ -89,6 +89,12 @@ export interface PortableTaskReviewRecord {
     target: ReviewTarget;
     time: string;
 }
+/** A field value that could leak the reviewing machine into a committed record. */
+export declare function hasMachinePath(text: string): boolean;
+/** Default bound for one redacted field; callers pass a smaller bound when needed. */
+export declare const MAX_SANITIZE_CHARS = 2000;
+/** Redact machine paths and credentials, then bound the result. */
+export declare function sanitizeText(text: string, maximum?: number): string;
 export declare function isReviewFinding(value: unknown): value is ReviewFinding;
 /**
  * Validate the committed record: only the sanitized fields may appear, so a

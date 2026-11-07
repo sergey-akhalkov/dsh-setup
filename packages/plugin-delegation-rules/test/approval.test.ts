@@ -8,6 +8,7 @@ import {
   computeApprovalCoverage,
   FINDING_CLASSES,
   formatApprovalGapLines,
+  hasMachinePath,
   isReviewFinding,
   laneOfTask,
   localTaskRecordPath,
@@ -23,6 +24,7 @@ import {
   recognizeArchiveCommands,
   reviewerBindingOf,
   reviewerMatches,
+  sanitizeText,
   taskIdOf,
   unparseableCheckedLines,
 } from '../src/shared/approval.ts'
@@ -82,6 +84,20 @@ describe('finding classification', () => {
     expect(isReviewFinding(finding)).toBe(true)
     expect(isReviewFinding({ ...finding, class: 'missing-test' })).toBe(true)
     expect(isReviewFinding({ ...finding, class: 'made-up' })).toBe(false)
+  })
+
+  it('redacts backtick paths, file URLs, and home-relative machine paths from finding text', () => {
+    const text =
+      'See `/home/owner/private/config.json:12`, file:///home/owner/private/a.json, ' +
+      '~/.config/service/credentials.json, [/home/owner/private/b.json], ' +
+      '</home/owner/private/c.json:9> and {/home/owner/private/d.json}'
+    const sanitized = sanitizeText(text)
+    expect(sanitized).not.toContain('/home/owner')
+    expect(sanitized).not.toContain('~/.config')
+    expect(sanitized).not.toContain('file://')
+    expect(sanitized).toContain('[path]')
+    expect(hasMachinePath(text)).toBe(true)
+    expect(hasMachinePath('src/file.ts:12')).toBe(false)
   })
 })
 

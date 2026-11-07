@@ -1,0 +1,170 @@
+import { createHash } from 'node:crypto';
+import { historyWindowOf, readFindingHistory, } from './finding-history.js';
+import { lessonDedupeKey, proposeLesson } from './lesson-store.js';
+export const REVIEW_RETRO_DESCRIPTION = 'Report repeated review findings by class from the local bounded finding history, and optionally propose at most one lesson draft. Deterministic: calls no model and edits no source file. A proposed lesson is never injected until a user accepts it.';
+export const MAX_REPORT_CHARS = 4_000;
+const MAX_EXAMPLE_CHARS = 300;
+const MAX_EXAMPLES = 3;
+function clip(text, maximum) {
+    return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`;
+}
+/** Normalized title identity used to count a repeat across records. */
+export function findingTitleHash(finding) {
+    return createHash('sha256').update(lessonDedupeKey(finding)).digest('hex').slice(0, 16);
+}
+function percent(part, total) {
+    return total === 0 ? 0 : Math.round((part / total) * 100);
+}
+/** Deterministic clustering over the already-read history entries. */
+export function buildRetroReport(entries, options = {}) {
+    const window = historyWindowOf(options.window);
+    const skipped = options.skipped ?? 0;
+    const gaps = entries.filter((entry) => entry.kind === 'gap').length;
+    const counts = new Map();
+    const examples = new Map();
+    const seen = new Map();
+    const repeatedHashes = new Set();
+    let findings = 0;
+    let repeatedSource;
+    for (const entry of entries) {
+        if (entry.kind !== 'run')
+            continue;
+        for (const finding of entry.findings) {
+            findings += 1;
+            const key = findingTitleHash(finding);
+            const previous = seen.get(key) ?? 0;
+            seen.set(key, previous + 1);
+            const bucket = counts.get(finding.class) ?? { count: 0, repeats: 0 };
+            bucket.count += 1;
+            if (previous > 0) {
+                bucket.repeats += 1;
+                repeatedHashes.add(key);
+                if (repeatedSource === undefined) {
+                    repeatedSource = {
+                        change: entry.change,
+                        ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
+                        time: entry.time,
+                    };
+                }
+            }
+            counts.set(finding.class, bucket);
+            const list = examples.get(finding.class) ?? [];
+            if (list.length < MAX_EXAMPLES) {
+                list.push({
+                    class: finding.class,
+                    title: clip(finding.title, MAX_EXAMPLE_CHARS),
+                    evidence: clip(finding.evidence, MAX_EXAMPLE_CHARS),
+                    rule: entry.rule,
+                    change: entry.change,
+                    ...(entry.taskId === undefined ? {} : { taskId: entry.taskId }),
+                    time: entry.time,
+                });
+                examples.set(finding.class, list);
+            }
+        }
+    }
+    const classes = [...counts.entries()]
+        .map(([findingClass, bucket]) => ({
+        class: findingClass,
+        count: bucket.count,
+        repeats: bucket.repeats,
+        rate: percent(bucket.repeats, bucket.count),
+    }))
+        .sort((left, right) => right.count - left.count || left.class.localeCompare(right.class));
+    const top = classes[0];
+    const topClass = top?.class;
+    const topExamples = topClass === undefined ? [] : (examples.get(topClass) ?? []);
+    let draft;
+    if (top !== undefined && top.repeats > 0 && topClass !== undefined) {
+        const example = topExamples[0];
+        const hashes = [...repeatedHashes].sort();
+        draft = {
+            class: topClass,
+            title: `Check for ${topClass} findings earlier`,
+            body: `${top.count} ${topClass} finding(s), ${top.repeats} repeated in the last ${window} settled reviews. Example: ${example?.title ?? 'none'}. Before returning PASS, check this class explicitly.`,
+            appliesTo: { rules: ['*'], capabilities: [] },
+            source: {
+                ...(repeatedSource?.change === undefined ? {} : { change: repeatedSource.change }),
+                ...(repeatedSource?.taskId === undefined ? {} : { taskId: repeatedSource.taskId }),
+                findingHashes: hashes.slice(0, 20),
+            },
+        };
+    }
+    const lines = [
+        `review retro: last ${entries.length} settled review(s), ${findings} finding(s), ${gaps} gap(s), ${skipped} malformed line(s) skipped`,
+    ];
+    if (findings === 0) {
+        lines.push('no findings in the window; no lesson draft');
+    }
+    else {
+        for (const entry of classes) {
+            lines.push(`- ${entry.class}: ${entry.count} finding(s), ${entry.repeats} repeated (${entry.rate}%)`);
+        }
+        lines.push(`top class: ${topClass ?? 'none'}`);
+        if (topExamples.length > 0) {
+            lines.push('examples:');
+            for (const example of topExamples) {
+                const source = [example.change, example.taskId, example.time]
+                    .filter((part) => part !== undefined)
+                    .join(' ');
+                lines.push(`- [${example.class}] ${example.title} (${source})`);
+            }
+        }
+        lines.push(draft === undefined
+            ? 'no repeated class; no lesson draft'
+            : `draft: ${draft.title}\n${draft.body}`);
+    }
+    const maximum = options.maxChars ?? MAX_REPORT_CHARS;
+    const text = lines.join('\n');
+    return {
+        window,
+        entries: entries.length,
+        findings,
+        gaps,
+        skipped,
+        classes,
+        ...(topClass === undefined ? {} : { topClass }),
+        examples: topExamples,
+        ...(draft === undefined ? {} : { draft }),
+        text: text.length <= maximum ? text : `${text.slice(0, maximum - 20)}\n… (truncated)`,
+    };
+}
+/** Read the windowed history and build the deterministic report. */
+export async function reviewRetro(workspaceRoot, options = {}) {
+    const window = historyWindowOf(options.window);
+    const read = await readFindingHistory(workspaceRoot, { window });
+    return buildRetroReport(read.entries, { window, skipped: read.skipped });
+}
+/** Run one `review_retro` action; `report` writes nothing, `propose` stores one draft. */
+export async function executeReviewRetro(value, context) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new Error('review_retro arguments must be an object');
+    }
+    const args = value;
+    const action = args.action;
+    const unknown = Object.keys(args).filter((key) => key !== 'action');
+    if (unknown.length > 0) {
+        throw new Error(`review_retro has unknown field(s): ${unknown.join(', ')}`);
+    }
+    if (action !== 'report' && action !== 'propose') {
+        throw new Error('review_retro.action must be "report" or "propose"');
+    }
+    const report = await reviewRetro(context.workspaceRoot, {
+        ...(context.window === undefined ? {} : { window: context.window }),
+    });
+    const bounded = context.maxChars === undefined || report.text.length <= context.maxChars
+        ? report.text
+        : `${report.text.slice(0, context.maxChars - 20)}\n… (truncated)`;
+    if (action === 'report' || report.draft === undefined)
+        return bounded;
+    const created = await proposeLesson(context.workspaceRoot, {
+        class: report.draft.class,
+        title: report.draft.title,
+        body: report.draft.body,
+        appliesTo: report.draft.appliesTo,
+        source: report.draft.source,
+        now: context.now().getTime(),
+        ...(context.maxLessons === undefined ? {} : { maxLessons: context.maxLessons }),
+    });
+    return `${bounded}\n\nproposed lesson ${created.lesson.id} [${created.lesson.class}] "${created.lesson.title}"; a user must accept it before it is injected`;
+}

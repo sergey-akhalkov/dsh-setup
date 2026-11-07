@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
 import {
+  appendFindingHistory,
+  findingHistoryPath,
+  type HistoryRunEntry,
+} from '../src/host/finding-history.ts'
+import {
   createReviewSnapshot,
   defaultGit,
   discardReviewSnapshot,
@@ -15,7 +20,6 @@ import {
   stopSnapshotLease,
   sweepReviewSnapshots,
 } from '../src/index.js'
-import { findingHistoryPath } from '../src/host/finding-history.ts'
 import {
   type BundleConfigLike,
   createAgent,
@@ -1039,14 +1043,17 @@ describe('patch contract', () => {
 })
 
 describe('tools and status', () => {
-  it('registers the three tools, the rule enum, and no always-on prompt section', async () => {
+  it('registers the five tools, the rule enum, and no always-on prompt section', async () => {
     const root = await workspace()
     const harness = harnessFor(root)
     expect([...harness.tools.keys()].sort()).toEqual([
       'delegate',
       'delegation_status',
+      'review_lesson',
+      'review_retro',
       'task_progress',
     ])
+    expect(harness.commands.map((command) => command.name)).toContain('review-retro')
     const delegate = harness.tools.get('delegate')
     const parameters = delegate?.parameters as { properties: { rule: { enum: string[] } } }
     expect(parameters.properties.rule.enum).toEqual(['spec-review', 'task-review', 'task-progress'])
@@ -2578,7 +2585,10 @@ describe('snapshot lifecycle', () => {
   })
 })
 describe('finding history', () => {
-  function classedFindings(): (run: RunRecord) => { output: Array<{ type: 'text'; text: string }>; stopReason: 'completed' } {
+  function classedFindings(): (run: RunRecord) => {
+    output: Array<{ type: 'text'; text: string }>
+    stopReason: 'completed'
+  } {
     return (run) => {
       const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
       const body = {
@@ -2618,7 +2628,10 @@ describe('finding history', () => {
     const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
     expect(await harness.waitForRun(runId)).toContain('state=completed')
     const record = JSON.parse(
-      await readFile(join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'), 'utf8'),
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
     ) as { findings: Array<{ class?: string }> }
     expect(record.findings[0]?.class).toBe('missing-test')
     const rendered = text(
@@ -2646,7 +2659,8 @@ describe('finding history', () => {
 
     const entries = await historyEntries(root)
     expect(entries.map((entry) => entry.verdict)).toEqual(['FINDINGS', 'PASS'])
-    expect((entries[0]?.findings as Array<{ class?: string }>)[0]?.class).toBe('missing-test')
+    const firstFindings = entries[0]?.findings as Array<{ class?: string }> | undefined
+    expect(firstFindings?.[0]?.class).toBe('missing-test')
     expect(entries[1]?.findings).toEqual([])
 
     const reused = text(
@@ -2682,7 +2696,11 @@ describe('finding history', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     const harness = harnessFor(root, taskReviewConfig(), subagents)
-    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a', task: taskId })
+    const runId = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-a',
+      task: taskId,
+    })
     expect(await harness.waitForRun(runId)).toContain('state=completed')
 
     const record = JSON.parse(
@@ -2693,7 +2711,10 @@ describe('finding history', () => {
     ) as { verdict: string }
     expect(record.verdict).toBe('PASS')
     const portable = JSON.parse(
-      await readFile(join(root, 'openspec', 'changes', 'change-a', 'reviews', `${taskId}.json`), 'utf8'),
+      await readFile(
+        join(root, 'openspec', 'changes', 'change-a', 'reviews', `${taskId}.json`),
+        'utf8',
+      ),
     ) as { verdict: string }
     expect(portable.verdict).toBe('PASS')
     const runFile = JSON.parse(
@@ -2714,7 +2735,11 @@ describe('finding history', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, classedFindings())
     const harness = harnessFor(root, taskReviewConfig(), subagents)
-    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a', task: taskId })
+    const runId = await harness.startReview({
+      rule: 'task-review',
+      change: 'change-a',
+      task: taskId,
+    })
     expect(await harness.waitForRun(runId)).toContain('state=completed')
 
     const record = JSON.parse(
@@ -2729,5 +2754,120 @@ describe('finding history', () => {
       await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
     ) as { detail?: string }
     expect(runFile.detail).toContain('history gap:')
+  })
+})
+
+describe('finding history writer', () => {
+  function runEntry(digest: string, time: string): HistoryRunEntry {
+    return {
+      v: 1,
+      kind: 'run',
+      rule: 'task-review',
+      change: 'change-a',
+      taskId: 'abc123',
+      verdict: 'PASS',
+      digest,
+      findings: [],
+      time,
+    }
+  }
+
+  async function entriesOf(root: string): Promise<Array<Record<string, unknown>>> {
+    const raw = await readFile(findingHistoryPath(root), 'utf8')
+    return raw
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  it('serializes concurrent appends without losing an entry', async () => {
+    const root = await workspace()
+    const digests = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)]
+    const results = await Promise.all(
+      digests.map((digest, index) =>
+        appendFindingHistory(root, runEntry(digest, `2026-11-0${index + 1}T00:00:00.000Z`)),
+      ),
+    )
+    expect(results.every((result) => result.appended)).toBe(true)
+    const entries = await entriesOf(root)
+    expect(entries).toHaveLength(3)
+    expect(new Set(entries.map((entry) => entry.digest))).toEqual(new Set(digests))
+  })
+
+  it('redacts a machine path and credentials from a gap marker reason', async () => {
+    const root = await workspace()
+    const failing = {
+      ...runEntry('a'.repeat(64), '2026-11-01T00:00:00.000Z'),
+      toJSON() {
+        throw new Error(
+          'EACCES: rename C:\\Users\\owner\\secret.ts -> C:\\Users\\owner\\target.ts; ' +
+            'Authorization: Bearer synthetic-review-token; password = "secret with spaces"',
+        )
+      },
+    } as unknown as HistoryRunEntry
+    const result = await appendFindingHistory(root, failing)
+    expect(result.appended).toBe(false)
+    expect(result.gapAppended).toBe(true)
+    expect(result.detail).toContain('[path]')
+    expect(result.detail).toContain('[secret]')
+    expect(result.detail).not.toContain('C:\\Users')
+    expect(result.detail).not.toContain('synthetic-review-token')
+    expect(result.detail).not.toContain('secret with spaces')
+    const raw = await readFile(findingHistoryPath(root), 'utf8')
+    expect(raw).toContain('"kind":"gap"')
+    expect(raw).not.toContain('C:\\\\Users')
+    expect(raw).not.toContain('C:\\Users')
+    expect(raw).not.toContain('synthetic-review-token')
+    expect(raw).not.toContain('secret with spaces')
+  })
+
+  it('redacts bracket-delimited and home-relative machine paths from findings', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.respond = (run) => {
+      const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
+      const body = {
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P1',
+            class: 'path-boundary',
+            title: 'Leaked location',
+            evidence:
+              'Config lives at [/home/owner/private/config.json] and ~/.config/service/credentials.json, see `/home/owner/private/other.json:12`, file:///home/owner/private/third.json, </home/owner/private/fourth.json:3> and {/home/owner/private/fifth.json}',
+            fix: 'Use a relative path.',
+          },
+        ],
+      }
+      return {
+        output: [{ type: 'text' as const, text: `\`\`\`json\n${JSON.stringify(body)}\n\`\`\`` }],
+        stopReason: 'completed' as const,
+      }
+    }
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const raw = await readFile(findingHistoryPath(root), 'utf8')
+    expect(raw).not.toContain('/home/owner')
+    expect(raw).not.toContain('~/.config')
+    expect(raw).not.toContain('file:///home')
+    expect(raw).toContain('[path]')
+  })
+
+  it('prunes to a one-entry window instead of retaining every append', async () => {
+    const root = await workspace()
+    for (const index of [1, 2, 3]) {
+      await appendFindingHistory(
+        root,
+        runEntry(`${index}`.repeat(64), `2026-11-0${index}T00:00:00.000Z`),
+        { window: 1 },
+      )
+    }
+    const entries = await entriesOf(root)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.digest).toBe(`${3}`.repeat(64))
   })
 })

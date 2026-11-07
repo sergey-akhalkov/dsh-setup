@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
-import { type ReviewFinding } from '../shared/approval.js';
+import { type NumberedTask, type ReviewFinding } from '../shared/approval.js';
+import { type Lesson } from './lesson-store.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -10,7 +11,7 @@ import { type ReviewFinding } from '../shared/approval.js';
  */
 /** Cordis plugin name, equal to the package name. */
 export declare const name = "@dsh-setup/plugin-delegation-rules";
-/** Services the registrations depend on. */
+/** Services the registrations depend on; the learning surfaces attach when present. */
 export declare const inject: string[];
 /**
  * Catalog text; a test keeps it identical to the asset frontmatter. Kept short
@@ -83,6 +84,17 @@ export interface ReviewQueueConfig {
     maxDelayMs: number;
     waitTimeoutMs: number;
 }
+/** Per-profile review-learning limits. */
+export interface ReviewLearningConfig {
+    /** Off: no retro/lesson tool, no command, and no lesson injection. */
+    enabled: boolean;
+    /** Settled reviews read by the retro and kept in the finding history. */
+    window: number;
+    /** Lesson store cap; the byte cap still applies. */
+    maxLessons: number;
+}
+/** The documented defaults; `window` and `maxLessons` also bound their stores. */
+export declare const DEFAULT_REVIEW_LEARNING: Readonly<ReviewLearningConfig>;
 /** Row configuration accepted by {@link apply}. */
 export interface BundleConfig {
     targets?: Record<string, TargetConfig>;
@@ -90,6 +102,7 @@ export interface BundleConfig {
     timeouts?: Partial<TimeoutConfig>;
     failureStreak?: number;
     reviewQueue?: Partial<ReviewQueueConfig>;
+    reviewLearning?: Partial<ReviewLearningConfig>;
 }
 /** Test seams; production uses the filesystem, git, and the wall clock. */
 export interface ApplyOptions {
@@ -118,6 +131,7 @@ interface EngineConfig {
     timeouts: TimeoutConfig;
     failureStreak: number;
     reviewQueue: ReviewQueueConfig;
+    reviewLearning: ReviewLearningConfig;
 }
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
@@ -126,12 +140,18 @@ interface EngineConfig {
  */
 export declare function validateConfig(raw: unknown): EngineConfig;
 /**
+ * Validate the review-learning block. The defaults bound the lesson store and
+ * the retro window; an invalid field fails plugin load with its range.
+ */
+export declare function validateReviewLearning(raw: unknown): ReviewLearningConfig;
+/**
  * Validate the review queue block. An omitted block enables the documented
  * defaults; an invalid field fails plugin load with the field and its range.
  */
 export declare function validateReviewQueue(raw: unknown): ReviewQueueConfig;
 /** Fixed-argument git runner. The shell is never used, so no input is interpolated. */
 export declare function defaultGit(args: readonly string[], cwd: string, signal?: AbortSignal, env?: Record<string, string>, stdin?: string | Buffer): Promise<Buffer>;
+type TaskInfo = NumberedTask;
 interface ChangeInfo {
     name: string;
     dir: string;
@@ -203,6 +223,14 @@ export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now
 export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner, 
 /** Test seam: the filesystem remover, so a failed removal can be injected. */
 remove?: (path: string) => Promise<void>): Promise<void>;
+interface ParsedVerdict {
+    verdict: 'PASS' | 'FINDINGS';
+    findings: Finding[];
+}
+/** Accept exactly one fenced JSON verdict that echoes the requested digest. */
+export declare function parseVerdict(text: string, expectedDigest: string): ParsedVerdict;
+/** Export for the prompt-budget tests; the engine is the only production caller. */
+export declare function reviewPrompt(rule: RuleConfig, change: ChangeInfo, digest: string, task: TaskInfo | undefined, context: string | undefined, objective: string | undefined, snapshot?: boolean, lessons?: readonly Lesson[]): string;
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools

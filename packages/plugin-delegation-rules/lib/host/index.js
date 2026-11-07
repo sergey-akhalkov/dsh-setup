@@ -4,7 +4,11 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
+import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeFindingClass, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, sanitizeText, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
+import { appendFindingHistory, DEFAULT_HISTORY_WINDOW, MAX_HISTORY_WINDOW, } from './finding-history.js';
+import { executeReviewLesson, REVIEW_LESSON_DESCRIPTION } from './learning-tools.js';
+import { changeCapabilities, DEFAULT_MAX_LESSONS, matchingLessons, readLessons, } from './lesson-store.js';
+import { executeReviewRetro, REVIEW_RETRO_DESCRIPTION } from './retro.js';
 import { classifyFailure, QueueInternalError, ReviewQueue, } from './review-queue.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -16,7 +20,7 @@ import { classifyFailure, QueueInternalError, ReviewQueue, } from './review-queu
  */
 /** Cordis plugin name, equal to the package name. */
 export const name = '@dsh-setup/plugin-delegation-rules';
-/** Services the registrations depend on. */
+/** Services the registrations depend on; the learning surfaces attach when present. */
 export const inject = ['tools', 'subagents', 'skills', 'workingDirectory'];
 /** Skill name advertised in the catalog and loaded on demand. */
 const SKILL_NAME = 'delegation-rules';
@@ -88,9 +92,14 @@ const REVIEW_QUEUE_KEYS = new Set([
     'waitTimeoutMs',
 ]);
 const MAX_ANSWER_CHARS = 12_000;
-const MAX_FINDING_CHARS = 2_000;
 const MAX_ERROR_CHARS = 4_000;
 const MAX_REASON_CHARS = 2_000;
+/** The documented defaults; `window` and `maxLessons` also bound their stores. */
+export const DEFAULT_REVIEW_LEARNING = {
+    enabled: true,
+    window: DEFAULT_HISTORY_WINDOW,
+    maxLessons: DEFAULT_MAX_LESSONS,
+};
 class DelegationError extends Error {
     constructor(message) {
         super(message);
@@ -193,6 +202,7 @@ const RULE_KEYS = new Set([
 const TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions', 'write']);
 const AGENT_OPTION_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'maxTokens']);
 const TIMEOUT_KEYS = new Set(['review', 'answer', 'patch']);
+const REVIEW_LEARNING_KEYS = new Set(['enabled', 'window', 'maxLessons']);
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
  * rule/target id and a next action; a missing provider is deliberately not a
@@ -203,9 +213,9 @@ export function validateConfig(raw) {
         raw = {};
     if (!isRecord(raw))
         fail('configuration must be a mapping');
-    const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'failureStreak', 'reviewQueue']));
+    const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'failureStreak', 'reviewQueue', 'reviewLearning']));
     if (unknownTop.length > 0) {
-        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, or reviewQueue`);
+        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, reviewQueue, or reviewLearning`);
     }
     const targetsRaw = raw.targets ?? {};
     if (!isRecord(targetsRaw))
@@ -312,7 +322,49 @@ export function validateConfig(raw) {
         failureStreak = raw.failureStreak;
     }
     const reviewQueue = validateReviewQueue(raw.reviewQueue);
-    return { targets, rules, timeouts, failureStreak, reviewQueue };
+    const reviewLearning = validateReviewLearning(raw.reviewLearning);
+    return { targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning };
+}
+/**
+ * Validate the review-learning block. The defaults bound the lesson store and
+ * the retro window; an invalid field fails plugin load with its range.
+ */
+export function validateReviewLearning(raw) {
+    const learning = { ...DEFAULT_REVIEW_LEARNING };
+    if (raw === undefined)
+        return learning;
+    if (!isRecord(raw))
+        fail('reviewLearning must be a mapping');
+    const unknown = unknownKeys(raw, REVIEW_LEARNING_KEYS);
+    if (unknown.length > 0) {
+        fail(`reviewLearning: unknown field(s) ${unknown.join(', ')}; use enabled, window, or maxLessons`);
+    }
+    if (raw.enabled !== undefined) {
+        if (typeof raw.enabled !== 'boolean')
+            fail('reviewLearning.enabled must be true or false');
+        learning.enabled = raw.enabled;
+    }
+    const window = raw.window;
+    if (window !== undefined) {
+        if (typeof window !== 'number' ||
+            !Number.isSafeInteger(window) ||
+            window < 1 ||
+            window > MAX_HISTORY_WINDOW) {
+            fail(`reviewLearning.window must be a whole number from 1 to ${MAX_HISTORY_WINDOW}; it bounds the retro window and the finding history`);
+        }
+        learning.window = window;
+    }
+    const maxLessons = raw.maxLessons;
+    if (maxLessons !== undefined) {
+        if (typeof maxLessons !== 'number' ||
+            !Number.isSafeInteger(maxLessons) ||
+            maxLessons < 1 ||
+            maxLessons > 1_000) {
+            fail('reviewLearning.maxLessons must be a whole number from 1 to 1000');
+        }
+        learning.maxLessons = maxLessons;
+    }
+    return learning;
 }
 /**
  * Validate the review queue block. An omitted block enables the documented
@@ -1143,27 +1195,6 @@ async function captureSnapshot(cwd, changes, services, signal) {
         snapshot.changes.push(entry);
     }
     return snapshot;
-}
-/**
- * Header values may contain quoted or escaped secrets, so redact the remainder
- * of the line. The delimiter requirement keeps ordinary prose intact.
- */
-const AUTHORIZATION_HEADER_PATTERN = /\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi;
-const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi;
-function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
-    const redacted = text
-        .replace(AUTHORIZATION_HEADER_PATTERN, '[secret]')
-        .replace(COOKIE_HEADER_PATTERN, '[secret]')
-        .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
-        .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
-        .replace(/\\\\[^\s"'`)]+/g, '[path]')
-        .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
-        .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
-        .replace(/\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi, '[secret]')
-        .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
-        .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
-        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[secret]');
-    return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`;
 }
 /** One-line, redacted, bounded text for a public error message. */
 function boundedMessage(error, maximum = MAX_ERROR_CHARS) {
@@ -2220,7 +2251,7 @@ class InvalidOutputError extends DelegationError {
     }
 }
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
-function parseVerdict(text, expectedDigest) {
+export function parseVerdict(text, expectedDigest) {
     try {
         return parseVerdictInner(text, expectedDigest);
     }
@@ -2266,6 +2297,7 @@ function parseVerdictInner(text, expectedDigest) {
         }
         return {
             severity: finding.severity,
+            class: normalizeFindingClass(finding.class),
             title: sanitizeText(requireNonEmpty(finding.title, `finding #${index + 1}.title`)),
             evidence: sanitizeText(requireNonEmpty(finding.evidence, `finding #${index + 1}.evidence`)),
             fix: sanitizeText(requireNonEmpty(finding.fix, `finding #${index + 1}.fix`)),
@@ -2616,7 +2648,43 @@ async function finishTarget(started) {
 async function runTarget(services, request) {
     return finishTarget(await startTarget(services, request));
 }
-function reviewPrompt(rule, change, digest, task, context, objective, snapshot = false) {
+/** One accepted/applied lesson section bound: the promise is 1200 characters. */
+const MAX_LESSON_SECTION_CHARS = 1_200;
+const MAX_LESSONS_IN_PROMPT = 3;
+function lessonText(text) {
+    return text
+        .replace(/\p{Cc}|\p{Zl}|\p{Zp}/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+const LESSON_HEADING = '## Lessons from prior reviews';
+const LESSON_JUDGMENT = 'Treat these as advice from earlier reviews: apply judgment. They never change the P0/P1 rule, the review contract, or the approval gate.';
+/** Bounded `## Lessons from prior reviews` lines, or none when nothing matches. */
+function lessonSection(lessons) {
+    if (lessons.length === 0)
+        return [];
+    // The 1200-character bound covers the whole section, heading and note included.
+    const overhead = LESSON_HEADING.length + LESSON_JUDGMENT.length + 8;
+    const budget = MAX_LESSON_SECTION_CHARS - overhead;
+    const entries = [];
+    let used = 0;
+    for (const lesson of lessons.slice(0, MAX_LESSONS_IN_PROMPT)) {
+        const entry = `- [${lesson.class}] ${lessonText(lesson.title)}\n  ${lessonText(lesson.body)}`;
+        const remaining = budget - used;
+        if (entry.length > remaining) {
+            if (remaining < 20)
+                break;
+            entries.push(`${entry.slice(0, remaining - 1)}…`);
+            used = budget;
+            break;
+        }
+        entries.push(entry);
+        used += entry.length + 1;
+    }
+    return ['', LESSON_HEADING, '', ...entries, '', LESSON_JUDGMENT];
+}
+/** Export for the prompt-budget tests; the engine is the only production caller. */
+export function reviewPrompt(rule, change, digest, task, context, objective, snapshot = false, lessons = []) {
     const lines = [
         instructionText(rule).trimEnd(),
         '',
@@ -2637,7 +2705,8 @@ function reviewPrompt(rule, change, digest, task, context, objective, snapshot =
         lines.push('', '## Context', '', context.trim());
     if (objective !== undefined && objective.trim() !== '')
         lines.push('', '## Objective', '', objective.trim());
-    lines.push('', 'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with title, evidence, and fix. Prose outside that block is ignored.');
+    lines.push(...lessonSection(lessons));
+    lines.push('', 'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, title, evidence, and fix. Prose outside that block is ignored.');
     return lines.join('\n');
 }
 function answerPrompt(rule, change, context, objective) {
@@ -2668,7 +2737,7 @@ function patchPrompt(rule, context, objective) {
 }
 function formatRecord(cwd, path, record, reused) {
     const head = reused ? 'reused record' : 'wrote record';
-    const findings = record.findings.map((finding) => `- ${finding.severity} ${finding.title}\n  evidence: ${finding.evidence}\n  fix: ${finding.fix}`);
+    const findings = record.findings.map((finding) => `- ${finding.severity} ${finding.title}\n  class: ${normalizeFindingClass(finding.class)}\n  evidence: ${finding.evidence}\n  fix: ${finding.fix}`);
     const lines = [
         `rule "${record.rule}" ${record.verdict} (${head} ${relativePath(cwd, path)})`,
         `change: ${record.change}`,
@@ -2948,6 +3017,19 @@ class DelegationEngine {
         }
         return undefined;
     }
+    /** Matching accepted/applied lessons; a broken learning store never fails a review. */
+    async reviewLessons(run) {
+        if (!this.config.reviewLearning.enabled)
+            return [];
+        try {
+            const capabilities = await changeCapabilities(run.context.change.dir);
+            const { lessons } = await readLessons(run.workspaceRoot);
+            return matchingLessons(lessons, run.context.rule.id, capabilities);
+        }
+        catch {
+            return [];
+        }
+    }
     /** Start one admitted target; the queue owns the slot and settlement. */
     async startPreparedReview(run) {
         let prepared = run.prepared;
@@ -2993,10 +3075,11 @@ class DelegationEngine {
                 fail(`run ${run.file.id} lost its prepared review after re-preparation`);
             }
         }
+        const lessons = await this.reviewLessons(run);
         const started = await startTarget(this.services, {
             rule: run.context.rule,
             target: this.target(run.context.rule),
-            prompt: reviewPrompt(run.context.rule, run.context.change, prepared.digest, run.context.task, run.context.args.context, run.context.args.objective, prepared.snapshotTree !== undefined),
+            prompt: reviewPrompt(run.context.rule, run.context.change, prepared.digest, run.context.task, run.context.args.context, run.context.args.objective, prepared.snapshotTree !== undefined, lessons),
             agent: run.context.agent,
             cwd: prepared.reviewCwd ?? run.context.cwd,
             signal: run.context.signal,
@@ -3189,7 +3272,7 @@ class DelegationEngine {
                     throw new InputMutationError(`reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`);
                 }
             }
-            await this.publishRecord(run, {
+            const record = await this.publishRecord(run, {
                 digest: prepared.digest,
                 ...(prepared.worktreeDigest === undefined
                     ? {}
@@ -3198,7 +3281,14 @@ class DelegationEngine {
                 findings: parsed.findings,
                 target: targetIdentity(result.provider, result.model, result.reasoningEffort),
             });
-            await this.markRun(run, 'completed', this.withFallbackDetail(prepared, parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined));
+            const historyDetail = await this.recordFindingHistory(run, record);
+            const detail = [
+                parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
+                historyDetail,
+            ]
+                .filter((part) => part !== undefined)
+                .join('; ');
+            await this.markRun(run, 'completed', this.withFallbackDetail(prepared, detail === '' ? undefined : detail));
             outcome = 'completed';
         }
         catch (error) {
@@ -3315,7 +3405,10 @@ class DelegationEngine {
                 digest: fields.digest,
                 ...(fields.worktreeDigest === undefined ? {} : { worktreeDigest: fields.worktreeDigest }),
                 verdict: fields.verdict,
-                findings: fields.findings,
+                findings: fields.findings.map((finding) => ({
+                    ...finding,
+                    class: normalizeFindingClass(finding.class),
+                })),
                 target: fields.target,
                 session: currentThread(run.context.agent),
                 runId: run.file.id,
@@ -3356,6 +3449,37 @@ class DelegationEngine {
         }
         finally {
             await release();
+        }
+    }
+    /**
+     * Append one settled review's findings after its record is published. The
+     * helper never throws; when neither the entry nor its gap marker is writable,
+     * the run detail names the gap rather than changing any verdict.
+     */
+    async recordFindingHistory(run, record) {
+        try {
+            const result = await appendFindingHistory(run.workspaceRoot, {
+                v: 1,
+                kind: 'run',
+                rule: record.rule,
+                change: record.change,
+                ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
+                verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
+                digest: record.digest,
+                findings: record.findings.map((finding) => ({
+                    class: normalizeFindingClass(finding.class),
+                    title: finding.title,
+                    evidence: finding.evidence,
+                    fix: finding.fix,
+                })),
+                time: record.time,
+            }, { window: this.config.reviewLearning.window });
+            if (result.appended || result.gapAppended)
+                return undefined;
+            return `history gap: ${result.detail ?? 'the finding history could not be written'}`;
+        }
+        catch (error) {
+            return `history gap: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`;
         }
     }
     /** Best-effort failure path: write a visible ERROR record when inputs were prepared. */
@@ -4815,13 +4939,25 @@ function renderOutput(value) {
 function timeoutForContract(timeouts, contract) {
     return contract === 'note' ? timeouts.answer : timeouts[contract];
 }
-function buildToolDefinitions(engine, config) {
+/** The learning store is workspace-scoped like the review records. */
+async function sessionWorkspaceRoot(services, agent) {
+    const cwd = services.workingDirectory.get(agent.session);
+    const openspecRoot = await findOpenSpecRoot(cwd);
+    return openspecRoot === undefined ? cwd : dirname(openspecRoot);
+}
+/** Tool executions carry the calling agent; a sessionless call cannot scope a store. */
+function requireToolAgent(agent) {
+    if (agent === undefined)
+        fail('this tool needs a live agent session; call it from a session turn');
+    return agent;
+}
+function buildToolDefinitions(engine, config, services) {
     const ruleIds = config.rules.map((rule) => rule.id);
     const output = {
         schema: TOOL_OUTPUT_SCHEMA,
         render: (_args, value) => renderOutput(value),
     };
-    return [
+    const definitions = [
         {
             name: 'delegate',
             description: toolDescriptions.delegate,
@@ -4901,6 +5037,92 @@ function buildToolDefinitions(engine, config) {
             },
         },
     ];
+    if (!config.reviewLearning.enabled)
+        return definitions;
+    definitions.push({
+        name: 'review_retro',
+        description: REVIEW_RETRO_DESCRIPTION,
+        parameters: {
+            type: 'object',
+            properties: {
+                action: {
+                    type: 'string',
+                    enum: ['report', 'propose'],
+                    description: 'report: deterministic counts and repeat rate; propose: also store at most one proposed lesson draft.',
+                },
+            },
+            required: ['action'],
+            additionalProperties: false,
+        },
+        output,
+        execute: async (args, exec) => {
+            const agent = requireToolAgent(exec.agent);
+            const workspaceRoot = await sessionWorkspaceRoot(services, agent);
+            return toolOutput(await executeReviewRetro(args, {
+                workspaceRoot,
+                now: services.now,
+                window: config.reviewLearning.window,
+                maxLessons: config.reviewLearning.maxLessons,
+            }));
+        },
+    }, {
+        name: 'review_lesson',
+        description: REVIEW_LESSON_DESCRIPTION,
+        parameters: {
+            type: 'object',
+            properties: {
+                action: {
+                    type: 'string',
+                    enum: ['list', 'propose', 'decide', 'apply'],
+                    description: 'A model may only propose; decide and apply ask the user and return without a write until the user answers.',
+                },
+                class: { type: 'string', description: 'One of the fixed finding-class vocabulary.' },
+                title: { type: 'string', description: 'Short lesson title (dedupe key with the class).' },
+                body: { type: 'string', description: 'The lesson text; stored as bounded data.' },
+                appliesTo: {
+                    type: 'object',
+                    properties: {
+                        rules: { type: 'array', items: { type: 'string' } },
+                        capabilities: { type: 'array', items: { type: 'string' } },
+                    },
+                    additionalProperties: false,
+                },
+                source: {
+                    type: 'object',
+                    properties: {
+                        change: { type: 'string' },
+                        taskId: { type: 'string' },
+                        findingHashes: { type: 'array', items: { type: 'string' } },
+                    },
+                    additionalProperties: false,
+                },
+                id: { type: 'string', description: 'Lesson revision id from list.' },
+                decision: { type: 'string', enum: ['accept', 'reject'] },
+                target: {
+                    type: 'string',
+                    description: 'Change, spec, file, or test the accepted lesson is applied to.',
+                },
+            },
+            required: ['action'],
+            additionalProperties: false,
+        },
+        output,
+        execute: async (args, exec) => {
+            const agent = requireToolAgent(exec.agent);
+            const workspaceRoot = await sessionWorkspaceRoot(services, agent);
+            return toolOutput(await executeReviewLesson(args, {
+                workspaceRoot,
+                now: services.now,
+                maxLessons: config.reviewLearning.maxLessons,
+                agent,
+                signal: exec.signal,
+                ...(services.userQuestions === undefined
+                    ? {}
+                    : { userQuestions: services.userQuestions }),
+            }));
+        },
+    });
+    return definitions;
 }
 function parseDelegateArgs(args) {
     if (!isRecord(args))
@@ -4979,6 +5201,45 @@ function createSkillProvider(note) {
     };
 }
 /**
+ * `/review-retro` is a read-only host command: it prints the deterministic
+ * report and never accepts or applies a lesson. Disabled learning registers
+ * nothing.
+ */
+function registerReviewRetroCommand(ctx, config, services) {
+    if (!config.reviewLearning.enabled)
+        return;
+    const commands = ctx.commands;
+    if (commands === undefined)
+        return;
+    const definition = {
+        definitionId: '@dsh-setup/plugin-delegation-rules/review-retro',
+        name: 'review-retro',
+        description: 'Report repeated review findings by class from the local bounded finding history; never accepts or applies a lesson.',
+        handler: async (invocation) => {
+            try {
+                const workspaceRoot = await sessionWorkspaceRoot(services, invocation.agent);
+                const text = await executeReviewRetro({ action: 'report' }, {
+                    workspaceRoot,
+                    now: services.now,
+                    window: config.reviewLearning.window,
+                });
+                return { kind: 'success', text };
+            }
+            catch (error) {
+                return {
+                    kind: 'error',
+                    text: `review retro failed: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`,
+                };
+            }
+        },
+    };
+    const effect = ctx.effect;
+    if (typeof effect === 'function')
+        effect(() => commands.register(definition));
+    else
+        commands.register(definition);
+}
+/**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools
  * and `delegation_status`, so the profile composes without that provider.
@@ -4986,12 +5247,14 @@ function createSkillProvider(note) {
 export function apply(ctx, config = {}, options = {}) {
     const validated = validateConfig(config);
     const state = new DelegationState();
+    const userQuestions = ctx.userQuestions;
     const services = {
         subagents: ctx.subagents,
         workingDirectory: ctx.workingDirectory,
         state,
         git: { runGit: options.runGit ?? defaultGit },
         now: options.now ?? (() => new Date()),
+        ...(userQuestions === undefined ? {} : { userQuestions }),
         timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
         ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
         ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
@@ -5000,9 +5263,10 @@ export function apply(ctx, config = {}, options = {}) {
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);
-    for (const definition of buildToolDefinitions(engine, validated)) {
+    for (const definition of buildToolDefinitions(engine, validated, services)) {
         ctx.tools.register(definition);
     }
+    registerReviewRetroCommand(ctx, validated, services);
     ctx.skills.registerProvider(() => createSkillProvider(skillAdapterNote()));
     attachGate({
         ctx,

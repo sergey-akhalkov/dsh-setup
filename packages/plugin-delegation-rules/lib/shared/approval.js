@@ -129,11 +129,37 @@ function isNonEmptyString(value) {
     return typeof value === 'string' && value.trim() !== '';
 }
 /** A field value that could leak the reviewing machine into a committed record. */
-function hasMachinePath(text) {
+export function hasMachinePath(text) {
     return (/[A-Za-z]:[\\/]/.test(text) ||
         /\\\\/.test(text) ||
-        /(?:^|[\s"'([{<])\/[^\s"'`)\]}>]+/.test(text) ||
-        /(?:^|[\s"'([{<])~[/\\]/.test(text));
+        /file:\/\//i.test(text) ||
+        /(?:^|[\s"'([{<`])\/[^\s"'`)\]}>]+/.test(text) ||
+        /(?:^|[\s"'([{<`])~[/\\]/.test(text));
+}
+/** Default bound for one redacted field; callers pass a smaller bound when needed. */
+export const MAX_SANITIZE_CHARS = 2_000;
+/**
+ * Header values may contain quoted or escaped secrets, so redact the remainder
+ * of the line. The delimiter requirement keeps ordinary prose intact.
+ */
+const AUTHORIZATION_HEADER_PATTERN = /\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi;
+const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi;
+/** Redact machine paths and credentials, then bound the result. */
+export function sanitizeText(text, maximum = MAX_SANITIZE_CHARS) {
+    const redacted = text
+        .replace(AUTHORIZATION_HEADER_PATTERN, '[secret]')
+        .replace(COOKIE_HEADER_PATTERN, '[secret]')
+        .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
+        .replace(/\bfile:\/\/[^\s"'`)]*/gi, '[path]')
+        .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
+        .replace(/\\\\[^\s"'`)]+/g, '[path]')
+        .replace(/~[/\\][^\s"'`)]*/g, '[path]')
+        .replace(/(^|[\s"'=([{<`])\/[^\s"'`)\]}<>]+/g, '$1[path]')
+        .replace(/\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi, '[secret]')
+        .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
+        .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
+        .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[secret]');
+    return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`;
 }
 function isCleanString(value) {
     return isNonEmptyString(value) && !hasMachinePath(value);
