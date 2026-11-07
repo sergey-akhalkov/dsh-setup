@@ -2755,9 +2755,12 @@ class DelegationEngine {
                 current.kind === 'record' ? JSON.stringify(current.record) : undefined;
             run.baselineCaptured = true;
         }
-        if (run.waitedInQueue === true &&
-            run.reprepared !== true &&
-            (await this.queuedInputsChanged(run))) {
+        if (run.waitedInQueue === true && (await this.queuedInputsChanged(run))) {
+            if (run.reprepared === true) {
+                // The single re-preparation is spent: a later change must surface as a
+                // terminal ERROR, never as a start on stale queued inputs.
+                fail('reviewed inputs changed again while the review waited in the queue; a review re-prepares only once — finish the writes and start a fresh review');
+            }
             // A queued run re-checks its source inputs before every attempt; a retry
             // after a rejected start must not begin on stale prepared inputs.
             await this.reprepareQueuedRun(run);
