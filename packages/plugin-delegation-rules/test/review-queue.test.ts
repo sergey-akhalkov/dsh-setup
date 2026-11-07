@@ -504,6 +504,50 @@ describe('review queue admission', () => {
     expect(queue.owns('run-b')).toBe(false)
     queue.dispose()
   })
+
+  it('enforces the acceptance deadline when a slow start fails after it', async () => {
+    let clock = new Date('2026-01-01T00:00:00.000Z')
+    let releaseStart: (error: Error) => void = () => undefined
+    const startGate = new Promise<Error>((resolve) => {
+      releaseStart = resolve
+    })
+    const hooks = {
+      start: vi.fn(async (run: QueueRun) => {
+        if (run.file.id === 'run-a') throw await startGate
+      }),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => clock,
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 20,
+      },
+      hooks,
+    )
+    const delayed = fakeRun('run-a', 'key-a', 'identity-a')
+    const submitting = queue.submit(delayed)
+    await vi.waitFor(() => {
+      expect(hooks.start).toHaveBeenCalledWith(delayed)
+    })
+
+    clock = new Date(clock.getTime() + 100)
+    releaseStart(new Error('subagent limit reached (active child limit: 8)'))
+    expect(await submitting).toEqual({ kind: 'settled' })
+    expect(hooks.timeout).toHaveBeenCalledWith(delayed, { waitMs: expect.any(Number) })
+    expect(hooks.settled).toHaveBeenCalledWith(delayed, 'failed')
+    expect(hooks.fail).not.toHaveBeenCalled()
+    expect(queue.owns('run-a')).toBe(false)
+    queue.dispose()
+  })
 })
 
 describe('review queue cancellation', () => {

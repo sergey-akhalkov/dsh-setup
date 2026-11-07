@@ -106,6 +106,8 @@ interface QueueEntry<T extends QueueRun> {
   retryTimer?: ReturnType<typeof setTimeout>
   head: boolean
   finished: boolean
+  /** A target has started once; the acceptance wait clock no longer applies. */
+  admitted: boolean
   /** Set while a retry timer owns eligibility, so a stale timer is ignored. */
   retryToken: number
   /** Settles when this run's first start attempt leaves `starting`. */
@@ -264,6 +266,7 @@ export class ReviewQueue<T extends QueueRun> {
       waitDeadlineMs: 0,
       head: false,
       finished: false,
+      admitted: false,
       retryToken: 0,
     }
     this.entries.set(run.file.id, entry)
@@ -287,7 +290,7 @@ export class ReviewQueue<T extends QueueRun> {
       await entry.startOutcome
       if (entry.startError !== undefined) throw entry.startError
     }
-    if (entry.finished) return { kind: 'settled' }
+    if (entry.finished || entry.phase === 'settled') return { kind: 'settled' }
     if (entry.phase === 'retry-wait') return { kind: 'accepted', phase: 'retry-wait' }
     if (entry.phase === 'queued') return { kind: 'accepted', phase: 'queued' }
     return { kind: 'accepted', phase: 'running' }
@@ -344,6 +347,21 @@ export class ReviewQueue<T extends QueueRun> {
     run.file.lastRetryAt = this.hooks.now().toISOString()
     delete run.file.queuePosition
     this.persistEntry(run)
+    // A never-started run keeps its acceptance deadline across the backoff.
+    if (this.limits.enabled && !entry.admitted) {
+      if (entry.waitTimer !== undefined) {
+        clearTimeout(entry.waitTimer)
+        delete entry.waitTimer
+      }
+      const remaining = entry.waitDeadlineMs - this.hooks.now().getTime()
+      if (remaining <= 0) {
+        void this.settleWaitTimeout(entry)
+        return
+      }
+      entry.waitTimer = setTimeout(() => {
+        void this.waitTimedOut(entry)
+      }, remaining)
+    }
     const token = ++entry.retryToken
     const delay = retryDelayMs(entry.attempts, this.limits, failure.retryAfterMs)
     entry.retryTimer = setTimeout(() => {
@@ -356,7 +374,7 @@ export class ReviewQueue<T extends QueueRun> {
   private retryDue(entry: QueueEntry<T>, token: number): void {
     if (entry.finished || entry.retryToken !== token) return
     delete entry.retryTimer
-    if (this.hooks.now().getTime() >= entry.waitDeadlineMs) {
+    if (!entry.admitted && this.hooks.now().getTime() >= entry.waitDeadlineMs) {
       void this.settleWaitTimeout(entry)
       return
     }
@@ -544,6 +562,12 @@ export class ReviewQueue<T extends QueueRun> {
       const failure = classifyFailure(error, 'start')
       entry.failureClass = failure.failureClass
       if (this.limits.enabled && failure.transient && entry.attempts < this.limits.maxAttempts) {
+        // A slow start can consume the wait timer and then fail after the
+        // acceptance deadline; a never-started run must not begin retrying.
+        if (this.hooks.now().getTime() >= entry.waitDeadlineMs) {
+          await this.settleWaitTimeout(entry)
+          return
+        }
         this.scheduleRetry(entry.run, failure, error)
         return
       }
@@ -553,6 +577,7 @@ export class ReviewQueue<T extends QueueRun> {
     }
     if (entry.finished) return
     entry.phase = 'running'
+    entry.admitted = true
     entry.run.file.state = 'running'
     if (entry.waitTimer !== undefined) {
       // The target is live: admission is proven and the wait clock stops.
