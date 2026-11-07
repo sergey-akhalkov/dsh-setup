@@ -682,7 +682,7 @@ describe('review queue identity', () => {
     queue.dispose()
   })
 
-  it('settles a re-preparation collision as discarded while the incumbent proceeds', async () => {
+  it('settles a re-preparation collision as discarded and promotes its follower', async () => {
     const hooks = hooksFor()
     const queue = new ReviewQueue<QueueRun>(
       {
@@ -698,13 +698,17 @@ describe('review queue identity', () => {
     )
     const occupying = fakeRun('run-x', 'key-x', 'identity-x')
     expect(await queue.submit(occupying)).toEqual({ kind: 'accepted', phase: 'running' })
-    const incumbent = fakeRun('run-b', 'key-b', 'identity-d2')
-    expect(await queue.submit(incumbent)).toEqual({ kind: 'accepted', phase: 'queued' })
-    const reprepared = fakeRun('run-a', 'key-a', 'identity-d1')
+    // One key: a D1 head with a D2 follower.
+    const reprepared = fakeRun('run-a', 'key-k', 'identity-d1')
+    const incumbent = fakeRun('run-b', 'key-k', 'identity-d2')
     expect(await queue.submit(reprepared)).toEqual({ kind: 'accepted', phase: 'queued' })
+    expect(await queue.submit(incumbent)).toEqual({ kind: 'accepted', phase: 'queued' })
 
-    expect(queue.replaceIdentity(reprepared, 'identity-d2')).toEqual({ collision: incumbent })
-    await queue.complete(reprepared, 'discarded')
+    const collision = await queue.replaceIdentity(reprepared, 'identity-d2')
+    expect(collision.collision).toBe(incumbent)
+    expect(collision.replaced).toBe(false)
+    expect(reprepared.file.state).toBe('discarded')
+    expect(reprepared.file.detail).toContain('duplicate of run run-b')
     expect(queue.owns('run-a')).toBe(false)
 
     await queue.complete(occupying, 'completed')
@@ -727,6 +731,12 @@ describe('review queue identity', () => {
       (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-a',
     )
     expect(startedA).toHaveLength(0)
+    const startedIdentities = hooks.start.mock.calls.map(
+      (call: unknown[]) => (call[0] as QueueRun).file.identity,
+    )
+    expect(startedIdentities.filter((identity: string) => identity === 'identity-d2')).toHaveLength(
+      1,
+    )
     queue.dispose()
   })
 })

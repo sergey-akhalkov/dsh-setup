@@ -109,12 +109,14 @@ export declare class ReviewQueue<T extends QueueRun> {
     submit(run: T): Promise<Admission<T>>;
     /**
      * Replace a queued run's identity after a re-preparation. The old mapping is
-     * removed and the new one inserted in one step; an occupied identity is
-     * returned so the caller settles this run as the duplicate.
+     * removed and the new one inserted in one step. When the new identity is
+     * already admitted, this run is the duplicate: it settles `discarded` naming
+     * the incumbent, promotes its follower, and fires its observer exactly once.
      */
-    replaceIdentity(run: T, identity: string): {
+    replaceIdentity(run: T, identity: string): Promise<{
         collision?: T;
-    };
+        replaced: boolean;
+    }>;
     /** Mark the run's terminal state, release its slot, and settle exactly once. */
     complete(run: T, state: SettledRunState): Promise<void>;
     /** A queued run cancelled before any target started settles discarded. */

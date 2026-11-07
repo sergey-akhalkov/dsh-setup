@@ -301,21 +301,23 @@ export class ReviewQueue<T extends QueueRun> {
 
   /**
    * Replace a queued run's identity after a re-preparation. The old mapping is
-   * removed and the new one inserted in one step; an occupied identity is
-   * returned so the caller settles this run as the duplicate.
+   * removed and the new one inserted in one step. When the new identity is
+   * already admitted, this run is the duplicate: it settles `discarded` naming
+   * the incumbent, promotes its follower, and fires its observer exactly once.
    */
-  replaceIdentity(run: T, identity: string): { collision?: T } {
+  async replaceIdentity(run: T, identity: string): Promise<{ collision?: T; replaced: boolean }> {
     const entry = this.entries.get(run.file.id)
-    if (entry === undefined || entry.finished) return {}
+    if (entry === undefined || entry.finished) return { replaced: false }
     const occupied = this.identities.get(identity)
     if (occupied !== undefined && occupied !== entry && !occupied.finished) {
       this.forgetIdentity(entry)
-      return { collision: occupied.run }
+      await this.finish(entry, 'discarded', `duplicate of run ${occupied.run.file.id}`)
+      return { collision: occupied.run, replaced: false }
     }
     this.forgetIdentity(entry)
     run.file.identity = identity
     this.identities.set(identity, entry)
-    return {}
+    return { replaced: true }
   }
 
   /** Mark the run's terminal state, release its slot, and settle exactly once. */
