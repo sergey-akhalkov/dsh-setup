@@ -1133,10 +1133,10 @@ async function captureSnapshot(cwd, changes, services, signal) {
 }
 /**
  * Header values may contain quoted or escaped secrets, so redact the remainder
- * of the line; credential forms elsewhere are handled by the narrower rules.
+ * of the line. The delimiter requirement keeps ordinary prose intact.
  */
-const AUTHORIZATION_HEADER_PATTERN = /\bauthorization\b[\s\S]*?(?=\r?\n|$)/gi;
-const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)\b[\s\S]*?(?=\r?\n|$)/gi;
+const AUTHORIZATION_HEADER_PATTERN = /\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi;
+const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi;
 function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
     const redacted = text
         .replace(AUTHORIZATION_HEADER_PATTERN, '[secret]')
@@ -1146,7 +1146,7 @@ function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
         .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
         .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
-        .replace(/\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*["']?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi, '[secret]')
+        .replace(/\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi, '[secret]')
         .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
         .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
         .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[secret]');

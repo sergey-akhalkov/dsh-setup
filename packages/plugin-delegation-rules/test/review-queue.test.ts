@@ -1766,7 +1766,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 token=\\"synthetic-escaped-credential\\"\nAuthorization: Bearer "synthetic-quoted-credential" authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} Cookie: preference="quoted-value"; session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" {"access_token":"synthetic-access-credential","refresh_token":"synthetic-refresh-token"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt\n${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 token=\\"synthetic-escaped-credential\\" ${JSON.stringify(JSON.stringify({ access_token: 'synthetic-double-escaped-secret' }))}\nAuthorization: Bearer "synthetic-quoted-credential" authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} Cookie: preference="quoted-value"; session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" {"access_token":"synthetic-access-credential","refresh_token":"synthetic-refresh-token"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt\n${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1788,6 +1788,7 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('synthetic-example-value')
     expect(record.error).not.toContain('synthetic-quoted-credential')
     expect(record.error).not.toContain('synthetic-escaped-credential')
+    expect(record.error).not.toContain('synthetic-double-escaped-secret')
     expect(record.error).not.toContain('sk-proj-')
     expect(record.error).not.toContain('synthetic-secret-value')
     expect(record.error).not.toContain('another-secret-value')
@@ -1804,5 +1805,47 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('/home/alice')
     expect(record.error).not.toContain('C:\\Users')
     expect(record.error.length).toBe(4_000)
+  })
+
+  it('keeps ordinary authorization and cookie prose in findings', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, (run) => {
+      const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
+      const verdict = {
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P1',
+            title: 'Authorization bypass on the cookie route',
+            evidence: 'The Authorization header is trusted without a signature check',
+            fix: 'Cookie handling must validate the session before redirect',
+          },
+        ],
+      }
+      return {
+        output: [{ type: 'text' as const, text: `\`\`\`json\n${JSON.stringify(verdict)}\n\`\`\`` }],
+        stopReason: 'completed' as const,
+      }
+    })
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string; findings: Array<{ title: string; evidence: string; fix: string }> }
+    expect(record.verdict).toBe('FINDINGS')
+    expect(record.findings[0]?.title).toBe('Authorization bypass on the cookie route')
+    expect(record.findings[0]?.evidence).toBe(
+      'The Authorization header is trusted without a signature check',
+    )
+    expect(record.findings[0]?.fix).toBe(
+      'Cookie handling must validate the session before redirect',
+    )
   })
 })

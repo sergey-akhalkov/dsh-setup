@@ -1640,10 +1640,10 @@ async function captureSnapshot(
 
 /**
  * Header values may contain quoted or escaped secrets, so redact the remainder
- * of the line; credential forms elsewhere are handled by the narrower rules.
+ * of the line. The delimiter requirement keeps ordinary prose intact.
  */
-const AUTHORIZATION_HEADER_PATTERN = /\bauthorization\b[\s\S]*?(?=\r?\n|$)/gi
-const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)\b[\s\S]*?(?=\r?\n|$)/gi
+const AUTHORIZATION_HEADER_PATTERN = /\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi
+const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi
 
 function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
   const redacted = text
@@ -1655,7 +1655,7 @@ function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
     .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
     .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
     .replace(
-      /\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*["']?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi,
+      /\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi,
       '[secret]',
     )
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
