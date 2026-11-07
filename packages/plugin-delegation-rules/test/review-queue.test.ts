@@ -201,14 +201,15 @@ describe('review queue admission', () => {
     const subagents = new FakeSubagents()
     const pending = deferred()
     subagents.addProvider('codex-subagent', {}, pending.responder)
-    const harness = await harnessFor(
-      root,
-      {
+    const harness = new Harness({
+      cwd: root,
+      config: {
         ...defaultTestConfig(),
         reviewQueue: { concurrency: 1, waitTimeoutMs: 30 },
       },
-      subagents,
-    )
+      agents: subagents,
+      now: () => new Date(),
+    })
 
     const firstRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
     const timed = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-b' })
@@ -222,6 +223,8 @@ describe('review queue admission', () => {
     expect(subagents.startCalls).toBe(1)
     const run = await readRun(root, timedRun)
     expect(run.failureClass).toBe('queue-timeout')
+    expect(run.attempts).toBe(0)
+    expect(run.waitMs).toBeGreaterThanOrEqual(30)
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-b', 'spec.json'),
@@ -233,6 +236,8 @@ describe('review queue admission', () => {
     expect(record.error).toContain('no target started')
     const status = await harness.toolText('delegation_status', {})
     expect(status).toMatch(new RegExp(`run ${timedRun}: .*state=failed`))
+    expect(status).toMatch(new RegExp(`run ${timedRun}: .*attempts=0`))
+    expect(status).toMatch(new RegExp(`run ${timedRun}: .*waitMs=\\d+`))
 
     pending.releases.shift()?.()
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
@@ -3979,5 +3984,36 @@ describe('status queue facts', () => {
     expect(await harness.waitForRun(queuedRun)).toContain('state=completed')
     const finalStatus = await harness.toolText('delegation_status', {})
     expect(finalStatus).toMatch(new RegExp(`run ${queuedRun}: .*attempts=1`))
+  })
+})
+
+describe('run file validation', () => {
+  it('ignores crafted queue fields instead of echoing them', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const runsDir = join(root, '.dsh', 'delegation', 'runs')
+    await mkdir(runsDir, { recursive: true })
+    await writeFile(
+      join(runsDir, 'run-evil.json'),
+      JSON.stringify({
+        id: 'run-evil',
+        rule: 'spec-review',
+        change: 'change-a',
+        key: 'k',
+        identity: 'i',
+        state: 'failed',
+        record: '.dsh/delegation/spec-review/change-a/spec.json',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        queuedAt: 'C:\\Users\\secret\\machine',
+        failureClass: 'sk-secretcredentialvalue1234567890',
+        lastRetryAt: 'x'.repeat(100_000),
+      }),
+      'utf8',
+    )
+    const harness = await harnessFor(root, defaultTestConfig(), new FakeSubagents())
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).not.toContain('run-evil')
+    expect(status).not.toContain('C:\\Users\\secret')
+    expect(status).not.toMatch(/sk-secretcredential/)
   })
 })

@@ -1708,6 +1708,26 @@ function isRunState(value) {
         value === 'discarded' ||
         value === 'interrupted');
 }
+const RUN_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const FAILURE_CLASSES = new Set([
+    'child-limit',
+    'provider-not-started',
+    'timeout',
+    'reviewed-inputs-changed',
+    'invalid-output',
+    'config',
+    'permission',
+    'unknown',
+    'queue-full',
+    'queue-timeout',
+    'queue-internal-error',
+]);
+function isFailureClass(value) {
+    return typeof value === 'string' && FAILURE_CLASSES.has(value);
+}
+function isRunTimestamp(value) {
+    return typeof value === 'string' && RUN_TIMESTAMP.test(value);
+}
 function parseRunFile(value) {
     if (!isRecord(value))
         return undefined;
@@ -1724,14 +1744,16 @@ function parseRunFile(value) {
     }
     if (value.taskId !== undefined && typeof value.taskId !== 'string')
         return undefined;
-    if (value.detail !== undefined && typeof value.detail !== 'string')
+    if (value.detail !== undefined &&
+        (typeof value.detail !== 'string' || value.detail.length > 500)) {
         return undefined;
+    }
     if (value.queuePosition !== undefined) {
         if (typeof value.queuePosition !== 'number' || !Number.isSafeInteger(value.queuePosition)) {
             return undefined;
         }
     }
-    if (value.queuedAt !== undefined && typeof value.queuedAt !== 'string')
+    if (value.queuedAt !== undefined && !isRunTimestamp(value.queuedAt))
         return undefined;
     if (value.waitMs !== undefined) {
         if (typeof value.waitMs !== 'number' || !Number.isFinite(value.waitMs) || value.waitMs < 0) {
@@ -1742,9 +1764,9 @@ function parseRunFile(value) {
         if (typeof value.attempts !== 'number' || !Number.isSafeInteger(value.attempts))
             return undefined;
     }
-    if (value.failureClass !== undefined && typeof value.failureClass !== 'string')
+    if (value.failureClass !== undefined && !isFailureClass(value.failureClass))
         return undefined;
-    if (value.lastRetryAt !== undefined && typeof value.lastRetryAt !== 'string')
+    if (value.lastRetryAt !== undefined && !isRunTimestamp(value.lastRetryAt))
         return undefined;
     return value;
 }
@@ -3359,6 +3381,9 @@ class DelegationEngine {
         const prepared = run.prepared;
         const position = info.position === undefined ? '' : ` at position ${info.position}`;
         const message = `review queue wait timed out after ${info.waitMs} ms${position}; no target started. Shorten the running reviews or start this review again after the queue drains`;
+        run.file.waitMs = info.waitMs;
+        if (run.file.attempts === undefined)
+            run.file.attempts = 0;
         // A newer publication during the wait decides this review; report the
         // discard instead of a timeout that would hide the authoritative record.
         const current = await inspectRecord(run.recordPath);

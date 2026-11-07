@@ -312,6 +312,8 @@ export class ReviewQueue {
         }
         run.file.state = 'queued';
         run.file.queuedAt = this.hooks.now().toISOString();
+        if (run.file.attempts === undefined)
+            run.file.attempts = 0;
         delete run.file.queuePosition;
         this.waiting.push(entry);
         this.waiting.sort((left, right) => left.seq - right.seq);
@@ -562,6 +564,10 @@ export class ReviewQueue {
             delete entry.retryTimer;
         }
         entry.phase = 'settled';
+        entry.run.file.waitMs = waitMs;
+        if (entry.run.file.attempts === undefined)
+            entry.run.file.attempts = 0;
+        this.persistEntry(entry.run);
         try {
             await this.hooks.timeout(entry.run, {
                 ...(position === 0 ? {} : { position }),
