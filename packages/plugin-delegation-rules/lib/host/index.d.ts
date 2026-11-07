@@ -25,6 +25,8 @@ export declare const toolDescriptions: {
     readonly task_progress: "Record an explicit in-progress or blocked note for one unchecked task, with the reason and the current worktree digest. Use it when a task spans turns instead of ticking `tasks.md`: it runs no model and costs nothing. The note lets a code-changing turn close only while the worktree still matches it; after any further change it is stale and a fresh note or the tick plus `delegate` task review is required. A checked task never accepts a note, and a note never counts as a task-review PASS.";
     readonly delegation_status: "Report registered DSH subagent providers and capabilities, configured delegation targets and rules, each active change's involvement by this session (created, spec changed, checked tasks), per-change task/progress-note state, review record state (matching, stale, missing, malformed), and missing-target diagnostics with the next action. It never attributes a change. Use it when a `delegate` call reports a target problem or before configuring rules.";
 };
+/** Queue defaults stay well below the DSH active-child limit so workers keep room. */
+export declare const DEFAULT_REVIEW_QUEUE: Readonly<ReviewQueueConfig>;
 export type Trigger = 'manual' | 'spec-ready' | 'spec-task-ready' | 'implementation-work' | 'lane-assignment' | 'lane-boundary' | 'implementation-complete' | 'failure-streak';
 export type Contract = 'review' | 'answer' | 'patch' | 'note';
 export type Gate = 'strict' | 'soft' | 'none';
@@ -66,12 +68,27 @@ export interface TimeoutConfig {
     answer: number;
     patch: number;
 }
+/** Per-profile review queue limits and retry policy. */
+export interface ReviewQueueConfig {
+    /** Off restores the direct target start. */
+    enabled: boolean;
+    /** Live review targets allowed at once; below the DSH active-child limit. */
+    concurrency: number;
+    /** Unique waiting runs allowed before admission is refused. */
+    maxQueued: number;
+    /** Original attempt plus retries. */
+    maxAttempts: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+    waitTimeoutMs: number;
+}
 /** Row configuration accepted by {@link apply}. */
 export interface BundleConfig {
     targets?: Record<string, TargetConfig>;
     rules?: RuleConfig[];
     timeouts?: Partial<TimeoutConfig>;
     failureStreak?: number;
+    reviewQueue?: Partial<ReviewQueueConfig>;
 }
 /** Test seams; production uses the filesystem, git, and the wall clock. */
 export interface ApplyOptions {
@@ -93,6 +110,7 @@ interface EngineConfig {
     rules: RuleConfig[];
     timeouts: TimeoutConfig;
     failureStreak: number;
+    reviewQueue: ReviewQueueConfig;
 }
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
@@ -100,6 +118,11 @@ interface EngineConfig {
  * validation error, so the profile composes without the target installed.
  */
 export declare function validateConfig(raw: unknown): EngineConfig;
+/**
+ * Validate the review queue block. An omitted block enables the documented
+ * defaults; an invalid field fails plugin load with the field and its range.
+ */
+export declare function validateReviewQueue(raw: unknown): ReviewQueueConfig;
 /** Fixed-argument git runner. The shell is never used, so no input is interpolated. */
 export declare function defaultGit(args: readonly string[], cwd: string, signal?: AbortSignal, env?: Record<string, string>, stdin?: string | Buffer): Promise<Buffer>;
 interface ChangeInfo {

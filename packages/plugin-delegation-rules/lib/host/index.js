@@ -67,6 +67,25 @@ const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow']);
 const DEFAULT_TIMEOUTS = { review: 1_200_000, answer: 300_000, patch: 1_800_000 };
 const DEFAULT_FAILURE_STREAK = 3;
+/** Queue defaults stay well below the DSH active-child limit so workers keep room. */
+export const DEFAULT_REVIEW_QUEUE = {
+    enabled: true,
+    concurrency: 2,
+    maxQueued: 16,
+    maxAttempts: 3,
+    baseDelayMs: 5_000,
+    maxDelayMs: 60_000,
+    waitTimeoutMs: 300_000,
+};
+const REVIEW_QUEUE_KEYS = new Set([
+    'enabled',
+    'concurrency',
+    'maxQueued',
+    'maxAttempts',
+    'baseDelayMs',
+    'maxDelayMs',
+    'waitTimeoutMs',
+]);
 const MAX_ANSWER_CHARS = 12_000;
 const MAX_FINDING_CHARS = 2_000;
 const MAX_ERROR_CHARS = 4_000;
@@ -129,9 +148,9 @@ export function validateConfig(raw) {
         raw = {};
     if (!isRecord(raw))
         fail('configuration must be a mapping');
-    const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'failureStreak']));
+    const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'failureStreak', 'reviewQueue']));
     if (unknownTop.length > 0) {
-        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, or failureStreak`);
+        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, or reviewQueue`);
     }
     const targetsRaw = raw.targets ?? {};
     if (!isRecord(targetsRaw))
@@ -237,7 +256,48 @@ export function validateConfig(raw) {
         }
         failureStreak = raw.failureStreak;
     }
-    return { targets, rules, timeouts, failureStreak };
+    const reviewQueue = validateReviewQueue(raw.reviewQueue);
+    return { targets, rules, timeouts, failureStreak, reviewQueue };
+}
+/**
+ * Validate the review queue block. An omitted block enables the documented
+ * defaults; an invalid field fails plugin load with the field and its range.
+ */
+export function validateReviewQueue(raw) {
+    const queue = { ...DEFAULT_REVIEW_QUEUE };
+    if (raw === undefined)
+        return queue;
+    if (!isRecord(raw))
+        fail('reviewQueue must be a mapping');
+    const unknown = unknownKeys(raw, REVIEW_QUEUE_KEYS);
+    if (unknown.length > 0) {
+        fail(`reviewQueue: unknown field(s) ${unknown.join(', ')}; use enabled, concurrency, maxQueued, maxAttempts, baseDelayMs, maxDelayMs, or waitTimeoutMs`);
+    }
+    if (raw.enabled !== undefined) {
+        if (typeof raw.enabled !== 'boolean')
+            fail('reviewQueue.enabled must be true or false');
+        queue.enabled = raw.enabled;
+    }
+    const integer = (field, minimum, maximum) => {
+        const value = raw[field];
+        if (value === undefined)
+            return;
+        const range = maximum === undefined ? `at least ${minimum}` : `from ${minimum} to ${maximum}`;
+        if (typeof value !== 'number' ||
+            !Number.isSafeInteger(value) ||
+            value < minimum ||
+            (maximum !== undefined && value > maximum)) {
+            fail(`reviewQueue.${field} must be a whole number ${range}; use ${JSON.stringify(queue[field])}`);
+        }
+        queue[field] = value;
+    };
+    integer('concurrency', 1, 4);
+    integer('maxQueued', 1);
+    integer('maxAttempts', 1);
+    integer('baseDelayMs', 1);
+    integer('maxDelayMs', 1);
+    integer('waitTimeoutMs', 1);
+    return queue;
 }
 function validateRule(raw, index, targets) {
     const at = `rule #${index + 1}`;
