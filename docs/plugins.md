@@ -469,8 +469,10 @@ The Host records `agent/pre-step`, `agent/turn-stopping`, `tools/result`, `subag
 `subagent/end` events as one bounded JSONL record per event under
 `.dsh/workflows/events/<sessionId>.jsonl`. A record is capped at 4 KB with a 600-character summary;
 secret-shaped keys, bearer tokens and private-key blocks are redacted, and the append is atomic. The
-workspace keeps at most 30 days, 50 MB total and 5 MB per session, pruning the oldest sessions first;
-a failed write leaves the previous records intact. The shipped shadow catalog lives in
+workspace keeps at most 30 days and 50 MB total, pruning the oldest sessions first. A session file
+rotates to `<sessionId>.jsonl.1` at 5 MiB and the rotation is retained beside the current file until a
+later write prunes it; a failed write leaves the previous records intact. The shipped shadow catalog
+lives in
 `packages/plugin-workflows/assets/triggers/` (turn start/stop, delegate result, subagent start/end,
 OpenSpec `tasks.md`, review record, change created and archive move) and is evaluated by a pure
 function whose reasons are exactly `would-fire`, `event-mismatch`, `filter-mismatch`, `dedupe`,
@@ -488,9 +490,10 @@ The read API is carrier-neutral and GET-only: `GET /api/workflows/events?session
 `GET /api/workflows/runs?session=<id>`, `GET /api/workflows/triggers?session=<id>`,
 `GET /api/workflows/health?session=<id>` and
 `GET /api/workflows/evidence?session=<id>&path=<relative>` for redacted record links. Every route
-resolves the workspace from the session, scopes reads to it, accepts `limit` (default 50, max 200) and
-a `cursor`, refuses a path outside the workspace, and returns a bounded error body; a non-GET method is
-405. A host without the connection fetch registry registers no API.
+resolves the workspace from the session, scopes reads to it, refuses a path outside the workspace, and
+returns a bounded error body; a non-GET method is 405. The `events` and `runs` routes accept `limit`
+(default 50, max 200) and a `cursor`; `triggers`, `health` and `evidence` return one unpaginated
+response. A host without the connection fetch registry registers no API.
 
 `health.json` beside the journal carries the listener count (5 expected), last event time, journal
 writability, trigger count and last error. A 60-second self-check writes it, and the view distinguishes
@@ -582,8 +585,9 @@ The `Changes` segment also follows its rows while it is open: for every active r
 proposal, design, tasks and delta spec files through the same host file observation, and a version
 bump schedules exactly one list re-read 300 ms after the last change, so task counts, artifact kinds
 and the last-modified fact move without reopening the tab. Archived rows contribute no watch and the
-`Archive` segment stays manual; a change created outside the selected workspace is not discovered until
-the native refresh, and no polling timer or plugin-owned watcher exists. Leaving `Changes` disposes the
+`Archive` segment stays manual; a change created in the selected workspace while `Changes` is open is
+not discovered through file observation alone and needs the native refresh or a hidden-to-visible
+re-read to appear, and no polling timer or plugin-owned watcher exists. Leaving `Changes` disposes the
 batch and cancels a pending debounce; returning with the same address set schedules one reconciliation
 read.
 
