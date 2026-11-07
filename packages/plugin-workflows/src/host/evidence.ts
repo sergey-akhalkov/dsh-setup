@@ -1,7 +1,16 @@
+import { createHash } from 'node:crypto'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
-import type { AllEvidence, Evidence, FileEvidence } from './definitions.js'
+import type {
+  AllEvidence,
+  CheckEvidence,
+  Evidence,
+  FileEvidence,
+  HumanEvidence,
+  RecordEvidence,
+  ToolCallEvidence,
+} from './definitions.js'
 import { globMatches } from './evaluate.js'
 import { isInside } from './fs-change.js'
 import type { RunEvidence } from './runs.js'
@@ -21,6 +30,11 @@ export type EvidenceFailureReason =
   | 'invalid-context'
   | 'no-match'
   | 'invalid-evidence'
+  | 'record-mismatch'
+  | 'no-call'
+  | 'check-failed'
+  | 'no-answer'
+  | 'rejected-answer'
   | 'unsupported'
 
 export interface EvidenceFailure {
@@ -35,11 +49,56 @@ export type EvidenceCheck =
   | { readonly ok: true; readonly evidence: RunEvidence }
   | { readonly ok: false; readonly failure: EvidenceFailure }
 
+/** One completed tool call the verifier may match against. */
+export interface ToolCallObservation {
+  readonly callId: string
+  readonly name: string
+  readonly arguments: Readonly<Record<string, unknown>>
+  readonly ok: boolean
+  readonly at?: number
+}
+
+/** One completed foreground shell result the verifier may match against. */
+export interface ShellResultObservation {
+  readonly callId: string
+  readonly command: string
+  readonly at: number
+  readonly exitCode: number
+  readonly foreground: boolean
+  readonly signal?: string
+  readonly timedOut?: boolean
+  readonly sandboxDenied?: boolean
+}
+
+/** One recorded user answer, from the user-questions service. */
+export interface HumanAnswerObservation {
+  readonly answer: string
+  readonly at?: number
+}
+
 export interface EvidenceContext {
   /** The session workspace root. */
   readonly workspace: string
   /** The run context; only validated identifiers are interpolated. */
   readonly values: Readonly<Record<string, unknown>>
+  /** The session's observed tool calls; absent means none is available. */
+  readonly toolCalls?: readonly ToolCallObservation[]
+  /** Completed foreground shell results observed in this session. */
+  readonly shellResults?: readonly ShellResultObservation[]
+  /** The step's request time; a check must run after it. */
+  readonly stepStartedAt?: number
+  /** Recorded user answers for the step's question. */
+  readonly answers?: readonly HumanAnswerObservation[]
+  /** Whether the step is marked nonCritical, the only declaration consumer. */
+  readonly nonCriticalStep?: boolean
+}
+
+/** A validated checkpoint record path a host-computed context value may carry. */
+const CHECKPOINT_PATH = /^\.dsh\/work-checkpoints\/[a-f0-9]{16}\/[0-9]+\.json$/u
+
+/** An evidence-path interpolation value: a validated identifier or checkpoint path. */
+function validContextValue(value: string): boolean {
+  return CHANGE_NAME.test(value) || CHECKPOINT_PATH.test(value)
 }
 
 /** An evidence-path interpolation value: a validated identifier. */
@@ -61,18 +120,50 @@ function interpolate(value: string, context: EvidenceContext, item?: string): Ev
   for (const match of value.matchAll(/\{([a-z][a-z0-9-]*)\}/gu)) {
     const key = match[1] ?? ''
     const entry = context.values[key]
-    if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
+    if (typeof entry !== 'string' || !validContextValue(entry)) {
       return {
         ok: false,
         failure: {
           reason: 'invalid-context',
           ...(item === undefined ? {} : { item }),
-          detail: `evidence context "${key}" is not a validated identifier`,
+          detail: `evidence context "${key}" is not a validated value`,
         },
       }
     }
   }
   return { ok: true, evidence: { kind: 'file', path: replaced } }
+}
+
+/** Interpolate every placeholder in a free-form string with a validated value. */
+export function resolveEvidenceText(
+  value: string,
+  context: EvidenceContext,
+  item?: string,
+):
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly failure: EvidenceFailure } {
+  const checked = interpolate(value, context, item)
+  if (!checked.ok) return checked
+  return { ok: true, text: checked.evidence.path ?? value }
+}
+
+function deepSubset(expected: unknown, actual: unknown): boolean {
+  if (expected === actual) return true
+  if (typeof expected !== 'object' || expected === null) return false
+  if (typeof actual !== 'object' || actual === null) return false
+  if (Array.isArray(expected) !== Array.isArray(actual)) return false
+  if (Array.isArray(expected)) {
+    const actualList = actual as unknown[]
+    return (
+      expected.length <= actualList.length &&
+      expected.every((entry, index) => deepSubset(entry, actualList[index]))
+    )
+  }
+  const expectedRecord = expected as Record<string, unknown>
+  const actualRecord = actual as Record<string, unknown>
+  return Object.keys(expectedRecord).every(
+    (key) => key in actualRecord && deepSubset(expectedRecord[key], actualRecord[key]),
+  )
 }
 
 function failure(
@@ -234,6 +325,391 @@ export async function expandGlob(root: string, pattern: string): Promise<string[
   return found.sort()
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hashParts(parts: readonly string[]): string {
+  const hash = createHash('sha256')
+  for (const part of parts) {
+    hash.update(part)
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+/**
+ * The change artifact digest, replicated from the delegation-rules reader: it
+ * hashes every file under the change directory (except `.openspec.yaml` and the
+ * portable `reviews/` directory), normalizing `tasks.md` checkbox state.
+ */
+export async function specDigest(changeDir: string): Promise<string> {
+  const files: string[] = []
+  const walk = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true })
+    for (const entry of entries) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (relative(changeDir, path).split(sep).join('/') === 'reviews') continue
+        await walk(path)
+      } else if (entry.isFile()) {
+        files.push(path)
+      }
+    }
+  }
+  await walk(changeDir)
+  files.sort()
+  const parts: string[] = ['change-artifacts-v1']
+  for (const file of files) {
+    const name = relative(changeDir, file).split(sep).join('/')
+    if (name === '.openspec.yaml') continue
+    let content = await readFile(file, 'utf8')
+    if (name === 'tasks.md') content = content.replace(/^(\s*-\s*)\[[xX]\]/gm, '$1[ ]')
+    parts.push(name, content)
+  }
+  return hashParts(parts)
+}
+
+/** The current digest of one change, or undefined when it does not exist. */
+export async function currentSpecDigest(
+  workspace: string,
+  change: string,
+): Promise<string | undefined> {
+  if (!CHANGE_NAME.test(change)) return undefined
+  try {
+    const root = await realpath(workspace)
+    const changeDir = await realpath(join(root, 'openspec', 'changes', change))
+    if (!isInside(root, changeDir)) return undefined
+    return await specDigest(changeDir)
+  } catch {
+    return undefined
+  }
+}
+
+function mismatch(detail: string, path?: string, item?: string): EvidenceCheck {
+  return failure('record-mismatch', detail, path, item)
+}
+
+async function recordCheck(
+  evidence: RecordEvidence,
+  context: EvidenceContext,
+  item: string | undefined,
+): Promise<EvidenceCheck> {
+  const rule = resolveEvidenceText(evidence.rule, context, item)
+  if (!rule.ok) return rule
+  const change =
+    evidence.change === undefined ? undefined : resolveEvidenceText(evidence.change, context, item)
+  if (change !== undefined && !change.ok) return change
+  const derived =
+    change === undefined
+      ? undefined
+      : `.dsh/delegation/${rule.text}/${change.text}/${evidence.phase ?? 'spec'}.json`
+  const path =
+    evidence.path === undefined
+      ? derived === undefined
+        ? undefined
+        : { ok: true as const, text: derived }
+      : resolveEvidenceText(evidence.path, context, item)
+  if (path === undefined || !path.ok) {
+    return failure(
+      'invalid-evidence',
+      'record evidence needs a path, or a rule and change',
+      undefined,
+      item,
+    )
+  }
+  const read = await readWorkspaceFile(context.workspace, path.text)
+  if (read === undefined) {
+    return failure(
+      'missing-file',
+      `the record "${path.text}" is missing or escapes the workspace`,
+      path.text,
+      item,
+    )
+  }
+  let record: unknown
+  try {
+    record = JSON.parse(read.text)
+  } catch {
+    return mismatch(`the record "${path.text}" is not valid JSON`, path.text, item)
+  }
+  if (!isRecord(record))
+    return mismatch(`the record "${path.text}" is not an object`, path.text, item)
+  if (evidence.source === 'checkpoint') {
+    if (
+      typeof record.turn !== 'number' ||
+      (record.outcome !== 'done' && record.outcome !== 'continue') ||
+      !Array.isArray(record.lanes)
+    ) {
+      return mismatch(
+        `the record "${path.text}" is not a checkpoint record (outcome, turn, lanes)`,
+        path.text,
+        item,
+      )
+    }
+    if (evidence.verdict !== 'recorded' && record.outcome !== evidence.verdict) {
+      return mismatch(
+        `the checkpoint outcome "${String(record.outcome)}" is not "${evidence.verdict}"`,
+        path.text,
+        item,
+      )
+    }
+    return {
+      ok: true,
+      evidence: {
+        kind: 'record',
+        path: path.text,
+        detail: `checkpoint turn ${String(record.turn)} (${String(record.outcome)})`,
+      },
+    }
+  }
+  if (record.rule !== evidence.rule) {
+    return mismatch(`the record rule is not "${evidence.rule}"`, path.text, item)
+  }
+  if (change !== undefined && record.change !== change.text) {
+    return mismatch(`the record change is not "${change.text}"`, path.text, item)
+  }
+  if (evidence.phase !== undefined && record.phase !== evidence.phase) {
+    return mismatch(`the record phase is not "${evidence.phase}"`, path.text, item)
+  }
+  if (evidence.scope !== undefined) {
+    if (evidence.scope === 'whole' && record.scope === 'task') {
+      return mismatch('a task-scoped record is not whole-spec evidence', path.text, item)
+    }
+    if (record.scope !== evidence.scope) {
+      return mismatch(`the record scope is not "${evidence.scope}"`, path.text, item)
+    }
+  }
+  if (
+    evidence.task !== undefined &&
+    record.taskId !== evidence.task &&
+    record.task !== evidence.task
+  ) {
+    return mismatch(`the record task is not "${evidence.task}"`, path.text, item)
+  }
+  if (record.verdict !== evidence.verdict) {
+    return mismatch(`the record verdict is not "${evidence.verdict}"`, path.text, item)
+  }
+  if (evidence.digest === 'current') {
+    if (change === undefined) {
+      return mismatch('a current digest needs a change name', path.text, item)
+    }
+    const current = await currentSpecDigest(context.workspace, change.text)
+    if (current === undefined || record.digest !== current) {
+      return mismatch(
+        'the whole-spec record is stale for the current change artifacts',
+        path.text,
+        item,
+      )
+    }
+  } else if (evidence.digest !== undefined && record.digest !== evidence.digest) {
+    return mismatch(`the record digest is not "${evidence.digest}"`, path.text, item)
+  }
+  return {
+    ok: true,
+    evidence: {
+      kind: 'record',
+      path: path.text,
+      ...(typeof record.digest === 'string' ? { digest: record.digest } : {}),
+      detail: `record ${evidence.rule} ${evidence.verdict}`,
+    },
+  }
+}
+
+function toolCheck(
+  evidence: ToolCallEvidence,
+  context: EvidenceContext,
+  item: string | undefined,
+): EvidenceCheck {
+  let command: string | undefined
+  if (evidence.command !== undefined) {
+    const checked = resolveEvidenceText(evidence.command, context, item)
+    if (!checked.ok) return checked
+    command = checked.text
+  }
+  let args: Record<string, unknown> | undefined
+  if (evidence.args !== undefined) {
+    args = {}
+    for (const [key, value] of Object.entries(evidence.args)) {
+      if (typeof value === 'string') {
+        const checked = resolveEvidenceText(value, context, item)
+        if (!checked.ok) return checked
+        args[key] = checked.text
+      } else {
+        args[key] = value
+      }
+    }
+  }
+  const call = (context.toolCalls ?? []).find(
+    (candidate) =>
+      candidate.ok &&
+      candidate.name === evidence.name &&
+      (command === undefined || candidate.arguments.command === command) &&
+      (args === undefined || deepSubset(args, candidate.arguments)),
+  )
+  if (call === undefined) {
+    return failure(
+      'no-call',
+      `no completed "${evidence.name}" call matches the declared arguments`,
+      undefined,
+      item,
+    )
+  }
+  return { ok: true, evidence: { kind: 'tool', callId: call.callId, detail: evidence.name } }
+}
+
+function checkResult(
+  evidence: CheckEvidence,
+  context: EvidenceContext,
+  item: string | undefined,
+): EvidenceCheck {
+  const command = resolveEvidenceText(evidence.command, context, item)
+  if (!command.ok) return command
+  const result = (context.shellResults ?? []).find(
+    (candidate) => candidate.foreground && candidate.command === command.text,
+  )
+  if (result === undefined) {
+    return failure(
+      'check-failed',
+      `no completed foreground result for "${command.text}"`,
+      undefined,
+      item,
+    )
+  }
+  if (context.stepStartedAt !== undefined && result.at < context.stepStartedAt) {
+    return failure(
+      'check-failed',
+      `"${command.text}" last ran before the step was requested`,
+      undefined,
+      item,
+    )
+  }
+  if (result.timedOut === true) {
+    return failure('check-failed', `"${command.text}" timed out`, undefined, item)
+  }
+  if (result.signal !== undefined) {
+    return failure(
+      'check-failed',
+      `"${command.text}" was stopped by ${result.signal}`,
+      undefined,
+      item,
+    )
+  }
+  if (result.sandboxDenied === true) {
+    return failure('check-failed', `"${command.text}" was refused by the sandbox`, undefined, item)
+  }
+  if (result.exitCode !== 0) {
+    return failure(
+      'check-failed',
+      `"${command.text}" exited ${String(result.exitCode)}; a zero exit is required`,
+      undefined,
+      item,
+    )
+  }
+  return {
+    ok: true,
+    evidence: {
+      kind: 'check',
+      callId: result.callId,
+      at: result.at,
+      detail: command.text,
+    },
+  }
+}
+
+function humanResult(
+  evidence: HumanEvidence,
+  context: EvidenceContext,
+  item: string | undefined,
+): EvidenceCheck {
+  const accepted = (Array.isArray(evidence.answer) ? evidence.answer : [evidence.answer]).map(
+    (answer) => answer.trim().toLowerCase(),
+  )
+  const answers = context.answers ?? []
+  if (answers.length === 0) {
+    return failure('no-answer', 'no user answer was recorded for this step', undefined, item)
+  }
+  const matched = answers.find((entry) => accepted.includes(entry.answer.trim().toLowerCase()))
+  if (matched === undefined) {
+    const last = answers.at(-1)?.answer ?? ''
+    return failure(
+      'rejected-answer',
+      `the recorded answer "${last}" is not one of: ${accepted.join(', ')}`,
+      undefined,
+      item,
+    )
+  }
+  return {
+    ok: true,
+    evidence: {
+      kind: 'human',
+      answer: matched.answer,
+      ...(matched.at === undefined ? {} : { at: matched.at }),
+    },
+  }
+}
+
+/** Resolve every workspace-relative path an evidence contract will check. */
+export function collectEvidencePaths(
+  value: Evidence,
+  context: EvidenceContext,
+  item?: string,
+): string[] {
+  switch (value.kind) {
+    case 'file': {
+      const resolved = interpolate(value.path, context, item)
+      return resolved.ok ? [resolved.evidence.path ?? value.path] : [value.path]
+    }
+    case 'all':
+      return value.items.flatMap((child, index) =>
+        collectEvidencePaths(
+          child,
+          context,
+          item === undefined ? `items[${String(index)}]` : `${item}.items[${String(index)}]`,
+        ),
+      )
+    case 'record': {
+      if (value.path !== undefined) {
+        const resolved = interpolate(value.path, context, item)
+        return [resolved.ok ? (resolved.evidence.path ?? value.path) : value.path]
+      }
+      return []
+    }
+    default:
+      return []
+  }
+}
+
+/** A bounded one-line description of an evidence contract for the steer. */
+export function describeEvidence(value: Evidence, context: EvidenceContext): string {
+  switch (value.kind) {
+    case 'file': {
+      const [path] = collectEvidencePaths(value, context)
+      const suffix = [
+        value.minBytes === undefined ? '' : `min ${String(value.minBytes)} bytes`,
+        value.glob === true ? 'glob' : '',
+      ]
+        .filter((entry) => entry !== '')
+        .join(', ')
+      return `file ${path ?? value.path}${suffix === '' ? '' : ` (${suffix})`}`
+    }
+    case 'all':
+      return `all of: ${value.items.map((item) => describeEvidence(item, context)).join('; ')}`
+    case 'record': {
+      const [path] = collectEvidencePaths(value, context)
+      return `record ${value.rule} ${value.verdict}${path === undefined ? '' : ` at ${path}`}`
+    }
+    case 'tool':
+      return `completed tool call ${value.name}${value.command === undefined ? '' : ` "${value.command}"`}`
+    case 'check':
+      return `foreground command "${value.command}" exits 0`
+    case 'human':
+      return `user answer ${Array.isArray(value.answer) ? value.answer.join(' or ') : value.answer}`
+    case 'declaration':
+      return 'self-declared completion (non-critical only)'
+  }
+}
+
 /** Verify one evidence contract; an `all` returns the first failing item. */
 export async function verifyEvidence(
   value: Evidence,
@@ -243,6 +719,24 @@ export async function verifyEvidence(
   switch (value.kind) {
     case 'file':
       return fileCheck(value, context, item)
+    case 'record':
+      return recordCheck(value, context, item)
+    case 'tool':
+      return toolCheck(value, context, item)
+    case 'check':
+      return checkResult(value, context, item)
+    case 'human':
+      return humanResult(value, context, item)
+    case 'declaration':
+      if (context.nonCriticalStep !== true) {
+        return failure(
+          'invalid-evidence',
+          'a declaration never satisfies a critical step',
+          undefined,
+          item,
+        )
+      }
+      return { ok: true, evidence: { kind: 'declaration', detail: 'self-declared' } }
     case 'all': {
       const items = (value as AllEvidence).items
       if (items.length === 0) {
@@ -264,13 +758,15 @@ export async function verifyEvidence(
         evidence: { kind: 'all', detail: `${String(items.length)} item(s) verified` },
       }
     }
-    default:
+    default: {
+      const unknown = value as Evidence
       return failure(
         'unsupported',
-        `evidence kind "${value.kind}" is not verified yet`,
+        `evidence kind "${String(unknown.kind)}" is not verified`,
         undefined,
         item,
       )
+    }
   }
 }
 

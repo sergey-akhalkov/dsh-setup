@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Evidence } from '../src/host/definitions.ts'
-import { verifyEvidence } from '../src/host/evidence.ts'
+import {
+  currentSpecDigest,
+  type ShellResultObservation,
+  type ToolCallObservation,
+  verifyEvidence,
+} from '../src/host/evidence.ts'
 
 const TEMP_DIRECTORIES: string[] = []
 
@@ -151,5 +156,250 @@ describe('all and glob evidence', () => {
     const empty = await verifyEvidence(glob, { workspace, values })
     expect(empty.ok).toBe(false)
     if (!empty.ok) expect(empty.failure.reason).toBe('empty-file')
+  })
+})
+
+async function writeJson(workspace: string, path: string, value: unknown): Promise<void> {
+  const file = join(workspace, path)
+  await mkdir(join(file, '..'), { recursive: true })
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+async function writeChangeArtifacts(workspace: string): Promise<string> {
+  await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# Proposal\n')
+  await writeArtifact(workspace, 'openspec/changes/auth/design.md', '# Design\n')
+  await writeArtifact(workspace, 'openspec/changes/auth/tasks.md', '- [ ] 1.1 Task\n')
+  await writeArtifact(workspace, 'openspec/changes/auth/specs/x/spec.md', '# Spec\n')
+  return (await currentSpecDigest(workspace, 'auth')) as string
+}
+
+describe('record and tool evidence', () => {
+  it('accepts a matching whole-spec PASS record and its current digest', async () => {
+    const workspace = await tempWorkspace()
+    const digest = await writeChangeArtifacts(workspace)
+    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+      rule: 'spec-review',
+      change: 'auth',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest,
+      findings: [],
+    })
+    const evidence: Evidence = {
+      kind: 'record',
+      rule: 'spec-review',
+      change: '{name}',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest: 'current',
+    }
+    const result = await verifyEvidence(evidence, { workspace, values })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.evidence).toMatchObject({ kind: 'record', digest })
+    const explicit = await verifyEvidence(
+      { ...evidence, path: '.dsh/delegation/spec-review/{name}/spec.json' } as Evidence,
+      { workspace, values },
+    )
+    expect(explicit.ok).toBe(true)
+  })
+
+  it('refuses a stale digest, a missing record, and a task-scoped record as whole-spec evidence', async () => {
+    const workspace = await tempWorkspace()
+    await writeChangeArtifacts(workspace)
+    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+      rule: 'spec-review',
+      change: 'auth',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest: 'b'.repeat(64),
+    })
+    const record: Evidence = {
+      kind: 'record',
+      rule: 'spec-review',
+      change: '{name}',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest: 'current',
+    }
+    expect(await verifyEvidence(record, { workspace, values })).toMatchObject({
+      ok: false,
+      failure: { reason: 'record-mismatch', path: '.dsh/delegation/spec-review/auth/spec.json' },
+    })
+    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+      rule: 'spec-review',
+      change: 'auth',
+      phase: 'spec',
+      scope: 'task',
+      taskId: '0123456789abcdef',
+      verdict: 'PASS',
+      digest: 'b'.repeat(64),
+    })
+    const taskScoped = await verifyEvidence(record, { workspace, values })
+    expect(taskScoped).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+    if (!taskScoped.ok)
+      expect(taskScoped.failure.detail).toMatch(/task-scoped record is not whole-spec/u)
+    expect(
+      await verifyEvidence(
+        { ...record, path: '.dsh/delegation/spec-review/auth/missing.json' } as Evidence,
+        { workspace, values },
+      ),
+    ).toMatchObject({ ok: false, failure: { reason: 'missing-file' } })
+  })
+
+  it('accepts a checkpoint record and refuses a non-checkpoint file', async () => {
+    const workspace = await tempWorkspace()
+    const checkpointPath = `.dsh/work-checkpoints/${'a'.repeat(16)}/3.json`
+    await writeJson(workspace, checkpointPath, {
+      turn: 3,
+      outcome: 'done',
+      lanes: [{ id: 'l1', owner: 'lead', scope: ['src'], state: 'done' }],
+      next: 'tests',
+    })
+    const evidence: Evidence = {
+      kind: 'record',
+      source: 'checkpoint',
+      rule: 'goal-continuity',
+      verdict: 'done',
+      path: checkpointPath,
+    }
+    const result = await verifyEvidence(evidence, { workspace, values })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.evidence.detail).toContain('checkpoint turn 3')
+    await writeJson(workspace, checkpointPath, { turn: 3, outcome: 'continue', lanes: [] })
+    expect(await verifyEvidence(evidence, { workspace, values })).toMatchObject({
+      ok: false,
+      failure: { reason: 'record-mismatch' },
+    })
+  })
+
+  it('matches a completed tool call with its arguments and refuses a failed one', async () => {
+    const workspace = await tempWorkspace()
+    const commands: ToolCallObservation[] = [
+      {
+        callId: 'call-1',
+        name: 'shell',
+        arguments: { command: 'openspec new change auth', workdir: 'repo' },
+        ok: true,
+      },
+      {
+        callId: 'call-2',
+        name: 'shell',
+        arguments: { command: 'openspec validate auth --strict' },
+        ok: false,
+      },
+    ]
+    const evidence: Evidence = {
+      kind: 'tool',
+      name: 'shell',
+      command: 'openspec new change {name}',
+    }
+    const matched = await verifyEvidence(evidence, { workspace, values, toolCalls: commands })
+    expect(matched.ok).toBe(true)
+    if (matched.ok) expect(matched.evidence.callId).toBe('call-1')
+    expect(
+      await verifyEvidence(
+        { kind: 'tool', name: 'shell', command: 'openspec validate {name} --strict' } as Evidence,
+        { workspace, values, toolCalls: commands },
+      ),
+    ).toMatchObject({ ok: false, failure: { reason: 'no-call' } })
+    expect(
+      await verifyEvidence(
+        {
+          kind: 'tool',
+          name: 'shell',
+          args: { command: 'openspec new change auth', workdir: 'other' },
+        } as Evidence,
+        { workspace, values, toolCalls: commands },
+      ),
+    ).toMatchObject({ ok: false, failure: { reason: 'no-call' } })
+  })
+})
+
+function shell(overrides: Partial<ShellResultObservation> = {}): ShellResultObservation {
+  return {
+    callId: 'call-1',
+    command: 'openspec validate auth --strict',
+    at: 200,
+    exitCode: 0,
+    foreground: true,
+    ...overrides,
+  }
+}
+
+describe('check and human evidence', () => {
+  it('accepts a foreground zero exit after the step start and refuses each failure shape', async () => {
+    const workspace = await tempWorkspace()
+    const evidence: Evidence = { kind: 'check', command: 'openspec validate {name} --strict' }
+    const base = { workspace, values, stepStartedAt: 100 }
+    const accepted = await verifyEvidence(evidence, { ...base, shellResults: [shell()] })
+    expect(accepted.ok).toBe(true)
+    if (accepted.ok) expect(accepted.evidence).toMatchObject({ kind: 'check', callId: 'call-1' })
+    for (const bad of [
+      shell({ exitCode: 1 }),
+      shell({ timedOut: true }),
+      shell({ signal: 'SIGINT' }),
+      shell({ sandboxDenied: true }),
+      shell({ at: 50 }),
+      shell({ foreground: false }),
+    ]) {
+      expect(
+        await verifyEvidence(evidence, { ...base, shellResults: [bad] }),
+        JSON.stringify(bad),
+      ).toMatchObject({ ok: false, failure: { reason: 'check-failed' } })
+    }
+    expect(await verifyEvidence(evidence, { ...base, shellResults: [] })).toMatchObject({
+      ok: false,
+      failure: { reason: 'check-failed' },
+    })
+  })
+
+  it('completes only on the declared user answer and refuses no', async () => {
+    const workspace = await tempWorkspace()
+    const evidence: Evidence = { kind: 'human', answer: 'yes' }
+    expect(await verifyEvidence(evidence, { workspace, values })).toMatchObject({
+      ok: false,
+      failure: { reason: 'no-answer' },
+    })
+    const rejected = await verifyEvidence(evidence, {
+      workspace,
+      values,
+      answers: [{ answer: 'no', at: 1 }],
+    })
+    expect(rejected).toMatchObject({ ok: false, failure: { reason: 'rejected-answer' } })
+    if (!rejected.ok) expect(rejected.failure.detail).toContain('is not one of: yes')
+    const accepted = await verifyEvidence(evidence, {
+      workspace,
+      values,
+      answers: [
+        { answer: 'No', at: 1 },
+        { answer: 'Yes', at: 2 },
+      ],
+    })
+    expect(accepted.ok).toBe(true)
+    if (accepted.ok) expect(accepted.evidence).toMatchObject({ kind: 'human', answer: 'Yes' })
+    const multi: Evidence = { kind: 'human', answer: ['yes', 'approve'] }
+    expect(
+      await verifyEvidence(multi, { workspace, values, answers: [{ answer: 'approve' }] }),
+    ).toMatchObject({ ok: true })
+  })
+
+  it('never satisfies a critical step with a declaration', async () => {
+    const workspace = await tempWorkspace()
+    const evidence: Evidence = { kind: 'declaration' }
+    expect(await verifyEvidence(evidence, { workspace, values })).toMatchObject({
+      ok: false,
+      failure: { reason: 'invalid-evidence' },
+    })
+    const nonCritical = await verifyEvidence(evidence, {
+      workspace,
+      values,
+      nonCriticalStep: true,
+    })
+    expect(nonCritical.ok).toBe(true)
+    if (nonCritical.ok) expect(nonCritical.evidence).toMatchObject({ kind: 'declaration' })
   })
 })

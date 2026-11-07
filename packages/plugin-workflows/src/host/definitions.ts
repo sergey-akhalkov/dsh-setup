@@ -124,7 +124,8 @@ export interface AllEvidence {
 export interface RecordEvidence {
   readonly kind: 'record'
   readonly rule: string
-  readonly change: string
+  /** Matched when declared; a checkpoint record carries no change. */
+  readonly change?: string
   readonly verdict: string
   /** Workspace-relative record path; derived from rule/change/phase when absent. */
   readonly path?: string
@@ -133,6 +134,8 @@ export interface RecordEvidence {
   readonly task?: string
   /** `current` compares the record's digest with the change's current digest. */
   readonly digest?: 'current' | string
+  /** `review` (default) or the goal-continuity checkpoint record. */
+  readonly source?: 'review' | 'checkpoint'
 }
 
 export interface ToolCallEvidence {
@@ -195,6 +198,8 @@ export interface LoopSpec {
   readonly stop: Readonly<Record<string, unknown>>
   readonly next: string
   readonly cap?: 'blocked' | 'failed'
+  /** An optional context key holding the list to iterate over. */
+  readonly list?: string
 }
 
 export const MAX_LOOP_ITERATIONS = 50
@@ -278,6 +283,7 @@ const RECORD_KEYS = new Set([
   'scope',
   'task',
   'digest',
+  'source',
 ])
 const TOOL_EVIDENCE_KEYS = new Set(['kind', 'name', 'command', 'args'])
 const CHECK_KEYS = new Set(['kind', 'command'])
@@ -287,7 +293,7 @@ const TOOL_SPEC_KEYS = new Set(['name', 'command', 'args'])
 const SUBAGENT_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'schema'])
 const HUMAN_KEYS = new Set(['timeoutAction'])
 const BRANCH_KEYS = new Set(['predicate', 'then', 'else'])
-const LOOP_KEYS = new Set(['maxIterations', 'stop', 'next', 'cap'])
+const LOOP_KEYS = new Set(['maxIterations', 'stop', 'next', 'cap', 'list'])
 const LEGACY_KEYS = new Set(['plugin', 'signal'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -482,8 +488,10 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
       const record: RecordEvidence = {
         kind: 'record',
         rule: nonEmptyString(raw.rule, definition, `${field}.rule`),
-        change: nonEmptyString(raw.change, definition, `${field}.change`),
         verdict: nonEmptyString(raw.verdict, definition, `${field}.verdict`),
+        ...(raw.change === undefined
+          ? {}
+          : { change: nonEmptyString(raw.change, definition, `${field}.change`) }),
         ...(raw.path === undefined
           ? {}
           : { path: nonEmptyString(raw.path, definition, `${field}.path`) }),
@@ -496,6 +504,16 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
         ...(raw.task === undefined
           ? {}
           : { task: nonEmptyString(raw.task, definition, `${field}.task`) }),
+        ...(raw.source === undefined
+          ? {}
+          : {
+              source: isOneOf(
+                raw.source,
+                ['review', 'checkpoint'] as const,
+                definition,
+                `${field}.source`,
+              ),
+            }),
       }
       if (raw.digest !== undefined) {
         if (
@@ -637,6 +655,9 @@ function loopSpec(raw: unknown, definition: string, field: string): LoopSpec {
     stop: jsonLogic(raw.stop, definition, `${field}.stop`),
     next: nonEmptyString(raw.next, definition, `${field}.next`),
     ...(cap === undefined ? {} : { cap }),
+    ...(raw.list === undefined
+      ? {}
+      : { list: nonEmptyString(raw.list, definition, `${field}.list`) }),
   }
 }
 

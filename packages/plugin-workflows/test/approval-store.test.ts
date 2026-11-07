@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   approvalsPath,
@@ -235,6 +235,26 @@ describe('local definitions and the host approval store', () => {
     await expect(readFile(approvalsPath(workspace), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     })
+  })
+
+  it('refuses a link that aliases the definitions directory to the drafts or assets', async () => {
+    const workspace = await tempWorkspace()
+    const drafts = workspaceDraftsDirectory(workspace)
+    await mkdir(drafts, { recursive: true })
+    const definitions = workspaceDefinitionsDirectory(workspace)
+    await mkdir(dirname(definitions), { recursive: true })
+    await symlink(drafts, definitions, process.platform === 'win32' ? 'junction' : 'dir')
+    const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
+    expect(loaded.errors.join('\n')).toMatch(/definitions directory is a link and is refused/u)
+    const draft = await writeDefinitionFile(
+      workspace,
+      drafts,
+      'aliased.json',
+      definitionFor('aliased'),
+    )
+    await expect(installDefinition(workspace, draft, auth())).rejects.toThrow(
+      /definitions directory is a link/u,
+    )
   })
 
   it('requires a user-confirmed definition for an active intent trigger', async () => {

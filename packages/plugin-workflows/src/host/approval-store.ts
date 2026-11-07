@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import {
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -200,6 +201,19 @@ export async function installDefinition(
     throw new Error(`definition "${definition.id}" resolves outside the definitions directory`)
   }
   await writeAtomic(target, bytes)
+  // A concurrent swap for a link must not be blessed: the written file itself
+  // has to resolve to the exact expected name inside the definitions directory.
+  const written = await realpath(target).catch(() => undefined)
+  if (
+    written === undefined ||
+    dirname(written) !== directory ||
+    (await lstat(target)).isSymbolicLink()
+  ) {
+    await unlink(target).catch(() => undefined)
+    throw new Error(
+      `definition "${definition.id}" was replaced while installing; the approval was not recorded`,
+    )
+  }
   // Sign the exact validated source bytes. Never re-read the writable
   // destination: a write between the copy and the re-read must not be blessed.
   const hash = sha256(bytes)
@@ -221,6 +235,14 @@ async function ensureDefinitionsDirectory(workspace: string): Promise<string> {
   const root = await realpath(workspace)
   const directory = workspaceDefinitionsDirectory(workspace)
   await mkdir(directory, { recursive: true })
+  // A junction or symlink can point the writable definitions directory at the
+  // shipped assets or the drafts directory; only a real directory is accepted.
+  const info = await lstat(directory)
+  if (info.isSymbolicLink()) {
+    throw new Error(
+      'the workspace definitions directory is a link; remove it and use a real directory',
+    )
+  }
   const real = await realpath(directory)
   if (!isInside(root, real)) {
     throw new Error('the workspace definitions directory escapes the workspace; remove the link')
@@ -257,6 +279,16 @@ export async function loadApprovedDefinitions(
   const local = new Map<string, Definition>()
   const directory = workspaceDefinitionsDirectory(workspace)
   const root = await realpath(workspace).catch(() => undefined)
+  const directoryInfo = await lstat(directory).catch(() => undefined)
+  if (directoryInfo?.isSymbolicLink() === true) {
+    return {
+      definitions: shipped,
+      errors: [
+        ...errors,
+        'the workspace definitions directory is a link and is refused; use a real directory',
+      ],
+    }
+  }
   const realDirectory = await realpath(directory).catch(() => undefined)
   if (realDirectory !== undefined && (root === undefined || !isInside(root, realDirectory))) {
     return {
@@ -281,6 +313,11 @@ export async function loadApprovedDefinitions(
   }
   for (const name of names) {
     const file = join(realDirectory ?? directory, name)
+    const fileInfo = await lstat(file).catch(() => undefined)
+    if (fileInfo?.isSymbolicLink() === true) {
+      errors.push(`definition file "${name}" is a link and is refused`)
+      continue
+    }
     let bytes: Buffer
     try {
       bytes = await readFile(file)

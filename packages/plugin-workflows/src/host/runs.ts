@@ -57,6 +57,8 @@ export interface RunStep {
   readonly requestedAt?: number
   readonly at?: number
   readonly attempts?: number
+  /** The turn in which this step was last steered, so one turn steers once. */
+  readonly lastTurn?: number
   readonly evidence?: RunEvidence
   readonly reason?: string
 }
