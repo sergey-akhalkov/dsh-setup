@@ -1504,20 +1504,14 @@ describe('review failure classification', () => {
     subagents.addProvider('codex-subagent', {}, () => ({
       output: [],
       stopReason: 'error' as const,
-      diagnostic: 'category: access-policy',
+      // The permanent diagnostic sits beyond the public message bound.
+      diagnostic: `${'x'.repeat(4_000)} category: access-policy`,
     }))
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
     const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
     expect(await harness.waitForRun(runId)).toContain('state=failed')
     const run = await readRun(root, runId)
     expect(run.failureClass).toBe('permission')
-    const record = JSON.parse(
-      await readFile(
-        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
-        'utf8',
-      ),
-    ) as { error: string }
-    expect(record.error).toContain('access-policy')
   })
 
   it('bounds and redacts an immediate start rejection', async () => {
@@ -1620,6 +1614,24 @@ describe('review failure classification', () => {
     )
     const runs = await readdir(join(root, '.dsh', 'delegation', 'runs'))
     expect(runs).toHaveLength(1)
+    const run = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', runs[0] as string), 'utf8'),
+    ) as { failureClass: string; attempts: number }
+    expect(run.failureClass).toBe('permission')
+    expect(run.attempts).toBe(1)
+  })
+
+  it('classifies a denial beyond the public-message bound', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error(`${'x'.repeat(4_000)}; permission denied`)
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+    await expect(harness.startReview({ rule: 'spec-review', change: 'change-a' })).rejects.toThrow(
+      /could not start/,
+    )
+    const runs = await readdir(join(root, '.dsh', 'delegation', 'runs'))
     const run = JSON.parse(
       await readFile(join(root, '.dsh', 'delegation', 'runs', runs[0] as string), 'utf8'),
     ) as { failureClass: string; attempts: number }
@@ -1749,7 +1761,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer synthetic-example-value authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt ${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1773,6 +1785,8 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('synthetic-secret-value')
     expect(record.error).not.toContain('another-secret-value')
     expect(record.error).not.toContain('synthetic-password')
+    expect(record.error).not.toContain("synthetic'private-value")
+    expect(record.error).not.toContain('private-value')
     expect(record.error).not.toContain('/tmp/review')
     expect(record.error).not.toContain('/home/alice')
     expect(record.error).not.toContain('C:\\Users')

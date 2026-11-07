@@ -1138,9 +1138,11 @@ function sanitizeText(text, maximum = MAX_FINDING_CHARS) {
         .replace(/\\\\[^\s"'`)]+/g, '[path]')
         .replace(/(?:^|\s)\/[^\s"'`)]+/g, ' [path]')
         .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
-        .replace(/\bauthorization["']?\s*[:=]\s*["']?(?:bearer|basic)\s+[^"',;}\s]+["']?/gi, '[secret]')
-        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*["'][^"']*["']/gi, '[secret]')
-        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret)["']?\s*[=:]\s*[^\s"',;}]+/gi, '[secret]')
+        .replace(/\bauthorization["']?\s*[=:]\s*["']?[^\s"',;}]+(?:\s+[^\s"',;}]+)?["']?/gi, '[secret]')
+        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|passphrase|x-api-key|cookie|set-cookie)["']?\s*[=:]\s*"(?:[^"\\]|\\.)*"/gi, '[secret]')
+        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|passphrase|x-api-key|cookie|set-cookie)["']?\s*[=:]\s*'(?:[^'\\]|\\.)*'/gi, '[secret]')
+        .replace(/\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|passphrase|x-api-key|cookie|set-cookie)["']?\s*[=:]\s*[^\s"',;}]+/gi, '[secret]')
+        .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
         .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g, '[secret]')
         .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[secret]');
     return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`;
@@ -2451,8 +2453,9 @@ async function startTarget(services, request) {
         });
     }
     catch (error) {
-        const providerMessage = boundedMessage(error);
-        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${providerMessage}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`, providerMessage);
+        // Classify the untruncated cause; expose only the bounded, redacted text.
+        const providerMessage = errorMessage(error);
+        throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`, providerMessage);
     }
     const model = target.model ?? agentOptions?.model;
     const reasoningEffort = target.reasoningEffort ?? agentOptions?.reasoningEffort;
@@ -2487,6 +2490,7 @@ async function finishTarget(started) {
         await started.activation.dispose().catch(() => undefined);
     }
     if (result.stopReason !== 'completed') {
+        // Classify the raw diagnostic; render a bounded, redacted public message.
         const providerMessage = result.diagnostic === undefined
             ? `stopped with "${result.stopReason}"`
             : `stopped with "${result.stopReason}": ${result.diagnostic}`;
