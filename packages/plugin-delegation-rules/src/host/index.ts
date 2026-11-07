@@ -2626,6 +2626,9 @@ function recordSatisfies(
   const record = state.record
   if (record.change !== change || record.scope !== scope) return false
   if (record.verdict !== 'PASS' && record.verdict !== 'ERROR') return false
+  // A queue fault is not a review: the gate must ask for a fresh review rather
+  // than treating its fallback ERROR as the reviewed outcome.
+  if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error')) return false
   if (scope === 'task' && record.taskId !== taskId) return false
   return digest === undefined || record.digest === digest
 }

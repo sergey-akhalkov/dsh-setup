@@ -18,6 +18,7 @@ import {
   passResponder,
   type RunRecord,
   runIdFrom,
+  steerTexts,
   taskIdFor,
   writeChange,
 } from './helpers.js'
@@ -3281,6 +3282,57 @@ describe('queue fault during dispatch', () => {
 })
 
 describe('stranded start recovery', () => {
+  it('settles a queued follower whose start path faults after admission', async () => {
+    const internalFault = vi.fn()
+    let startBFault = false
+    const hooks = {
+      start: vi.fn(async (run: QueueRun) => {
+        if (run.file.id === 'run-b') {
+          startBFault = true
+          throw new Error('subagent limit reached (active child limit: 8)')
+        }
+      }),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      internalFault,
+      now: () => {
+        if (startBFault) throw new Error('clock fault')
+        return new Date('2026-01-01T00:00:00.000Z')
+      },
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 10,
+        maxDelayMs: 20,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const head = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(head)).toMatchObject({ phase: 'running' })
+    const follower = fakeRun('run-b', 'key-b', 'identity-b')
+    expect(await queue.submit(follower)).toEqual({ kind: 'accepted', phase: 'queued' })
+
+    await queue.complete(head, 'completed')
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!queue.owns('run-b')) break
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 5)
+      })
+    }
+    expect(internalFault).toHaveBeenCalledTimes(1)
+    expect(hooks.fail).toHaveBeenCalledWith(follower, expect.anything(), 'queue-internal-error')
+    expect(queue.owns('run-b')).toBe(false)
+    expect(queue.summary()).toMatchObject({ active: 0, queued: 0 })
+    queue.dispose()
+  })
+
   it('releases a start stranded by a bookkeeping fault and reports internally', async () => {
     let nowCalls = 0
     const internalFault = vi.fn()
@@ -3317,5 +3369,49 @@ describe('stranded start recovery', () => {
     expect(queue.owns('run-a')).toBe(false)
     expect(queue.summary()).toMatchObject({ active: 0, queued: 0 })
     queue.dispose()
+  })
+})
+
+describe('fallback gate approval', () => {
+  it('keeps a queue-internal fallback ERROR unapproved by the task gate', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error('cannot start')
+    const harness = new Harness({
+      cwd: root,
+      config: {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+        ],
+      },
+      agents: subagents,
+      queueFault: () => {
+        throw new Error('queue exploded')
+      },
+    })
+    await harness.preStep(1)
+    await expect(
+      harness.startReview({
+        rule: 'task-review',
+        change: 'change-a',
+        task: taskIdFor('Reviewed task'),
+      }),
+    ).rejects.toThrow(/could not start/)
+
+    await harness.turnStopping(1)
+    const steers = steerTexts(harness.agent).join('\n\n')
+    expect(steers).toContain('task-review')
+    expect(steers).toContain('delegate(rule: "task-review"')
   })
 })

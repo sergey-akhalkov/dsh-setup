@@ -190,6 +190,7 @@ export declare class ReviewQueue<T extends QueueRun> {
     private pump;
     private claim;
     private runStart;
+    private runStartInner;
     private failEntry;
     private finish;
 }

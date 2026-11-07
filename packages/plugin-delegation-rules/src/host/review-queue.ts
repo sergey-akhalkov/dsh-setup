@@ -811,6 +811,28 @@ export class ReviewQueue<T extends QueueRun> {
 
   private async runStart(entry: QueueEntry<T>): Promise<void> {
     try {
+      await this.runStartInner(entry)
+    } catch (error) {
+      // A bookkeeping fault after the handle returned must still settle the
+      // run and release its ownership instead of leaving it stranded.
+      if (entry.finished) return
+      this.active.delete(entry)
+      try {
+        await this.hooks.internalFault?.(
+          entry.run,
+          error instanceof Error ? error.message : String(error),
+        )
+      } catch {
+        // Evidence persistence must not block settlement.
+      }
+      await this.failEntry(entry, error, 'queue-internal-error').catch(() =>
+        this.finish(entry, 'failed'),
+      )
+    }
+  }
+
+  private async runStartInner(entry: QueueEntry<T>): Promise<void> {
+    try {
       await this.hooks.start(entry.run)
     } catch (error) {
       this.active.delete(entry)
