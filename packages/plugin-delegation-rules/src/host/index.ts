@@ -67,7 +67,12 @@ import {
   type TaskLane,
   unparseableCheckedLines,
 } from '../shared/approval.js'
-import { type FailureClass, type QueueTimeoutInfo, ReviewQueue } from './review-queue.js'
+import {
+  classifyFailure,
+  type FailureClass,
+  type QueueTimeoutInfo,
+  ReviewQueue,
+} from './review-queue.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -3796,6 +3801,7 @@ class DelegationEngine {
         await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
         outcome = 'discarded'
       } else {
+        run.file.failureClass = classifyFailure(error, 'run').failureClass
         try {
           await this.publishRecord(run, {
             digest: prepared.digest,
@@ -3904,6 +3910,9 @@ class DelegationEngine {
     failureClass?: FailureClass,
   ): Promise<void> {
     if (failureClass !== undefined) run.file.failureClass = failureClass
+    else if (!(error instanceof DiscardedRun)) {
+      run.file.failureClass = classifyFailure(error, 'run').failureClass
+    }
     let outcome: SettledRunState = 'failed'
     try {
       if (error instanceof DiscardedRun) {

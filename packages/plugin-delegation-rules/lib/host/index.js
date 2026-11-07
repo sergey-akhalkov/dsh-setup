@@ -5,7 +5,7 @@ import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
-import { ReviewQueue } from './review-queue.js';
+import { classifyFailure, ReviewQueue, } from './review-queue.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -2926,6 +2926,7 @@ class DelegationEngine {
                 outcome = 'discarded';
             }
             else {
+                run.file.failureClass = classifyFailure(error, 'run').failureClass;
                 try {
                     await this.publishRecord(run, {
                         digest: prepared.digest,
@@ -3015,6 +3016,9 @@ class DelegationEngine {
     async failRun(run, error, prepared, failureClass) {
         if (failureClass !== undefined)
             run.file.failureClass = failureClass;
+        else if (!(error instanceof DiscardedRun)) {
+            run.file.failureClass = classifyFailure(error, 'run').failureClass;
+        }
         let outcome = 'failed';
         try {
             if (error instanceof DiscardedRun) {

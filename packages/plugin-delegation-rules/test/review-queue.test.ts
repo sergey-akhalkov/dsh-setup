@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { specDigest } from '../src/host/index.js'
-import { type QueueRun, ReviewQueue } from '../src/host/review-queue.js'
+import { classifyFailure, type QueueRun, ReviewQueue } from '../src/host/review-queue.js'
 import {
   type BundleConfigLike,
   defaultTestConfig,
@@ -1359,5 +1359,121 @@ describe('review queue cancellation', () => {
     expect(writes.at(-1)).toEqual({ id: 'run-b', state: 'discarded' })
     expect(second.file.state).toBe('discarded')
     queue.dispose()
+  })
+})
+
+describe('review failure classification', () => {
+  const cases: Array<[string, Error, 'start' | 'run', string, boolean]> = [
+    [
+      'a child limit',
+      new Error('subagent limit reached (active child limit: 8)'),
+      'start',
+      'child-limit',
+      true,
+    ],
+    [
+      'a provider start rejection',
+      new Error(
+        'target "codex" on provider "codex-subagent" could not start: provider unavailable',
+      ),
+      'start',
+      'provider-not-started',
+      true,
+    ],
+    [
+      'a timeout',
+      new Error('target "codex" did not finish within 1200000 ms; widen timeouts.review'),
+      'run',
+      'timeout',
+      true,
+    ],
+    [
+      'a in-run input mutation',
+      new Error('reviewed inputs changed during the run (1 changed: proposal.md)'),
+      'run',
+      'reviewed-inputs-changed',
+      false,
+    ],
+    [
+      'an invalid verdict',
+      new Error('the target returned no fenced JSON verdict; the review needs exactly one block'),
+      'run',
+      'invalid-output',
+      false,
+    ],
+    [
+      'a configuration error',
+      new Error('target "x" names provider "missing", which is not registered'),
+      'start',
+      'config',
+      false,
+    ],
+    [
+      'a provider configuration rejection',
+      new Error('could not start: unsupported Codex target option "maxTokens"'),
+      'start',
+      'config',
+      false,
+    ],
+    [
+      'a permission denial',
+      new Error('permission denied: approval required for this target'),
+      'run',
+      'permission',
+      false,
+    ],
+    [
+      'an unrecognized failure',
+      new Error('the target exploded unexpectedly'),
+      'run',
+      'unknown',
+      false,
+    ],
+  ]
+
+  for (const [name, error, phase, expected, transient] of cases) {
+    it(`classifies ${name} as ${expected}`, () => {
+      const classified = classifyFailure(error, phase)
+      expect(classified.failureClass).toBe(expected)
+      expect(classified.transient).toBe(transient)
+    })
+  }
+
+  it('honors a provider retry-after hint', () => {
+    expect(
+      classifyFailure(
+        new Error('subagent limit reached (active child limit: 8); retry after 7 s'),
+        'start',
+      ),
+    ).toMatchObject({ failureClass: 'child-limit', retryAfterMs: 7_000 })
+    const withProperty = Object.assign(new Error('subagent limit reached'), { retryAfterMs: 1_234 })
+    expect(classifyFailure(withProperty, 'start').retryAfterMs).toBe(1_234)
+  })
+
+  it('records a bounded, redacted failure class on the run and record', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, () => {
+      throw new Error(
+        'permission denied for C:\\Users\\me\\secret.txt with sk-abcdefgh12345678 token',
+      )
+    })
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+
+    const run = await readRun(root, runId)
+    expect(run.failureClass).toBe('permission')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string; error: string }
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('[path]')
+    expect(record.error).toContain('[secret]')
+    expect(record.error.length).toBeLessThanOrEqual(4_000)
   })
 })
