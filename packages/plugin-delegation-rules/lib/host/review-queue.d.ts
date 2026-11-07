@@ -193,4 +193,6 @@ export declare class ReviewQueue<T extends QueueRun> {
     private runStartInner;
     private failEntry;
     private finish;
+    /** Pump from a background context; a fault settles the next waiter visibly. */
+    private safePump;
 }

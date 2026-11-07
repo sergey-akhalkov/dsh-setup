@@ -558,7 +558,7 @@ export class ReviewQueue<T extends QueueRun> {
     this.active.delete(entry)
     this.detachKey(entry)
     this.entries.delete(entry.run.file.id)
-    this.pump()
+    this.safePump()
   }
 
   /**
@@ -598,7 +598,7 @@ export class ReviewQueue<T extends QueueRun> {
     entry.retryTimer = setTimeout(() => {
       this.retryDue(entry, token)
     }, delay)
-    this.pump()
+    this.safePump()
   }
 
   /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
@@ -622,7 +622,7 @@ export class ReviewQueue<T extends QueueRun> {
     this.waiting.push(entry)
     this.waiting.sort((left, right) => left.seq - right.seq)
     this.syncPositions()
-    this.pump()
+    this.safePump()
   }
 
   /** Attempts this run has already used, for the retry budget decision. */
@@ -899,6 +899,28 @@ export class ReviewQueue<T extends QueueRun> {
     } catch {
       // The observer is a seam; it must not change queue cleanup.
     }
-    this.pump()
+    this.safePump()
+  }
+
+  /** Pump from a background context; a fault settles the next waiter visibly. */
+  private safePump(): void {
+    try {
+      this.pump()
+    } catch (error) {
+      const entry = this.waiting.find((candidate) => this.startEligible(candidate))
+      if (entry === undefined) return
+      entry.phase = 'settled'
+      const message = error instanceof Error ? error.message : String(error)
+      void (async () => {
+        try {
+          await this.hooks.internalFault?.(entry.run, message)
+        } catch {
+          // Evidence persistence must not block settlement.
+        }
+        await this.failEntry(entry, error, 'queue-internal-error').catch(() =>
+          this.finish(entry, 'failed'),
+        )
+      })()
+    }
   }
 }

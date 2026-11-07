@@ -3463,3 +3463,52 @@ describe('post-dispatch fault evidence', () => {
     queue.dispose()
   })
 })
+
+describe('background promotion faults', () => {
+  it('settles the next waiter when a promotion claim faults', async () => {
+    const internalFault = vi.fn()
+    let faultNow = false
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      internalFault,
+      now: () => {
+        if (faultNow) throw new Error('clock fault')
+        return new Date('2026-01-01T00:00:00.000Z')
+      },
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 10,
+        maxDelayMs: 20,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const head = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(head)).toMatchObject({ phase: 'running' })
+    const follower = fakeRun('run-b', 'key-b', 'identity-b')
+    expect(await queue.submit(follower)).toEqual({ kind: 'accepted', phase: 'queued' })
+
+    faultNow = true
+    await queue.complete(head, 'completed')
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!queue.owns('run-b')) break
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 5)
+      })
+    }
+    expect(internalFault).toHaveBeenCalledTimes(1)
+    expect(hooks.fail).toHaveBeenCalledWith(follower, expect.anything(), 'queue-internal-error')
+    expect(queue.owns('run-b')).toBe(false)
+    expect(queue.summary()).toMatchObject({ active: 0, queued: 0 })
+    queue.dispose()
+  })
+})

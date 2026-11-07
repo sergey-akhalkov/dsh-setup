@@ -427,7 +427,7 @@ export class ReviewQueue {
         this.active.delete(entry);
         this.detachKey(entry);
         this.entries.delete(entry.run.file.id);
-        this.pump();
+        this.safePump();
     }
     /**
      * Re-enter a transiently failed run after its backoff. The caller has already
@@ -467,7 +467,7 @@ export class ReviewQueue {
         entry.retryTimer = setTimeout(() => {
             this.retryDue(entry, token);
         }, delay);
-        this.pump();
+        this.safePump();
     }
     /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
     retryDue(entry, token) {
@@ -490,7 +490,7 @@ export class ReviewQueue {
         this.waiting.push(entry);
         this.waiting.sort((left, right) => left.seq - right.seq);
         this.syncPositions();
-        this.pump();
+        this.safePump();
     }
     /** Attempts this run has already used, for the retry budget decision. */
     attemptsOf(runId) {
@@ -752,6 +752,28 @@ export class ReviewQueue {
         catch {
             // The observer is a seam; it must not change queue cleanup.
         }
-        this.pump();
+        this.safePump();
+    }
+    /** Pump from a background context; a fault settles the next waiter visibly. */
+    safePump() {
+        try {
+            this.pump();
+        }
+        catch (error) {
+            const entry = this.waiting.find((candidate) => this.startEligible(candidate));
+            if (entry === undefined)
+                return;
+            entry.phase = 'settled';
+            const message = error instanceof Error ? error.message : String(error);
+            void (async () => {
+                try {
+                    await this.hooks.internalFault?.(entry.run, message);
+                }
+                catch {
+                    // Evidence persistence must not block settlement.
+                }
+                await this.failEntry(entry, error, 'queue-internal-error').catch(() => this.finish(entry, 'failed'));
+            })();
+        }
     }
 }
