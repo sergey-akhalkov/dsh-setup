@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -18,9 +18,11 @@ interface FakeHost {
   readonly workspace: string
   readonly listeners: Map<string, Listener[]>
   readonly steers: unknown[]
+  readonly fsWatchers: Array<(error?: Error) => void>
   readonly agent: FakeAgent
   addAgent(id: string, origin?: 'subagent', parentSession?: string): FakeAgent
   emit(name: string, ...args: unknown[]): unknown
+  fireFs(error?: Error): void
   dispose(): void
   calls(): { steers: number; injects: number; preExecute: number }
 }
@@ -29,6 +31,7 @@ function createHost(workspace: string): FakeHost {
   const listeners = new Map<string, Listener[]>()
   const steers: unknown[] = []
   const agents = new Map<string, FakeAgent>()
+  const fsWatchers: Array<(error?: Error) => void> = []
   const effects: Array<() => void> = []
   const mainDisposers: Array<() => void> = []
   const remove = (name: string, listener: Listener): void => {
@@ -72,7 +75,10 @@ function createHost(workspace: string): FakeHost {
       if (name === 'fs') {
         return {
           resolve: async (path: string) => ({ targetKey: path, displayPath: path }),
-          watch: async () => async () => {},
+          watch: async (_target: unknown, changed: (error?: Error) => void) => {
+            fsWatchers.push(changed)
+            return async () => {}
+          },
         }
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
@@ -102,7 +108,22 @@ function createHost(workspace: string): FakeHost {
     for (const cleanup of effects.splice(0)) cleanup()
     for (const cleanup of mainDisposers.splice(0)) cleanup()
   }
-  return { ctx, workspace, listeners, steers, agent, addAgent, emit, dispose, calls: () => calls }
+  const fireFs = (error?: Error): void => {
+    for (const changed of fsWatchers) changed(error)
+  }
+  return {
+    ctx,
+    workspace,
+    listeners,
+    steers,
+    fsWatchers,
+    agent,
+    addAgent,
+    emit,
+    fireFs,
+    dispose,
+    calls: () => calls,
+  }
 }
 
 const step = async (host: FakeHost, agent: FakeAgent, turn: number, number: number): Promise<unknown> =>
@@ -521,6 +542,275 @@ describe('workflow event recorder', () => {
     expect(records[0]?.summary).toBe('first')
   })
 
+  it('preserves readable records when an append after rotation fails', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    const journal = new Journal({
+      maxSessionBytes: 260,
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 3) throw new Error('disk full')
+        await appendFile(file, line, 'utf8')
+      },
+    })
+    const entry = (index: number): ReturnType<Journal['record']> =>
+      journal.record({
+        at: index,
+        session: 'session-1',
+        kind: 'tools/result',
+        subject: 'read',
+        summary: `entry-${String(index)} ${'x'.repeat(120)}`,
+        bytes: 130,
+        truncated: false,
+      })
+    expect((await journal.append(workspace, entry(1).record)).ok).toBe(true)
+    expect((await journal.append(workspace, entry(2).record)).ok).toBe(true)
+    expect((await journal.read(workspace, 'session-1', 0, 10)).records).toHaveLength(2)
+    expect((await journal.append(workspace, entry(3).record)).ok).toBe(false)
+    expect((await journal.read(workspace, 'session-1', 0, 10)).records).toHaveLength(2)
+  })
+
+  it('repairs a torn line so the next successful record is readable', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    const journal = new Journal({
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 2) {
+          await appendFile(file, '{"torn":', 'utf8')
+          throw new Error('partial write')
+        }
+        await appendFile(file, line, 'utf8')
+      },
+    })
+    const entry = (index: number, summary: string): ReturnType<Journal['record']> =>
+      journal.record({
+        at: index,
+        session: 'session-1',
+        kind: 'tools/result',
+        subject: 'read',
+        summary,
+        bytes: summary.length,
+        truncated: false,
+      })
+    expect((await journal.append(workspace, entry(1, 'first').record)).ok).toBe(true)
+    expect((await journal.append(workspace, entry(2, 'second').record)).ok).toBe(false)
+    expect((await journal.append(workspace, entry(3, 'third').record)).ok).toBe(true)
+    const { records } = await journal.read(workspace, 'session-1', 0, 10)
+    expect(records.map((record) => record.summary)).toEqual(['first', 'third'])
+  })
+
+  it('keeps the workspace under its cap for concurrent appends', async () => {
+    const workspace = await tempWorkspace()
+    const journal = new Journal({ maxWorkspaceBytes: 400 })
+    await Promise.all(
+      ['a', 'b', 'c', 'd'].map(async (session) => {
+        const { record } = journal.record({
+          at: 1,
+          session,
+          kind: 'tools/result',
+          subject: 'read',
+          summary: 'x'.repeat(150),
+          bytes: 150,
+          truncated: false,
+        })
+        expect((await journal.append(workspace, record)).ok).toBe(true)
+      }),
+    )
+    const files = await readdir(eventsDirectory(workspace))
+    let total = 0
+    for (const name of files) {
+      total += (await stat(join(eventsDirectory(workspace), name))).size
+    }
+    expect(total).toBeLessThanOrEqual(400)
+  })
+
+  it('publishes workspace health on boot and on every event', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
+    host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'call-health', name: 'read', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
+      try {
+        return JSON.parse(await readFile(healthFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return undefined
+      }
+    }
+    await waitFor(async () => typeof (await readHealth())?.lastEventAt === 'number')
+    const health = (await readHealth()) ?? {}
+    expect(health.listenerCount).toBeGreaterThanOrEqual(4)
+    expect(typeof health.triggerCount).toBe('number')
+    expect(health.journalWritable).toBe(true)
+    expect(typeof health.lastCheckAt).toBe('number')
+  })
+
+  it('leaves committed records readable when the repair truncation fails', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    const journal = new Journal({
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 2) {
+          await appendFile(file, '{"torn":', 'utf8')
+          throw new Error('partial write')
+        }
+        await appendFile(file, line, 'utf8')
+      },
+      truncateFile: async () => {
+        throw new Error('truncate failed')
+      },
+    })
+    const entry = (index: number): ReturnType<Journal['record']> =>
+      journal.record({
+        at: index,
+        session: 'session-1',
+        kind: 'tools/result',
+        subject: 'read',
+        summary: `entry-${String(index)}`,
+        bytes: 5,
+        truncated: false,
+      })
+    expect((await journal.append(workspace, entry(1).record)).ok).toBe(true)
+    expect((await journal.append(workspace, entry(2).record)).ok).toBe(false)
+    expect((await journal.append(workspace, entry(3).record)).ok).toBe(false)
+    const { records } = await journal.read(workspace, 'session-1', 0, 10)
+    expect(records.map((record) => record.summary)).toEqual(['entry-1'])
+  })
+
+  it('repairs one session file even when another session appends in between', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    const journal = new Journal({
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 2) {
+          await appendFile(file, '{"torn":', 'utf8')
+          throw new Error('partial write')
+        }
+        await appendFile(file, line, 'utf8')
+      },
+    })
+    const entry = (session: string, index: number): ReturnType<Journal['record']> =>
+      journal.record({
+        at: index,
+        session,
+        kind: 'tools/result',
+        subject: 'read',
+        summary: `${session}-${String(index)}`,
+        bytes: 5,
+        truncated: false,
+      })
+    expect((await journal.append(workspace, entry('a', 1).record)).ok).toBe(true)
+    expect((await journal.append(workspace, entry('a', 2).record)).ok).toBe(false)
+    expect((await journal.append(workspace, entry('b', 1).record)).ok).toBe(true)
+    expect((await journal.append(workspace, entry('a', 3).record)).ok).toBe(true)
+    const { records } = await journal.read(workspace, 'a', 0, 10)
+    expect(records.map((record) => record.summary)).toEqual(['a-1', 'a-3'])
+  })
+
+  it('repairs a torn file when a new Journal instance takes over', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    const first = new Journal({
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 2) {
+          await appendFile(file, '{"torn":', 'utf8')
+          throw new Error('partial write')
+        }
+        await appendFile(file, line, 'utf8')
+      },
+    })
+    const entry = (index: number): ReturnType<Journal['record']> =>
+      first.record({
+        at: index,
+        session: 'session-1',
+        kind: 'tools/result',
+        subject: 'read',
+        summary: `entry-${String(index)}`,
+        bytes: 5,
+        truncated: false,
+      })
+    expect((await first.append(workspace, entry(1).record)).ok).toBe(true)
+    expect((await first.append(workspace, entry(2).record)).ok).toBe(false)
+    const second = new Journal()
+    expect((await second.append(workspace, entry(3).record)).ok).toBe(true)
+    const { records } = await second.read(workspace, 'session-1', 0, 10)
+    expect(records.map((record) => record.summary)).toEqual(['entry-1', 'entry-3'])
+  })
+
+  it('records a workspace change under the session active there', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const journal = new Journal()
+    await step(host, host.agent, 1, 1)
+    await waitFor(() => host.fsWatchers.length > 0)
+    await mkdir(join(workspace, 'openspec', 'changes', 'add-x'), { recursive: true })
+    await writeFile(join(workspace, 'openspec', 'changes', 'add-x', 'tasks.md'), '- [ ] 1.1\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () =>
+      (await journal.read(workspace, 'session-1', 0, 50)).records.some(
+        (record) => record.kind === 'fs.change',
+      ),
+    )
+    const record = (await journal.read(workspace, 'session-1', 0, 50)).records.find(
+      (entry) => entry.kind === 'fs.change',
+    )
+    expect(record?.session).toBe('session-1')
+    expect(record?.subject).toContain('openspec/changes/add-x/tasks.md')
+    expect(record?.summary).toContain('created')
+    expect(record?.turn).toBe(1)
+  })
+
+  it('fails the append when the repair read fails and preserves both records on retry', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    let failRead = false
+    const journal = new Journal({
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 2) {
+          await appendFile(file, '{"torn":', 'utf8')
+          throw new Error('partial write')
+        }
+        await appendFile(file, line, 'utf8')
+      },
+      readText: async (file) => {
+        if (failRead) {
+          const error = new Error('EIO') as NodeJS.ErrnoException
+          error.code = 'EIO'
+          throw error
+        }
+        return readFile(file, 'utf8')
+      },
+    })
+    const entry = (index: number): ReturnType<Journal['record']> =>
+      journal.record({
+        at: index,
+        session: 'session-1',
+        kind: 'tools/result',
+        subject: 'read',
+        summary: `entry-${String(index)}`,
+        bytes: 5,
+        truncated: false,
+      })
+    expect((await journal.append(workspace, entry(1).record)).ok).toBe(true)
+    expect((await journal.append(workspace, entry(2).record)).ok).toBe(false)
+    failRead = true
+    expect((await journal.append(workspace, entry(3).record)).ok).toBe(false)
+    failRead = false
+    expect((await journal.append(workspace, entry(3).record)).ok).toBe(true)
+    const { records } = await journal.read(workspace, 'session-1', 0, 10)
+    expect(records.map((record) => record.summary)).toEqual(['entry-1', 'entry-3'])
+  })
+
   it('contains a listener whose journal write fails', async () => {
     const workspace = await tempWorkspace()
     await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
@@ -540,4 +830,6 @@ describe('workflow event recorder', () => {
     expect(String(errors.mock.calls[0]?.[0]).length).toBeLessThan(300)
   })
 })
+
+
 
