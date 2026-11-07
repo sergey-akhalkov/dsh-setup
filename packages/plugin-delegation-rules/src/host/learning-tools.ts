@@ -232,9 +232,11 @@ export async function executeReviewLesson(
   const args = parseArgs(value)
   if (args.action === 'list') {
     const { lessons, skipped } = await readLessons(context.workspaceRoot)
-    const lines = lessons.slice(-20).map((lesson) => {
+    // The store is already bounded, so list every record: an applied lesson
+    // must stay reachable even when it is no longer among the newest.
+    const lines = lessons.map((lesson) => {
       const applied = lesson.appliedIn === undefined ? '' : ` applied in ${lesson.appliedIn}`
-      return `- ${lesson.id} [${lesson.status}] ${lesson.class}: ${lesson.title}${applied}`
+      return `- ${lesson.id} [${lesson.status}] ${lesson.class}: ${preview(lesson.title)}${applied}`
     })
     if (lines.length === 0) return 'no lessons stored yet; review_retro propose creates one'
     const skippedText = skipped === 0 ? '' : `; ${skipped} malformed line(s) skipped`

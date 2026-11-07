@@ -302,6 +302,43 @@ describe('review_lesson lifecycle', () => {
     expect(question?.detail).toContain('Class: other')
   })
 
+  it('keeps an applied lesson reachable through the full bounded list', async () => {
+    const root = await workspace()
+    const questions = new FakeQuestions()
+    const oldest = await proposeLesson(root, {
+      class: 'path-boundary',
+      title: 'Oldest applied lesson',
+      body: 'Oldest body.',
+      now: 1,
+    })
+    questions.selected = ['Accept']
+    await executeReviewLesson(
+      { action: 'decide', id: oldest.lesson.id, decision: 'accept' },
+      context(root, questions),
+    )
+    questions.selected = ['Apply']
+    await executeReviewLesson(
+      { action: 'apply', id: oldest.lesson.id, target: 'openspec/specs/a/spec.md' },
+      context(root, questions),
+    )
+    for (let index = 0; index < 20; index += 1) {
+      await executeReviewLesson(
+        {
+          action: 'propose',
+          class: 'security',
+          title: `Filler ${index}`,
+          body: `Body ${index}`,
+        },
+        context(root, questions),
+      )
+    }
+    const listed = await executeReviewLesson({ action: 'list' }, context(root))
+    expect(listed).toContain(`lessons (21)`)
+    expect(listed).toContain(oldest.lesson.id)
+    expect(listed).toContain('[applied]')
+    expect(listed).toContain('applied in openspec/specs/a/spec.md')
+  })
+
   it('leaves the lesson unchanged on a cancelled or mismatched answer', async () => {
     const root = await workspace()
     const questions = new FakeQuestions()
