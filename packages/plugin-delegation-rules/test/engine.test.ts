@@ -1496,7 +1496,9 @@ describe('settlement observer', () => {
 
     const harness = new Harness({
       cwd: root,
-      config: defaultTestConfig(),
+      // The off switch restores the direct start, including its synchronous
+      // start failure: this test covers the observer-omitted error path.
+      config: { ...defaultTestConfig(), reviewQueue: { enabled: false } },
       agents: subagents,
       observeSettlements: false,
     })
@@ -2147,7 +2149,12 @@ describe('asynchronous review runs', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     subagents.startError = new Error('cannot start')
-    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    // The off switch keeps the pre-queue direct-start cleanup contract.
+    const harness = harnessFor(
+      root,
+      { ...taskReviewConfig(), reviewQueue: { enabled: false } },
+      subagents,
+    )
     harness.git.files = ['src/engine.ts']
     await expect(harness.startReview({ rule: 'task-review', change: 'change-a' })).rejects.toThrow(
       /could not start/,

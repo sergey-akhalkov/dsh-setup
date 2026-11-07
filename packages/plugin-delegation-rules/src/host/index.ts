@@ -67,6 +67,7 @@ import {
   type TaskLane,
   unparseableCheckedLines,
 } from '../shared/approval.js'
+import { type FailureClass, type QueueTimeoutInfo, ReviewQueue } from './review-queue.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -794,7 +795,15 @@ interface ReviewRecord {
   error?: string
 }
 
-type RunState = 'queued' | 'running' | 'completed' | 'failed' | 'discarded'
+type RunState =
+  | 'queued'
+  | 'starting'
+  | 'running'
+  | 'retry-wait'
+  | 'completed'
+  | 'failed'
+  | 'discarded'
+  | 'interrupted'
 
 /** Durable, model-facing state of one asynchronous review run. */
 interface RunFile {
@@ -809,6 +818,13 @@ interface RunFile {
   record: string
   startedAt: string
   detail?: string
+  /** Bounded queue facts; absent for runs that bypassed the queue. */
+  queuePosition?: number
+  queuedAt?: string
+  waitMs?: number
+  attempts?: number
+  failureClass?: FailureClass
+  lastRetryAt?: string
 }
 
 interface ManagedRun {
@@ -818,6 +834,10 @@ interface ManagedRun {
   existingFingerprint?: string
   /** Disposable checkout this run reviews; absent when it reviews the live worktree. */
   snapshot?: ReviewSnapshot
+  /** Prepared digest and inputs; set before admission. */
+  prepared?: ReviewPreparation
+  /** Cached-record text returned instead of a target start. */
+  reusedText?: string
   context: {
     rule: RuleConfig
     change: ChangeInfo
@@ -2133,10 +2153,13 @@ function reviewKeyForPrompt(change: string, task: TaskInfo | undefined, rule: Ru
 function isRunState(value: unknown): value is RunState {
   return (
     value === 'queued' ||
+    value === 'starting' ||
     value === 'running' ||
+    value === 'retry-wait' ||
     value === 'completed' ||
     value === 'failed' ||
-    value === 'discarded'
+    value === 'discarded' ||
+    value === 'interrupted'
   )
 }
 
@@ -2157,6 +2180,23 @@ function parseRunFile(value: unknown): RunFile | undefined {
   }
   if (value.taskId !== undefined && typeof value.taskId !== 'string') return undefined
   if (value.detail !== undefined && typeof value.detail !== 'string') return undefined
+  if (value.queuePosition !== undefined) {
+    if (typeof value.queuePosition !== 'number' || !Number.isSafeInteger(value.queuePosition)) {
+      return undefined
+    }
+  }
+  if (value.queuedAt !== undefined && typeof value.queuedAt !== 'string') return undefined
+  if (value.waitMs !== undefined) {
+    if (typeof value.waitMs !== 'number' || !Number.isFinite(value.waitMs) || value.waitMs < 0) {
+      return undefined
+    }
+  }
+  if (value.attempts !== undefined) {
+    if (typeof value.attempts !== 'number' || !Number.isSafeInteger(value.attempts))
+      return undefined
+  }
+  if (value.failureClass !== undefined && typeof value.failureClass !== 'string') return undefined
+  if (value.lastRetryAt !== undefined && typeof value.lastRetryAt !== 'string') return undefined
   return value as unknown as RunFile
 }
 
@@ -3195,14 +3235,21 @@ interface ToolAgentContext {
 /** The engine behind the three tools: validation, target runs, records, status. */
 class DelegationEngine {
   private readonly runs = new Map<string, ManagedRun>()
-  private readonly runIdentities = new Map<string, ManagedRun>()
-  private readonly runKeyHeads = new Map<string, ManagedRun>()
-  private readonly runQueues = new Map<string, ManagedRun[]>()
+  private readonly queue: ReviewQueue<ManagedRun>
 
   constructor(
     private readonly config: EngineConfig,
     private readonly services: EngineServices,
-  ) {}
+  ) {
+    this.queue = new ReviewQueue<ManagedRun>(config.reviewQueue, {
+      start: (run) => this.startPreparedReview(run),
+      persist: (run) => this.persistRun(run),
+      fail: (run, error, failureClass) => this.failRun(run, error, run.prepared, failureClass),
+      timeout: (run, info) => this.timeoutRun(run, info),
+      settled: (run, state) => this.notifySettled(run, state),
+      now: () => this.services.now(),
+    })
+  }
 
   private rule(ruleId: string): RuleConfig {
     const rule = this.config.rules.find((entry) => entry.id === ruleId)
@@ -3325,7 +3372,7 @@ class DelegationEngine {
       ...(task === undefined ? {} : { taskId: task.id }),
       key,
       identity: `${workspaceRoot}\u0000${reviewIdentity(rule, change.name, task)}`,
-      state: 'running',
+      state: 'queued',
       record: relativePath(workspaceRoot, path),
       startedAt: this.now(),
     }
@@ -3345,7 +3392,11 @@ class DelegationEngine {
     }
   }
 
-  /** Validate, start, and return the run handle without waiting for the verdict. */
+  /**
+   * Validate, prepare, admit, and return the run handle without waiting for the
+   * verdict. Preparation and cached-record reuse run before admission so a
+   * cached verdict never consumes a queue slot.
+   */
   private async startReview(
     rule: RuleConfig,
     change: ChangeInfo,
@@ -3371,108 +3422,116 @@ class DelegationEngine {
     await this.attributeChange(workspaceRoot, agent, change.name, task?.id)
 
     const run = this.createRun(workspaceRoot, rule, change, task, agent, cwd, args)
-    const pending = this.runIdentities.get(run.file.identity)
-    if (pending !== undefined) return this.runHandleText(pending, 'duplicate')
-    this.runs.set(run.file.id, run)
-    this.runIdentities.set(run.file.identity, run)
-
-    const head = this.runKeyHeads.get(run.file.key)
-    if (head !== undefined) {
-      const queue = this.runQueues.get(run.file.key) ?? []
-      queue.push(run)
-      this.runQueues.set(run.file.key, queue)
-      await this.markRun(run, 'queued', `queued behind run ${head.file.id}`)
-      return this.runHandleText(run, 'queued')
-    }
-    this.runKeyHeads.set(run.file.key, run)
-    const outcome = await this.beginReviewRun(run)
-    return outcome.reusedText ?? this.runHandleText(run, 'running')
-  }
-
-  /** Prepare immutable digest/inputs and start the target; cleanup is owned here. */
-  private async beginReviewRun(run: ManagedRun): Promise<{ reusedText?: string }> {
-    let prepared: ReviewPreparation | undefined
     try {
-      const tasks = await readTasks(run.context.change.dir)
-      const task = run.context.task
-      if (task !== undefined) {
-        const current = tasks.find((entry) => entry.id === task.id)
-        if (current === undefined || !current.checked) {
-          fail(
-            `task "${task.number} ${task.text}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
-          )
-        }
-        run.context.task = current
-      }
-      prepared = await this.prepareReview(run)
-      const existing = await inspectRecord(prepared.path)
-      run.existingFingerprint =
-        existing.kind === 'record' ? JSON.stringify(existing.record) : undefined
-      const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)))
-      if (
-        existing.kind === 'record' &&
-        recordIdentifies(
-          existing.record,
-          run.context.rule,
-          run.context.change.name,
-          run.context.task?.id,
-        )
-      ) {
-        const record = existing.record
-        const reusable =
-          record.verdict === 'PASS' ||
-          (record.verdict === 'FINDINGS' && record.digest === prepared.digest)
-        const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest
-        // A cached PASS from another reviewer is not reused: the marker binding
-        // prescribes a fresh run of the configured reviewer instead. An
-        // unreadable marker also forbids reuse until it is repaired.
-        if (
-          reusable &&
-          current &&
-          reviewer.error === undefined &&
-          reviewerMatches(record.target, reviewer.reviewer)
-        ) {
-          await this.discardSnapshot(run)
-          await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'))
-          this.freeRun(run)
-          await this.startNextRun(run.file.key)
-          return {
-            reusedText: formatRecord(run.context.cwd, prepared.path, record, true),
-          }
-        }
-      }
-      const started = await startTarget(this.services, {
-        rule: run.context.rule,
-        target: this.target(run.context.rule),
-        prompt: reviewPrompt(
-          run.context.rule,
-          run.context.change,
-          prepared.digest,
-          run.context.task,
-          run.context.args.context,
-          run.context.args.objective,
-          prepared.snapshotTree !== undefined,
-        ),
-        agent: run.context.agent,
-        cwd: prepared.reviewCwd ?? run.context.cwd,
-        signal: run.context.signal,
-      })
-      await this.markRun(
-        run,
-        'running',
-        this.withFallbackDetail(
-          prepared,
-          prepared.snapshotTree === undefined
-            ? 'live worktree'
-            : `snapshot ${prepared.snapshotTree.slice(0, 8)}`,
-        ),
-      )
-      void this.completeReviewRun(run, started, prepared)
-      return {}
+      const reused = await this.prepareReviewRun(run)
+      if (reused !== undefined) return reused
     } catch (error) {
-      await this.failRun(run, error, prepared)
+      await this.failRun(run, error, run.prepared)
       throw error
     }
+    this.runs.set(run.file.id, run)
+
+    const admission = await this.queue.submit(run)
+    if (admission.kind === 'duplicate') return this.runHandleText(admission.run, 'duplicate')
+    if (admission.kind === 'full') {
+      const error = new DelegationError(
+        `review queue full: ${admission.depth} waiting run(s) at maxQueued=${admission.maxQueued}; let the current reviews settle, then start this review again`,
+      )
+      await this.failRun(run, error, run.prepared, 'queue-full')
+      throw error
+    }
+    if (admission.kind === 'settled') return this.runHandleText(run, 'settled')
+    return this.runHandleText(run, admission.phase)
+  }
+
+  /**
+   * Re-read the selected task, build the immutable digest/inputs, and reuse a
+   * matching authoritative record. Returns the reused text when no target is
+   * needed; the caller admits the run otherwise.
+   */
+  private async prepareReviewRun(run: ManagedRun): Promise<string | undefined> {
+    const tasks = await readTasks(run.context.change.dir)
+    const task = run.context.task
+    if (task !== undefined) {
+      const current = tasks.find((entry) => entry.id === task.id)
+      if (current === undefined || !current.checked) {
+        fail(
+          `task "${task.number} ${task.text}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
+        )
+      }
+      run.context.task = current
+    }
+    const prepared = await this.prepareReview(run)
+    run.prepared = prepared
+    const existing = await inspectRecord(prepared.path)
+    run.existingFingerprint =
+      existing.kind === 'record' ? JSON.stringify(existing.record) : undefined
+    const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)))
+    if (
+      existing.kind === 'record' &&
+      recordIdentifies(
+        existing.record,
+        run.context.rule,
+        run.context.change.name,
+        run.context.task?.id,
+      )
+    ) {
+      const record = existing.record
+      const reusable =
+        record.verdict === 'PASS' ||
+        (record.verdict === 'FINDINGS' && record.digest === prepared.digest)
+      const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest
+      // A cached PASS from another reviewer is not reused: the marker binding
+      // prescribes a fresh run of the configured reviewer instead. An
+      // unreadable marker also forbids reuse until it is repaired.
+      if (
+        reusable &&
+        current &&
+        reviewer.error === undefined &&
+        reviewerMatches(record.target, reviewer.reviewer)
+      ) {
+        await this.discardSnapshot(run)
+        await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'))
+        this.notifySettled(run, 'completed')
+        return formatRecord(run.context.cwd, prepared.path, record, true)
+      }
+    }
+    return undefined
+  }
+
+  /** Start one admitted target; the queue owns the slot and settlement. */
+  private async startPreparedReview(run: ManagedRun): Promise<void> {
+    const prepared = run.prepared
+    if (prepared === undefined) {
+      fail(`run ${run.file.id} reached the queue without a prepared review; start the review again`)
+    }
+    const started = await startTarget(this.services, {
+      rule: run.context.rule,
+      target: this.target(run.context.rule),
+      prompt: reviewPrompt(
+        run.context.rule,
+        run.context.change,
+        prepared.digest,
+        run.context.task,
+        run.context.args.context,
+        run.context.args.objective,
+        prepared.snapshotTree !== undefined,
+      ),
+      agent: run.context.agent,
+      cwd: prepared.reviewCwd ?? run.context.cwd,
+      signal: run.context.signal,
+    })
+    await this.markRun(
+      run,
+      'running',
+      this.withFallbackDetail(
+        prepared,
+        prepared.snapshotTree === undefined
+          ? 'live worktree'
+          : `snapshot ${prepared.snapshotTree.slice(0, 8)}`,
+      ),
+    )
+    void this.completeReviewRun(run, started, prepared)
   }
 
   private async prepareReview(run: ManagedRun): Promise<ReviewPreparation> {
@@ -3563,6 +3622,7 @@ class DelegationEngine {
     started: StartedTarget,
     prepared: ReviewPreparation,
   ): Promise<void> {
+    let outcome: SettledRunState = 'failed'
     try {
       const result = await finishTarget(started)
       const parsed = parseVerdict(result.text, prepared.digest)
@@ -3599,9 +3659,11 @@ class DelegationEngine {
           parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
         ),
       )
+      outcome = 'completed'
     } catch (error) {
       if (error instanceof DiscardedRun) {
         await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
+        outcome = 'discarded'
       } else {
         try {
           await this.publishRecord(run, {
@@ -3626,6 +3688,7 @@ class DelegationEngine {
               'discarded',
               this.withFallbackDetail(prepared, publishError.message),
             )
+            outcome = 'discarded'
           } else {
             await this.markRun(
               run,
@@ -3640,8 +3703,7 @@ class DelegationEngine {
       }
     } finally {
       await this.discardSnapshot(run)
-      this.freeRun(run)
-      await this.startNextRun(run.file.key)
+      await this.settleReviewRun(run, outcome)
     }
   }
   /** Write a record under the publish lock; a newer writer wins and this run is discarded. */
@@ -3708,10 +3770,14 @@ class DelegationEngine {
     run: ManagedRun,
     error: unknown,
     prepared: ReviewPreparation | undefined,
+    failureClass?: FailureClass,
   ): Promise<void> {
+    if (failureClass !== undefined) run.file.failureClass = failureClass
+    let outcome: SettledRunState = 'failed'
     try {
       if (error instanceof DiscardedRun) {
         await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
+        outcome = 'discarded'
       } else if (prepared !== undefined) {
         try {
           const target = this.config.targets.get(run.context.rule.to ?? '')
@@ -3744,6 +3810,7 @@ class DelegationEngine {
               'discarded',
               this.withFallbackDetail(prepared, publishError.message),
             )
+            outcome = 'discarded'
           } else {
             await this.markRun(
               run,
@@ -3764,8 +3831,66 @@ class DelegationEngine {
       }
     } finally {
       await this.discardSnapshot(run)
-      this.freeRun(run)
-      await this.startNextRun(run.file.key).catch(() => undefined)
+      await this.settleReviewRun(run, outcome)
+    }
+  }
+
+  /** Write the terminal wait-timeout ERROR; the queue finishes the run after this. */
+  private async timeoutRun(run: ManagedRun, info: QueueTimeoutInfo): Promise<void> {
+    const prepared = run.prepared
+    const message = `review queue wait timed out after ${info.waitMs} ms at position ${info.position}; no target started. Shorten the running reviews or start this review again after the queue drains`
+    if (prepared !== undefined) {
+      try {
+        const target = this.config.targets.get(run.context.rule.to ?? '')
+        await this.publishRecord(run, {
+          digest: prepared.digest,
+          ...(prepared.worktreeDigest === undefined
+            ? {}
+            : { worktreeDigest: prepared.worktreeDigest }),
+          verdict: 'ERROR',
+          findings: [],
+          target:
+            target === undefined
+              ? { provider: run.context.rule.to ?? 'unknown' }
+              : targetIdentity(
+                  target.provider,
+                  target.model ?? target.agentOptions?.model,
+                  target.reasoningEffort ?? target.agentOptions?.reasoningEffort,
+                ),
+          error: sanitizeText(message, MAX_ERROR_CHARS),
+        })
+      } catch {
+        // A record write failure must not keep a timed-out run queued.
+      }
+    }
+    run.file.failureClass = 'queue-timeout'
+    await this.markRun(run, 'failed', this.withFallbackDetail(prepared, message))
+  }
+
+  /** Persist the current run-file state without a state transition. */
+  private async persistRun(run: ManagedRun): Promise<void> {
+    try {
+      await writeJsonAtomic(runFilePath(run.workspaceRoot, run.file.id), run.file)
+    } catch {
+      // Run state is local scratch; a write failure must not break the background run.
+    }
+  }
+
+  /** Terminal cleanup and the single settlement observation for this run. */
+  private async settleReviewRun(run: ManagedRun, state: SettledRunState): Promise<void> {
+    if (this.queue.owns(run.file.id)) {
+      await this.queue.complete(run, state)
+      return
+    }
+    this.notifySettled(run, state)
+  }
+
+  private notifySettled(run: ManagedRun, state: SettledRunState): void {
+    this.runs.delete(run.file.id)
+    try {
+      this.services.onRunSettled?.(run.file.id, state)
+    } catch {
+      // The observer is a test seam; it must not change run cleanup.
     }
   }
 
@@ -3802,37 +3927,20 @@ class DelegationEngine {
     }
   }
 
-  private freeRun(run: ManagedRun): void {
-    this.runs.delete(run.file.id)
-    this.runIdentities.delete(run.file.identity)
-    const state = run.file.state
-    if (state === 'queued' || state === 'running') return
-    try {
-      this.services.onRunSettled?.(run.file.id, state)
-    } catch {
-      // The observer is a test seam; it must not change run cleanup.
-    }
-  }
-
-  private async startNextRun(key: string): Promise<void> {
-    const queue = this.runQueues.get(key)
-    const next = queue?.shift()
-    if (queue !== undefined && queue.length === 0) this.runQueues.delete(key)
-    if (next === undefined) {
-      this.runKeyHeads.delete(key)
-      return
-    }
-    this.runKeyHeads.set(key, next)
-    try {
-      await this.beginReviewRun(next)
-    } catch {
-      // beginReviewRun already cleaned up and surfaced a failed run file.
-    }
-  }
-
-  private runHandleText(run: ManagedRun, mode: 'running' | 'queued' | 'duplicate'): string {
+  private runHandleText(
+    run: ManagedRun,
+    mode: 'running' | 'queued' | 'retry-wait' | 'settled' | 'duplicate',
+  ): string {
     const label =
-      mode === 'duplicate' ? 'already pending' : mode === 'queued' ? 'queued' : 'started'
+      mode === 'duplicate'
+        ? 'already pending'
+        : mode === 'queued'
+          ? 'queued'
+          : mode === 'retry-wait'
+            ? 'retrying'
+            : mode === 'settled'
+              ? 'finished'
+              : 'started'
     const lines = [
       `rule "${run.file.rule}" review ${label}`,
       `run: ${run.file.id}`,
@@ -3841,9 +3949,12 @@ class DelegationEngine {
     ]
     if (run.file.taskId !== undefined) lines.push(`task id: ${run.file.taskId}`)
     lines.push(`record: ${run.file.record}`)
-    if (mode === 'queued') {
-      const head = this.runKeyHeads.get(run.file.key)
-      if (head !== undefined) lines.push(`queued behind: ${head.file.id}`)
+    if (mode === 'queued' && run.file.queuePosition !== undefined) {
+      lines.push(`queue position: ${run.file.queuePosition}`)
+    }
+    if (mode === 'retry-wait') {
+      if (run.file.attempts !== undefined) lines.push(`attempt: ${run.file.attempts}`)
+      if (run.file.failureClass !== undefined) lines.push(`failure class: ${run.file.failureClass}`)
     }
     lines.push(
       '',
@@ -3870,7 +3981,12 @@ class DelegationEngine {
       ) {
         continue
       }
-      if (run.file.state === 'queued' || run.file.state === 'running') {
+      if (
+        run.file.state === 'queued' ||
+        run.file.state === 'starting' ||
+        run.file.state === 'running' ||
+        run.file.state === 'retry-wait'
+      ) {
         return { id: run.file.id, state: run.file.state, record: run.file.record }
       }
     }
