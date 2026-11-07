@@ -188,35 +188,47 @@ export class ReviewQueue {
             if (error instanceof Error && EXPECTED_FAILURE_NAMES.has(error.name))
                 throw error;
             const entry = this.entries.get(run.file.id);
-            if (entry !== undefined && this.startDispatched(entry)) {
-                // A target start is already in flight: keep ownership and report its
-                // outcome instead of rolling back and starting a second target.
-                try {
-                    await this.hooks.internalFault?.(run, error instanceof Error ? error.message : String(error));
-                }
-                catch {
-                    // Evidence persistence must not break the surviving run.
-                }
+            if (entry !== undefined) {
+                // Let an in-flight start settle before deciding whether it survived.
                 if (entry.startOutcome !== undefined) {
                     await entry.startOutcome.catch(() => undefined);
                 }
-                if (entry.finished || entry.phase === 'settled')
+                const message = error instanceof Error ? error.message : String(error);
+                if (entry.phase === 'running' && !entry.finished) {
+                    // A live target survived the bookkeeping fault: keep ownership.
+                    try {
+                        await this.hooks.internalFault?.(run, message);
+                    }
+                    catch {
+                        // Evidence persistence must not break the surviving run.
+                    }
+                    return { kind: 'accepted', phase: 'running' };
+                }
+                if (entry.finished || entry.phase === 'settled') {
+                    // The start settled a terminal record before the fault: never replay it.
+                    this.rollback(run.file.id);
+                    try {
+                        await this.hooks.internalFault?.(run, message);
+                    }
+                    catch {
+                        // Evidence persistence must not break the settled run.
+                    }
                     return { kind: 'settled' };
-                if (entry.phase === 'retry-wait')
-                    return { kind: 'accepted', phase: 'retry-wait' };
-                if (entry.phase === 'queued')
-                    return { kind: 'accepted', phase: 'queued' };
-                return { kind: 'accepted', phase: 'running' };
+                }
+                // A rejected or stranded start: release ownership and let the engine
+                // fall back to a single direct start.
+                this.rollback(run.file.id);
+                try {
+                    await this.hooks.internalFault?.(run, message);
+                }
+                catch {
+                    // Evidence persistence must not break the fallback.
+                }
+                throw new QueueInternalError(`review queue internal error: ${message}`, error);
             }
             this.rollback(run.file.id);
             throw new QueueInternalError(`review queue internal error: ${error instanceof Error ? error.message : String(error)}`, error);
         }
-    }
-    startDispatched(entry) {
-        return (entry.startOutcome !== undefined ||
-            entry.phase === 'running' ||
-            entry.phase === 'retry-wait' ||
-            entry.finished);
     }
     /** Remove an admission that failed before it could settle; never observe it. */
     rollback(runId) {

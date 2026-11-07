@@ -115,7 +115,6 @@ export declare class ReviewQueue<T extends QueueRun> {
     };
     /** Admission for one already prepared run; unexpected faults become internal. */
     submit(run: T): Promise<Admission<T>>;
-    private startDispatched;
     /** Remove an admission that failed before it could settle; never observe it. */
     private rollback;
     /**

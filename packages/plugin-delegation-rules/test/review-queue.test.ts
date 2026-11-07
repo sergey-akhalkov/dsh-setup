@@ -3279,3 +3279,43 @@ describe('queue fault during dispatch', () => {
     queue.dispose()
   })
 })
+
+describe('stranded start recovery', () => {
+  it('releases a start stranded by a bookkeeping fault and reports internally', async () => {
+    let nowCalls = 0
+    const internalFault = vi.fn()
+    const hooks = {
+      start: vi.fn(async () => {
+        throw new Error('subagent limit reached (active child limit: 8)')
+      }),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      internalFault,
+      now: () => {
+        nowCalls += 1
+        if (nowCalls === 4) throw new Error('clock fault')
+        return new Date('2026-01-01T00:00:00.000Z')
+      },
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 10,
+        maxDelayMs: 20,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const run = fakeRun('run-a', 'key-a', 'identity-a')
+    await expect(queue.submit(run)).rejects.toThrow(/review queue internal error/)
+    expect(internalFault).toHaveBeenCalledTimes(1)
+    expect(queue.owns('run-a')).toBe(false)
+    expect(queue.summary()).toMatchObject({ active: 0, queued: 0 })
+    queue.dispose()
+  })
+})
