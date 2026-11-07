@@ -45,7 +45,8 @@ export interface ClassifiedFailure {
 }
 /** Facts a wait-timeout settlement reports for the ERROR detail. */
 export interface QueueTimeoutInfo {
-    position: number;
+    /** Waiting-list position; absent when the run timed out during retry backoff. */
+    position?: number;
     waitMs: number;
 }
 /** Engine callbacks; every write of a record or run file stays in the engine. */
@@ -123,7 +124,7 @@ export declare class ReviewQueue<T extends QueueRun> {
      * persisted `retry-wait`; this releases the slot and arms the retry timer.
      */
     scheduleRetry(run: T, failure: ClassifiedFailure, error?: unknown): void;
-    /** Re-enter the waiting list, or settle visibly when the waiting list is full. */
+    /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
     private retryDue;
     /** Attempts this run has already used, for the retry budget decision. */
     attemptsOf(runId: string): number;
@@ -132,6 +133,8 @@ export declare class ReviewQueue<T extends QueueRun> {
     private forgetIdentity;
     private armWaitTimer;
     private waitTimedOut;
+    /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
+    private settleWaitTimeout;
     private positionOf;
     private removeWaiting;
     /** Apply every position before any persistence so a stale sweep cannot win. */

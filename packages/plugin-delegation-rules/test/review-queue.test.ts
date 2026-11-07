@@ -408,6 +408,59 @@ describe('review queue admission', () => {
     expect(waiting.file.queuePosition).toBe(1)
     queue.dispose()
   })
+
+  it('enforces the acceptance wait deadline during retry backoff', async () => {
+    let firstStart = true
+    const hooks = {
+      start: vi.fn(async (run: QueueRun) => {
+        if (run.file.id === 'run-a' && firstStart) {
+          firstStart = false
+          throw new Error('subagent limit reached (active child limit: 8)')
+        }
+      }),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 3,
+        maxAttempts: 3,
+        baseDelayMs: 200,
+        maxDelayMs: 200,
+        waitTimeoutMs: 50,
+      },
+      hooks,
+    )
+    const retrying = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(retrying)).toEqual({ kind: 'accepted', phase: 'retry-wait' })
+    expect(await queue.submit(fakeRun('run-b', 'key-b', 'identity-b'))).toEqual({
+      kind: 'accepted',
+      phase: 'running',
+    })
+
+    // The backoff (100-200 ms) outlives the 50 ms acceptance deadline, so the
+    // run must settle instead of re-entering the queue and starting late.
+    await vi.waitFor(
+      () => {
+        expect(hooks.settled).toHaveBeenCalledWith(retrying, 'failed')
+      },
+      { timeout: 2_000 },
+    )
+    const aStarts = hooks.start.mock.calls.filter(
+      (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-a',
+    )
+    expect(aStarts).toHaveLength(1)
+    expect(hooks.timeout).toHaveBeenCalledWith(retrying, { waitMs: expect.any(Number) })
+    expect(hooks.fail).not.toHaveBeenCalled()
+    expect(queue.owns('run-a')).toBe(false)
+    expect(queue.summary().queued).toBe(0)
+    queue.dispose()
+  })
 })
 
 describe('review queue cancellation', () => {

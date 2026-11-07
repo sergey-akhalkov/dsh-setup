@@ -64,7 +64,8 @@ export interface ClassifiedFailure {
 
 /** Facts a wait-timeout settlement reports for the ERROR detail. */
 export interface QueueTimeoutInfo {
-  position: number
+  /** Waiting-list position; absent when the run timed out during retry backoff. */
+  position?: number
   waitMs: number
 }
 
@@ -99,7 +100,10 @@ interface QueueEntry<T extends QueueRun> {
   attempts: number
   failureClass?: FailureClass
   retryAfterMs?: number
-  timer?: ReturnType<typeof setTimeout>
+  /** Acceptance-based wait deadline; a retry never resets it. */
+  waitDeadlineMs: number
+  waitTimer?: ReturnType<typeof setTimeout>
+  retryTimer?: ReturnType<typeof setTimeout>
   head: boolean
   finished: boolean
   /** Set while a retry timer owns eligibility, so a stale timer is ignored. */
@@ -214,7 +218,8 @@ export class ReviewQueue<T extends QueueRun> {
   /** Stop every pending timer; the engine calls this when the plugin unloads. */
   dispose(): void {
     for (const entry of this.entries.values()) {
-      if (entry.timer !== undefined) clearTimeout(entry.timer)
+      if (entry.waitTimer !== undefined) clearTimeout(entry.waitTimer)
+      if (entry.retryTimer !== undefined) clearTimeout(entry.retryTimer)
     }
     this.entries.clear()
     this.identities.clear()
@@ -256,6 +261,7 @@ export class ReviewQueue<T extends QueueRun> {
       seq: ++this.sequence,
       queuedAtMs: this.hooks.now().getTime(),
       attempts: 0,
+      waitDeadlineMs: 0,
       head: false,
       finished: false,
       retryToken: 0,
@@ -340,15 +346,20 @@ export class ReviewQueue<T extends QueueRun> {
     this.persistEntry(run)
     const token = ++entry.retryToken
     const delay = retryDelayMs(entry.attempts, this.limits, failure.retryAfterMs)
-    entry.timer = setTimeout(() => {
+    entry.retryTimer = setTimeout(() => {
       this.retryDue(entry, token)
     }, delay)
     this.pump()
   }
 
-  /** Re-enter the waiting list, or settle visibly when the waiting list is full. */
+  /** Re-enter the waiting list, or settle visibly when capacity or time is gone. */
   private retryDue(entry: QueueEntry<T>, token: number): void {
     if (entry.finished || entry.retryToken !== token) return
+    delete entry.retryTimer
+    if (this.hooks.now().getTime() >= entry.waitDeadlineMs) {
+      void this.settleWaitTimeout(entry)
+      return
+    }
     if (this.limits.enabled && this.waiting.length >= this.limits.maxQueued) {
       const cause =
         entry.lastError ?? new Error('the retry could not re-enter the full review queue')
@@ -395,20 +406,35 @@ export class ReviewQueue<T extends QueueRun> {
   }
 
   private armWaitTimer(entry: QueueEntry<T>): void {
-    if (entry.timer !== undefined) clearTimeout(entry.timer)
-    entry.timer = setTimeout(() => {
+    entry.waitDeadlineMs = this.hooks.now().getTime() + this.limits.waitTimeoutMs
+    entry.waitTimer = setTimeout(() => {
       void this.waitTimedOut(entry)
     }, this.limits.waitTimeoutMs)
   }
 
   private async waitTimedOut(entry: QueueEntry<T>): Promise<void> {
-    if (entry.finished || entry.phase !== 'queued') return
+    if (entry.finished) return
+    // A live or in-flight target is already admitted; the wait clock no longer applies.
+    if (entry.phase === 'starting' || entry.phase === 'running') return
+    await this.settleWaitTimeout(entry)
+  }
+
+  /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
+  private async settleWaitTimeout(entry: QueueEntry<T>): Promise<void> {
     const position = this.positionOf(entry)
     const waitMs = this.hooks.now().getTime() - entry.queuedAtMs
     this.removeWaiting(entry)
+    entry.retryToken += 1
+    if (entry.retryTimer !== undefined) {
+      clearTimeout(entry.retryTimer)
+      delete entry.retryTimer
+    }
     entry.phase = 'settled'
     try {
-      await this.hooks.timeout(entry.run, { position, waitMs })
+      await this.hooks.timeout(entry.run, {
+        ...(position === 0 ? {} : { position }),
+        waitMs,
+      })
     } finally {
       await this.finish(entry, 'failed')
     }
@@ -486,7 +512,10 @@ export class ReviewQueue<T extends QueueRun> {
     entry.run.file.attempts = entry.attempts
     entry.run.file.waitMs = this.hooks.now().getTime() - entry.queuedAtMs
     delete entry.run.file.queuePosition
-    delete entry.timer
+    if (entry.retryTimer !== undefined) {
+      clearTimeout(entry.retryTimer)
+      delete entry.retryTimer
+    }
     this.active.add(entry)
     this.syncPositions()
     this.persistEntry(entry.run)
@@ -513,6 +542,11 @@ export class ReviewQueue<T extends QueueRun> {
     if (entry.finished) return
     entry.phase = 'running'
     entry.run.file.state = 'running'
+    if (entry.waitTimer !== undefined) {
+      // The target is live: admission is proven and the wait clock stops.
+      clearTimeout(entry.waitTimer)
+      delete entry.waitTimer
+    }
     this.persistEntry(entry.run)
   }
 
@@ -537,9 +571,13 @@ export class ReviewQueue<T extends QueueRun> {
     if (entry.finished) return
     entry.finished = true
     entry.phase = 'settled'
-    if (entry.timer !== undefined) {
-      clearTimeout(entry.timer)
-      delete entry.timer
+    if (entry.waitTimer !== undefined) {
+      clearTimeout(entry.waitTimer)
+      delete entry.waitTimer
+    }
+    if (entry.retryTimer !== undefined) {
+      clearTimeout(entry.retryTimer)
+      delete entry.retryTimer
     }
     this.removeWaiting(entry)
     this.active.delete(entry)

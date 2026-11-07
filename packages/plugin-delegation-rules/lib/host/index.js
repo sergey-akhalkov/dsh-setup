@@ -2965,7 +2965,8 @@ class DelegationEngine {
     /** Write the terminal wait-timeout ERROR; the queue finishes the run after this. */
     async timeoutRun(run, info) {
         const prepared = run.prepared;
-        const message = `review queue wait timed out after ${info.waitMs} ms at position ${info.position}; no target started. Shorten the running reviews or start this review again after the queue drains`;
+        const position = info.position === undefined ? '' : ` at position ${info.position}`;
+        const message = `review queue wait timed out after ${info.waitMs} ms${position}; no target started. Shorten the running reviews or start this review again after the queue drains`;
         if (prepared !== undefined) {
             try {
                 const target = this.config.targets.get(run.context.rule.to ?? '');
