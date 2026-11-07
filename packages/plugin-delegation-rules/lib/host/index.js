@@ -1725,6 +1725,9 @@ const FAILURE_CLASSES = new Set([
 function isFailureClass(value) {
     return typeof value === 'string' && FAILURE_CLASSES.has(value);
 }
+function isActiveRunState(state) {
+    return state === 'queued' || state === 'starting' || state === 'running' || state === 'retry-wait';
+}
 function isRunTimestamp(value) {
     return typeof value === 'string' && RUN_TIMESTAMP.test(value);
 }
@@ -2673,6 +2676,7 @@ class DelegationEngine {
     config;
     services;
     runs = new Map();
+    recoveredWorkspaces = new Set();
     queue;
     constructor(config, services) {
         this.config = config;
@@ -2811,6 +2815,7 @@ class DelegationEngine {
      * cached verdict never consumes a queue slot.
      */
     async startReview(rule, change, agent, cwd, workspaceRoot, args) {
+        await this.ensureRecovered(workspaceRoot);
         const tasks = await readTasks(change.dir);
         let task;
         if (args.task !== undefined) {
@@ -3488,6 +3493,35 @@ class DelegationEngine {
             // Run state is local scratch; a write failure must not break the background run.
         }
     }
+    /** Reconcile crashed run files from the authoritative records once per workspace. */
+    async ensureRecovered(workspaceRoot) {
+        if (this.recoveredWorkspaces.has(workspaceRoot))
+            return;
+        this.recoveredWorkspaces.add(workspaceRoot);
+        for (const run of await listRunFiles(workspaceRoot)) {
+            if (!isActiveRunState(run.state))
+                continue;
+            const current = await inspectRecord(join(workspaceRoot, run.record));
+            if (current.kind === 'record' && current.record.runId === run.id) {
+                run.state = current.record.verdict === 'ERROR' ? 'failed' : 'completed';
+                run.detail = `recovered from the published ${current.record.verdict} record`;
+            }
+            else if (current.kind === 'record') {
+                run.state = 'discarded';
+                run.detail = 'recovered: a newer review run holds the record';
+            }
+            else {
+                run.state = 'interrupted';
+                run.detail = 'recovered after restart without an authoritative record; run a fresh review';
+            }
+            try {
+                await writeJsonAtomic(runFilePath(workspaceRoot, run.id), run);
+            }
+            catch {
+                // Run state is scratch; recovery must not fail the caller.
+            }
+        }
+    }
     /** Bounded queue facts; never a path, credential, or provider message. */
     runFacts(file) {
         const facts = [];
@@ -3776,6 +3810,7 @@ class DelegationEngine {
             if (changes.length === 0)
                 lines.push('- no active change');
             const workspaceRoot = dirname(openspecRoot);
+            await this.ensureRecovered(workspaceRoot);
             const involvementRead = await readInvolvement(workspaceRoot, thread);
             if (involvementRead.warning !== undefined) {
                 lines.push(`- session involvement: ${involvementRead.warning}`);

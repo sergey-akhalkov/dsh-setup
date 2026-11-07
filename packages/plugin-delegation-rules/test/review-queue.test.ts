@@ -4124,3 +4124,141 @@ describe('retry wait visibility', () => {
     expect(aStarts).toBe(1)
   })
 })
+
+describe('restart recovery', () => {
+  const findingsResponse = (run: RunRecord) => {
+    const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
+    return {
+      output: [
+        {
+          type: 'text' as const,
+          text: `\`\`\`json\n${JSON.stringify({
+            digest,
+            verdict: 'FINDINGS',
+            findings: [{ severity: 'P1', title: 'Blocking', evidence: 'Observed', fix: 'Fix it' }],
+          })}\n\`\`\``,
+        },
+      ],
+      stopReason: 'completed' as const,
+    }
+  }
+
+  const runFile = (id: string, change: string, state: string, record: string) => ({
+    id,
+    rule: 'spec-review',
+    change,
+    key: `spec-review:${change}`,
+    identity: `spec-review:whole:${change}`,
+    state,
+    record,
+    startedAt: '2026-01-01T00:00:00.000Z',
+  })
+
+  it('recovers active runs from records without touching them', async () => {
+    const root = await workspace()
+    const cases: Array<{
+      change: string
+      state: 'completed' | 'failed'
+      respond: (run: RunRecord) => unknown
+      stale?: boolean
+      runId?: string
+      recordPath?: string
+    }> = [
+      { change: 'change-a', state: 'completed', respond: passResponder },
+      { change: 'change-b', state: 'completed', respond: findingsResponse },
+      {
+        change: 'change-c',
+        state: 'failed',
+        respond: () => ({ output: [], stopReason: 'completed' }),
+      },
+      { change: 'change-d', state: 'completed', respond: passResponder, stale: true },
+    ]
+    const records = new Map<string, string>()
+    for (const testCase of cases) {
+      await writeChange(root, testCase.change, [])
+      const agents = new FakeSubagents()
+      agents.addProvider(
+        'codex-subagent',
+        {},
+        (run) => testCase.respond(run) as ReturnType<typeof passResponder>,
+      )
+      const harness = await harnessFor(root, defaultTestConfig(), agents)
+      const runId = await harness.startReview({
+        rule: 'spec-review',
+        change: testCase.change,
+      })
+      expect(await harness.waitForRun(runId)).toContain(`state=${testCase.state}`)
+      const recordPath = join(
+        root,
+        '.dsh',
+        'delegation',
+        'spec-review',
+        testCase.change,
+        'spec.json',
+      )
+      testCase.runId = runId
+      testCase.recordPath = recordPath
+      records.set(runId, await readFile(recordPath, 'utf8'))
+      if (testCase.stale === true) {
+        await writeFile(
+          join(root, 'openspec', 'changes', testCase.change, 'proposal.md'),
+          '# Proposal\n\nStale.\n',
+          'utf8',
+        )
+      }
+      const runPath = join(root, '.dsh', 'delegation', 'runs', `${runId}.json`)
+      const run = JSON.parse(await readFile(runPath, 'utf8')) as Record<string, unknown>
+      run.state = 'running'
+      await writeFile(runPath, JSON.stringify(run), 'utf8')
+    }
+
+    await writeChange(root, 'change-e', [])
+    await writeChange(root, 'change-f', [])
+    const runsDir = join(root, '.dsh', 'delegation', 'runs')
+    await mkdir(runsDir, { recursive: true })
+    await writeFile(
+      join(runsDir, 'run-no-record.json'),
+      JSON.stringify(
+        runFile(
+          'run-no-record',
+          'change-e',
+          'running',
+          '.dsh/delegation/spec-review/change-e/spec.json',
+        ),
+      ),
+      'utf8',
+    )
+    await mkdir(join(root, '.dsh', 'delegation', 'spec-review', 'change-f'), { recursive: true })
+    await writeFile(
+      join(root, '.dsh', 'delegation', 'spec-review', 'change-f', 'spec.json'),
+      '{not json',
+      'utf8',
+    )
+    await writeFile(
+      join(runsDir, 'run-bad-record.json'),
+      JSON.stringify(
+        runFile(
+          'run-bad-record',
+          'change-f',
+          'queued',
+          '.dsh/delegation/spec-review/change-f/spec.json',
+        ),
+      ),
+      'utf8',
+    )
+
+    const fresh = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: new FakeSubagents(),
+    })
+    const status = await fresh.toolText('delegation_status', {})
+    for (const testCase of cases) {
+      const runId = testCase.runId as string
+      expect(status).toMatch(new RegExp(`run ${runId}: .*state=${testCase.state}`))
+      expect(await readFile(testCase.recordPath as string, 'utf8')).toBe(records.get(runId))
+    }
+    expect(status).toMatch(/run run-no-record: .*state=interrupted/)
+    expect(status).toMatch(/run run-bad-record: .*state=interrupted/)
+  })
+})

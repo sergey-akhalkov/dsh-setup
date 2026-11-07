@@ -2307,6 +2307,10 @@ function isFailureClass(value: unknown): value is FailureClass {
   return typeof value === 'string' && FAILURE_CLASSES.has(value)
 }
 
+function isActiveRunState(state: RunState): boolean {
+  return state === 'queued' || state === 'starting' || state === 'running' || state === 'retry-wait'
+}
+
 function isRunTimestamp(value: unknown): value is string {
   return typeof value === 'string' && RUN_TIMESTAMP.test(value)
 }
@@ -3465,6 +3469,7 @@ interface ToolAgentContext {
 /** The engine behind the three tools: validation, target runs, records, status. */
 class DelegationEngine {
   private readonly runs = new Map<string, ManagedRun>()
+  private readonly recoveredWorkspaces = new Set<string>()
   private readonly queue: ReviewQueue<ManagedRun>
 
   constructor(
@@ -3641,6 +3646,7 @@ class DelegationEngine {
     workspaceRoot: string,
     args: DelegateArguments,
   ): Promise<string> {
+    await this.ensureRecovered(workspaceRoot)
     const tasks = await readTasks(change.dir)
     let task: TaskInfo | undefined
     if (args.task !== undefined) {
@@ -4503,6 +4509,31 @@ class DelegationEngine {
     }
   }
 
+  /** Reconcile crashed run files from the authoritative records once per workspace. */
+  private async ensureRecovered(workspaceRoot: string): Promise<void> {
+    if (this.recoveredWorkspaces.has(workspaceRoot)) return
+    this.recoveredWorkspaces.add(workspaceRoot)
+    for (const run of await listRunFiles(workspaceRoot)) {
+      if (!isActiveRunState(run.state)) continue
+      const current = await inspectRecord(join(workspaceRoot, run.record))
+      if (current.kind === 'record' && current.record.runId === run.id) {
+        run.state = current.record.verdict === 'ERROR' ? 'failed' : 'completed'
+        run.detail = `recovered from the published ${current.record.verdict} record`
+      } else if (current.kind === 'record') {
+        run.state = 'discarded'
+        run.detail = 'recovered: a newer review run holds the record'
+      } else {
+        run.state = 'interrupted'
+        run.detail = 'recovered after restart without an authoritative record; run a fresh review'
+      }
+      try {
+        await writeJsonAtomic(runFilePath(workspaceRoot, run.id), run)
+      } catch {
+        // Run state is scratch; recovery must not fail the caller.
+      }
+    }
+  }
+
   /** Bounded queue facts; never a path, credential, or provider message. */
   private runFacts(file: RunFile): string {
     const facts: string[] = []
@@ -4841,6 +4872,7 @@ class DelegationEngine {
       const changes = await listActiveChanges(openspecRoot)
       if (changes.length === 0) lines.push('- no active change')
       const workspaceRoot = dirname(openspecRoot)
+      await this.ensureRecovered(workspaceRoot)
       const involvementRead = await readInvolvement(workspaceRoot, thread)
       if (involvementRead.warning !== undefined) {
         lines.push(`- session involvement: ${involvementRead.warning}`)
