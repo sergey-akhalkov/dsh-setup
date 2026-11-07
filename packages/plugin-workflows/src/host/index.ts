@@ -3,7 +3,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SubagentRunEndInfo, SubagentRunInfo } from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { Journal, summarize, toolResultText, type JournalInput } from './journal.js'
+import { Journal, MAX_RECORD_BYTES, toolResultText, type JournalInput } from './journal.js'
 
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
 export const name = '@dsh-setup/plugin-workflows'
@@ -99,6 +99,34 @@ function describe(value: unknown): string {
   }
 }
 
+/** Characters a tool name may keep in a journal summary. */
+const SAFE_NAME = /[^A-Za-z0-9._-]+/gu
+
+/** The handle `delegate` mints: `run-<base36>-<8 hex>`. */
+const RUN_ID = /^run-[a-z0-9]+-[a-f0-9]{8}$/u
+
+/**
+ * The journal stores an index, never the tool's output text. Only fixed,
+ * validated identity fields are kept; the raw payload stays in the session log,
+ * so a credential in a tool result cannot reach the journal at all. A delegate
+ * result keeps its run handle because the run projection attributes it.
+ */
+function toolSummary(name: string, isError: boolean, text: string): string {
+  const tool = name.replace(SAFE_NAME, '_').slice(0, 80)
+  if (tool === 'delegate') {
+    const lines = text.split('\n').slice(0, 6)
+    const mode = lines
+      .map((line) => /\brule\s+"[^"]*"\s+review\s+(started|queued|already pending)\b/u.exec(line)?.[1])
+      .find((value) => value !== undefined)
+    const runLine = lines.find((line) => line.trimStart().startsWith('run:'))
+    const run = runLine?.replace(/^\s*run:\s*/u, '').trim()
+    if (mode !== undefined && run !== undefined && RUN_ID.test(run)) {
+      return `delegate review ${mode}; run: ${run}`
+    }
+  }
+  return `${tool} ${isError ? 'failed' : 'ok'}; output omitted`
+}
+
 /**
  * Register the recorder. Every listener is observe-only: it never calls
  * `agent.steer`, `agent.inject`, or a tool, and a thrown observation is
@@ -178,7 +206,8 @@ export function apply(ctx: Context): void {
       const workspace = workspaceFor(services, session)
       if (workspace === undefined) return
       const text = toolResultText(result)
-      const bounded = summarize(text)
+      const summary = toolSummary(exec.name, result.isError, text)
+      const bytes = Buffer.byteLength(text, 'utf8')
       record(workspace, {
         at: journal.time(),
         session: String(session.id),
@@ -189,9 +218,9 @@ export function apply(ctx: Context): void {
         subject: exec.name,
         callId: String(exec.callId),
         ok: !result.isError,
-        summary: bounded.summary,
-        bytes: bounded.bytes,
-        truncated: bounded.truncated,
+        summary,
+        bytes,
+        truncated: bytes > MAX_RECORD_BYTES,
       })
     } catch {
       // Observability never breaks tool dispatch.

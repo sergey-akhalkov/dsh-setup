@@ -1,6 +1,7 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, rename, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { redactPayload, redactValue } from './redact.js'
 
 /**
  * Bounded per-session event journal: one JSONL line per observed process
@@ -13,6 +14,15 @@ export const JOURNAL_VERSION = 1
 
 /** Per-record cap: one record over this is summarized and marked truncated. */
 export const MAX_RECORD_BYTES = 4096
+
+/** Per-session cap before the current file rotates to `.1`. */
+export const MAX_SESSION_BYTES = 5 * 1024 * 1024
+
+/** Workspace cap across every session file; the oldest are pruned first. */
+export const MAX_WORKSPACE_BYTES = 50 * 1024 * 1024
+
+/** Workspace retention window. */
+export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 
 /** Characters one summary may spend before the record cap applies. */
 export const MAX_SUMMARY_CHARS = 600
@@ -72,12 +82,59 @@ export interface JournalPage {
   readonly next?: string
 }
 
+/** One session file on disk, as retention sees it. */
+export interface JournalFileInfo {
+  readonly name: string
+  readonly size: number
+  readonly mtimeMs: number
+}
+
 export interface JournalOptions {
   readonly maxRecordBytes?: number
+  readonly maxSessionBytes?: number
+  readonly maxWorkspaceBytes?: number
+  readonly retentionMs?: number
   readonly now?: () => number
   /** Test seam: write one complete line. */
   readonly writeLine?: (file: string, line: string) => Promise<void>
   readonly readText?: (file: string) => Promise<string>
+  /** Test seam: list the event directory. */
+  readonly listFiles?: (directory: string) => Promise<JournalFileInfo[]>
+  /** Test seam: one file's size and age, or undefined when absent. */
+  readonly statFile?: (file: string) => Promise<{ size: number; mtimeMs: number } | undefined>
+  readonly renameFile?: (from: string, to: string) => Promise<void>
+  readonly removeFile?: (file: string) => Promise<void>
+}
+
+/** Event files and their single rotation. */
+function isJournalFile(name: string): boolean {
+  return /\.jsonl(?:\.1)?$/u.test(name)
+}
+
+async function listJournalFiles(directory: string): Promise<JournalFileInfo[]> {
+  try {
+    const names = await readdir(directory)
+    const files = await Promise.all(
+      names.filter(isJournalFile).map(async (name) => {
+        const info = await stat(join(directory, name))
+        return { name, size: info.size, mtimeMs: info.mtimeMs }
+      }),
+    )
+    return files
+  } catch {
+    return []
+  }
+}
+
+async function statJournalFile(
+  file: string,
+): Promise<{ size: number; mtimeMs: number } | undefined> {
+  try {
+    const info = await stat(file)
+    return { size: info.size, mtimeMs: info.mtimeMs }
+  } catch {
+    return undefined
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -95,39 +152,61 @@ export function toolResultText(result: ToolExecutionResult): string {
 }
 
 /**
- * A short summary and the original payload size. Over-long text is cut with a
- * marker; the raw payload stays in the session log.
+ * A short redacted summary and the original payload size. Redaction happens
+ * before the cut, so truncating a private-key block can never leave its prefix;
+ * over-long text is cut with a marker and the raw payload stays in the session
+ * log.
  */
 export function summarize(
   text: string,
   maxChars = MAX_SUMMARY_CHARS,
 ): { summary: string; bytes: number; truncated: boolean } {
+  const redacted = redactPayload(text)
   const bytes = Buffer.byteLength(text, 'utf8')
-  if (text.length <= maxChars) return { summary: text, bytes, truncated: false }
-  return { summary: `${text.slice(0, maxChars - 1)}…`, bytes, truncated: true }
+  const oversized = bytes > MAX_RECORD_BYTES
+  if (redacted.length <= maxChars) return { summary: redacted, bytes, truncated: oversized }
+  return { summary: `${redacted.slice(0, maxChars - 1)}…`, bytes, truncated: true }
 }
 
 /**
  * Shrink one record until its JSON line fits the per-record cap. The summary
- * is the only unbounded field, so it is cut first and a marker is kept.
+ * and then the subject are cut; optional metadata is dropped last, so an
+ * oversized field can never push the line over the limit.
  */
 export function capRecord(
   record: JournalRecord,
   maxBytes = MAX_RECORD_BYTES,
 ): { record: JournalRecord; truncated: boolean } {
-  const encode = (value: JournalRecord): string => JSON.stringify(value)
-  if (Buffer.byteLength(encode(record), 'utf8') <= maxBytes) return { record, truncated: false }
-  let summary = record.summary
-  while (summary.length > 0) {
-    const next = summary.slice(0, Math.max(0, Math.floor(summary.length / 2)))
-    const candidate: JournalRecord = { ...record, summary: `${next}…`, truncated: true }
-    if (Buffer.byteLength(encode(candidate), 'utf8') <= maxBytes) {
-      return { record: candidate, truncated: true }
+  const fits = (value: JournalRecord): boolean =>
+    Buffer.byteLength(JSON.stringify(value), 'utf8') <= maxBytes
+  if (fits(record)) return { record, truncated: false }
+  let candidate: JournalRecord = { ...record, truncated: true }
+  for (const field of ['summary', 'subject'] as const) {
+    let value = candidate[field]
+    while (value.length > 0) {
+      const shorter = value.slice(0, Math.floor(value.length / 2))
+      candidate = { ...candidate, [field]: `${shorter}…` }
+      if (fits(candidate)) return { record: candidate, truncated: true }
+      value = shorter
     }
-    summary = next
+    candidate = { ...candidate, [field]: '…' }
+    if (fits(candidate)) return { record: candidate, truncated: true }
   }
-  const candidate: JournalRecord = { ...record, summary: '', truncated: true }
-  return { record: candidate, truncated: true }
+  const minimal: JournalRecord = {
+    v: candidate.v,
+    at: candidate.at,
+    session: candidate.session,
+    ...(candidate.turn === undefined ? {} : { turn: candidate.turn }),
+    kind: candidate.kind,
+    subject: '…',
+    summary: '',
+    bytes: candidate.bytes,
+    truncated: true,
+  }
+  if (!fits(minimal)) {
+    throw new Error(`journal record metadata exceeds the ${String(maxBytes)}-byte cap`)
+  }
+  return { record: minimal, truncated: true }
 }
 
 /**
@@ -137,21 +216,37 @@ export function capRecord(
  */
 export class Journal {
   private readonly maxRecordBytes: number
+  private readonly maxSessionBytes: number
+  private readonly maxWorkspaceBytes: number
+  private readonly retentionMs: number
   private readonly now: () => number
   private readonly writeLine: (file: string, line: string) => Promise<void>
   private readonly readText: (file: string) => Promise<string>
+  private readonly listFiles: (directory: string) => Promise<JournalFileInfo[]>
+  private readonly statFile: (
+    file: string,
+  ) => Promise<{ size: number; mtimeMs: number } | undefined>
+  private readonly renameFile: (from: string, to: string) => Promise<void>
+  private readonly removeFile: (file: string) => Promise<void>
   private readonly queues = new Map<string, Promise<unknown>>()
 
   constructor(options: JournalOptions = {}) {
     this.maxRecordBytes = options.maxRecordBytes ?? MAX_RECORD_BYTES
+    this.maxSessionBytes = options.maxSessionBytes ?? MAX_SESSION_BYTES
+    this.maxWorkspaceBytes = options.maxWorkspaceBytes ?? MAX_WORKSPACE_BYTES
+    this.retentionMs = options.retentionMs ?? RETENTION_MS
     this.now = options.now ?? (() => Date.now())
     this.writeLine = options.writeLine ?? ((file, line) => appendFile(file, line, 'utf8'))
     this.readText = options.readText ?? ((file) => readFile(file, 'utf8'))
+    this.listFiles = options.listFiles ?? listJournalFiles
+    this.statFile = options.statFile ?? statJournalFile
+    this.renameFile = options.renameFile ?? ((from, to) => rename(from, to))
+    this.removeFile = options.removeFile ?? ((file) => unlink(file))
   }
 
-  /** Build the bounded record a producer's fields describe. */
+  /** Build the redacted, bounded record a producer's fields describe. */
   record(input: JournalInput): { record: JournalRecord; truncated: boolean } {
-    const record: JournalRecord = {
+    const built: JournalRecord = {
       v: JOURNAL_VERSION,
       at: input.at,
       session: input.session,
@@ -162,9 +257,15 @@ export class Journal {
       ...(input.ok === undefined ? {} : { ok: input.ok }),
       summary: input.summary,
       bytes: input.bytes,
-      truncated: input.truncated,
+      // An oversized original payload is marked even when redaction replaced
+      // its text with one marker and the stored line is short.
+      truncated: input.truncated || input.bytes > this.maxRecordBytes,
     }
-    return capRecord(record, this.maxRecordBytes)
+    // Whole-record redaction also covers any structured field a later producer
+    // adds; a secret-named key never reaches the file even inside JSON text.
+    const redacted = redactValue(built) as JournalRecord
+    const capped = capRecord(redacted, this.maxRecordBytes)
+    return { record: capped.record, truncated: capped.truncated || redacted.truncated }
   }
 
   /** Append one record; returns a result instead of throwing. */
@@ -173,8 +274,11 @@ export class Journal {
     const file = join(directory, `${sessionFileName(record.session)}.jsonl`)
     const line = `${JSON.stringify(record)}\n`
     const previous = this.queues.get(file) ?? Promise.resolve()
+    // shortcut: one appendFile call is the atomic unit; a crash mid-write can
+    // leave a torn final line, which every reader skips.
     const write = previous.then(async () => {
       await mkdir(directory, { recursive: true })
+      await this.rotateIfNeeded(file, Buffer.byteLength(line, 'utf8'))
       await this.writeLine(file, line)
     })
     this.queues.set(
@@ -183,13 +287,46 @@ export class Journal {
     )
     try {
       await write
+      // Retention runs after the record is durable and never fails the append.
+      await this.prune(workspace)
       return { ok: true }
     } catch (error) {
       return { ok: false, error: errorMessage(error) }
     }
   }
 
-  /** One page of a session's records; an invalid stored line is skipped. */
+  /** Rotate the current session file to `.1` when the next line would exceed its cap. */
+  private async rotateIfNeeded(file: string, incoming: number): Promise<void> {
+    const current = await this.statFile(file)
+    if (current === undefined || current.size + incoming <= this.maxSessionBytes) return
+    const rotated = `${file}.1`
+    await this.removeFile(rotated).catch(() => undefined)
+    await this.renameFile(file, rotated)
+  }
+
+  /** Drop expired files, then the oldest files until the workspace cap holds. */
+  private async prune(workspace: string): Promise<void> {
+    try {
+      const directory = eventsDirectory(workspace)
+      const cutoff = this.now() - this.retentionMs
+      let files = (await this.listFiles(directory)).filter((file) => isJournalFile(file.name))
+      for (const file of files) {
+        if (file.mtimeMs >= cutoff) continue
+        await this.removeFile(join(directory, file.name))
+        files = files.filter((candidate) => candidate !== file)
+      }
+      let total = files.reduce((sum, file) => sum + file.size, 0)
+      for (const file of [...files].sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+        if (total <= this.maxWorkspaceBytes) break
+        await this.removeFile(join(directory, file.name))
+        total -= file.size
+      }
+    } catch {
+      // Pruning never fails the append that triggered it.
+    }
+  }
+
+  /** One page of a session's records; the rotation and current file are one log. */
   async read(
     workspace: string,
     session: string,
@@ -197,21 +334,23 @@ export class Journal {
     limit = 50,
   ): Promise<JournalPage> {
     const file = join(eventsDirectory(workspace), `${sessionFileName(session)}.jsonl`)
-    let raw = ''
-    try {
-      raw = await this.readText(file)
-    } catch {
-      return { records: [] }
-    }
     const records: JournalRecord[] = []
-    for (const line of raw.split('\n')) {
-      if (line.trim() === '') continue
+    for (const candidate of [`${file}.1`, file]) {
+      let raw = ''
       try {
-        const value = JSON.parse(line) as JournalRecord
-        if (value.v !== JOURNAL_VERSION || typeof value.at !== 'number') continue
-        records.push(value)
+        raw = await this.readText(candidate)
       } catch {
-        // A torn or foreign line is not a record; the next line still is.
+        continue
+      }
+      for (const line of raw.split('\n')) {
+        if (line.trim() === '') continue
+        try {
+          const value = JSON.parse(line) as JournalRecord
+          if (value.v !== JOURNAL_VERSION || typeof value.at !== 'number') continue
+          records.push(value)
+        } catch {
+          // A torn or foreign line is not a record; the next line still is.
+        }
       }
     }
     const start = Math.min(Math.max(0, cursor), records.length)

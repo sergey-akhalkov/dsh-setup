@@ -1,10 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/host/index.ts'
-import { Journal } from '../src/host/journal.ts'
-
+import { Journal, eventsDirectory } from '../src/host/journal.ts'
 type Listener = (...args: unknown[]) => unknown
 
 interface FakeAgent {
@@ -339,6 +338,189 @@ describe('workflow event recorder', () => {
     expect((await journal.read(workspace, 'session-1', 0, 50)).records[0]?.kind).toBe('tools/result')
   })
 
+  it('never stores tool output content, only a fixed identity summary', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const journal = new Journal()
+    host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'call-secret', name: 'read', arguments: {} },
+      {
+        isError: false,
+        content: [{ type: 'text', text: 'authorization: Bearer SECRET-TOKEN-123' }],
+      },
+    )
+    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    const { records } = await journal.read(workspace, 'session-1', 0, 50)
+    expect(records[0]?.summary).toBe('read ok; output omitted')
+    expect(records[0]?.bytes).toBeGreaterThan(0)
+    expect(JSON.stringify(records)).not.toContain('SECRET-TOKEN-123')
+  })
+
+  it('keeps a delegate run handle so the run projection can attribute it', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const journal = new Journal()
+    host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'call-run', name: 'delegate', arguments: {} },
+      {
+        isError: false,
+        content: [
+          {
+            type: 'text',
+            text: 'rule "task-review" review started\nrun: run-mw6abcde-1234abcd\nstate: running\npassword: HUNTER-secret',
+          },
+        ],
+      },
+    )
+    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    const { records } = await journal.read(workspace, 'session-1', 0, 50)
+    expect(records[0]?.summary).toBe('delegate review started; run: run-mw6abcde-1234abcd')
+    expect(JSON.stringify(records)).not.toContain('HUNTER-secret')
+  })
+
+  it('does not treat an arbitrary run line as a delegate handle', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const journal = new Journal()
+    host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'call-forged', name: 'delegate', arguments: {} },
+      {
+        isError: false,
+        content: [
+          {
+            type: 'text',
+            text: 'rule "task-review" review started\nrun: HUNTER-secret',
+          },
+        ],
+      },
+    )
+    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    const { records } = await journal.read(workspace, 'session-1', 0, 50)
+    expect(records[0]?.summary).toBe('delegate ok; output omitted')
+    expect(JSON.stringify(records)).not.toContain('HUNTER-secret')
+  })
+
+  it('marks an oversized tool result as truncated', async () => {
+    const workspace = await tempWorkspace()
+    const host = createHost(workspace)
+    apply(host.ctx as never)
+    const journal = new Journal()
+    host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'call-big', name: 'read', arguments: {} },
+      {
+        isError: false,
+        content: [{ type: 'text', text: 'x'.repeat(5000) }],
+      },
+    )
+    await waitFor(async () => (await journal.read(workspace, 'session-1', 0, 50)).records.length === 1)
+    const { records } = await journal.read(workspace, 'session-1', 0, 50)
+    expect(records[0]?.truncated).toBe(true)
+    expect(records[0]?.bytes).toBe(5000)
+    expect(records[0]?.summary).toBe('read ok; output omitted')
+  })
+
+  it('removes expired and over-limit session files on write', async () => {
+    const workspace = await tempWorkspace()
+    const now = 1_700_000_000_000
+    const day = 24 * 60 * 60 * 1000
+    let files = [
+      { name: 'old.jsonl', size: 100, mtimeMs: now - 31 * day },
+      { name: 'middle.jsonl', size: 100, mtimeMs: now - 1000 },
+      { name: 'newest.jsonl', size: 100, mtimeMs: now - 10 },
+    ]
+    const removed: string[] = []
+    const journal = new Journal({
+      now: () => now,
+      retentionMs: 30 * day,
+      maxWorkspaceBytes: 150,
+      statFile: async () => ({ size: 0, mtimeMs: now }),
+      writeLine: async () => {},
+      listFiles: async () => files,
+      removeFile: async (file) => {
+        removed.push(file)
+        files = files.filter((entry) => !file.endsWith(entry.name))
+      },
+    })
+    const { record } = journal.record({
+      at: now,
+      session: 'session-1',
+      kind: 'tools/result',
+      subject: 'read',
+      summary: 'ok',
+      bytes: 2,
+      truncated: false,
+    })
+    expect((await journal.append(workspace, record)).ok).toBe(true)
+    expect(removed.some((file) => file.endsWith('old.jsonl'))).toBe(true)
+    expect(removed.some((file) => file.endsWith('middle.jsonl'))).toBe(true)
+    expect(removed.some((file) => file.endsWith('newest.jsonl'))).toBe(false)
+  })
+
+  it('rotates a full session file and keeps its newest records readable', async () => {
+    const workspace = await tempWorkspace()
+    const journal = new Journal({ maxSessionBytes: 260 })
+    for (let index = 0; index < 3; index += 1) {
+      const { record } = journal.record({
+        at: index,
+        session: 'session-1',
+        kind: 'tools/result',
+        subject: 'read',
+        summary: `entry-${String(index)} ${'x'.repeat(120)}`,
+        bytes: 130,
+        truncated: false,
+      })
+      expect((await journal.append(workspace, record)).ok).toBe(true)
+    }
+    const files = await readdir(eventsDirectory(workspace))
+    expect(files.some((name) => name.endsWith('.jsonl.1'))).toBe(true)
+    const { records } = await journal.read(workspace, 'session-1', 0, 10)
+    expect(records.length).toBeGreaterThanOrEqual(2)
+    expect(records.at(-1)?.summary).toContain('entry-2')
+  })
+
+  it('leaves previous records intact when a write fails', async () => {
+    const workspace = await tempWorkspace()
+    let calls = 0
+    const journal = new Journal({
+      writeLine: async (file, line) => {
+        calls += 1
+        if (calls === 2) throw new Error('disk full')
+        await appendFile(file, line, 'utf8')
+      },
+    })
+    const first = journal.record({
+      at: 1,
+      session: 'session-1',
+      kind: 'tools/result',
+      subject: 'read',
+      summary: 'first',
+      bytes: 5,
+      truncated: false,
+    })
+    expect((await journal.append(workspace, first.record)).ok).toBe(true)
+    const second = journal.record({
+      at: 2,
+      session: 'session-1',
+      kind: 'tools/result',
+      subject: 'read',
+      summary: 'second',
+      bytes: 6,
+      truncated: false,
+    })
+    const failed = await journal.append(workspace, second.record)
+    expect(failed.ok).toBe(false)
+    const { records } = await journal.read(workspace, 'session-1', 0, 10)
+    expect(records).toHaveLength(1)
+    expect(records[0]?.summary).toBe('first')
+  })
+
   it('contains a listener whose journal write fails', async () => {
     const workspace = await tempWorkspace()
     await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
@@ -358,3 +540,4 @@ describe('workflow event recorder', () => {
     expect(String(errors.mock.calls[0]?.[0]).length).toBeLessThan(300)
   })
 })
+

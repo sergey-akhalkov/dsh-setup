@@ -1,5 +1,6 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { redactPayload, redactValue } from './redact.js';
 /**
  * Bounded per-session event journal: one JSONL line per observed process
  * event, an index of the session log rather than a copy of it. Everything here
@@ -9,6 +10,12 @@ import { join } from 'node:path';
 export const JOURNAL_VERSION = 1;
 /** Per-record cap: one record over this is summarized and marked truncated. */
 export const MAX_RECORD_BYTES = 4096;
+/** Per-session cap before the current file rotates to `.1`. */
+export const MAX_SESSION_BYTES = 5 * 1024 * 1024;
+/** Workspace cap across every session file; the oldest are pruned first. */
+export const MAX_WORKSPACE_BYTES = 50 * 1024 * 1024;
+/** Workspace retention window. */
+export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** Characters one summary may spend before the record cap applies. */
 export const MAX_SUMMARY_CHARS = 600;
 /** The directories the journal owns inside a session workspace. */
@@ -26,6 +33,32 @@ export function sessionFileName(session) {
     const safe = session.replace(/[^A-Za-z0-9._-]+/gu, '_').slice(0, 120);
     return safe === '' ? 'session' : safe;
 }
+/** Event files and their single rotation. */
+function isJournalFile(name) {
+    return /\.jsonl(?:\.1)?$/u.test(name);
+}
+async function listJournalFiles(directory) {
+    try {
+        const names = await readdir(directory);
+        const files = await Promise.all(names.filter(isJournalFile).map(async (name) => {
+            const info = await stat(join(directory, name));
+            return { name, size: info.size, mtimeMs: info.mtimeMs };
+        }));
+        return files;
+    }
+    catch {
+        return [];
+    }
+}
+async function statJournalFile(file) {
+    try {
+        const info = await stat(file);
+        return { size: info.size, mtimeMs: info.mtimeMs };
+    }
+    catch {
+        return undefined;
+    }
+}
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -41,34 +74,57 @@ export function toolResultText(result) {
     return parts.join('\n');
 }
 /**
- * A short summary and the original payload size. Over-long text is cut with a
- * marker; the raw payload stays in the session log.
+ * A short redacted summary and the original payload size. Redaction happens
+ * before the cut, so truncating a private-key block can never leave its prefix;
+ * over-long text is cut with a marker and the raw payload stays in the session
+ * log.
  */
 export function summarize(text, maxChars = MAX_SUMMARY_CHARS) {
+    const redacted = redactPayload(text);
     const bytes = Buffer.byteLength(text, 'utf8');
-    if (text.length <= maxChars)
-        return { summary: text, bytes, truncated: false };
-    return { summary: `${text.slice(0, maxChars - 1)}…`, bytes, truncated: true };
+    const oversized = bytes > MAX_RECORD_BYTES;
+    if (redacted.length <= maxChars)
+        return { summary: redacted, bytes, truncated: oversized };
+    return { summary: `${redacted.slice(0, maxChars - 1)}…`, bytes, truncated: true };
 }
 /**
  * Shrink one record until its JSON line fits the per-record cap. The summary
- * is the only unbounded field, so it is cut first and a marker is kept.
+ * and then the subject are cut; optional metadata is dropped last, so an
+ * oversized field can never push the line over the limit.
  */
 export function capRecord(record, maxBytes = MAX_RECORD_BYTES) {
-    const encode = (value) => JSON.stringify(value);
-    if (Buffer.byteLength(encode(record), 'utf8') <= maxBytes)
+    const fits = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8') <= maxBytes;
+    if (fits(record))
         return { record, truncated: false };
-    let summary = record.summary;
-    while (summary.length > 0) {
-        const next = summary.slice(0, Math.max(0, Math.floor(summary.length / 2)));
-        const candidate = { ...record, summary: `${next}…`, truncated: true };
-        if (Buffer.byteLength(encode(candidate), 'utf8') <= maxBytes) {
-            return { record: candidate, truncated: true };
+    let candidate = { ...record, truncated: true };
+    for (const field of ['summary', 'subject']) {
+        let value = candidate[field];
+        while (value.length > 0) {
+            const shorter = value.slice(0, Math.floor(value.length / 2));
+            candidate = { ...candidate, [field]: `${shorter}…` };
+            if (fits(candidate))
+                return { record: candidate, truncated: true };
+            value = shorter;
         }
-        summary = next;
+        candidate = { ...candidate, [field]: '…' };
+        if (fits(candidate))
+            return { record: candidate, truncated: true };
     }
-    const candidate = { ...record, summary: '', truncated: true };
-    return { record: candidate, truncated: true };
+    const minimal = {
+        v: candidate.v,
+        at: candidate.at,
+        session: candidate.session,
+        ...(candidate.turn === undefined ? {} : { turn: candidate.turn }),
+        kind: candidate.kind,
+        subject: '…',
+        summary: '',
+        bytes: candidate.bytes,
+        truncated: true,
+    };
+    if (!fits(minimal)) {
+        throw new Error(`journal record metadata exceeds the ${String(maxBytes)}-byte cap`);
+    }
+    return { record: minimal, truncated: true };
 }
 /**
  * Append-only JSONL journal. Writes are serialized per session file so record
@@ -77,19 +133,33 @@ export function capRecord(record, maxBytes = MAX_RECORD_BYTES) {
  */
 export class Journal {
     maxRecordBytes;
+    maxSessionBytes;
+    maxWorkspaceBytes;
+    retentionMs;
     now;
     writeLine;
     readText;
+    listFiles;
+    statFile;
+    renameFile;
+    removeFile;
     queues = new Map();
     constructor(options = {}) {
         this.maxRecordBytes = options.maxRecordBytes ?? MAX_RECORD_BYTES;
+        this.maxSessionBytes = options.maxSessionBytes ?? MAX_SESSION_BYTES;
+        this.maxWorkspaceBytes = options.maxWorkspaceBytes ?? MAX_WORKSPACE_BYTES;
+        this.retentionMs = options.retentionMs ?? RETENTION_MS;
         this.now = options.now ?? (() => Date.now());
         this.writeLine = options.writeLine ?? ((file, line) => appendFile(file, line, 'utf8'));
         this.readText = options.readText ?? ((file) => readFile(file, 'utf8'));
+        this.listFiles = options.listFiles ?? listJournalFiles;
+        this.statFile = options.statFile ?? statJournalFile;
+        this.renameFile = options.renameFile ?? ((from, to) => rename(from, to));
+        this.removeFile = options.removeFile ?? ((file) => unlink(file));
     }
-    /** Build the bounded record a producer's fields describe. */
+    /** Build the redacted, bounded record a producer's fields describe. */
     record(input) {
-        const record = {
+        const built = {
             v: JOURNAL_VERSION,
             at: input.at,
             session: input.session,
@@ -100,9 +170,15 @@ export class Journal {
             ...(input.ok === undefined ? {} : { ok: input.ok }),
             summary: input.summary,
             bytes: input.bytes,
-            truncated: input.truncated,
+            // An oversized original payload is marked even when redaction replaced
+            // its text with one marker and the stored line is short.
+            truncated: input.truncated || input.bytes > this.maxRecordBytes,
         };
-        return capRecord(record, this.maxRecordBytes);
+        // Whole-record redaction also covers any structured field a later producer
+        // adds; a secret-named key never reaches the file even inside JSON text.
+        const redacted = redactValue(built);
+        const capped = capRecord(redacted, this.maxRecordBytes);
+        return { record: capped.record, truncated: capped.truncated || redacted.truncated };
     }
     /** Append one record; returns a result instead of throwing. */
     async append(workspace, record) {
@@ -110,41 +186,81 @@ export class Journal {
         const file = join(directory, `${sessionFileName(record.session)}.jsonl`);
         const line = `${JSON.stringify(record)}\n`;
         const previous = this.queues.get(file) ?? Promise.resolve();
+        // shortcut: one appendFile call is the atomic unit; a crash mid-write can
+        // leave a torn final line, which every reader skips.
         const write = previous.then(async () => {
             await mkdir(directory, { recursive: true });
+            await this.rotateIfNeeded(file, Buffer.byteLength(line, 'utf8'));
             await this.writeLine(file, line);
         });
         this.queues.set(file, write.catch(() => undefined));
         try {
             await write;
+            // Retention runs after the record is durable and never fails the append.
+            await this.prune(workspace);
             return { ok: true };
         }
         catch (error) {
             return { ok: false, error: errorMessage(error) };
         }
     }
-    /** One page of a session's records; an invalid stored line is skipped. */
-    async read(workspace, session, cursor = 0, limit = 50) {
-        const file = join(eventsDirectory(workspace), `${sessionFileName(session)}.jsonl`);
-        let raw = '';
+    /** Rotate the current session file to `.1` when the next line would exceed its cap. */
+    async rotateIfNeeded(file, incoming) {
+        const current = await this.statFile(file);
+        if (current === undefined || current.size + incoming <= this.maxSessionBytes)
+            return;
+        const rotated = `${file}.1`;
+        await this.removeFile(rotated).catch(() => undefined);
+        await this.renameFile(file, rotated);
+    }
+    /** Drop expired files, then the oldest files until the workspace cap holds. */
+    async prune(workspace) {
         try {
-            raw = await this.readText(file);
+            const directory = eventsDirectory(workspace);
+            const cutoff = this.now() - this.retentionMs;
+            let files = (await this.listFiles(directory)).filter((file) => isJournalFile(file.name));
+            for (const file of files) {
+                if (file.mtimeMs >= cutoff)
+                    continue;
+                await this.removeFile(join(directory, file.name));
+                files = files.filter((candidate) => candidate !== file);
+            }
+            let total = files.reduce((sum, file) => sum + file.size, 0);
+            for (const file of [...files].sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+                if (total <= this.maxWorkspaceBytes)
+                    break;
+                await this.removeFile(join(directory, file.name));
+                total -= file.size;
+            }
         }
         catch {
-            return { records: [] };
+            // Pruning never fails the append that triggered it.
         }
+    }
+    /** One page of a session's records; the rotation and current file are one log. */
+    async read(workspace, session, cursor = 0, limit = 50) {
+        const file = join(eventsDirectory(workspace), `${sessionFileName(session)}.jsonl`);
         const records = [];
-        for (const line of raw.split('\n')) {
-            if (line.trim() === '')
-                continue;
+        for (const candidate of [`${file}.1`, file]) {
+            let raw = '';
             try {
-                const value = JSON.parse(line);
-                if (value.v !== JOURNAL_VERSION || typeof value.at !== 'number')
-                    continue;
-                records.push(value);
+                raw = await this.readText(candidate);
             }
             catch {
-                // A torn or foreign line is not a record; the next line still is.
+                continue;
+            }
+            for (const line of raw.split('\n')) {
+                if (line.trim() === '')
+                    continue;
+                try {
+                    const value = JSON.parse(line);
+                    if (value.v !== JOURNAL_VERSION || typeof value.at !== 'number')
+                        continue;
+                    records.push(value);
+                }
+                catch {
+                    // A torn or foreign line is not a record; the next line still is.
+                }
             }
         }
         const start = Math.min(Math.max(0, cursor), records.length);
