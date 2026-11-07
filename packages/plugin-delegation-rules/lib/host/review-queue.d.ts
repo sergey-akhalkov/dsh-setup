@@ -9,6 +9,11 @@ import type { SettledRunState } from './index.js';
 export type FailureClass = 'child-limit' | 'provider-not-started' | 'timeout' | 'reviewed-inputs-changed' | 'invalid-output' | 'config' | 'permission' | 'unknown' | 'queue-full' | 'queue-timeout' | 'queue-internal-error';
 /** One admission state; `settled` is reachable only through completion. */
 export type QueuePhase = 'queued' | 'starting' | 'running' | 'retry-wait' | 'settled';
+/** An unexpected queue failure the engine may recover from by a direct start. */
+export declare class QueueInternalError extends Error {
+    readonly causeError?: unknown | undefined;
+    constructor(message: string, causeError?: unknown | undefined);
+}
 /** Bounded queue facts persisted on the durable run file. */
 export interface QueueRunFile {
     id: string;
@@ -95,6 +100,7 @@ export declare class ReviewQueue<T extends QueueRun> {
     private readonly active;
     private readonly persistChains;
     private sequence;
+    private disposed;
     constructor(limits: QueueLimits, hooks: ReviewQueueHooks<T>);
     /** Stop every pending timer; the engine calls this when the plugin unloads. */
     dispose(): void;
@@ -105,8 +111,11 @@ export declare class ReviewQueue<T extends QueueRun> {
         active: number;
         queued: number;
     };
-    /** Admission for one already prepared run. */
+    /** Admission for one already prepared run; unexpected faults become internal. */
     submit(run: T): Promise<Admission<T>>;
+    /** Remove an admission that failed before it could settle; never observe it. */
+    private rollback;
+    private submitInner;
     /**
      * Replace a queued run's identity after a re-preparation. The old mapping is
      * removed and the new one inserted in one step. When the new identity is
@@ -123,6 +132,13 @@ export declare class ReviewQueue<T extends QueueRun> {
     complete(run: T, state: SettledRunState): Promise<void>;
     /** A queued run cancelled before any target started settles discarded. */
     cancel(runId: string): Promise<boolean>;
+    /**
+     * Hold a timed-out run's conversation key, capacity slot, and snapshot until
+     * its child teardown is confirmed. The settlement observer fires once here;
+     * `teardown` is retried with backoff and releases the slot on success.
+     */
+    quarantine(run: T, teardown: () => Promise<void>): void;
+    private confirmTeardown;
     /**
      * Re-enter a transiently failed run after its backoff. The caller has already
      * persisted `retry-wait`; this releases the slot and arms the retry timer.

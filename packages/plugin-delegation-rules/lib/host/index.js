@@ -5,7 +5,7 @@ import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
-import { classifyFailure, ReviewQueue, } from './review-queue.js';
+import { classifyFailure, QueueInternalError, ReviewQueue, } from './review-queue.js';
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
  * instructions, result contracts, and gate policies are configuration. The
@@ -2808,7 +2808,25 @@ class DelegationEngine {
             throw error;
         }
         this.runs.set(run.file.id, run);
-        const admission = await this.queue.submit(run);
+        let admission;
+        try {
+            this.services.queueFault?.();
+        }
+        catch (cause) {
+            const internal = new QueueInternalError(`review queue internal error: ${errorMessage(cause)}`, cause);
+            await this.startDirectFallback(run, internal);
+            return this.runHandleText(run, 'running');
+        }
+        try {
+            admission = await this.queue.submit(run);
+        }
+        catch (error) {
+            if (!(error instanceof QueueInternalError))
+                throw error;
+            // Fallback: start directly once so a queue fault cannot trap the turn.
+            await this.startDirectFallback(run, error);
+            return this.runHandleText(run, 'running');
+        }
         if (admission.kind === 'duplicate') {
             await this.discardSnapshot(run);
             this.runs.delete(run.file.id);
@@ -2918,6 +2936,20 @@ class DelegationEngine {
             ? 'live worktree'
             : `snapshot ${prepared.snapshotTree.slice(0, 8)}`));
         void this.completeReviewRun(run, started, prepared);
+    }
+    /** Start prepared work directly once when the queue faults before admission. */
+    async startDirectFallback(run, error) {
+        run.file.failureClass = 'queue-internal-error';
+        const detail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`;
+        await this.markRun(run, 'running', detail);
+        try {
+            await this.startPreparedReview(run);
+        }
+        catch (startError) {
+            run.file.failureClass = 'queue-internal-error';
+            await this.failRun(run, startError, run.prepared, 'queue-internal-error');
+            throw startError;
+        }
     }
     /** Whether the live source inputs moved since this run was prepared. */
     async queuedInputsChanged(run) {
@@ -3060,6 +3092,7 @@ class DelegationEngine {
             else {
                 const failure = classifyFailure(error, 'run');
                 const unconfirmed = error instanceof UnconfirmedTimeoutError;
+                const queued = this.queue.owns(run.file.id);
                 run.file.failureClass = failure.failureClass;
                 if (unconfirmed) {
                     // A possibly-still-running child owns its key, slot, and snapshot
@@ -3085,14 +3118,17 @@ class DelegationEngine {
                             // The run file is scratch; quarantine still protects the key.
                         }
                     }
-                    skipCleanup = true;
-                    this.queue.quarantine(run, async () => {
-                        await started.activation.dispose();
-                        await this.discardSnapshot(run);
-                    });
-                    return;
+                    if (queued) {
+                        skipCleanup = true;
+                        this.queue.quarantine(run, async () => {
+                            await started.activation.dispose();
+                            await this.discardSnapshot(run);
+                        });
+                        return;
+                    }
                 }
-                if (this.config.reviewQueue.enabled &&
+                else if (queued &&
+                    this.config.reviewQueue.enabled &&
                     failure.transient &&
                     this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts) {
                     // A retry publishes no verdict and keeps its snapshot for the re-run.
@@ -4714,6 +4750,7 @@ export function apply(ctx, config = {}, options = {}) {
         now: options.now ?? (() => new Date()),
         timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
         ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
+        ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);

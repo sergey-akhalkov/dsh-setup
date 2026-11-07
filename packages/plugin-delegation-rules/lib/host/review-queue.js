@@ -1,3 +1,24 @@
+/** An unexpected queue failure the engine may recover from by a direct start. */
+export class QueueInternalError extends Error {
+    causeError;
+    constructor(message, causeError) {
+        super(message);
+        this.causeError = causeError;
+        this.name = 'QueueInternalError';
+    }
+}
+/** Failures the engine raises deliberately through the queue hooks. */
+const EXPECTED_FAILURE_NAMES = new Set([
+    'DelegationError',
+    'ConfigError',
+    'ProviderStartError',
+    'ProviderResultError',
+    'TimeoutError',
+    'UnconfirmedTimeoutError',
+    'InvalidOutputError',
+    'InputMutationError',
+    'DiscardedRun',
+]);
 const CHILD_LIMIT_PATTERN = /active child limit|subagent limit reached/i;
 const REVIEWED_CHANGED_PATTERN = /reviewed inputs changed/i;
 const INVALID_OUTPUT_PATTERN = /no fenced JSON verdict|fenced verdict|fenced blocks|returned no text output|verdict digest does not match|verdict must|findings must|requires zero P0\/P1 findings|requires at least one P0\/P1 finding|finding #/i;
@@ -157,8 +178,34 @@ export class ReviewQueue {
             queued: this.waiting.length,
         };
     }
-    /** Admission for one already prepared run. */
+    /** Admission for one already prepared run; unexpected faults become internal. */
     async submit(run) {
+        try {
+            return await this.submitInner(run);
+        }
+        catch (error) {
+            if (error instanceof Error && EXPECTED_FAILURE_NAMES.has(error.name))
+                throw error;
+            this.rollback(run.file.id);
+            throw new QueueInternalError(`review queue internal error: ${error instanceof Error ? error.message : String(error)}`, error);
+        }
+    }
+    /** Remove an admission that failed before it could settle; never observe it. */
+    rollback(runId) {
+        const entry = this.entries.get(runId);
+        if (entry === undefined)
+            return;
+        this.removeWaiting(entry);
+        this.active.delete(entry);
+        this.forgetIdentity(entry);
+        this.detachKey(entry);
+        if (entry.waitTimer !== undefined)
+            clearTimeout(entry.waitTimer);
+        if (entry.retryTimer !== undefined)
+            clearTimeout(entry.retryTimer);
+        this.entries.delete(runId);
+    }
+    async submitInner(run) {
         const existing = this.identities.get(run.file.identity);
         if (existing !== undefined && !existing.finished) {
             return { kind: 'duplicate', run: existing.run };

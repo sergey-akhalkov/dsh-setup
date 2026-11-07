@@ -68,8 +68,10 @@ import {
   unparseableCheckedLines,
 } from '../shared/approval.js'
 import {
+  type Admission,
   classifyFailure,
   type FailureClass,
+  QueueInternalError,
   type QueueTimeoutInfo,
   ReviewQueue,
 } from './review-queue.js'
@@ -262,6 +264,8 @@ export interface ApplyOptions {
   now?: () => Date
   /** Called once per review run after it settles; the run is no longer pending. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
+  /** Test seam: throws before admission to simulate an internal queue failure. */
+  queueFault?: () => void
 }
 
 /** Terminal review-run states reported to the settlement observer. */
@@ -3060,6 +3064,8 @@ interface EngineServices {
   timeoutsFor(rule: RuleConfig): number
   /** Test seam: fired once per review run after it leaves the pending set. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
+  /** Test seam: throws before admission to simulate an internal queue failure. */
+  queueFault?: () => void
   /** Set by the engine after construction so the gate can see pending review runs. */
   pendingReview?: (
     workspaceRoot: string,
@@ -3632,7 +3638,25 @@ class DelegationEngine {
     }
     this.runs.set(run.file.id, run)
 
-    const admission = await this.queue.submit(run)
+    let admission: Admission<ManagedRun>
+    try {
+      this.services.queueFault?.()
+    } catch (cause) {
+      const internal = new QueueInternalError(
+        `review queue internal error: ${errorMessage(cause)}`,
+        cause,
+      )
+      await this.startDirectFallback(run, internal)
+      return this.runHandleText(run, 'running')
+    }
+    try {
+      admission = await this.queue.submit(run)
+    } catch (error) {
+      if (!(error instanceof QueueInternalError)) throw error
+      // Fallback: start directly once so a queue fault cannot trap the turn.
+      await this.startDirectFallback(run, error)
+      return this.runHandleText(run, 'running')
+    }
     if (admission.kind === 'duplicate') {
       await this.discardSnapshot(run)
       this.runs.delete(run.file.id)
@@ -3773,6 +3797,20 @@ class DelegationEngine {
       ),
     )
     void this.completeReviewRun(run, started, prepared)
+  }
+
+  /** Start prepared work directly once when the queue faults before admission. */
+  private async startDirectFallback(run: ManagedRun, error: unknown): Promise<void> {
+    run.file.failureClass = 'queue-internal-error'
+    const detail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`
+    await this.markRun(run, 'running', detail)
+    try {
+      await this.startPreparedReview(run)
+    } catch (startError) {
+      run.file.failureClass = 'queue-internal-error'
+      await this.failRun(run, startError, run.prepared, 'queue-internal-error')
+      throw startError
+    }
   }
 
   /** Whether the live source inputs moved since this run was prepared. */
@@ -3957,6 +3995,7 @@ class DelegationEngine {
       } else {
         const failure = classifyFailure(error, 'run')
         const unconfirmed = error instanceof UnconfirmedTimeoutError
+        const queued = this.queue.owns(run.file.id)
         run.file.failureClass = failure.failureClass
         if (unconfirmed) {
           // A possibly-still-running child owns its key, slot, and snapshot
@@ -3991,14 +4030,16 @@ class DelegationEngine {
               // The run file is scratch; quarantine still protects the key.
             }
           }
-          skipCleanup = true
-          this.queue.quarantine(run, async () => {
-            await started.activation.dispose()
-            await this.discardSnapshot(run)
-          })
-          return
-        }
-        if (
+          if (queued) {
+            skipCleanup = true
+            this.queue.quarantine(run, async () => {
+              await started.activation.dispose()
+              await this.discardSnapshot(run)
+            })
+            return
+          }
+        } else if (
+          queued &&
           this.config.reviewQueue.enabled &&
           failure.transient &&
           this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts
@@ -5959,6 +6000,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
     now: options.now ?? (() => new Date()),
     timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
     ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
+    ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
   }
   const engine = new DelegationEngine(validated, services)
   services.pendingReview = (workspaceRoot, ruleId, change, taskId) =>

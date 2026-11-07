@@ -2970,3 +2970,69 @@ describe('review timeout retry and quarantine', () => {
     }
   })
 })
+
+describe('queue-internal-error fallback', () => {
+  it('starts directly once and records the queue-internal-error', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    let faults = 0
+    const harness = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: subagents,
+      queueFault: () => {
+        faults += 1
+        throw new Error('queue exploded')
+      },
+    })
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(faults).toBe(1)
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const run = await readRun(root, runId)
+    expect(run.failureClass).toBe('queue-internal-error')
+    expect(subagents.startCalls).toBe(1)
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(record.verdict).toBe('PASS')
+  })
+
+  it('returns an ERROR record when the fallback cannot start', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error('cannot start')
+    const harness = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: subagents,
+      queueFault: () => {
+        throw new Error('queue exploded')
+      },
+    })
+    await expect(harness.startReview({ rule: 'spec-review', change: 'change-a' })).rejects.toThrow(
+      /could not start/,
+    )
+
+    const runs = await readdir(join(root, '.dsh', 'delegation', 'runs'))
+    expect(runs).toHaveLength(1)
+    const run = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', runs[0] as string), 'utf8'),
+    ) as { failureClass: string; state: string }
+    expect(run.failureClass).toBe('queue-internal-error')
+    expect(run.state).toBe('failed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(record.verdict).toBe('ERROR')
+  })
+})

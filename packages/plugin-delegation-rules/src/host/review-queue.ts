@@ -24,6 +24,30 @@ export type FailureClass =
 /** One admission state; `settled` is reachable only through completion. */
 export type QueuePhase = 'queued' | 'starting' | 'running' | 'retry-wait' | 'settled'
 
+/** An unexpected queue failure the engine may recover from by a direct start. */
+export class QueueInternalError extends Error {
+  constructor(
+    message: string,
+    readonly causeError?: unknown,
+  ) {
+    super(message)
+    this.name = 'QueueInternalError'
+  }
+}
+
+/** Failures the engine raises deliberately through the queue hooks. */
+const EXPECTED_FAILURE_NAMES = new Set([
+  'DelegationError',
+  'ConfigError',
+  'ProviderStartError',
+  'ProviderResultError',
+  'TimeoutError',
+  'UnconfirmedTimeoutError',
+  'InvalidOutputError',
+  'InputMutationError',
+  'DiscardedRun',
+])
+
 /** Bounded queue facts persisted on the durable run file. */
 export interface QueueRunFile {
   id: string
@@ -288,8 +312,34 @@ export class ReviewQueue<T extends QueueRun> {
     }
   }
 
-  /** Admission for one already prepared run. */
+  /** Admission for one already prepared run; unexpected faults become internal. */
   async submit(run: T): Promise<Admission<T>> {
+    try {
+      return await this.submitInner(run)
+    } catch (error) {
+      if (error instanceof Error && EXPECTED_FAILURE_NAMES.has(error.name)) throw error
+      this.rollback(run.file.id)
+      throw new QueueInternalError(
+        `review queue internal error: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      )
+    }
+  }
+
+  /** Remove an admission that failed before it could settle; never observe it. */
+  private rollback(runId: string): void {
+    const entry = this.entries.get(runId)
+    if (entry === undefined) return
+    this.removeWaiting(entry)
+    this.active.delete(entry)
+    this.forgetIdentity(entry)
+    this.detachKey(entry)
+    if (entry.waitTimer !== undefined) clearTimeout(entry.waitTimer)
+    if (entry.retryTimer !== undefined) clearTimeout(entry.retryTimer)
+    this.entries.delete(runId)
+  }
+
+  private async submitInner(run: T): Promise<Admission<T>> {
     const existing = this.identities.get(run.file.identity)
     if (existing !== undefined && !existing.finished) {
       return { kind: 'duplicate', run: existing.run }

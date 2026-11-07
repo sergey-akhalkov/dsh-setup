@@ -248,6 +248,8 @@ export interface HarnessOptions {
   now?: () => Date
   /** Set false to exercise the engine path with no settlement observer. */
   observeSettlements?: boolean
+  /** Throws before admission to exercise the queue-internal-error fallback. */
+  queueFault?: () => void
 }
 
 type ContextEvent = (...args: unknown[]) => unknown
@@ -323,6 +325,7 @@ export class Harness {
       ...(options.observeSettlements === false
         ? {}
         : { onRunSettled: (runId, state) => this.recordSettlement(runId, state) }),
+      ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
     })
   }
 

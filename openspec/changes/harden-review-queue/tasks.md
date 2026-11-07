@@ -19,7 +19,7 @@ The change is one Host package with a shared start path; it is a single lane. Te
 - [x] 3.1 Add the classifier for `child-limit`, `provider-not-started`, `timeout`, `reviewed-inputs-changed`, `invalid-output`, `config`, `permission`, and `unknown`; verify each class from a fake provider result and a bounded redacted message.
 - [x] 3.2 Add retry with `maxAttempts`, exponential backoff, full jitter, a provider-supplied retry-after cap, and a fake clock; verify the attempt count, the delay bounds, and that a permanent class starts no retry.
 - [x] 3.3 Add the timeout retry guard: cancel and drain the started child, publish no record, and retry only when cancellation is confirmed; otherwise settle `ERROR` `timeout` and quarantine the conversation key, capacity slot, and snapshot until teardown is confirmed; verify a cancelled timeout retries, an unconfirmed timeout settles, and followers wait during quarantine.
-- [ ] 3.4 Add the queue-internal-error fallback: record `queue-internal-error`, start directly once when possible, and otherwise return `ERROR`; verify the fallback starts one target and the gate sees an `ERROR`, not a PASS.
+- [x] 3.4 Add the queue-internal-error fallback: record `queue-internal-error`, start directly once when possible, and otherwise return `ERROR`; verify the fallback starts one target and the gate sees an `ERROR`, not a PASS.
 
 ## 4. Record integrity and settlement
 
