@@ -162,10 +162,11 @@ export function buildRetroReport(
     if (topExamples.length > 0) {
       lines.push('examples:')
       for (const example of topExamples) {
-        const source = [example.change, example.taskId, example.time]
+        const source = [example.rule, example.change, example.taskId, example.time]
           .filter((part) => part !== undefined)
           .join(' ')
         lines.push(`- [${example.class}] ${example.title} (${source})`)
+        lines.push(`  evidence: ${example.evidence}`)
       }
     }
     lines.push(
