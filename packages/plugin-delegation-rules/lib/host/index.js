@@ -2748,26 +2748,26 @@ class DelegationEngine {
             fail(`run ${run.file.id} reached the queue without a prepared review; start the review again`);
         }
         if (run.baselineCaptured !== true) {
-            // Only a run that actually waited re-checks its inputs; a direct start
-            // keeps the prepared signature it captured before hashing.
-            if (run.waitedInQueue === true &&
-                run.reprepared !== true &&
-                (await this.queuedInputsChanged(run))) {
-                await this.reprepareQueuedRun(run);
-                // A collision settled this run as the duplicate; its successor proceeds.
-                if (run.file.state === 'discarded' || run.file.state === 'failed')
-                    return;
-                prepared = run.prepared;
-                if (prepared === undefined) {
-                    fail(`run ${run.file.id} lost its prepared review after re-preparation`);
-                }
-            }
             // Start-eligible means the record's predecessor has settled: snapshot the
             // authoritative record now, but never again before a retry.
             const current = await inspectRecord(run.recordPath);
             run.existingFingerprint =
                 current.kind === 'record' ? JSON.stringify(current.record) : undefined;
             run.baselineCaptured = true;
+        }
+        if (run.waitedInQueue === true &&
+            run.reprepared !== true &&
+            (await this.queuedInputsChanged(run))) {
+            // A queued run re-checks its source inputs before every attempt; a retry
+            // after a rejected start must not begin on stale prepared inputs.
+            await this.reprepareQueuedRun(run);
+            // A collision settled this run as the duplicate; its successor proceeds.
+            if (run.file.state === 'discarded' || run.file.state === 'failed')
+                return;
+            prepared = run.prepared;
+            if (prepared === undefined) {
+                fail(`run ${run.file.id} lost its prepared review after re-preparation`);
+            }
         }
         const started = await startTarget(this.services, {
             rule: run.context.rule,

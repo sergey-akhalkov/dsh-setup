@@ -954,6 +954,45 @@ describe('review queue admission', () => {
     expect(record.error).toContain('no longer a checked task')
     expect(subagents.startCalls).toBe(1)
   })
+
+  it('re-checks the source inputs before a retry start', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.startError = new Error('subagent limit reached (active child limit: 8)')
+    const harness = await harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 200 },
+      },
+      subagents,
+    )
+
+    const handle = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const runId = runIdFrom(handle)
+    expect(handle).toContain('review retrying')
+    expect(handle).toContain('failure class: child-limit')
+
+    subagents.startError = undefined
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
+      '# Proposal\n\nChanged during retry wait.\n',
+      'utf8',
+    )
+
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { digest: string; verdict: string }
+    expect(record.verdict).toBe('PASS')
+    expect(record.digest).toBe(await specDigest(join(root, 'openspec', 'changes', 'change-a')))
+    expect((await readRun(root, runId)).attempts).toBe(2)
+  })
 })
 
 describe('review queue identity', () => {
