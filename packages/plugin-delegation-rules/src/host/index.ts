@@ -3220,10 +3220,12 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
 async function finishTarget(started: StartedTarget): Promise<RunResult> {
   const { rule, target } = started
   let timer: ReturnType<typeof setTimeout> | undefined
+  let graceTimer: ReturnType<typeof setTimeout> | undefined
   let timedOut = false
   let result: SubagentResult | undefined
   let raceError: unknown
-  let disposeError: unknown
+  let disposeConfirmed = true
+  let disposePending = false
   try {
     result = await Promise.race([
       started.activation.result,
@@ -3242,15 +3244,33 @@ async function finishTarget(started: StartedTarget): Promise<RunResult> {
     raceError = error
   } finally {
     if (timer !== undefined) clearTimeout(timer)
-    try {
-      await started.activation.dispose()
-    } catch (error) {
-      disposeError = error
-    }
+    // Cancellation gets a bounded grace: an unresponsive dispose must not hold
+    // the run open forever; it becomes an unconfirmed timeout instead.
+    const disposal = started.activation.dispose().then(
+      () => undefined,
+      () => {
+        disposeConfirmed = false
+      },
+    )
+    const graceMs = Math.min(30_000, started.timeoutMs)
+    await Promise.race([
+      disposal,
+      new Promise<void>((resolve) => {
+        graceTimer = setTimeout(() => {
+          disposePending = true
+          resolve()
+        }, graceMs)
+      }),
+    ])
+    if (graceTimer !== undefined) clearTimeout(graceTimer)
   }
-  if (timedOut && disposeError !== undefined) {
+  const providerTimeout =
+    result !== undefined &&
+    result.stopReason !== 'completed' &&
+    /timeout|timed out/i.test(`${result.stopReason} ${result.diagnostic ?? ''}`)
+  if ((timedOut || providerTimeout) && (!disposeConfirmed || disposePending)) {
     throw new UnconfirmedTimeoutError(
-      `rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms and the child could not be confirmed cancelled; check the provider before starting a fresh review`,
+      `rule "${rule.id}": target "${targetLabel(target)}" timed out and the child could not be confirmed cancelled; check the provider before starting a fresh review`,
       started.activation,
     )
   }
@@ -3939,8 +3959,47 @@ class DelegationEngine {
         const failure = classifyFailure(error, 'run')
         const unconfirmed = error instanceof UnconfirmedTimeoutError
         run.file.failureClass = failure.failureClass
+        if (unconfirmed) {
+          // A possibly-still-running child owns its key, slot, and snapshot
+          // until teardown is confirmed, regardless of publication outcome.
+          try {
+            await this.publishRecord(run, {
+              digest: prepared.digest,
+              ...(prepared.worktreeDigest === undefined
+                ? {}
+                : { worktreeDigest: prepared.worktreeDigest }),
+              verdict: 'ERROR',
+              findings: [],
+              target: targetIdentity(started.provider, started.model, started.reasoningEffort),
+              error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+            })
+            await this.markRun(
+              run,
+              'failed',
+              this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+            )
+          } catch (publishError) {
+            try {
+              await this.markRun(
+                run,
+                publishError instanceof DiscardedRun ? 'discarded' : 'failed',
+                this.withFallbackDetail(
+                  prepared,
+                  sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+                ),
+              )
+            } catch {
+              // The run file is scratch; quarantine still protects the key.
+            }
+          }
+          skipCleanup = true
+          this.queue.quarantine(run, async () => {
+            await started.activation.dispose()
+            await this.discardSnapshot(run)
+          })
+          return
+        }
         if (
-          !unconfirmed &&
           this.config.reviewQueue.enabled &&
           failure.transient &&
           this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts
@@ -3968,16 +4027,6 @@ class DelegationEngine {
             'failed',
             this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
           )
-          if (unconfirmed) {
-            // No retry while the old child may still run: quarantine the key,
-            // capacity slot, and snapshot until teardown is confirmed.
-            skipCleanup = true
-            this.queue.quarantine(run, async () => {
-              await started.activation.dispose()
-              await this.discardSnapshot(run)
-            })
-            return
-          }
         } catch (publishError) {
           if (publishError instanceof DiscardedRun) {
             await this.markRun(
