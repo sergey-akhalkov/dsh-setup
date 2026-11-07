@@ -1749,7 +1749,7 @@ function parseRunFile(value) {
             return undefined;
         // Normalize rather than discard an otherwise valid run: the engine bounds
         // details to 4000 characters, the status shows a shorter excerpt.
-        value.detail = value.detail.slice(0, 500);
+        value.detail = sanitizeText(value.detail, 500);
     }
     if (value.queuePosition !== undefined) {
         if (typeof value.queuePosition !== 'number' || !Number.isSafeInteger(value.queuePosition)) {

@@ -625,6 +625,11 @@ export class ReviewQueue<T extends QueueRun> {
       return
     }
     entry.phase = 'queued'
+    const queuedAt = this.hooks.now()
+    entry.queuedAtMs = queuedAt.getTime()
+    entry.run.file.state = 'queued'
+    entry.run.file.queuedAt = queuedAt.toISOString()
+    delete entry.run.file.waitMs
     delete entry.run.file.failureClass
     this.waiting.push(entry)
     this.waiting.sort((left, right) => left.seq - right.seq)

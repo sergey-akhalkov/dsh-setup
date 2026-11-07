@@ -4061,7 +4061,7 @@ describe('queued wait visibility', () => {
         waitMs: 5,
         attempts: 1,
         failureClass: 'timeout',
-        detail: 'x'.repeat(600),
+        detail: 'token=synthetic-secret-value path=C:\\\\Users\\\\secret ' + 'x'.repeat(600),
       }),
       'utf8',
     )
@@ -4070,5 +4070,57 @@ describe('queued wait visibility', () => {
     expect(status).toContain('run-long')
     expect(status).toContain('attempts=1')
     expect(status).not.toContain('x'.repeat(501))
+    expect(status).not.toContain('synthetic-secret-value')
+    expect(status).not.toContain('C:\\Users\\secret')
+  })
+})
+
+describe('retry wait visibility', () => {
+  it('reports a current wait after a retry re-enters the queue', async () => {
+    let clock = new Date('2026-01-01T00:00:00.000Z')
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const originalStart = subagents.startActivation.bind(subagents)
+    let aStarts = 0
+    subagents.startActivation = async (spec) => {
+      const promptText = spec.request.prompt
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('')
+      if (promptText.includes('change-a') && aStarts === 0) {
+        aStarts += 1
+        throw new Error('subagent limit reached (active child limit: 8)')
+      }
+      return originalStart(spec)
+    }
+    const harness = new Harness({
+      cwd: root,
+      config: {
+        ...defaultTestConfig(),
+        reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 50, maxDelayMs: 50 },
+      },
+      agents: subagents,
+      now: () => clock,
+    })
+    const aRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.toolText('delegate', { rule: 'spec-review', change: 'change-b' })
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const state = await readRun(root, aRun)
+        .then((run) => run.state)
+        .catch(() => undefined)
+      if (state === 'queued') break
+      await new Promise((resolve) => {
+        realSetTimeout(resolve, 10)
+      })
+    }
+    expect((await readRun(root, aRun)).state).toBe('queued')
+    clock = new Date(clock.getTime() + 20_000)
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toMatch(new RegExp(`run ${aRun}: .*state=queued .*waitMs=20000`))
+    expect(status).toMatch(new RegExp(`run ${aRun}: .*attempts=1`))
+    expect(aStarts).toBe(1)
   })
 })
