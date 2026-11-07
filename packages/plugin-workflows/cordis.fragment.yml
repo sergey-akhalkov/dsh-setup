@@ -1,0 +1,7 @@
+# Composition fragment for @dsh-setup/plugin-workflows.
+#
+# One row mounts this package's Host recorder and the Workflows conversation
+# view. The shipped shadow trigger catalog is package data in assets/triggers,
+# not owner configuration: no trigger acts, so there is nothing to tune yet.
+rows:
+  - id: dsh-setup-workflows

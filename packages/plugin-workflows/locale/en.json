@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workflows",
+    "description": "A read-only process surface: shadow trigger evaluations with their reasons, the session's bounded event journal, projected checkpoint/delegation/review runs, and listener health"
+  }
+}
