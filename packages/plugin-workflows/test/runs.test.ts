@@ -1,0 +1,370 @@
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { HostAuth } from '../src/host/host-auth.ts'
+import {
+  issueAdoptionReceipt,
+  issueCompletionReceipt,
+  readReceipt,
+  receiptPath,
+} from '../src/host/receipts.ts'
+import {
+  cancelRun,
+  INTERRUPTED_REASON,
+  pendingStep,
+  recoverRuns,
+  resumeRun,
+} from '../src/host/resume.ts'
+import {
+  addViolation,
+  assertRunSession,
+  boundContext,
+  createRun,
+  DAY_MS,
+  listAuthenticatedRuns,
+  openRunCount,
+  pruneRuns,
+  readAuthenticatedRun,
+  requestStep,
+  runLimitExceeded,
+  runPath,
+  runsDirectory,
+  sessionRunsFor,
+  setRunStatus,
+  settleStep,
+  type WorkflowRun,
+  writeRun,
+} from '../src/host/runs.ts'
+
+const TEMP_DIRECTORIES: string[] = []
+
+async function tempWorkspace(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'workflows-runs-'))
+  TEMP_DIRECTORIES.push(directory)
+  return directory
+}
+
+afterEach(async () => {
+  await Promise.all(
+    TEMP_DIRECTORIES.splice(0).map(async (directory) => {
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }),
+  )
+})
+
+function auth(): HostAuth {
+  return HostAuth.fromKey('test-runs-host-key-0123456789')
+}
+
+const DIGEST = 'a'.repeat(64)
+
+function intakeRun(workspace: string, name: string, now: number, id?: string): WorkflowRun {
+  return createRun({
+    definition: 'change-intake',
+    trigger: 'tool.pre-execute',
+    session: 'session-1',
+    workspace,
+    context: { name },
+    steps: ['requirements', 'approval'],
+    now,
+    ...(id === undefined ? {} : { id }),
+  })
+}
+
+async function writeAndComplete(
+  workspace: string,
+  name: string,
+  now: number,
+  id?: string,
+): Promise<WorkflowRun> {
+  let run = intakeRun(workspace, name, now, id)
+  run = settleStep(run, 'requirements', 'done', { at: now + 1 })
+  run = settleStep(run, 'approval', 'done', { at: now + 2 })
+  run = setRunStatus(run, 'completed', now + 3)
+  await writeRun(workspace, run, auth())
+  return run
+}
+
+describe('run store', () => {
+  it('writes, signs, reloads, and atomically replaces one run', async () => {
+    const workspace = await tempWorkspace()
+    const run = intakeRun(workspace, 'auth', 1_000)
+    await writeRun(workspace, run, auth())
+    expect(await readAuthenticatedRun(workspace, run.id, auth())).toEqual(run)
+
+    const advanced = settleStep(run, 'requirements', 'done', {
+      at: 2_000,
+      evidence: { kind: 'file', path: '.dsh/workflows/drafts/auth/requirements.md', bytes: 800 },
+    })
+    await writeRun(workspace, advanced, auth())
+    const reloaded = await readAuthenticatedRun(workspace, run.id, auth())
+    expect(reloaded?.steps[0]).toMatchObject({ state: 'done', evidence: { bytes: 800 } })
+    expect(reloaded?.updatedAt).toBe(2_000)
+    const names = await readdir(runsDirectory(workspace))
+    expect(names).toEqual([`${run.id}.json`])
+  })
+
+  it('refuses an unsigned or modified run for authority', async () => {
+    const workspace = await tempWorkspace()
+    const run = await writeAndComplete(workspace, 'auth', 1_000)
+    // A modified status must not authenticate.
+    const file = runPath(workspace, run.id)
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+    parsed.status = 'failed'
+    await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
+    expect(await readAuthenticatedRun(workspace, run.id, auth())).toBeUndefined()
+    await expect(issueCompletionReceipt(workspace, run.id, DIGEST, auth(), 2_000)).rejects.toThrow(
+      /unsigned, modified, or unreadable/u,
+    )
+
+    const unsigned = intakeRun(workspace, 'unsigned', 3_000)
+    await mkdir(runsDirectory(workspace), { recursive: true })
+    await writeFile(
+      runPath(workspace, unsigned.id),
+      `${JSON.stringify(unsigned, null, 2)}\n`,
+      'utf8',
+    )
+    expect(await readAuthenticatedRun(workspace, unsigned.id, auth())).toBeUndefined()
+    await expect(
+      issueCompletionReceipt(workspace, unsigned.id, DIGEST, auth(), 4_000),
+    ).rejects.toThrow(/unsigned, modified, or unreadable/u)
+  })
+
+  it('records evidence, violations, and status transitions in the file', async () => {
+    const workspace = await tempWorkspace()
+    let run = intakeRun(workspace, 'auth', 1_000)
+    run = settleStep(run, 'requirements', 'done', {
+      at: 1_100,
+      evidence: { kind: 'tool', callId: 'call-1' },
+    })
+    run = addViolation(run, 'the turn closed with the requirements step open', {
+      step: 'requirements',
+      at: 1_200,
+    })
+    run = settleStep(run, 'approval', 'cancelled', { at: 1_300, reason: 'user cancelled' })
+    run = setRunStatus(run, 'cancelled', 1_300)
+    await writeRun(workspace, run, auth())
+    const reloaded = await readAuthenticatedRun(workspace, run.id, auth())
+    expect(reloaded?.status).toBe('cancelled')
+    expect(reloaded?.violations[0]).toMatchObject({ kind: 'VIOLATION', step: 'requirements' })
+    expect(reloaded?.steps[0]?.evidence).toEqual({ kind: 'tool', callId: 'call-1' })
+    expect(reloaded?.steps[1]?.reason).toBe('user cancelled')
+  })
+
+  it('prunes expired terminal runs first and keeps open runs and receipts', async () => {
+    const workspace = await tempWorkspace()
+    const oldCompleted = await writeAndComplete(workspace, 'old-done', 1_000)
+    const oldRunning = intakeRun(workspace, 'old-open', 1_100, 'run-old-open-x')
+    await writeRun(workspace, oldRunning, auth())
+    const recentCompleted = await writeAndComplete(workspace, 'recent-done', 2_000)
+    const receipt = await issueCompletionReceipt(workspace, oldCompleted.id, DIGEST, auth(), 2_100)
+    expect(receipt.signature).toMatch(/^[a-f0-9]{64}$/u)
+
+    const now = 50 * DAY_MS
+    await utimes(
+      runPath(workspace, oldCompleted.id),
+      new Date(now - 40 * DAY_MS),
+      new Date(now - 40 * DAY_MS),
+    )
+    await utimes(
+      runPath(workspace, oldRunning.id),
+      new Date(now - 40 * DAY_MS),
+      new Date(now - 40 * DAY_MS),
+    )
+    const result = await pruneRuns(workspace, { auth: auth(), now, retentionMs: 30 * DAY_MS })
+    expect(result.removed).toContain(oldCompleted.id)
+    expect(result.removed).not.toContain(oldRunning.id)
+    const remaining = await listAuthenticatedRuns(workspace, auth())
+    expect(remaining.map((run) => run.id)).toEqual(
+      expect.arrayContaining([oldRunning.id, recentCompleted.id]),
+    )
+    // The receipt is not a run and survives pruning of the run it names.
+    expect(await readReceipt(workspace, 'old-done', auth())).toMatchObject({ change: 'old-done' })
+  })
+
+  it('enforces the byte cap by removing the oldest terminal runs only', async () => {
+    const workspace = await tempWorkspace()
+    const first = await writeAndComplete(workspace, 'first', 1_000)
+    const second = await writeAndComplete(workspace, 'second', 2_000)
+    const open = intakeRun(workspace, 'open', 3_000, 'run-open-x')
+    await writeRun(workspace, open, auth())
+    const result = await pruneRuns(workspace, {
+      auth: auth(),
+      now: 4_000,
+      retentionMs: 30 * DAY_MS,
+      maxBytes: 1_500,
+    })
+    expect(result.removed).toContain(first.id)
+    expect(result.removed).not.toContain(open.id)
+    expect(await readAuthenticatedRun(workspace, second.id, auth())).toBeDefined()
+    expect(await readAuthenticatedRun(workspace, open.id, auth())).toBeDefined()
+  })
+
+  it('refuses a forged or unsigned receipt after a reload', async () => {
+    const workspace = await tempWorkspace()
+    await mkdir(join(workspace, '.dsh', 'workflows', 'receipts'), { recursive: true })
+    const forged = {
+      v: 1,
+      kind: 'adoption',
+      change: 'auth',
+      digest: DIGEST,
+      issuedAt: 1_000,
+      signature: 'f'.repeat(64),
+    }
+    await writeFile(receiptPath(workspace, 'auth'), `${JSON.stringify(forged, null, 2)}\n`, 'utf8')
+    expect(await readReceipt(workspace, 'auth', auth())).toBeUndefined()
+    await writeFile(
+      receiptPath(workspace, 'auth'),
+      `${JSON.stringify({ ...forged, signature: undefined }, null, 2)}\n`,
+      'utf8',
+    )
+    expect(await readReceipt(workspace, 'auth', auth())).toBeUndefined()
+    const valid = await issueAdoptionReceipt(workspace, 'auth', DIGEST, auth(), 2_000)
+    expect((await readReceipt(workspace, 'auth', auth()))?.signature).toBe(valid.signature)
+  })
+
+  it('refuses a receipt for a run that is not a completed change-intake', async () => {
+    const workspace = await tempWorkspace()
+    const run = intakeRun(workspace, 'auth', 1_000)
+    await writeRun(workspace, run, auth())
+    await expect(issueCompletionReceipt(workspace, run.id, DIGEST, auth(), 2_000)).rejects.toThrow(
+      /not a completed change-intake run/u,
+    )
+  })
+})
+
+describe('startup recovery and resume', () => {
+  it('marks each unfinished previous-process run interrupted and never completes it', async () => {
+    const workspace = await tempWorkspace()
+    const running = intakeRun(workspace, 'running-name', 1_000)
+    const blocked = setRunStatus(intakeRun(workspace, 'blocked-name', 1_100), 'blocked', 1_200)
+    const completed = await writeAndComplete(workspace, 'done-name', 1_300)
+    await writeRun(workspace, running, auth())
+    await writeRun(workspace, blocked, auth())
+
+    const result = await recoverRuns(workspace, auth(), 2_000)
+    expect(result.recovered).toEqual(expect.arrayContaining([running.id, blocked.id]))
+    expect(result.skipped).toContain(completed.id)
+    const recovered = await listAuthenticatedRuns(workspace, auth())
+    for (const id of [running.id, blocked.id]) {
+      const run = recovered.find((entry) => entry.id === id)
+      expect(run?.status).toBe('interrupted')
+      expect(run?.reason).toBe(INTERRUPTED_REASON)
+      expect(run?.steps.every((step) => step.state === 'open')).toBe(true)
+    }
+    expect(recovered.find((entry) => entry.id === completed.id)?.status).toBe('completed')
+  })
+
+  it('resumes an interrupted intake after create-change at spec without recreating anything', async () => {
+    const workspace = await tempWorkspace()
+    let run = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', draftDir: '.dsh/workflows/drafts/auth' },
+      steps: ['requirements', 'create-change', 'spec', 'approval'],
+      now: 1_000,
+    })
+    run = settleStep(run, 'requirements', 'done', { at: 1_100 })
+    run = settleStep(run, 'create-change', 'done', { at: 1_200 })
+    await writeRun(workspace, run, auth())
+    const recovery = await recoverRuns(workspace, auth(), 2_000)
+    expect(recovery.recovered).toContain(run.id)
+
+    const resumed = await resumeRun(workspace, run.id, auth(), 3_000)
+    expect(resumed.stepId).toBe('spec')
+    expect(resumed.run.status).toBe('running')
+    expect(pendingStep(resumed.run)).toBe('spec')
+    expect(resumed.run.steps.find((step) => step.id === 'create-change')?.state).toBe('done')
+    expect(await readdir(join(workspace, 'openspec')).catch(() => undefined)).toBeUndefined()
+    expect((await listAuthenticatedRuns(workspace, auth())).length).toBe(1)
+  })
+
+  it('cancels a resumed run and refuses a terminal run', async () => {
+    const workspace = await tempWorkspace()
+    const run = setRunStatus(intakeRun(workspace, 'auth', 1_000), 'blocked', 1_100)
+    await writeRun(workspace, run, auth())
+    await resumeRun(workspace, run.id, auth(), 2_000)
+    const cancelled = await cancelRun(workspace, run.id, auth(), 3_000)
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.steps.find((step) => step.id === 'requirements')?.state).toBe('cancelled')
+    await expect(cancelRun(workspace, run.id, auth(), 4_000)).rejects.toThrow(
+      /is cancelled; it is not cancelable/u,
+    )
+    const completed = await writeAndComplete(workspace, 'other', 5_000)
+    await expect(resumeRun(workspace, completed.id, auth(), 6_000)).rejects.toThrow(
+      /only an interrupted or blocked run can be resumed/u,
+    )
+  })
+
+  it('refuses a fabricated or modified completed run', async () => {
+    const workspace = await tempWorkspace()
+    const unsigned = setRunStatus(intakeRun(workspace, 'fake', 1_000), 'completed', 1_100)
+    await mkdir(runsDirectory(workspace), { recursive: true })
+    await writeFile(
+      runPath(workspace, unsigned.id),
+      `${JSON.stringify(unsigned, null, 2)}\n`,
+      'utf8',
+    )
+    await expect(resumeRun(workspace, unsigned.id, auth(), 2_000)).rejects.toThrow(
+      /unsigned, modified, or unreadable/u,
+    )
+    const signed = await writeAndComplete(workspace, 'real', 3_000)
+    const file = runPath(workspace, signed.id)
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+    parsed.status = 'interrupted'
+    await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
+    await expect(resumeRun(workspace, signed.id, auth(), 4_000)).rejects.toThrow(
+      /unsigned, modified, or unreadable/u,
+    )
+  })
+})
+
+describe('run limits and scoping', () => {
+  it('counts only open runs against maxRuns and scopes a step to its session', async () => {
+    const workspace = await tempWorkspace()
+    const open = intakeRun(workspace, 'open', 1_000)
+    const completed = setRunStatus(intakeRun(workspace, 'done', 1_100), 'completed', 1_200)
+    expect(openRunCount([open, completed])).toBe(1)
+    expect(runLimitExceeded([open, completed], 1)).toBe(true)
+    expect(runLimitExceeded([completed], 1)).toBe(false)
+    expect(sessionRunsFor([open, completed], 'session-1')).toEqual([open])
+    expect(sessionRunsFor([open], 'session-2')).toEqual([])
+    expect(() => assertRunSession(open, 'session-2')).toThrow(
+      /belongs to session "session-1".*cannot satisfy/u,
+    )
+    expect(() => assertRunSession(open, 'session-1')).not.toThrow()
+  })
+
+  it('runs one requested step at a time and bounds the context', async () => {
+    const workspace = await tempWorkspace()
+    let run = intakeRun(workspace, 'auth', 1_000)
+    run = requestStep(run, 'requirements', 1_100)
+    expect(run.steps.find((step) => step.id === 'requirements')).toMatchObject({
+      state: 'open',
+      attempts: 1,
+    })
+    expect(() => requestStep(run, 'approval', 1_200)).toThrow(/one main step runs at a time/u)
+    run = requestStep(run, 'requirements', 1_300)
+    expect(run.steps.find((step) => step.id === 'requirements')?.attempts).toBe(2)
+
+    const oversized = { name: 'auth', payload: 'x'.repeat(10_000) }
+    const bounded = boundContext(oversized, 200)
+    expect(bounded.truncated).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThan(200)
+    const small = { name: 'auth' }
+    expect(boundContext(small)).toEqual(small)
+    const created = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: oversized,
+      steps: ['requirements'],
+      now: 2_000,
+    })
+    expect(created.context.truncated).toBe(true)
+  })
+})

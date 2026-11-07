@@ -197,6 +197,21 @@ describe('workflow definition schema', () => {
     expect(validateDefinition(nonCritical).steps[0]?.evidence).toEqual({ kind: 'declaration' })
   })
 
+  it('requires a path-safe definition id', () => {
+    for (const id of [
+      '../../outside',
+      '../../escape',
+      'UPPER',
+      'with space',
+      'with_underscore',
+      '.hidden',
+    ]) {
+      const bad = valid()
+      bad.id = id
+      expect(() => validateDefinition(bad), id).toThrow(/field "id" must match/u)
+    }
+  })
+
   it('refuses a defer without a legacy source and a tool step outside settings.allowTools', () => {
     const defer = valid()
     ;(defer.settings as Record<string, unknown>).gateOwnership = 'defer'

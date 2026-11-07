@@ -194,10 +194,15 @@ export async function installDefinition(
   if (existing.error !== undefined) {
     throw new Error(`${existing.error}; fix or remove ${APPROVALS_FILE} before installing`)
   }
-  const target = join(await ensureDefinitionsDirectory(workspace), `${definition.id}.json`)
+  const directory = await ensureDefinitionsDirectory(workspace)
+  const target = join(directory, `${definition.id}.json`)
+  if (!isInside(directory, target) || dirname(target) !== directory) {
+    throw new Error(`definition "${definition.id}" resolves outside the definitions directory`)
+  }
   await writeAtomic(target, bytes)
-  const installed = await readFile(target)
-  const hash = sha256(installed)
+  // Sign the exact validated source bytes. Never re-read the writable
+  // destination: a write between the copy and the re-read must not be blessed.
+  const hash = sha256(bytes)
   const record: StoredApproval = {
     hash,
     signature: approvalSignature(auth, definition.id, hash),

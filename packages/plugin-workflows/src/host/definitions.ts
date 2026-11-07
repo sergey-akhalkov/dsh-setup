@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url'
 
 export const DEFINITION_SCHEMA_VERSION = 1
 
+/** A definition id is also its install file name, so it must be path-safe. */
+export const DEFINITION_ID = /^[a-z0-9][a-z0-9-]*$/u
+
 /** The deterministic event kinds a definition trigger may observe. */
 export const OBLIGATION_EVENT_KINDS = [
   'turn.stopping',
@@ -839,6 +842,9 @@ function assertAcyclic(definition: string, steps: readonly Step[]): void {
 export function validateDefinition(raw: unknown, source = 'definition'): Definition {
   if (!isRecord(raw)) throw new Error(`workflow definition "${source}" must be an object`)
   const definition = nonEmptyString(raw.id, source, 'id')
+  if (!DEFINITION_ID.test(definition)) {
+    fail(definition, 'id', 'must match ^[a-z0-9][a-z0-9-]*$')
+  }
   assertKnown(raw, DEFINITION_KEYS, definition, '')
   if (raw.v !== DEFINITION_SCHEMA_VERSION) {
     fail(definition, 'v', `must be ${String(DEFINITION_SCHEMA_VERSION)}`)

@@ -107,6 +107,9 @@ describe('local definitions and the host approval store', () => {
     const installed = await installDefinition(workspace, draft, auth())
     expect(installed.definition.id).toBe('change-intake')
     expect(installed.hash).toMatch(/^[a-f0-9]{64}$/u)
+    // The approval signs the validated source bytes, never a re-read of the
+    // writable destination.
+    expect(installed.hash).toBe(await hashFile(draft))
     expect(await readFile(approvalsPath(workspace), 'utf8')).toContain(installed.hash)
 
     const loaded = await loadApprovedDefinitions(workspace, {
@@ -214,6 +217,24 @@ describe('local definitions and the host approval store', () => {
     await expect(installDefinition(workspace, file, auth())).rejects.toThrow(
       /is outside the workspace/u,
     )
+  })
+
+  it('refuses a definition id that could escape the installation directory', async () => {
+    const workspace = await tempWorkspace()
+    for (const id of ['../../outside', '../escape', '/absolute']) {
+      const draft = await writeDefinitionFile(
+        workspace,
+        workspaceDraftsDirectory(workspace),
+        'evil.json',
+        definitionFor(id),
+      )
+      await expect(installDefinition(workspace, draft, auth()), id).rejects.toThrow(
+        /field "id" must match/u,
+      )
+    }
+    await expect(readFile(approvalsPath(workspace), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
   })
 
   it('requires a user-confirmed definition for an active intent trigger', async () => {

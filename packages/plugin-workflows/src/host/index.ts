@@ -23,7 +23,8 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
-import { createRun, runFailure, writeRun } from './runs.js'
+import { recoverRuns } from './resume.js'
+import { createRun, runFailure, storedRuns, writeRun } from './runs.js'
 import {
   type DefinitionEvent,
   evaluateDefinitions,
@@ -299,6 +300,22 @@ export function apply(ctx: Context): void {
   const definitionsByWorkspace = new Map<string, readonly Definition[]>()
   const definitionsLoading = new Set<string>()
   let storedAuth: HostAuth | undefined
+  let authPromise: Promise<HostAuth | undefined> | undefined
+  /** Load the host key once; a failure is reported and leaves runs unsigned. */
+  const ensureAuth = (): Promise<HostAuth | undefined> => {
+    authPromise ??= HostAuth.load()
+      .then((auth) => {
+        storedAuth = auth
+        return auth
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `workflows: the host key could not be loaded (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
+        )
+        return undefined
+      })
+    return authPromise
+  }
   /** The legacy sources the installed profile proves through its tools. */
   const installedLegacySources = (): Set<string> => {
     const installed = new Set<string>()
@@ -325,15 +342,18 @@ export function apply(ctx: Context): void {
     definitionsLoading.add(workspace)
     void (async () => {
       try {
-        if ((await hasLocalDefinitionFiles(workspace)) && storedAuth === undefined) {
-          storedAuth = await HostAuth.load()
-        }
+        if (await hasLocalDefinitionFiles(workspace)) await ensureAuth()
         const loaded = await loadApprovedDefinitions(workspace, {
           ...(storedAuth === undefined ? {} : { auth: storedAuth }),
           installedLegacy: installedLegacySources(),
         })
         if (pluginDisposed) return
         definitionsByWorkspace.set(workspace, loaded.definitions)
+        // A run is authoritative only when signed, so an active definition
+        // needs the host key ready before its first event.
+        if (loaded.definitions.some((definition) => definition.trigger.mode === 'active')) {
+          void ensureAuth()
+        }
         // Definition-load refusals are diagnostics, not listener failures: they
         // must not overwrite the health strip's single last-error slot.
         for (const message of loaded.errors) {
@@ -357,6 +377,14 @@ export function apply(ctx: Context): void {
     definition: Definition,
     event: DefinitionEvent,
   ): StartRunOutcome => {
+    const auth = storedAuth
+    if (auth === undefined) {
+      void ensureAuth()
+      return {
+        ok: false,
+        reason: 'the host key is not ready yet; no unsigned run is created',
+      }
+    }
     try {
       const run = createRun({
         definition: definition.id,
@@ -367,13 +395,33 @@ export function apply(ctx: Context): void {
         steps: definition.steps.map((step) => step.id),
         now: journal.time(),
       })
-      void writeRun(workspace, run).catch((error: unknown) => {
+      void writeRun(workspace, run, auth).catch((error: unknown) => {
         healthFor(workspace).recordError(error)
       })
       return { ok: true }
     } catch (error) {
       return { ok: false, reason: runFailure(error) }
     }
+  }
+  /** Mark unfinished runs from a previous process interrupted, never completed. */
+  const recoverIfNeeded = (workspace: string): void => {
+    void (async () => {
+      try {
+        if ((await storedRuns(workspace)).length === 0 || pluginDisposed) return
+        const auth = await ensureAuth()
+        if (auth === undefined || pluginDisposed) return
+        const result = await recoverRuns(workspace, auth)
+        if (result.recovered.length > 0) {
+          console.error(
+            `workflows: ${String(result.recovered.length)} unfinished run(s) marked interrupted; resume or cancel them instead of auto-completing`,
+          )
+        }
+      } catch (error) {
+        console.error(
+          `workflows: run recovery failed (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
+        )
+      }
+    })()
   }
   /** Begin health for a session workspace as soon as the session is known. */
   const observeSession = (session: Session): void => {
@@ -384,6 +432,7 @@ export function apply(ctx: Context): void {
         healthFor(workspace)
         watchChanges(workspace)
         loadDefinitions(workspace)
+        recoverIfNeeded(workspace)
       }
     } catch {
       // A session without a usable workspace keeps the rest of the host working.
