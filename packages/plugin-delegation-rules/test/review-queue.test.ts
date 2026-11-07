@@ -1520,7 +1520,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     subagents.startError = new Error(
-      `permission denied: authorization: bearer "synthetic-quoted-credential" {"Authorization":"Bearer synthetic-example-value"} Cookie: session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} {"access_token":"synthetic-access-credential"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
+      `permission denied: token=\\"synthetic-escaped-credential\\"\nauthorization: bearer "synthetic-quoted-credential" {"Authorization":"Bearer synthetic-example-value"} Cookie: session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} {"access_token":"synthetic-access-credential"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
     )
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
 
@@ -1534,6 +1534,7 @@ describe('review failure classification', () => {
     const message = thrown?.message ?? ''
     expect(message).not.toContain('synthetic-example-value')
     expect(message).not.toContain('synthetic-quoted-credential')
+    expect(message).not.toContain('synthetic-escaped-credential')
     expect(message).not.toContain('synthetic-session-credential')
     expect(message).not.toContain('synthetic-access-credential')
     expect(message).not.toContain('synthetic-aws-secret')
@@ -1765,7 +1766,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 Authorization: Bearer "synthetic-quoted-credential" authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} Cookie: preference="quoted-value"; session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" {"access_token":"synthetic-access-credential","refresh_token":"synthetic-refresh-token"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt\n${'x'.repeat(6_000)}`,
+        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 token=\\"synthetic-escaped-credential\\"\nAuthorization: Bearer "synthetic-quoted-credential" authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} Cookie: preference="quoted-value"; session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" {"access_token":"synthetic-access-credential","refresh_token":"synthetic-refresh-token"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt\n${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1786,6 +1787,7 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('sk-abcdefgh12345678')
     expect(record.error).not.toContain('synthetic-example-value')
     expect(record.error).not.toContain('synthetic-quoted-credential')
+    expect(record.error).not.toContain('synthetic-escaped-credential')
     expect(record.error).not.toContain('sk-proj-')
     expect(record.error).not.toContain('synthetic-secret-value')
     expect(record.error).not.toContain('another-secret-value')
