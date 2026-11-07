@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
@@ -30,6 +30,11 @@ const LESSON_STATUSES: ReadonlySet<string> = new Set([
 ])
 
 export type LessonStatus = 'proposed' | 'accepted' | 'rejected' | 'applied'
+
+/** The exact revision an answer is bound to; any field change changes this hash. */
+export function lessonRevision(lesson: Lesson): string {
+  return createHash('sha256').update(JSON.stringify(lesson)).digest('hex').slice(0, 12)
+}
 
 export interface LessonScope {
   /** Rule ids, or `*`; an empty list matches any rule. */
@@ -505,17 +510,35 @@ async function findLesson(
   return { lessons, lesson }
 }
 
+export interface LessonWriteOptions {
+  maxLessons?: number
+  /** Reject the transition unless the record still matches this revision. */
+  expectedRevision?: string
+}
+
+function assertExpectedRevision(lesson: Lesson, expected: string | undefined): void {
+  if (expected === undefined) return
+  const current = lessonRevision(lesson)
+  if (current !== expected) {
+    throw new LessonStoreError(
+      `lesson "${lesson.id}" changed while the question was open (current revision ${current}); ask again for the current revision`,
+      'transition',
+    )
+  }
+}
+
 /** Apply a direct user decision; the caller supplies the answer, never the model. */
 export async function decideLesson(
   workspaceRoot: string,
   id: string,
   decision: 'accepted' | 'rejected',
   now: number,
-  maxLessons = DEFAULT_MAX_LESSONS,
+  options: LessonWriteOptions = {},
 ): Promise<Lesson> {
   const path = lessonStorePath(workspaceRoot)
   return serialized(path, async () => {
     const { lessons, lesson } = await findLesson(workspaceRoot, id)
+    assertExpectedRevision(lesson, options.expectedRevision)
     if (lesson.status !== 'proposed') {
       throw new LessonStoreError(
         `lesson "${id}" is ${lesson.status}; only a proposed lesson can be accepted or rejected`,
@@ -527,7 +550,7 @@ export async function decideLesson(
       path,
       enforceCapacity(
         lessons.map((entry) => (entry.id === id ? next : entry)),
-        maxLessons,
+        options.maxLessons ?? DEFAULT_MAX_LESSONS,
         id,
       ),
     )
@@ -546,12 +569,13 @@ export async function applyLesson(
   id: string,
   target: string,
   now: number,
-  maxLessons = DEFAULT_MAX_LESSONS,
+  options: LessonWriteOptions = {},
 ): Promise<Lesson> {
   const appliedIn = validateLessonTarget(target)
   const path = lessonStorePath(workspaceRoot)
   return serialized(path, async () => {
     const { lessons, lesson } = await findLesson(workspaceRoot, id)
+    assertExpectedRevision(lesson, options.expectedRevision)
     if (lesson.status !== 'accepted') {
       throw new LessonStoreError(
         `lesson "${id}" is ${lesson.status}; only an accepted lesson can be applied`,
@@ -563,7 +587,7 @@ export async function applyLesson(
       path,
       enforceCapacity(
         lessons.map((entry) => (entry.id === id ? next : entry)),
-        maxLessons,
+        options.maxLessons ?? DEFAULT_MAX_LESSONS,
         id,
       ),
     )

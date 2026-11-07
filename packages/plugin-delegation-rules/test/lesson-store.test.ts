@@ -7,6 +7,7 @@ import {
   applyLesson,
   decideLesson,
   LessonStoreError,
+  lessonRevision,
   lessonStorePath,
   proposeLesson,
   readLessons,
@@ -317,6 +318,19 @@ describe('lesson store', () => {
     await run('git', ['init'], { cwd: root })
     await expect(proposeLesson(root, proposal())).rejects.toThrow(/not git-ignored/)
     expect(await readLessons(root)).toEqual({ lessons: [], skipped: 0 })
+  })
+
+  it('refuses a decision whose expected revision changed inside the lock', async () => {
+    const root = await workspace()
+    const created = await proposeLesson(root, proposal({ now: 1 }))
+    const staleRevision = lessonRevision(created.lesson)
+    await proposeLesson(root, proposal({ body: 'Updated body.', now: 2 }))
+    await expect(
+      decideLesson(root, created.lesson.id, 'accepted', 3, { expectedRevision: staleRevision }),
+    ).rejects.toThrow(/changed while the question was open/)
+    const lesson = (await readLessons(root)).lessons[0]
+    expect(lesson?.status).toBe('proposed')
+    expect(lesson?.body).toBe('Updated body.')
   })
 
   it('updates the existing proposed revision on repeated proposals after acceptance', async () => {

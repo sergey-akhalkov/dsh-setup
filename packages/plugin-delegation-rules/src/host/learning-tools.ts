@@ -1,13 +1,15 @@
-import { createHash } from 'node:crypto'
 import {
   applyLesson,
   decideLesson,
   type Lesson,
   LessonStoreError,
+  lessonRevision,
   proposeLesson,
   readLessons,
   validateLessonTarget,
 } from './lesson-store.js'
+
+export { lessonRevision } from './lesson-store.js'
 
 /** Structural copy of the DSH user-questions service; these are not a type dependency. */
 export interface UserQuestionOption {
@@ -84,11 +86,6 @@ function fail(message: string): never {
 function text(value: unknown, at: string): string {
   if (typeof value !== 'string' || value.trim() === '') fail(`${at} must be a non-empty string`)
   return value
-}
-
-/** The exact revision an answer is bound to; any field change changes this hash. */
-export function lessonRevision(lesson: Lesson): string {
-  return createHash('sha256').update(JSON.stringify(lesson)).digest('hex').slice(0, 12)
 }
 
 function preview(value: string): string {
@@ -277,20 +274,17 @@ export async function executeReviewLesson(
     if (rejected && args.decision === 'accept') {
       return `lesson ${args.id} unchanged; the user did not confirm acceptance`
     }
-    const current = await lessonById(context.workspaceRoot, args.id)
-    if (lessonRevision(current) !== revision) {
-      throw new LessonStoreError(
-        `lesson "${args.id}" changed while the question was open (current revision ${lessonRevision(current)}); ask again for the current revision`,
-        'transition',
-      )
-    }
-    // shortcut: the revision check is not atomic with the store write; a single-host session serializes writers per file.
+    // The expected revision is checked inside the store's locked transaction,
+    // so a proposal committed while the question was open cannot be decided.
     const updated = await decideLesson(
       context.workspaceRoot,
       args.id,
       accepted ? 'accepted' : 'rejected',
       context.now().getTime(),
-      context.maxLessons,
+      {
+        ...(context.maxLessons === undefined ? {} : { maxLessons: context.maxLessons }),
+        expectedRevision: revision,
+      },
     )
     return `lesson ${updated.id} ${updated.status}`
   }
@@ -308,19 +302,15 @@ export async function executeReviewLesson(
   if (!selected.includes('Apply')) {
     return `lesson ${args.id} unchanged; the user did not confirm the target`
   }
-  const current = await lessonById(context.workspaceRoot, args.id)
-  if (lessonRevision(current) !== revision) {
-    throw new LessonStoreError(
-      `lesson "${args.id}" changed while the question was open (current revision ${lessonRevision(current)}); ask again for the current revision`,
-      'transition',
-    )
-  }
   const updated = await applyLesson(
     context.workspaceRoot,
     args.id,
     target,
     context.now().getTime(),
-    context.maxLessons,
+    {
+      ...(context.maxLessons === undefined ? {} : { maxLessons: context.maxLessons }),
+      expectedRevision: revision,
+    },
   )
   return `lesson ${updated.id} applied in ${String(updated.appliedIn)}`
 }
