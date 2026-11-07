@@ -14,7 +14,7 @@ import {
   startSnapshotLease,
   stopSnapshotLease,
   sweepReviewSnapshots,
-} from '../lib/index.js'
+} from '../src/index.js'
 import {
   type BundleConfigLike,
   createAgent,

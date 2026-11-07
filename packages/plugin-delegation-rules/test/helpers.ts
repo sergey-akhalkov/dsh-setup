@@ -15,7 +15,7 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { expect, vi } from 'vitest'
-import { apply, type BundleConfig, type SettledRunState } from '../lib/index.js'
+import { apply, type BundleConfig, type SettledRunState } from '../src/index.js'
 
 export type GitRunner = (
   args: readonly string[],
