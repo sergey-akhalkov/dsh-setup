@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ErrorLine,
   EventList,
@@ -66,6 +66,27 @@ interface ViewState {
   readonly message?: string
 }
 
+export type PageKind = 'events' | 'runs'
+export interface PageState {
+  readonly key: string
+  readonly phase: 'loading' | 'error'
+  readonly message?: string
+}
+export type PageStates = Record<PageKind, PageState | undefined>
+
+export function emptyPageStates(): PageStates {
+  return { events: undefined, runs: undefined }
+}
+
+/** Replace only one list's pagination state; a sibling request keeps its own. */
+export function updatePageState(
+  states: PageStates,
+  kind: PageKind,
+  value: PageState | undefined,
+): PageStates {
+  return { ...states, [kind]: value }
+}
+
 function pageOf<T>(body: { next?: string }, items: readonly T[]): Page<T> {
   return { items, ...(body.next === undefined ? {} : { next: body.next }) }
 }
@@ -74,6 +95,11 @@ function pageOf<T>(body: { next?: string }, items: readonly T[]): Page<T> {
  * The Workflows conversation view: health, catalog, session events, runs, and
  * the Why-not rows. It requests bounded pages and never the whole journal.
  */
+/** A response from a previous session generation must never commit. */
+export function isStaleGeneration(requested: number, current: number): boolean {
+  return requested !== current
+}
+
 export function WorkflowsView(props: {
   readonly sessionId?: string
   readonly t: Translate
@@ -81,9 +107,18 @@ export function WorkflowsView(props: {
   const { sessionId, t } = props
   const [state, setState] = useState<ViewState>({ phase: 'loading' })
   const [selected, setSelected] = useState<string | undefined>(undefined)
+  const loadId = useRef(0)
+  const pendingPages = useRef(new Set<string>())
+  const [pageStates, setPageStates] = useState<PageStates>({
+    events: undefined,
+    runs: undefined,
+  })
 
   const load = (): void => {
     if (sessionId === undefined) return
+    const generation = ++loadId.current
+    pendingPages.current.clear()
+    setPageStates(emptyPageStates())
     setState({ phase: 'loading' })
     Promise.all([
       requestJson<HealthView>(healthUrl(sessionId)),
@@ -92,6 +127,7 @@ export function WorkflowsView(props: {
       requestJson<{ runs: RunView[]; next?: string }>(runsUrl(sessionId)),
     ]).then(
       ([health, triggers, events, runs]) => {
+        if (isStaleGeneration(generation, loadId.current)) return
         setState({
           phase: 'ready',
           loaded: {
@@ -103,6 +139,7 @@ export function WorkflowsView(props: {
         })
       },
       (error: unknown) => {
+        if (isStaleGeneration(generation, loadId.current)) return
         setState({
           phase: 'error',
           message: error instanceof Error ? error.message : String(error),
@@ -111,7 +148,12 @@ export function WorkflowsView(props: {
     )
   }
 
-  useEffect(load, [sessionId])
+  useEffect(() => {
+    load()
+    return () => {
+      loadId.current += 1
+    }
+  }, [sessionId])
 
   if (sessionId === undefined) {
     return (
@@ -122,42 +164,91 @@ export function WorkflowsView(props: {
   }
 
   const mergeEvents = (): void => {
-    if (state.loaded?.events.next === undefined) return
-    void requestJson<{ events: JournalEvent[]; next?: string }>(
-      eventsUrl(sessionId, state.loaded.events.next),
-    ).then((page) => {
-      setState((current) => {
-        if (current.loaded === undefined) return current
-        return {
-          ...current,
-          loaded: {
-            ...current.loaded,
-            events: pageOf(page, [...current.loaded.events.items, ...page.events]),
-          },
-        }
-      })
-    })
+    const next = state.loaded?.events.next
+    if (next === undefined) return
+    const key = `events:${next}`
+    if (pendingPages.current.has(key)) return
+    const generation = loadId.current
+    pendingPages.current.add(key)
+    setPageStates((current) => updatePageState(current, 'events', { key, phase: 'loading' }))
+    void requestJson<{ events: JournalEvent[]; next?: string }>(eventsUrl(sessionId, next)).then(
+      (page) => {
+        if (isStaleGeneration(generation, loadId.current)) return
+        pendingPages.current.delete(key)
+        setPageStates((current) => updatePageState(current, 'events', undefined))
+        setState((current) => {
+          if (current.loaded === undefined) return current
+          return {
+            ...current,
+            loaded: {
+              ...current.loaded,
+              events: pageOf(page, [...current.loaded.events.items, ...page.events]),
+            },
+          }
+        })
+      },
+      (error: unknown) => {
+        if (isStaleGeneration(generation, loadId.current)) return
+        pendingPages.current.delete(key)
+        setPageStates((current) =>
+          updatePageState(current, 'events', {
+            key,
+            phase: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      },
+    )
   }
 
   const mergeRuns = (): void => {
-    if (state.loaded?.runs.next === undefined) return
-    void requestJson<{ runs: RunView[]; next?: string }>(
-      runsUrl(sessionId, state.loaded.runs.next),
-    ).then((page) => {
-      setState((current) => {
-        if (current.loaded === undefined) return current
-        return {
-          ...current,
-          loaded: {
-            ...current.loaded,
-            runs: pageOf(page, [...current.loaded.runs.items, ...page.runs]),
-          },
-        }
-      })
-    })
+    const next = state.loaded?.runs.next
+    if (next === undefined) return
+    const key = `runs:${next}`
+    if (pendingPages.current.has(key)) return
+    const generation = loadId.current
+    pendingPages.current.add(key)
+    setPageStates((current) => updatePageState(current, 'runs', { key, phase: 'loading' }))
+    void requestJson<{ runs: RunView[]; next?: string }>(runsUrl(sessionId, next)).then(
+      (page) => {
+        if (isStaleGeneration(generation, loadId.current)) return
+        pendingPages.current.delete(key)
+        setPageStates((current) => updatePageState(current, 'runs', undefined))
+        setState((current) => {
+          if (current.loaded === undefined) return current
+          return {
+            ...current,
+            loaded: {
+              ...current.loaded,
+              runs: pageOf(page, [...current.loaded.runs.items, ...page.runs]),
+            },
+          }
+        })
+      },
+      (error: unknown) => {
+        if (isStaleGeneration(generation, loadId.current)) return
+        pendingPages.current.delete(key)
+        setPageStates((current) =>
+          updatePageState(current, 'runs', {
+            key,
+            phase: 'error',
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        )
+      },
+    )
   }
 
   let body: ReactNode
+  const pageProps = (
+    kind: 'events' | 'runs',
+    next: string | undefined,
+  ): Record<string, unknown> => {
+    const page = pageStates[kind]
+    if (next === undefined || page?.key !== `${kind}:${next}`) return {}
+    if (page.phase === 'loading') return { loading: true }
+    return { error: page.message ?? t('state.error') }
+  }
   if (state.phase === 'loading') {
     body = <LoadingLine t={t} />
   } else if (state.phase === 'error') {
@@ -170,14 +261,24 @@ export function WorkflowsView(props: {
         <HealthStrip health={loaded.health} t={t} />
         <TriggersTable triggers={loaded.triggers} t={t} />
         <EventList events={loaded.events.items} t={t} />
-        <LoadMore next={loaded.events.next} t={t} onLoad={mergeEvents} />
+        <LoadMore
+          next={loaded.events.next}
+          t={t}
+          onLoad={mergeEvents}
+          {...pageProps('events', loaded.events.next)}
+        />
         <RunsList
           runs={loaded.runs.items}
           t={t}
           {...(selected === undefined ? {} : { selected })}
           onSelect={(run) => setSelected(run.id)}
         />
-        <LoadMore next={loaded.runs.next} t={t} onLoad={mergeRuns} />
+        <LoadMore
+          next={loaded.runs.next}
+          t={t}
+          onLoad={mergeRuns}
+          {...pageProps('runs', loaded.runs.next)}
+        />
         {selectedRun === undefined ? null : <RunDetail run={selectedRun} t={t} />}
         <WhyNotTable events={loaded.events.items} t={t} />
       </>

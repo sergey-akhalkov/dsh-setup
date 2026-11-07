@@ -290,7 +290,19 @@ window.__ModuleLoader__.load({
     }
     function LoadMore(props) {
       if (props.next === void 0) return null;
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", className: "dsh-wf-more", onClick: props.onLoad, children: props.t("paging.more") });
+      if (props.error !== void 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ErrorLine, { message: props.error, t: props.t, onRetry: props.onLoad });
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        "button",
+        {
+          type: "button",
+          className: "dsh-wf-more",
+          disabled: props.loading === true,
+          onClick: props.onLoad,
+          children: props.t("paging.more")
+        }
+      );
     }
 
     // packages/plugin-workflows/src/client/view.tsx
@@ -324,15 +336,33 @@ window.__ModuleLoader__.load({
     .dsh-wf-error-block { display: flex; flex-direction: column; gap: 6px; }
     .dsh-wf-retry, .dsh-wf-more { align-self: flex-start; padding: 4px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }
     `;
+    function emptyPageStates() {
+      return { events: void 0, runs: void 0 };
+    }
+    function updatePageState(states, kind, value) {
+      return { ...states, [kind]: value };
+    }
     function pageOf(body, items) {
       return { items, ...body.next === void 0 ? {} : { next: body.next } };
+    }
+    function isStaleGeneration(requested, current) {
+      return requested !== current;
     }
     function WorkflowsView(props) {
       const { sessionId, t } = props;
       const [state, setState] = (0, import_react.useState)({ phase: "loading" });
       const [selected, setSelected] = (0, import_react.useState)(void 0);
+      const loadId = (0, import_react.useRef)(0);
+      const pendingPages = (0, import_react.useRef)(/* @__PURE__ */ new Set());
+      const [pageStates, setPageStates] = (0, import_react.useState)({
+        events: void 0,
+        runs: void 0
+      });
       const load = () => {
         if (sessionId === void 0) return;
+        const generation = ++loadId.current;
+        pendingPages.current.clear();
+        setPageStates(emptyPageStates());
         setState({ phase: "loading" });
         Promise.all([
           requestJson(healthUrl(sessionId)),
@@ -341,6 +371,7 @@ window.__ModuleLoader__.load({
           requestJson(runsUrl(sessionId))
         ]).then(
           ([health, triggers, events, runs]) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
             setState({
               phase: "ready",
               loaded: {
@@ -352,6 +383,7 @@ window.__ModuleLoader__.load({
             });
           },
           (error) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
             setState({
               phase: "error",
               message: error instanceof Error ? error.message : String(error)
@@ -359,45 +391,96 @@ window.__ModuleLoader__.load({
           }
         );
       };
-      (0, import_react.useEffect)(load, [sessionId]);
+      (0, import_react.useEffect)(() => {
+        load();
+        return () => {
+          loadId.current += 1;
+        };
+      }, [sessionId]);
       if (sessionId === void 0) {
         return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
       }
       const mergeEvents = () => {
-        if (state.loaded?.events.next === void 0) return;
-        void requestJson(
-          eventsUrl(sessionId, state.loaded.events.next)
-        ).then((page) => {
-          setState((current) => {
-            if (current.loaded === void 0) return current;
-            return {
-              ...current,
-              loaded: {
-                ...current.loaded,
-                events: pageOf(page, [...current.loaded.events.items, ...page.events])
-              }
-            };
-          });
-        });
+        const next = state.loaded?.events.next;
+        if (next === void 0) return;
+        const key = `events:${next}`;
+        if (pendingPages.current.has(key)) return;
+        const generation = loadId.current;
+        pendingPages.current.add(key);
+        setPageStates((current) => updatePageState(current, "events", { key, phase: "loading" }));
+        void requestJson(eventsUrl(sessionId, next)).then(
+          (page) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
+            pendingPages.current.delete(key);
+            setPageStates((current) => updatePageState(current, "events", void 0));
+            setState((current) => {
+              if (current.loaded === void 0) return current;
+              return {
+                ...current,
+                loaded: {
+                  ...current.loaded,
+                  events: pageOf(page, [...current.loaded.events.items, ...page.events])
+                }
+              };
+            });
+          },
+          (error) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
+            pendingPages.current.delete(key);
+            setPageStates(
+              (current) => updatePageState(current, "events", {
+                key,
+                phase: "error",
+                message: error instanceof Error ? error.message : String(error)
+              })
+            );
+          }
+        );
       };
       const mergeRuns = () => {
-        if (state.loaded?.runs.next === void 0) return;
-        void requestJson(
-          runsUrl(sessionId, state.loaded.runs.next)
-        ).then((page) => {
-          setState((current) => {
-            if (current.loaded === void 0) return current;
-            return {
-              ...current,
-              loaded: {
-                ...current.loaded,
-                runs: pageOf(page, [...current.loaded.runs.items, ...page.runs])
-              }
-            };
-          });
-        });
+        const next = state.loaded?.runs.next;
+        if (next === void 0) return;
+        const key = `runs:${next}`;
+        if (pendingPages.current.has(key)) return;
+        const generation = loadId.current;
+        pendingPages.current.add(key);
+        setPageStates((current) => updatePageState(current, "runs", { key, phase: "loading" }));
+        void requestJson(runsUrl(sessionId, next)).then(
+          (page) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
+            pendingPages.current.delete(key);
+            setPageStates((current) => updatePageState(current, "runs", void 0));
+            setState((current) => {
+              if (current.loaded === void 0) return current;
+              return {
+                ...current,
+                loaded: {
+                  ...current.loaded,
+                  runs: pageOf(page, [...current.loaded.runs.items, ...page.runs])
+                }
+              };
+            });
+          },
+          (error) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
+            pendingPages.current.delete(key);
+            setPageStates(
+              (current) => updatePageState(current, "runs", {
+                key,
+                phase: "error",
+                message: error instanceof Error ? error.message : String(error)
+              })
+            );
+          }
+        );
       };
       let body;
+      const pageProps = (kind, next) => {
+        const page = pageStates[kind];
+        if (next === void 0 || page?.key !== `${kind}:${next}`) return {};
+        if (page.phase === "loading") return { loading: true };
+        return { error: page.message ?? t("state.error") };
+      };
       if (state.phase === "loading") {
         body = /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(LoadingLine, { t });
       } else if (state.phase === "error") {
@@ -409,7 +492,15 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(HealthStrip, { health: loaded.health, t }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(TriggersTable, { triggers: loaded.triggers, t }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(EventList, { events: loaded.events.items, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(LoadMore, { next: loaded.events.next, t, onLoad: mergeEvents }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+            LoadMore,
+            {
+              next: loaded.events.next,
+              t,
+              onLoad: mergeEvents,
+              ...pageProps("events", loaded.events.next)
+            }
+          ),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
             RunsList,
             {
@@ -419,7 +510,15 @@ window.__ModuleLoader__.load({
               onSelect: (run) => setSelected(run.id)
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(LoadMore, { next: loaded.runs.next, t, onLoad: mergeRuns }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+            LoadMore,
+            {
+              next: loaded.runs.next,
+              t,
+              onLoad: mergeRuns,
+              ...pageProps("runs", loaded.runs.next)
+            }
+          ),
           selectedRun === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(RunDetail, { run: selectedRun, t }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(WhyNotTable, { events: loaded.events.items, t })
         ] });

@@ -458,11 +458,21 @@ export function ErrorLine(props: { message: string; t: Translate; onRetry(): voi
 export function LoadMore(props: {
   next: string | undefined
   t: Translate
+  loading?: boolean
+  error?: string
   onLoad(): void
 }): ReactNode {
   if (props.next === undefined) return null
+  if (props.error !== undefined) {
+    return <ErrorLine message={props.error} t={props.t} onRetry={props.onLoad} />
+  }
   return (
-    <button type="button" className="dsh-wf-more" onClick={props.onLoad}>
+    <button
+      type="button"
+      className="dsh-wf-more"
+      disabled={props.loading === true}
+      onClick={props.onLoad}
+    >
       {props.t('paging.more')}
     </button>
   )

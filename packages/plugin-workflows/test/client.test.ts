@@ -61,6 +61,12 @@ interface LoadedModule {
   ErrorLine?: (props: Record<string, unknown>) => unknown
   LoadingLine?: (props: Record<string, unknown>) => unknown
   LoadMore?: (props: Record<string, unknown>) => unknown
+  isStaleGeneration?: (requested: number, current: number) => boolean
+  updatePageState?: (
+    states: Record<string, unknown>,
+    kind: 'events' | 'runs',
+    value: unknown,
+  ) => Record<string, unknown>
   VIEW_CSS?: string
   eventsUrl?: (session: string, cursor?: string) => string
   healthUrl?: (session: string) => string
@@ -367,6 +373,43 @@ describe('Workflows Client half', () => {
     const retry = elements(error).find((element) => element.type === 'button')
     ;(retry?.props.onClick as (() => void) | undefined)?.()
     expect(retried).toBe(1)
+  })
+
+  it('discards responses from a previous session generation', () => {
+    const module = loadModule()
+    expect(module.isStaleGeneration?.(2, 1)).toBe(true)
+    expect(module.isStaleGeneration?.(1, 1)).toBe(false)
+  })
+
+  it('keeps events and runs pagination states independent', () => {
+    const module = loadModule()
+    const initial = {
+      events: { key: 'events:5', phase: 'error', message: 'events failed' },
+      runs: { key: 'runs:5', phase: 'loading' },
+    }
+    const afterRuns = module.updatePageState?.(initial, 'runs', undefined)
+    expect(afterRuns?.events).toEqual(initial.events)
+    const afterEvents = module.updatePageState?.(initial, 'events', undefined)
+    expect(afterEvents?.runs).toEqual(initial.runs)
+  })
+
+  it('renders pagination with loading, retry, and end states', () => {
+    const module = loadModule()
+    const more = renderTree(module.LoadMore?.({ next: '5', t: translate, onLoad: () => {} }))
+    expect(childText(more)).toContain('paging.more')
+    const loading = module.LoadMore?.({
+      next: '5',
+      t: translate,
+      loading: true,
+      onLoad: () => {},
+    })
+    expect(elements(loading).some((element) => element.props.disabled === true)).toBe(true)
+    const failed = renderTree(
+      module.LoadMore?.({ next: '5', t: translate, error: 'page failed', onLoad: () => {} }),
+    )
+    expect(childText(failed)).toContain('page failed')
+    expect(childText(failed)).toContain('state.retry')
+    expect(module.LoadMore?.({ next: undefined, t: translate, onLoad: () => {} })).toBeNull()
   })
 
   it('builds document-relative API URLs and never redefines a shipped token', () => {
