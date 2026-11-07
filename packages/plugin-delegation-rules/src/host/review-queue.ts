@@ -435,14 +435,15 @@ export class ReviewQueue<T extends QueueRun> {
 
   private async waitTimedOut(entry: QueueEntry<T>): Promise<void> {
     if (entry.finished || entry.settling) return
-    // A live or in-flight target is already admitted; the wait clock no longer applies.
-    if (entry.phase === 'starting' || entry.phase === 'running') return
+    // Only an unadmitted run has a wait clock; a live, in-flight, or already
+    // settled run is unaffected by a late timer dispatch.
+    if (entry.phase !== 'queued' && entry.phase !== 'retry-wait') return
     await this.settleWaitTimeout(entry)
   }
 
   /** Settle an unadmitted run whose acceptance-based wait deadline expired. */
   private async settleWaitTimeout(entry: QueueEntry<T>): Promise<void> {
-    if (entry.finished || entry.settling) return
+    if (entry.finished || entry.settling || entry.phase === 'settled') return
     entry.settling = true
     const position = this.positionOf(entry)
     const waitMs = this.hooks.now().getTime() - entry.queuedAtMs

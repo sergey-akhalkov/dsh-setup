@@ -605,6 +605,130 @@ describe('review queue admission', () => {
       vi.useRealTimers()
     }
   })
+
+  it('treats a changed prepared digest as a new run instead of a duplicate', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(
+      root,
+      { ...defaultTestConfig(), reviewQueue: { concurrency: 2 } },
+      subagents,
+    )
+
+    const first = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const firstRun = runIdFrom(first)
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
+      '# Proposal\n\nChanged.\n',
+      'utf8',
+    )
+    const second = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const secondRun = runIdFrom(second)
+
+    expect(secondRun).not.toBe(firstRun)
+    expect(second).not.toContain('already pending')
+    expect(second).toContain('review queued')
+    await vi.waitFor(async () => {
+      expect((await readRun(root, firstRun)).identity).not.toBe(
+        (await readRun(root, secondRun)).identity,
+      )
+    })
+
+    pending.releases.shift()?.()
+    await harness.waitForRun(firstRun)
+    await subagents.waitForStarts(2)
+    pending.releases.shift()?.()
+    await harness.waitForRun(secondRun)
+  })
+})
+
+describe('review queue identity', () => {
+  function hooksFor() {
+    return {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+  }
+
+  it('runs two independent keys up to the concurrency limit', async () => {
+    const hooks = hooksFor()
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 2,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    expect(await queue.submit(fakeRun('run-a', 'key-a', 'identity-a'))).toMatchObject({
+      phase: 'running',
+    })
+    expect(await queue.submit(fakeRun('run-b', 'key-b', 'identity-b'))).toMatchObject({
+      phase: 'running',
+    })
+    expect(hooks.start).toHaveBeenCalledTimes(2)
+    expect(queue.summary()).toMatchObject({ active: 2, queued: 0 })
+    queue.dispose()
+  })
+
+  it('settles a re-preparation collision as discarded while the incumbent proceeds', async () => {
+    const hooks = hooksFor()
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 3,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const occupying = fakeRun('run-x', 'key-x', 'identity-x')
+    expect(await queue.submit(occupying)).toEqual({ kind: 'accepted', phase: 'running' })
+    const incumbent = fakeRun('run-b', 'key-b', 'identity-d2')
+    expect(await queue.submit(incumbent)).toEqual({ kind: 'accepted', phase: 'queued' })
+    const reprepared = fakeRun('run-a', 'key-a', 'identity-d1')
+    expect(await queue.submit(reprepared)).toEqual({ kind: 'accepted', phase: 'queued' })
+
+    expect(queue.replaceIdentity(reprepared, 'identity-d2')).toEqual({ collision: incumbent })
+    await queue.complete(reprepared, 'discarded')
+    expect(queue.owns('run-a')).toBe(false)
+
+    await queue.complete(occupying, 'completed')
+    await vi.waitFor(() => {
+      expect(
+        hooks.start.mock.calls.some((call: unknown[]) => (call[0] as QueueRun).file.id === 'run-b'),
+      ).toBe(true)
+    })
+    await queue.complete(incumbent, 'completed')
+
+    const settledA = hooks.settled.mock.calls.filter(
+      (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-a',
+    )
+    const settledB = hooks.settled.mock.calls.filter(
+      (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-b',
+    )
+    expect(settledA).toEqual([[reprepared, 'discarded']])
+    expect(settledB).toEqual([[incumbent, 'completed']])
+    const startedA = hooks.start.mock.calls.filter(
+      (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-a',
+    )
+    expect(startedA).toHaveLength(0)
+    queue.dispose()
+  })
 })
 
 describe('review queue cancellation', () => {

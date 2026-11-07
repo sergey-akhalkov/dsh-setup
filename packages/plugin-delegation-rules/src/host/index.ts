@@ -2139,8 +2139,22 @@ function reviewConversationKey(
     : `${change}\u0000whole\u0000${rule.phase ?? 'review'}`
 }
 
-function reviewIdentity(rule: RuleConfig, change: string, task: TaskInfo | undefined): string {
-  return `${rule.id}\u0000${change}\u0000${task?.id ?? rule.phase ?? 'whole'}`
+/** The prepared-review identity: rule, change, task/phase, digest, and resolved reviewer. */
+function reviewIdentity(
+  rule: RuleConfig,
+  change: string,
+  task: TaskInfo | undefined,
+  digest: string,
+  reviewer: string,
+): string {
+  return `${rule.id}\u0000${change}\u0000${task?.id ?? rule.phase ?? 'whole'}\u0000${digest}\u0000${reviewer}`
+}
+
+/** The resolved reviewer identity a dedupe key binds: provider, model, and effort. */
+function reviewerLabel(target: TargetConfig): string {
+  const model = target.model ?? target.agentOptions?.model ?? ''
+  const effort = target.reasoningEffort ?? target.agentOptions?.reasoningEffort ?? ''
+  return `${target.provider}/${model}@${effort}`
 }
 
 /** Human/provider-readable key marker; a provider may resume one conversation per key. */
@@ -3371,7 +3385,8 @@ class DelegationEngine {
       change: change.name,
       ...(task === undefined ? {} : { taskId: task.id }),
       key,
-      identity: `${workspaceRoot}\u0000${reviewIdentity(rule, change.name, task)}`,
+      // Replaced with the prepared digest/reviewer identity before admission.
+      identity: `${workspaceRoot}\u0000pending\u0000${id}`,
       state: 'queued',
       record: relativePath(workspaceRoot, path),
       startedAt: this.now(),
@@ -3425,6 +3440,17 @@ class DelegationEngine {
     try {
       const reused = await this.prepareReviewRun(run)
       if (reused !== undefined) return reused
+      const prepared = run.prepared
+      if (prepared === undefined) fail(`run ${run.file.id} prepared no review inputs`)
+      // Identity is computed only after preparation: a changed digest or
+      // reviewer is a distinct run, never a join of the earlier handle.
+      run.file.identity = `${workspaceRoot}\u0000${reviewIdentity(
+        rule,
+        change.name,
+        task,
+        prepared.digest,
+        reviewerLabel(this.target(rule)),
+      )}`
     } catch (error) {
       await this.failRun(run, error, run.prepared)
       throw error
@@ -3432,7 +3458,11 @@ class DelegationEngine {
     this.runs.set(run.file.id, run)
 
     const admission = await this.queue.submit(run)
-    if (admission.kind === 'duplicate') return this.runHandleText(admission.run, 'duplicate')
+    if (admission.kind === 'duplicate') {
+      await this.discardSnapshot(run)
+      this.runs.delete(run.file.id)
+      return this.runHandleText(admission.run, 'duplicate')
+    }
     if (admission.kind === 'full') {
       const error = new DelegationError(
         `review queue full: ${admission.depth} waiting run(s) at maxQueued=${admission.maxQueued}; let the current reviews settle, then start this review again`,
