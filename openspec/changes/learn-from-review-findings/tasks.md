@@ -11,7 +11,7 @@ The change is one lane: every group edits the shared `packages/plugin-delegation
 
 ## 2. Lesson store (owns `packages/plugin-delegation-rules/src/host/lesson-store.ts`, `packages/plugin-delegation-rules/test/lesson-store.test.ts`)
 
-- [ ] 2.1 Add the local store under `.dsh/review-learning/<workspaceKey>.jsonl` with the stable workspace key, atomic append, tolerant read, and malformed-line count; verify a write/read round trip, a missing file, and a malformed line.
+- [x] 2.1 Add the local store under `.dsh/review-learning/<workspaceKey>.jsonl` with the stable workspace key, atomic append, tolerant read, and malformed-line count; verify a write/read round trip, a missing file, and a malformed line.
 - [ ] 2.2 Implement the dedupe key and the 200-lesson or 1 MB bound, retaining applied lessons and evicting the oldest non-applied lesson first; when no non-applied lesson exists, refuse the write atomically with `capacity` and leave existing records unchanged; verify a duplicate, a full store, and an applied-only full store.
 - [ ] 2.3 Implement bounded fields, source evidence, and the no-tracked-file rule; verify a 4 KB body is truncated, a machine path is not stored, and `git status` sees no new tracked file.
 

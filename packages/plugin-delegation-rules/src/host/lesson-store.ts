@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { FINDING_CLASSES, type FindingClass, hasMachinePath } from '../shared/approval.js'
 import { workspaceKeyOf } from './finding-history.js'
@@ -57,11 +57,11 @@ export interface Lesson {
   supersedes?: string
 }
 
-/** A validation problem or the bounded-store refusal; `code` is stable for callers. */
+/** A validation problem, the bounded-store refusal, or a held store lock. */
 export class LessonStoreError extends Error {
   constructor(
     message: string,
-    readonly code: 'validation' | 'capacity' | 'not-found' | 'transition',
+    readonly code: 'validation' | 'capacity' | 'not-found' | 'transition' | 'locked',
   ) {
     super(message)
     this.name = 'LessonStoreError'
@@ -229,12 +229,64 @@ export async function readLessons(workspaceRoot: string): Promise<LessonStoreRea
   return { lessons, skipped }
 }
 
-/** Serialize same-process writers per file so two proposals never lose a line. */
+/** Serialize same-process writers per file so a prune never races an append. */
 const storeWrites = new Map<string, Promise<unknown>>()
+const STORE_LOCK_TIMEOUT_MS = 2_000
+
+/** Remove the lock only while it still carries this writer's owner token. */
+async function removeOwnedLock(lock: string, owner: string): Promise<void> {
+  try {
+    const current = await readFile(join(lock, 'owner'), 'utf8')
+    if (current !== owner) return
+  } catch {
+    return
+  }
+  await rm(lock, { recursive: true, force: true }).catch(() => undefined)
+}
+
+/**
+ * Cross-process lock for the read-prune-rename sequence: an atomic directory
+ * create with an owner token. A crashed writer leaves the lock behind; the
+ * bounded wait then fails with the lock path and a manual next action rather
+ * than risking a takeover race that could lose a lesson.
+ */
+async function withStoreProcessLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const lock = `${path}.lock`
+  await mkdir(dirname(path), { recursive: true })
+  const owner = randomUUID()
+  const deadline = Date.now() + STORE_LOCK_TIMEOUT_MS
+  for (;;) {
+    try {
+      await mkdir(lock)
+      try {
+        await writeFile(join(lock, 'owner'), owner, 'utf8')
+      } catch (error) {
+        await rm(lock, { recursive: true, force: true }).catch(() => undefined)
+        throw error
+      }
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (Date.now() >= deadline) {
+        throw new LessonStoreError(
+          `lesson store is locked by another writer (${lock.replaceAll('\\', '/')}); if no other host is writing, remove that lock and retry`,
+          'locked',
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+  try {
+    return await work()
+  } finally {
+    await removeOwnedLock(lock, owner)
+  }
+}
 
 function serialized<T>(path: string, work: () => Promise<T>): Promise<T> {
   const previous = storeWrites.get(path) ?? Promise.resolve()
-  const next = previous.then(work)
+  // A failed writer must not cancel the writes queued behind it.
+  const next = previous.catch(() => undefined).then(() => withStoreProcessLock(path, work))
   storeWrites.set(path, next)
   return next.finally(() => {
     if (storeWrites.get(path) === next) storeWrites.delete(path)
@@ -255,15 +307,16 @@ function storeBytes(lessons: readonly Lesson[]): number {
   return total
 }
 
-function evictToBounds(lessons: Lesson[], maxLessons: number): Lesson[] {
+/** Evict the oldest non-applied lesson until the store fits; the written record is never a victim. */
+function enforceCapacity(lessons: Lesson[], maxLessons: number, protectedId: string): Lesson[] {
   const next = [...lessons]
   while (next.length > maxLessons || storeBytes(next) > MAX_STORE_BYTES) {
     const victim = next
-      .filter((lesson) => lesson.status !== 'applied')
+      .filter((lesson) => lesson.status !== 'applied' && lesson.id !== protectedId)
       .sort((left, right) => left.createdAt - right.createdAt)[0]
     if (victim === undefined) {
       throw new LessonStoreError(
-        `lesson store is at capacity (${next.length} lessons, ${storeBytes(next)} bytes) and every lesson is applied; reject or apply a lesson elsewhere, or raise reviewLearning.maxLessons`,
+        `lesson store is at capacity (${next.length} lessons, ${storeBytes(next)} bytes) and no non-applied lesson can be evicted; reject or apply a lesson elsewhere, or raise reviewLearning.maxLessons`,
         'capacity',
       )
     }
@@ -338,10 +391,12 @@ export async function proposeLesson(
         source,
         createdAt: input.now,
       }
-      await writeLessons(
-        path,
+      const next = enforceCapacity(
         lessons.map((lesson) => (lesson.id === existing.id ? updated : lesson)),
+        maxLessons,
+        updated.id,
       )
+      await writeLessons(path, next)
       return { lesson: updated, kind: 'updated' as const, replaced: existing }
     }
     if (
@@ -349,29 +404,18 @@ export async function proposeLesson(
       (existing.status === 'accepted' || existing.status === 'applied')
     ) {
       const revision: Lesson = { ...record, supersedes: existing.id }
-      const next = evictToBounds([...lessons, revision], maxLessons)
-      if (!next.some((lesson) => lesson.id === revision.id)) {
-        throw new LessonStoreError(
-          'lesson store is at capacity; the proposed revision could not be stored',
-          'capacity',
-        )
-      }
+      const next = enforceCapacity([...lessons, revision], maxLessons, revision.id)
       await writeLessons(path, next)
       return { lesson: revision, kind: 'revision' as const }
     }
     const replaced = existing
-    const next = evictToBounds(
+    const next = enforceCapacity(
       existing === undefined
         ? [...lessons, record]
         : lessons.map((lesson) => (lesson.id === existing.id ? record : lesson)),
       maxLessons,
+      record.id,
     )
-    if (!next.some((lesson) => lesson.id === record.id)) {
-      throw new LessonStoreError(
-        'lesson store is at capacity; the proposed lesson could not be stored',
-        'capacity',
-      )
-    }
     await writeLessons(path, next)
     return {
       lesson: record,
