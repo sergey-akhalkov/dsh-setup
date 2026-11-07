@@ -112,6 +112,8 @@ interface QueueEntry<T extends QueueRun> {
   admitted: boolean
   /** Set while a retry timer owns eligibility, so a stale timer is ignored. */
   retryToken: number
+  /** A timed-out run whose teardown is not yet confirmed. */
+  quarantined?: boolean
   /** Settles when this run's first start attempt leaves `starting`. */
   startOutcome?: Promise<void>
   /** The permanent start failure this admission must surface to its caller. */
@@ -252,6 +254,7 @@ export class ReviewQueue<T extends QueueRun> {
   private readonly active = new Set<QueueEntry<T>>()
   private readonly persistChains = new Map<string, Promise<void>>()
   private sequence = 0
+  private disposed = false
 
   constructor(
     private readonly limits: QueueLimits,
@@ -260,6 +263,7 @@ export class ReviewQueue<T extends QueueRun> {
 
   /** Stop every pending timer; the engine calls this when the plugin unloads. */
   dispose(): void {
+    this.disposed = true
     for (const entry of this.entries.values()) {
       if (entry.waitTimer !== undefined) clearTimeout(entry.waitTimer)
       if (entry.retryTimer !== undefined) clearTimeout(entry.retryTimer)
@@ -381,6 +385,62 @@ export class ReviewQueue<T extends QueueRun> {
     if (entry === undefined || entry.finished || entry.phase !== 'queued') return false
     await this.finish(entry, 'discarded', 'cancelled before the target started')
     return true
+  }
+
+  /**
+   * Hold a timed-out run's conversation key, capacity slot, and snapshot until
+   * its child teardown is confirmed. The settlement observer fires once here;
+   * `teardown` is retried with backoff and releases the slot on success.
+   */
+  quarantine(run: T, teardown: () => Promise<void>): void {
+    const entry = this.entries.get(run.file.id)
+    if (entry === undefined || entry.finished) return
+    entry.quarantined = true
+    entry.finished = true
+    entry.phase = 'settled'
+    if (entry.waitTimer !== undefined) {
+      clearTimeout(entry.waitTimer)
+      delete entry.waitTimer
+    }
+    if (entry.retryTimer !== undefined) {
+      clearTimeout(entry.retryTimer)
+      delete entry.retryTimer
+    }
+    this.removeWaiting(entry)
+    this.forgetIdentity(entry)
+    // Keep `active` and the key head: followers and fresh same-key runs wait.
+    try {
+      this.hooks.settled(entry.run, 'failed')
+    } catch {
+      // The observer is a seam; it must not change quarantine cleanup.
+    }
+    void this.confirmTeardown(entry, teardown)
+  }
+
+  private async confirmTeardown(
+    entry: QueueEntry<T>,
+    teardown: () => Promise<void>,
+  ): Promise<void> {
+    let attempt = 0
+    for (;;) {
+      attempt += 1
+      try {
+        await teardown()
+        break
+      } catch {
+        if (this.disposed) return
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, retryDelayMs(attempt, this.limits))
+        })
+        if (this.disposed) return
+      }
+    }
+    if (this.disposed) return
+    entry.quarantined = false
+    this.active.delete(entry)
+    this.detachKey(entry)
+    this.entries.delete(entry.run.file.id)
+    this.pump()
   }
 
   /**

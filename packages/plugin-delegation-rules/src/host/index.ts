@@ -323,6 +323,17 @@ class TimeoutError extends DelegationError {
   }
 }
 
+/** A timeout whose child could not be confirmed cancelled; quarantine it. */
+class UnconfirmedTimeoutError extends TimeoutError {
+  constructor(
+    message: string,
+    readonly activation: SubagentActivation,
+  ) {
+    super(message)
+    this.name = 'UnconfirmedTimeoutError'
+  }
+}
+
 /** The reviewed inputs were written during the run; terminal, never retried. */
 class InputMutationError extends DelegationError {
   constructor(message: string) {
@@ -3209,12 +3220,16 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
 async function finishTarget(started: StartedTarget): Promise<RunResult> {
   const { rule, target } = started
   let timer: ReturnType<typeof setTimeout> | undefined
-  let result: SubagentResult
+  let timedOut = false
+  let result: SubagentResult | undefined
+  let raceError: unknown
+  let disposeError: unknown
   try {
     result = await Promise.race([
       started.activation.result,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
+          timedOut = true
           reject(
             new TimeoutError(
               `rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`,
@@ -3223,10 +3238,25 @@ async function finishTarget(started: StartedTarget): Promise<RunResult> {
         }, started.timeoutMs)
       }),
     ])
+  } catch (error) {
+    raceError = error
   } finally {
     if (timer !== undefined) clearTimeout(timer)
-    await started.activation.dispose().catch(() => undefined)
+    try {
+      await started.activation.dispose()
+    } catch (error) {
+      disposeError = error
+    }
   }
+  if (timedOut && disposeError !== undefined) {
+    throw new UnconfirmedTimeoutError(
+      `rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms and the child could not be confirmed cancelled; check the provider before starting a fresh review`,
+      started.activation,
+    )
+  }
+  if (raceError !== undefined) throw raceError
+  if (result === undefined)
+    fail(`rule "${rule.id}": target "${targetLabel(target)}" returned no result`)
   if (result.stopReason !== 'completed') {
     // Classify the raw diagnostic; render a bounded, redacted public message.
     const providerMessage =
@@ -3907,8 +3937,10 @@ class DelegationEngine {
         outcome = 'discarded'
       } else {
         const failure = classifyFailure(error, 'run')
+        const unconfirmed = error instanceof UnconfirmedTimeoutError
         run.file.failureClass = failure.failureClass
         if (
+          !unconfirmed &&
           this.config.reviewQueue.enabled &&
           failure.transient &&
           this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts
@@ -3936,6 +3968,16 @@ class DelegationEngine {
             'failed',
             this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
           )
+          if (unconfirmed) {
+            // No retry while the old child may still run: quarantine the key,
+            // capacity slot, and snapshot until teardown is confirmed.
+            skipCleanup = true
+            this.queue.quarantine(run, async () => {
+              await started.activation.dispose()
+              await this.discardSnapshot(run)
+            })
+            return
+          }
         } catch (publishError) {
           if (publishError instanceof DiscardedRun) {
             await this.markRun(

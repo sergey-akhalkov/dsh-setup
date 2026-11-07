@@ -126,12 +126,14 @@ export class ReviewQueue {
     active = new Set();
     persistChains = new Map();
     sequence = 0;
+    disposed = false;
     constructor(limits, hooks) {
         this.limits = limits;
         this.hooks = hooks;
     }
     /** Stop every pending timer; the engine calls this when the plugin unloads. */
     dispose() {
+        this.disposed = true;
         for (const entry of this.entries.values()) {
             if (entry.waitTimer !== undefined)
                 clearTimeout(entry.waitTimer);
@@ -257,6 +259,63 @@ export class ReviewQueue {
             return false;
         await this.finish(entry, 'discarded', 'cancelled before the target started');
         return true;
+    }
+    /**
+     * Hold a timed-out run's conversation key, capacity slot, and snapshot until
+     * its child teardown is confirmed. The settlement observer fires once here;
+     * `teardown` is retried with backoff and releases the slot on success.
+     */
+    quarantine(run, teardown) {
+        const entry = this.entries.get(run.file.id);
+        if (entry === undefined || entry.finished)
+            return;
+        entry.quarantined = true;
+        entry.finished = true;
+        entry.phase = 'settled';
+        if (entry.waitTimer !== undefined) {
+            clearTimeout(entry.waitTimer);
+            delete entry.waitTimer;
+        }
+        if (entry.retryTimer !== undefined) {
+            clearTimeout(entry.retryTimer);
+            delete entry.retryTimer;
+        }
+        this.removeWaiting(entry);
+        this.forgetIdentity(entry);
+        // Keep `active` and the key head: followers and fresh same-key runs wait.
+        try {
+            this.hooks.settled(entry.run, 'failed');
+        }
+        catch {
+            // The observer is a seam; it must not change quarantine cleanup.
+        }
+        void this.confirmTeardown(entry, teardown);
+    }
+    async confirmTeardown(entry, teardown) {
+        let attempt = 0;
+        for (;;) {
+            attempt += 1;
+            try {
+                await teardown();
+                break;
+            }
+            catch {
+                if (this.disposed)
+                    return;
+                await new Promise((resolve) => {
+                    setTimeout(resolve, retryDelayMs(attempt, this.limits));
+                });
+                if (this.disposed)
+                    return;
+            }
+        }
+        if (this.disposed)
+            return;
+        entry.quarantined = false;
+        this.active.delete(entry);
+        this.detachKey(entry);
+        this.entries.delete(entry.run.file.id);
+        this.pump();
     }
     /**
      * Re-enter a transiently failed run after its backoff. The caller has already

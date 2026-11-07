@@ -126,6 +126,15 @@ class TimeoutError extends DelegationError {
         this.name = 'TimeoutError';
     }
 }
+/** A timeout whose child could not be confirmed cancelled; quarantine it. */
+class UnconfirmedTimeoutError extends TimeoutError {
+    activation;
+    constructor(message, activation) {
+        super(message);
+        this.activation = activation;
+        this.name = 'UnconfirmedTimeoutError';
+    }
+}
 /** The reviewed inputs were written during the run; terminal, never retried. */
 class InputMutationError extends DelegationError {
     constructor(message) {
@@ -2484,22 +2493,41 @@ async function startTarget(services, request) {
 async function finishTarget(started) {
     const { rule, target } = started;
     let timer;
+    let timedOut = false;
     let result;
+    let raceError;
+    let disposeError;
     try {
         result = await Promise.race([
             started.activation.result,
             new Promise((_resolve, reject) => {
                 timer = setTimeout(() => {
+                    timedOut = true;
                     reject(new TimeoutError(`rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`));
                 }, started.timeoutMs);
             }),
         ]);
     }
+    catch (error) {
+        raceError = error;
+    }
     finally {
         if (timer !== undefined)
             clearTimeout(timer);
-        await started.activation.dispose().catch(() => undefined);
+        try {
+            await started.activation.dispose();
+        }
+        catch (error) {
+            disposeError = error;
+        }
     }
+    if (timedOut && disposeError !== undefined) {
+        throw new UnconfirmedTimeoutError(`rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms and the child could not be confirmed cancelled; check the provider before starting a fresh review`, started.activation);
+    }
+    if (raceError !== undefined)
+        throw raceError;
+    if (result === undefined)
+        fail(`rule "${rule.id}": target "${targetLabel(target)}" returned no result`);
     if (result.stopReason !== 'completed') {
         // Classify the raw diagnostic; render a bounded, redacted public message.
         const providerMessage = result.diagnostic === undefined
@@ -3015,8 +3043,10 @@ class DelegationEngine {
             }
             else {
                 const failure = classifyFailure(error, 'run');
+                const unconfirmed = error instanceof UnconfirmedTimeoutError;
                 run.file.failureClass = failure.failureClass;
-                if (this.config.reviewQueue.enabled &&
+                if (!unconfirmed &&
+                    this.config.reviewQueue.enabled &&
                     failure.transient &&
                     this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts) {
                     // A retry publishes no verdict and keeps its snapshot for the re-run.
@@ -3038,6 +3068,16 @@ class DelegationEngine {
                         error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
                     });
                     await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)));
+                    if (unconfirmed) {
+                        // No retry while the old child may still run: quarantine the key,
+                        // capacity slot, and snapshot until teardown is confirmed.
+                        skipCleanup = true;
+                        this.queue.quarantine(run, async () => {
+                            await started.activation.dispose();
+                            await this.discardSnapshot(run);
+                        });
+                        return;
+                    }
                 }
                 catch (publishError) {
                     if (publishError instanceof DiscardedRun) {

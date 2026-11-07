@@ -2411,3 +2411,164 @@ describe('review retry-after and run retries', () => {
     }
   })
 })
+
+describe('review timeout retry and quarantine', () => {
+  const flush = (): Promise<void> =>
+    new Promise((resolve) => {
+      realSetTimeout(resolve, 5)
+    })
+
+  function taskReviewRules() {
+    return [
+      {
+        id: 'task-review',
+        when: 'spec-task-ready' as const,
+        to: 'codex',
+        contract: 'review' as const,
+        scope: 'task' as const,
+        gate: 'strict' as const,
+        instruction: 'bundled:review-task',
+      },
+      {
+        id: 'task-review-extra',
+        when: 'spec-task-ready' as const,
+        to: 'codex',
+        contract: 'review' as const,
+        scope: 'task' as const,
+        gate: 'soft' as const,
+        instruction: 'bundled:review-task',
+      },
+    ]
+  }
+
+  it('retries a timeout whose cancellation is confirmed', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      let calls = 0
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        calls += 1
+        if (calls === 1) return new Promise(() => {})
+        return passResponder(run)
+      })
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          timeouts: { review: 20 },
+          reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 10, maxDelayMs: 20 },
+        },
+        subagents,
+      )
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      await vi.advanceTimersByTimeAsync(20)
+      await flush()
+      await vi.advanceTimersByTimeAsync(10)
+      await flush()
+      expect(await harness.waitForRun(runId)).toContain('state=completed')
+      expect(calls).toBe(2)
+      const record = JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+          'utf8',
+        ),
+      ) as { verdict: string }
+      expect(record.verdict).toBe('PASS')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('quarantines an unconfirmed timeout until teardown confirms', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [{ number: '1.1', text: 'Shared task', checked: true }])
+      const subagents = new FakeSubagents()
+      let calls = 0
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        calls += 1
+        if (calls === 1) return new Promise(() => {})
+        return passResponder(run)
+      })
+      const original = subagents.startActivation.bind(subagents)
+      let disposals = 0
+      subagents.startActivation = async (spec) => {
+        const activation = await original(spec)
+        return {
+          ...activation,
+          dispose: async () => {
+            disposals += 1
+            if (disposals <= 2) throw new Error('teardown unconfirmed')
+          },
+        }
+      }
+      const git = new FakeGit()
+      git.failSnapshot = true
+      const harness = new Harness({
+        cwd: root,
+        config: {
+          targets: { codex: { provider: 'codex-subagent' } },
+          rules: taskReviewRules(),
+          timeouts: { review: 20 },
+          reviewQueue: {
+            concurrency: 1,
+            maxQueued: 2,
+            maxAttempts: 2,
+            baseDelayMs: 50,
+            maxDelayMs: 100,
+          },
+        },
+        agents: subagents,
+        git,
+      })
+      const task = taskIdFor('Shared task')
+      const first = await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        task,
+      })
+      const firstRun = runIdFrom(first)
+      const follower = await harness.toolText('delegate', {
+        rule: 'task-review-extra',
+        change: 'change-a',
+        task,
+      })
+      const followerRun = runIdFrom(follower)
+      expect(follower).toContain('review queued')
+
+      await vi.advanceTimersByTimeAsync(20)
+      await flush()
+      expect(await harness.waitForRun(firstRun)).toContain('state=failed')
+      expect((await readRun(root, followerRun)).state).toBe('queued')
+      expect(subagents.startCalls).toBe(1)
+      const firstRecord = JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${task}.json`),
+          'utf8',
+        ),
+      ) as { verdict: string; error: string }
+      expect(firstRecord.verdict).toBe('ERROR')
+      expect(firstRecord.error).toContain('could not be confirmed cancelled')
+
+      await vi.advanceTimersByTimeAsync(50)
+      await flush()
+      await flush()
+      await flush()
+      await flush()
+      expect(subagents.startCalls).toBe(2)
+      expect(await harness.waitForRun(followerRun)).toContain('state=completed')
+      expect(calls).toBe(2)
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
+})
