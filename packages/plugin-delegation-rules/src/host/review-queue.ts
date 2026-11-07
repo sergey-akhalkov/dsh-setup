@@ -339,6 +339,40 @@ export class ReviewQueue<T extends QueueRun> {
     this.entries.delete(runId)
   }
 
+  /**
+   * Reserve a direct-start fallback's identity and conversation key. The run
+   * occupies a capacity slot and keeps dedupe/key ordering until it settles.
+   */
+  async reserve(
+    run: T,
+  ): Promise<{ kind: 'duplicate'; run: T } | { kind: 'conflict' } | { kind: 'reserved' }> {
+    const existing = this.identities.get(run.file.identity)
+    if (existing !== undefined && !existing.finished) {
+      return { kind: 'duplicate', run: existing.run }
+    }
+    if (this.keys.has(run.file.key)) return { kind: 'conflict' }
+    const entry: QueueEntry<T> = {
+      run,
+      phase: 'running',
+      seq: ++this.sequence,
+      queuedAtMs: this.hooks.now().getTime(),
+      attempts: 0,
+      waitDeadlineMs: 0,
+      head: true,
+      finished: false,
+      settling: false,
+      admitted: true,
+      retryToken: 0,
+    }
+    this.entries.set(run.file.id, entry)
+    this.identities.set(run.file.identity, entry)
+    this.keys.set(run.file.key, { head: entry, followers: [] })
+    this.active.add(entry)
+    run.file.state = 'running'
+    this.persistEntry(run)
+    return { kind: 'reserved' }
+  }
+
   private async submitInner(run: T): Promise<Admission<T>> {
     const existing = this.identities.get(run.file.identity)
     if (existing !== undefined && !existing.finished) {

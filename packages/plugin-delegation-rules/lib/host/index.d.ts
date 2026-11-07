@@ -96,6 +96,8 @@ export interface ApplyOptions {
     now?: () => Date;
     /** Called once per review run after it settles; the run is no longer pending. */
     onRunSettled?: (runId: string, state: SettledRunState) => void;
+    /** Test seam: throws before admission to simulate an internal queue failure. */
+    queueFault?: () => void;
 }
 /** Terminal review-run states reported to the settlement observer. */
 export type SettledRunState = 'completed' | 'failed' | 'discarded';

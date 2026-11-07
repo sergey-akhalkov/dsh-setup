@@ -115,6 +115,18 @@ export declare class ReviewQueue<T extends QueueRun> {
     submit(run: T): Promise<Admission<T>>;
     /** Remove an admission that failed before it could settle; never observe it. */
     private rollback;
+    /**
+     * Reserve a direct-start fallback's identity and conversation key. The run
+     * occupies a capacity slot and keeps dedupe/key ordering until it settles.
+     */
+    reserve(run: T): Promise<{
+        kind: 'duplicate';
+        run: T;
+    } | {
+        kind: 'conflict';
+    } | {
+        kind: 'reserved';
+    }>;
     private submitInner;
     /**
      * Replace a queued run's identity after a re-preparation. The old mapping is

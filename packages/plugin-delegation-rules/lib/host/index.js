@@ -2814,8 +2814,7 @@ class DelegationEngine {
         }
         catch (cause) {
             const internal = new QueueInternalError(`review queue internal error: ${errorMessage(cause)}`, cause);
-            await this.startDirectFallback(run, internal);
-            return this.runHandleText(run, 'running');
+            return this.fallbackAfterQueueError(run, internal);
         }
         try {
             admission = await this.queue.submit(run);
@@ -2824,8 +2823,7 @@ class DelegationEngine {
             if (!(error instanceof QueueInternalError))
                 throw error;
             // Fallback: start directly once so a queue fault cannot trap the turn.
-            await this.startDirectFallback(run, error);
-            return this.runHandleText(run, 'running');
+            return this.fallbackAfterQueueError(run, error);
         }
         if (admission.kind === 'duplicate') {
             await this.discardSnapshot(run);
@@ -2932,16 +2930,41 @@ class DelegationEngine {
             cwd: prepared.reviewCwd ?? run.context.cwd,
             signal: run.context.signal,
         });
-        await this.markRun(run, 'running', this.withFallbackDetail(prepared, prepared.snapshotTree === undefined
+        await this.markRun(run, 'running', this.withQueueFault(run, this.withFallbackDetail(prepared, prepared.snapshotTree === undefined
             ? 'live worktree'
-            : `snapshot ${prepared.snapshotTree.slice(0, 8)}`));
+            : `snapshot ${prepared.snapshotTree.slice(0, 8)}`) ?? 'running'));
         void this.completeReviewRun(run, started, prepared);
+    }
+    /** Reserve fallback ownership, then start directly when it is safe. */
+    async fallbackAfterQueueError(run, error) {
+        let reservation;
+        try {
+            reservation = await this.queue.reserve(run);
+        }
+        catch (reserveError) {
+            run.file.failureClass = 'queue-internal-error';
+            await this.failRun(run, reserveError, run.prepared, 'queue-internal-error');
+            throw reserveError;
+        }
+        if (reservation.kind === 'duplicate') {
+            await this.discardSnapshot(run);
+            this.runs.delete(run.file.id);
+            return this.runHandleText(reservation.run, 'duplicate');
+        }
+        if (reservation.kind === 'conflict') {
+            const conflict = new QueueInternalError('review queue internal error: another run for the same review conversation is already active; let it settle, then start this review again');
+            await this.failRun(run, conflict, run.prepared, 'queue-internal-error');
+            throw conflict;
+        }
+        run.fallback = true;
+        await this.startDirectFallback(run, error);
+        return this.runHandleText(run, 'running');
     }
     /** Start prepared work directly once when the queue faults before admission. */
     async startDirectFallback(run, error) {
         run.file.failureClass = 'queue-internal-error';
-        const detail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`;
-        await this.markRun(run, 'running', detail);
+        run.queueFaultDetail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`;
+        await this.markRun(run, 'running', run.queueFaultDetail);
         try {
             await this.startPreparedReview(run);
         }
@@ -2950,6 +2973,10 @@ class DelegationEngine {
             await this.failRun(run, startError, run.prepared, 'queue-internal-error');
             throw startError;
         }
+    }
+    /** Keep the queue fault visible alongside a later fallback failure. */
+    withQueueFault(run, detail) {
+        return run.queueFaultDetail === undefined ? detail : `${run.queueFaultDetail}; ${detail}`;
     }
     /** Whether the live source inputs moved since this run was prepared. */
     async queuedInputsChanged(run) {
@@ -3093,7 +3120,8 @@ class DelegationEngine {
                 const failure = classifyFailure(error, 'run');
                 const unconfirmed = error instanceof UnconfirmedTimeoutError;
                 const queued = this.queue.owns(run.file.id);
-                run.file.failureClass = failure.failureClass;
+                run.file.failureClass =
+                    run.fallback === true ? 'queue-internal-error' : failure.failureClass;
                 if (unconfirmed) {
                     // A possibly-still-running child owns its key, slot, and snapshot
                     // until teardown is confirmed, regardless of publication outcome.
@@ -3106,13 +3134,13 @@ class DelegationEngine {
                             verdict: 'ERROR',
                             findings: [],
                             target: targetIdentity(started.provider, started.model, started.reasoningEffort),
-                            error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+                            error: sanitizeText(this.withQueueFault(run, errorMessage(error)), MAX_ERROR_CHARS),
                         });
-                        await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)));
+                        await this.markRun(run, 'failed', this.withQueueFault(run, this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)) ?? ''));
                     }
                     catch (publishError) {
                         try {
-                            await this.markRun(run, publishError instanceof DiscardedRun ? 'discarded' : 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS)));
+                            await this.markRun(run, publishError instanceof DiscardedRun ? 'discarded' : 'failed', this.withFallbackDetail(prepared, sanitizeText(this.withQueueFault(run, errorMessage(publishError)), MAX_ERROR_CHARS)));
                         }
                         catch {
                             // The run file is scratch; quarantine still protects the key.
@@ -3128,6 +3156,7 @@ class DelegationEngine {
                     }
                 }
                 else if (queued &&
+                    run.fallback !== true &&
                     this.config.reviewQueue.enabled &&
                     failure.transient &&
                     this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts) {
@@ -3147,9 +3176,9 @@ class DelegationEngine {
                         verdict: 'ERROR',
                         findings: [],
                         target: targetIdentity(started.provider, started.model, started.reasoningEffort),
-                        error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+                        error: sanitizeText(this.withQueueFault(run, errorMessage(error)), MAX_ERROR_CHARS),
                     });
-                    await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)));
+                    await this.markRun(run, 'failed', this.withQueueFault(run, this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)) ?? ''));
                 }
                 catch (publishError) {
                     if (publishError instanceof DiscardedRun) {
@@ -3157,7 +3186,7 @@ class DelegationEngine {
                         outcome = 'discarded';
                     }
                     else {
-                        await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS)));
+                        await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(this.withQueueFault(run, errorMessage(publishError)), MAX_ERROR_CHARS)));
                     }
                 }
             }
@@ -3251,9 +3280,9 @@ class DelegationEngine {
                         target: target === undefined
                             ? { provider: run.context.rule.to ?? 'unknown' }
                             : targetIdentity(target.provider, target.model ?? target.agentOptions?.model, target.reasoningEffort ?? target.agentOptions?.reasoningEffort),
-                        error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+                        error: sanitizeText(this.withQueueFault(run, errorMessage(error)), MAX_ERROR_CHARS),
                     });
-                    await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)));
+                    await this.markRun(run, 'failed', this.withQueueFault(run, this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)) ?? ''));
                 }
                 catch (publishError) {
                     if (publishError instanceof DiscardedRun) {
@@ -3261,12 +3290,13 @@ class DelegationEngine {
                         outcome = 'discarded';
                     }
                     else {
-                        await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS)));
+                        await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(this.withQueueFault(run, errorMessage(publishError)), MAX_ERROR_CHARS)));
                     }
                 }
             }
             else {
-                await this.markRun(run, 'failed', this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)));
+                await this.markRun(run, 'failed', this.withQueueFault(run, this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)) ??
+                    ''));
             }
         }
         finally {

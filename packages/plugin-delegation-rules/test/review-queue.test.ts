@@ -3002,6 +3002,118 @@ describe('queue-internal-error fallback', () => {
     expect(record.verdict).toBe('PASS')
   })
 
+  it('does not start a duplicate target after a fallback', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: subagents,
+      queueFault: () => {
+        throw new Error('queue exploded')
+      },
+    })
+    const first = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const firstRun = runIdFrom(first)
+    const duplicate = await harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-a',
+    })
+    expect(duplicate).toContain('review already pending')
+    expect(duplicate).toContain(`run: ${firstRun}`)
+    expect(subagents.startCalls).toBe(1)
+    pending.releases.shift()?.()
+    await harness.waitForRun(firstRun)
+  })
+
+  it('returns ERROR when a fallback cannot own the conversation key', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Shared task', checked: true }])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = new Harness({
+      cwd: root,
+      config: {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+          {
+            id: 'task-review-extra',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'soft',
+            instruction: 'bundled:review-task',
+          },
+        ],
+      },
+      agents: subagents,
+      queueFault: () => {
+        throw new Error('queue exploded')
+      },
+    })
+    const task = taskIdFor('Shared task')
+    const first = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task,
+    })
+    await expect(
+      harness.toolText('delegate', {
+        rule: 'task-review-extra',
+        change: 'change-a',
+        task,
+      }),
+    ).rejects.toThrow(/already active/)
+    expect(subagents.startCalls).toBe(1)
+    pending.releases.shift()?.()
+    await harness.waitForRun(runIdFrom(first))
+  })
+
+  it('keeps queue-internal-error evidence when the fallback fails later', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, () => ({
+      output: [],
+      stopReason: 'completed' as const,
+    }))
+    const harness = new Harness({
+      cwd: root,
+      config: defaultTestConfig(),
+      agents: subagents,
+      queueFault: () => {
+        throw new Error('queue exploded')
+      },
+    })
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=failed')
+    const run = await readRun(root, runId)
+    expect(run.failureClass).toBe('queue-internal-error')
+    expect(String(run.detail)).toContain('queue-internal-error')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { verdict: string; error: string }
+    expect(record.verdict).toBe('ERROR')
+    expect(record.error).toContain('queue-internal-error')
+  })
+
   it('returns an ERROR record when the fallback cannot start', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])
