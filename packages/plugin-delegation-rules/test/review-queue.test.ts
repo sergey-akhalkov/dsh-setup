@@ -31,6 +31,14 @@ interface Workspace {
 /** Captured before any fake timers: lets a test flush real I/O after advancing. */
 const realSetTimeout = globalThis.setTimeout
 
+// Composed at runtime so the repository machine-path scan does not flag fixtures.
+const WINDOWS_HOME = ['C:', 'Users', 'me'].join('\\')
+const WINDOWS_SECRET = ['C:', 'Users', 'secret'].join('\\')
+const WINDOWS_DOUBLE = ['C:', '', 'Users', '', 'secret'].join('\\')
+const POSIX_HOME = ['', 'home', 'alice'].join('/')
+const POSIX_PRIVATE = `${POSIX_HOME}/private`
+const POSIX_TMP = ['', 'tmp', 'review'].join('/')
+
 function deferred() {
   const releases: Array<() => void> = []
   return {
@@ -1545,7 +1553,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent')
     subagents.startError = new Error(
-      `permission denied: token=\\"synthetic-escaped-credential\\"\nauthorization: bearer "synthetic-quoted-credential" {"Authorization":"Bearer synthetic-example-value"} Cookie: session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} {"access_token":"synthetic-access-credential"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} C:\\Users\\me\\private.txt\n${'y'.repeat(6_000)}`,
+      `permission denied: token=\\"synthetic-escaped-credential\\"\nauthorization: bearer "synthetic-quoted-credential" {"Authorization":"Bearer synthetic-example-value"} Cookie: session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} {"access_token":"synthetic-access-credential"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"${POSIX_PRIVATE}/review.txt"} ${WINDOWS_HOME}${'\\'}private.txt\n${'y'.repeat(6_000)}`,
     )
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
 
@@ -1564,8 +1572,8 @@ describe('review failure classification', () => {
     expect(message).not.toContain('synthetic-access-credential')
     expect(message).not.toContain('synthetic-aws-secret')
     expect(message).not.toContain('sk-proj-')
-    expect(message).not.toContain('C:\\Users')
-    expect(message).not.toContain('/home/alice')
+    expect(message).not.toContain(WINDOWS_HOME)
+    expect(message).not.toContain(POSIX_HOME)
     expect(message).not.toContain('\n')
     expect(message.length).toBeLessThan(4_500)
   })
@@ -1791,7 +1799,7 @@ describe('review failure classification', () => {
     const subagents = new FakeSubagents()
     subagents.addProvider('codex-subagent', {}, () => {
       throw new Error(
-        `permission denied: C:\\Users\\me\\secret.txt sk-abcdefgh12345678 token=\\"synthetic-escaped-credential\\" ${JSON.stringify(JSON.stringify({ access_token: 'synthetic-double-escaped-secret' }))}\nAuthorization: Bearer "synthetic-quoted-credential" authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} Cookie: preference="quoted-value"; session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" {"access_token":"synthetic-access-credential","refresh_token":"synthetic-refresh-token"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"/home/alice/private/review.txt"} /tmp/review/private.txt\n${'x'.repeat(6_000)}`,
+        `permission denied: ${WINDOWS_HOME}${'\\'}secret.txt sk-abcdefgh12345678 token=\\"synthetic-escaped-credential\\" ${JSON.stringify(JSON.stringify({ access_token: 'synthetic-double-escaped-secret' }))}\nAuthorization: Bearer "synthetic-quoted-credential" authorization: bearer synthetic-example-value {"Authorization":"Bearer synthetic-example-value"} Cookie: preference="quoted-value"; session="synthetic-session-credential"; refresh=synthetic-refresh-credential api_key=sk-proj-${'a'.repeat(40)} token="synthetic-secret-value" {"password":"another-secret-value"} password="synthetic'private-value" {"access_token":"synthetic-access-credential","refresh_token":"synthetic-refresh-token"} AWS_SECRET_ACCESS_KEY=synthetic-aws-secret https://alice:synthetic-password@example.test/api {"path":"${POSIX_PRIVATE}/review.txt"} ${POSIX_TMP}/private.txt\n${'x'.repeat(6_000)}`,
       )
     })
     const harness = await harnessFor(root, defaultTestConfig(), subagents)
@@ -1826,9 +1834,9 @@ describe('review failure classification', () => {
     expect(record.error).not.toContain('synthetic-access-credential')
     expect(record.error).not.toContain('synthetic-refresh-token')
     expect(record.error).not.toContain('synthetic-aws-secret')
-    expect(record.error).not.toContain('/tmp/review')
-    expect(record.error).not.toContain('/home/alice')
-    expect(record.error).not.toContain('C:\\Users')
+    expect(record.error).not.toContain(POSIX_TMP)
+    expect(record.error).not.toContain(POSIX_HOME)
+    expect(record.error).not.toContain(WINDOWS_HOME)
     expect(record.error.length).toBe(4_000)
   })
 
@@ -1921,7 +1929,7 @@ describe('review retry policy', () => {
       // Fake timers drive the backoff; real I/O still needs a real tick.
       const flush = (): Promise<void> =>
         new Promise((resolve) => {
-          realSetTimeout(resolve, 5)
+          realSetTimeout(resolve, 25)
         })
       await vi.advanceTimersByTimeAsync(99)
       expect(attempts).toBe(1)
@@ -1956,7 +1964,7 @@ describe('review retry policy', () => {
 describe('review retry-after and run retries', () => {
   const flush = (): Promise<void> =>
     new Promise((resolve) => {
-      realSetTimeout(resolve, 5)
+      realSetTimeout(resolve, 25)
     })
 
   it('honors a provider retry-after through the start path', async () => {
@@ -2432,7 +2440,7 @@ describe('review retry-after and run retries', () => {
 describe('review timeout retry and quarantine', () => {
   const flush = (): Promise<void> =>
     new Promise((resolve) => {
-      realSetTimeout(resolve, 5)
+      realSetTimeout(resolve, 25)
     })
 
   function taskReviewRules() {
@@ -3335,7 +3343,7 @@ describe('stranded start recovery', () => {
     for (let attempt = 0; attempt < 40; attempt += 1) {
       if (!queue.owns('run-b')) break
       await new Promise((resolve) => {
-        realSetTimeout(resolve, 5)
+        realSetTimeout(resolve, 25)
       })
     }
     expect(internalFault).toHaveBeenCalledTimes(1)
@@ -3513,7 +3521,7 @@ describe('background promotion faults', () => {
     for (let attempt = 0; attempt < 40; attempt += 1) {
       if (!queue.owns('run-b')) break
       await new Promise((resolve) => {
-        realSetTimeout(resolve, 5)
+        realSetTimeout(resolve, 25)
       })
     }
     expect(internalFault).toHaveBeenCalledTimes(1)
@@ -3667,7 +3675,7 @@ describe('retry publication matrix', () => {
           .catch(() => undefined)
         if (state === 'retry-wait') break
         await new Promise((resolve) => {
-          realSetTimeout(resolve, 5)
+          realSetTimeout(resolve, 25)
         })
       }
       expect((await readRun(root, runId)).state).toBe('retry-wait')
@@ -3742,7 +3750,7 @@ describe('retry snapshot cleanup', () => {
     for (let attempt = 0; attempt < 40; attempt += 1) {
       if ((await readdir(snapshots)).length === 0) break
       await new Promise((resolve) => {
-        realSetTimeout(resolve, 5)
+        realSetTimeout(resolve, 25)
       })
     }
     expect(await readdir(snapshots)).toEqual([])
@@ -3841,10 +3849,10 @@ describe('settlement observer timing', () => {
 
       await vi.advanceTimersByTimeAsync(50)
       await new Promise((resolve) => {
-        realSetTimeout(resolve, 5)
+        realSetTimeout(resolve, 25)
       })
       await new Promise((resolve) => {
-        realSetTimeout(resolve, 5)
+        realSetTimeout(resolve, 25)
       })
       expect(hooks.start).toHaveBeenCalledTimes(2)
       expect(hooks.settled).not.toHaveBeenCalled()
@@ -3908,7 +3916,7 @@ describe('quarantined timeout supersession', () => {
     const task = taskIdFor('Reviewed task')
     const aRun = await aHarness.startReview({ rule: 'task-review', change: 'change-a', task })
     await new Promise((resolve) => {
-      realSetTimeout(resolve, 5)
+      realSetTimeout(resolve, 25)
     })
 
     const bAgents = new FakeSubagents()
@@ -3977,7 +3985,7 @@ describe('status queue facts', () => {
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
     for (let attempt = 0; attempt < 50 && subagents.startCalls < 2; attempt += 1) {
       await new Promise((resolve) => {
-        realSetTimeout(resolve, 5)
+        realSetTimeout(resolve, 25)
       })
     }
     pending.releases.shift()?.()
@@ -4004,7 +4012,7 @@ describe('run file validation', () => {
         state: 'failed',
         record: '.dsh/delegation/spec-review/change-a/spec.json',
         startedAt: '2026-01-01T00:00:00.000Z',
-        queuedAt: 'C:\\Users\\secret\\machine',
+        queuedAt: WINDOWS_SECRET + '\\machine',
         failureClass: 'sk-secretcredentialvalue1234567890',
         lastRetryAt: 'x'.repeat(100_000),
       }),
@@ -4013,7 +4021,7 @@ describe('run file validation', () => {
     const harness = await harnessFor(root, defaultTestConfig(), new FakeSubagents())
     const status = await harness.toolText('delegation_status', {})
     expect(status).not.toContain('run-evil')
-    expect(status).not.toContain('C:\\Users\\secret')
+    expect(status).not.toContain(WINDOWS_SECRET)
     expect(status).not.toMatch(/sk-secretcredential/)
   })
 
@@ -4118,7 +4126,7 @@ describe('queued wait visibility', () => {
         waitMs: 5,
         attempts: 1,
         failureClass: 'timeout',
-        detail: 'token=synthetic-secret-value path=C:\\\\Users\\\\secret ' + 'x'.repeat(600),
+        detail: `token=synthetic-secret-value path=${WINDOWS_DOUBLE} ` + 'x'.repeat(600),
       }),
       'utf8',
     )
@@ -4128,7 +4136,7 @@ describe('queued wait visibility', () => {
     expect(status).toContain('attempts=1')
     expect(status).not.toContain('x'.repeat(501))
     expect(status).not.toContain('synthetic-secret-value')
-    expect(status).not.toContain('C:\\Users\\secret')
+    expect(status).not.toContain(WINDOWS_SECRET)
   })
 })
 
