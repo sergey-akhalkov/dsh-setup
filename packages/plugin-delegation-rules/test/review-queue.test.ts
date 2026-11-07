@@ -3549,15 +3549,15 @@ describe('record integrity', () => {
     await writeChange(root, 'change-a', [])
     const aAgents = new FakeSubagents()
     let aCalls = 0
+    const originalStart = aAgents.startActivation.bind(aAgents)
+    let aStarts = 0
+    aAgents.startActivation = async (spec) => {
+      aStarts += 1
+      if (aStarts === 1) throw new Error('subagent limit reached (active child limit: 8)')
+      return originalStart(spec)
+    }
     aAgents.addProvider('codex-subagent', {}, (run) => {
       aCalls += 1
-      if (aCalls === 1) {
-        return {
-          output: [],
-          stopReason: 'error' as const,
-          diagnostic: 'subagent limit reached (active child limit: 8)',
-        }
-      }
       return passResponder(run)
     })
     const aHarness = await harnessFor(
@@ -3580,7 +3580,7 @@ describe('record integrity', () => {
     expect(await bHarness.waitForRun(bRun)).toContain('state=completed')
 
     expect(await aHarness.waitForRun(aRun)).toContain('state=discarded')
-    expect(aCalls).toBe(1)
+    expect(aCalls).toBe(0)
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
@@ -3742,15 +3742,15 @@ describe('retry deadline with a competing record', () => {
     await writeChange(root, 'change-a', [])
     const aAgents = new FakeSubagents()
     let aCalls = 0
+    const originalStart = aAgents.startActivation.bind(aAgents)
+    let aStarts = 0
+    aAgents.startActivation = async (spec) => {
+      aStarts += 1
+      if (aStarts === 1) throw new Error('subagent limit reached (active child limit: 8)')
+      return originalStart(spec)
+    }
     aAgents.addProvider('codex-subagent', {}, (run) => {
       aCalls += 1
-      if (aCalls === 1) {
-        return {
-          output: [],
-          stopReason: 'error' as const,
-          diagnostic: 'subagent limit reached (active child limit: 8)',
-        }
-      }
       return passResponder(run)
     })
     const aHarness = await harnessFor(
@@ -3779,7 +3779,7 @@ describe('retry deadline with a competing record', () => {
     expect(await bHarness.waitForRun(bRun)).toContain('state=completed')
 
     expect(await aHarness.waitForRun(aRun)).toContain('state=discarded')
-    expect(aCalls).toBe(1)
+    expect(aCalls).toBe(0)
     const record = JSON.parse(
       await readFile(
         join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),

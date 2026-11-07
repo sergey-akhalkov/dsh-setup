@@ -3383,7 +3383,13 @@ class DelegationEngine {
                     error: sanitizeText(message, MAX_ERROR_CHARS),
                 });
             }
-            catch {
+            catch (publishError) {
+                if (publishError instanceof DiscardedRun) {
+                    await this.markRun(run, 'discarded', 'a newer review record was published while this run waited; its completion is discarded');
+                    await this.discardSnapshot(run);
+                    await this.settleReviewRun(run, 'discarded');
+                    return;
+                }
                 // A record write failure must not keep a timed-out run queued.
             }
         }
