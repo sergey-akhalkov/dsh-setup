@@ -2950,6 +2950,10 @@ class DelegationEngine {
             // A start may already be in flight; never launch a second target.
             return this.runHandleText(run, 'running');
         }
+        // Every fallback path, including a refused reservation, must carry the
+        // gate-recognized queue-fault classification.
+        run.file.failureClass = 'queue-internal-error';
+        run.queueFaultDetail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`;
         let reservation;
         try {
             reservation = await this.queue.reserve(run);

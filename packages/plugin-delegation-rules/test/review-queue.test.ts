@@ -3096,8 +3096,9 @@ describe('queue-internal-error fallback', () => {
         join(root, '.dsh', 'delegation', 'task-review-extra', 'change-a', 'tasks', `${task}.json`),
         'utf8',
       ),
-    ) as { verdict: string }
+    ) as { verdict: string; error: string }
     expect(conflictRecord.verdict).toBe('ERROR')
+    expect(conflictRecord.error.startsWith('queue-internal-error')).toBe(true)
     pending.releases.shift()?.()
     await harness.waitForRun(runIdFrom(first))
   })
