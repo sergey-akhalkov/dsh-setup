@@ -3083,6 +3083,71 @@ describe('queue-internal-error fallback', () => {
     await harness.waitForRun(runIdFrom(first))
   })
 
+  it('does not let a same-rule conflict overwrite the incumbent record', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const git = new FakeGit()
+    git.files = ['src/engine.ts']
+    const harness = new Harness({
+      cwd: root,
+      config: {
+        targets: { codex: { provider: 'codex-subagent' } },
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'strict',
+            instruction: 'bundled:review-task',
+          },
+        ],
+      },
+      agents: subagents,
+      git,
+      queueFault: () => {
+        throw new Error('queue exploded')
+      },
+    })
+    const task = taskIdFor('Reviewed task')
+    const first = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task,
+    })
+    const firstRun = runIdFrom(first)
+    git.status = 'M src/engine.ts'
+    await expect(
+      harness.toolText('delegate', { rule: 'task-review', change: 'change-a', task }),
+    ).rejects.toThrow(/already active/)
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(firstRun)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${task}.json`),
+        'utf8',
+      ),
+    ) as { runId: string; verdict: string }
+    expect(record.runId).toBe(firstRun)
+    expect(record.verdict).toBe('PASS')
+
+    const runs = await readdir(join(root, '.dsh', 'delegation', 'runs'))
+    for (const name of runs) {
+      const file = JSON.parse(
+        await readFile(join(root, '.dsh', 'delegation', 'runs', name), 'utf8'),
+      ) as { id: string; state: string; failureClass: string }
+      if (file.id === firstRun) continue
+      expect(file.state).toBe('failed')
+      expect(file.failureClass).toBe('queue-internal-error')
+    }
+  })
   it('keeps queue-internal-error evidence when the fallback fails later', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])

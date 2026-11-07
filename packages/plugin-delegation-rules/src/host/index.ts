@@ -3823,7 +3823,12 @@ class DelegationEngine {
       const conflict = new QueueInternalError(
         'review queue internal error: another run for the same review conversation is already active; let it settle, then start this review again',
       )
-      await this.failRun(run, conflict, run.prepared, 'queue-internal-error')
+      // Never publish to the incumbent's record path: report this run failed
+      // without invalidating the active review's result.
+      run.file.failureClass = 'queue-internal-error'
+      await this.markRun(run, 'failed', this.withQueueFault(run, conflict.message))
+      await this.discardSnapshot(run)
+      await this.settleReviewRun(run, 'failed')
       throw conflict
     }
     run.fallback = true
