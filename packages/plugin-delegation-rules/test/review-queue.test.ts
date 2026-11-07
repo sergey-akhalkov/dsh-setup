@@ -2359,4 +2359,55 @@ describe('review retry-after and run retries', () => {
       vi.restoreAllMocks()
     }
   })
+  it('re-checks inputs when an immediately admitted review retries', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      let calls = 0
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        calls += 1
+        if (calls === 1) {
+          return {
+            output: [],
+            stopReason: 'error' as const,
+            diagnostic: 'subagent limit reached (active child limit: 8)',
+          }
+        }
+        return passResponder(run)
+      })
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 200 },
+        },
+        subagents,
+      )
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      await flush()
+      await writeFile(
+        join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
+        '# Proposal\n\nChanged during backoff.\n',
+        'utf8',
+      )
+      await vi.advanceTimersByTimeAsync(100)
+      await flush()
+      expect(await harness.waitForRun(runId)).toContain('state=completed')
+      const record = JSON.parse(
+        await readFile(
+          join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+          'utf8',
+        ),
+      ) as { digest: string; verdict: string }
+      expect(record.verdict).toBe('PASS')
+      expect(record.digest).toBe(await specDigest(join(root, 'openspec', 'changes', 'change-a')))
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
 })

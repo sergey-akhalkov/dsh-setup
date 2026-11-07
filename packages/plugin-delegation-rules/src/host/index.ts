@@ -3914,6 +3914,8 @@ class DelegationEngine {
           this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts
         ) {
           // A retry publishes no verdict and keeps its snapshot for the re-run.
+          // Re-check the inputs before the next start, as for a queued run.
+          run.waitedInQueue = true
           skipCleanup = true
           await this.queue.scheduleRetry(run, failure, error)
           return
