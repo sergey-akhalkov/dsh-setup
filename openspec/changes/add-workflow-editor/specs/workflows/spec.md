@@ -23,12 +23,22 @@ The plugin SHALL provide a Design mode in the Workflows view with a node canvas,
 
 ### Requirement: Definition editing
 
-The editor SHALL create, edit, duplicate, rename, delete, and version-bump local definitions, and SHALL save only after schema validation passes. A shipped definition MUST be read-only; editing one SHALL create a local copy.
+The editor SHALL create, edit, duplicate, rename, delete, and version-bump local definitions, and SHALL save only after schema validation passes and only through the host's shared install/approve function. A successful save MUST persist both the definition and its matching host-signed approval record; a failed definition or approval write MUST leave both unchanged. A shipped definition MUST be read-only; editing one SHALL create a local copy.
 
 #### Scenario: Save a valid definition
 
 - **WHEN** the user saves a valid local definition
-- **THEN** the host writes it and the version is current
+- **THEN** the host writes it, persists the matching host-signed approval, and the version is current; the definition loads after a restart
+
+#### Scenario: Approval failure leaves no save
+
+- **WHEN** the definition write succeeds but the approval write fails
+- **THEN** neither the definition nor the approval changes and the save reports failure
+
+#### Scenario: Draft install is authorized
+
+- **WHEN** the user installs a model draft through a create-only save
+- **THEN** it uses the same install/approve function and loads after a restart; a colliding id leaves both files unchanged
 
 #### Scenario: Invalid definition is refused
 
