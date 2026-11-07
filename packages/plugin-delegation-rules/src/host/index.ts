@@ -6576,9 +6576,9 @@ function registerReviewRetroCommand(
   if (!config.reviewLearning.enabled) return
   // Read the optional service without declaring a Cordis inject dependency, so
   // the plugin still loads in a profile that has no command registry.
-  const commands = (
-    ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }
-  ).get?.('commands') as CommandRegistry | undefined
+  const commands = (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get?.(
+    'commands',
+  ) as CommandRegistry | undefined
   if (commands === undefined) return
   const definition = {
     definitionId: '@dsh-setup/plugin-delegation-rules/review-retro',

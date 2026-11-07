@@ -79,7 +79,10 @@ export function buildRetroReport(
   const examples = new Map<FindingClass, RetroExample[]>()
   const seen = new Map<string, number>()
   const repeatedHashes = new Map<FindingClass, Set<string>>()
-  const repeatedSources = new Map<FindingClass, { change?: string; taskId?: string; time: string }>()
+  const repeatedSources = new Map<
+    FindingClass,
+    { change?: string; taskId?: string; time: string }
+  >()
   let findings = 0
 
   for (const entry of entries) {
@@ -202,7 +205,8 @@ const REPORT_MARKER = '… (truncated)'
 /** The smallest accepted bound still fits the marker plus a short prefix. */
 export const MIN_REPORT_CHARS = REPORT_MARKER.length + 10
 
-function boundReport(text: string, maximum: number): string {  if (!Number.isSafeInteger(maximum) || maximum < MIN_REPORT_CHARS) {
+function boundReport(text: string, maximum: number): string {
+  if (!Number.isSafeInteger(maximum) || maximum < MIN_REPORT_CHARS) {
     throw new Error(
       `report character bound must be a whole number of at least ${MIN_REPORT_CHARS}; it must fit the truncation marker`,
     )

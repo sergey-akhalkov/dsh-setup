@@ -221,23 +221,24 @@ describe('review_lesson lifecycle', () => {
   it('sends the required bounded question contents and options', async () => {
     const root = await workspace()
     const questions = new FakeQuestions()
-    await executeReviewLesson(
-      { ...PROPOSAL, body: 'y'.repeat(4_000) },
-      context(root, questions),
-    )
+    await executeReviewLesson({ ...PROPOSAL, body: 'y'.repeat(4_000) }, context(root, questions))
     const id = (await readLessons(root)).lessons[0]?.id ?? ''
     const proposed = (await readLessons(root)).lessons[0]
     if (proposed === undefined) throw new Error('expected the proposed lesson')
     const revisionAtAsk = lessonRevision(proposed)
     questions.selected = ['Accept']
-    await executeReviewLesson({ action: 'decide', id, decision: 'accept' }, context(root, questions))
+    await executeReviewLesson(
+      { action: 'decide', id, decision: 'accept' },
+      context(root, questions),
+    )
     const decideQuestion = questions.calls[0]?.questions[0]
     expect(decideQuestion?.id).toBe('review-lesson')
     expect(decideQuestion?.question).toContain('Resolve a target by path components')
     expect(decideQuestion?.detail).toContain('Class: path-boundary')
     expect(decideQuestion?.detail).toContain(`Revision: ${revisionAtAsk}`)
     expect(decideQuestion?.detail).toContain('Source: change add-x, task 3.1, 1 finding hash(es)')
-    const decideBody = decideQuestion?.detail?.split('\n').find((line) => line.startsWith('Body: ')) ?? ''
+    const decideBody =
+      decideQuestion?.detail?.split('\n').find((line) => line.startsWith('Body: ')) ?? ''
     expect(decideBody.length).toBeLessThanOrEqual('Body: '.length + 300)
     expect(decideBody.endsWith('…')).toBe(true)
     expect(decideQuestion?.options?.map((option) => option.label)).toEqual(['Accept', 'Reject'])
@@ -258,7 +259,10 @@ describe('review_lesson lifecycle', () => {
     await executeReviewLesson(PROPOSAL, context(root, questions))
     const id = (await readLessons(root)).lessons[0]?.id ?? ''
     questions.selected = ['Accept']
-    await executeReviewLesson({ action: 'decide', id, decision: 'accept' }, context(root, questions))
+    await executeReviewLesson(
+      { action: 'decide', id, decision: 'accept' },
+      context(root, questions),
+    )
     const before = await readFile(lessonStorePath(root), 'utf8')
 
     questions.selected = ['Cancel']

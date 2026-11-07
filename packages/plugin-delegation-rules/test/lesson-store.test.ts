@@ -18,6 +18,8 @@ const run = promisify(execFile)
 const cleanups: Array<() => Promise<void>> = []
 // Composed at runtime so the repository machine-path scan does not flag the fixture.
 const WINDOWS_SECRET = ['C:', 'Users', 'owner', 'secret.ts'].join('\\')
+const POSIX_PATH = ['', 'home', 'owner', 'private.txt'].join('/')
+const TILDE_PATH = ['~', '.config', 'private.txt'].join('/')
 
 async function workspace(): Promise<string> {
   const created = await makeWorkspace()
@@ -283,10 +285,7 @@ describe('lesson store', () => {
       proposeLesson(root, proposal({ body: `See ${WINDOWS_SECRET} for the fix.` })),
     ).rejects.toThrow(/machine path/)
     await expect(
-      proposeLesson(
-        root,
-        proposal({ body: 'log=/home/owner/private.txt and path=~/.config/private.txt' }),
-      ),
+      proposeLesson(root, proposal({ body: `log=${POSIX_PATH} and path=${TILDE_PATH}` })),
     ).rejects.toThrow(/machine path/)
     await expect(
       proposeLesson(root, proposal({ body: '{"password":"example-secret-value"}' })),
