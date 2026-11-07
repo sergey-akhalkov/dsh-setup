@@ -15,6 +15,7 @@ import {
   stopSnapshotLease,
   sweepReviewSnapshots,
 } from '../src/index.js'
+import { findingHistoryPath } from '../src/host/finding-history.ts'
 import {
   type BundleConfigLike,
   createAgent,
@@ -2574,5 +2575,159 @@ describe('snapshot lifecycle', () => {
     expect(await readdir(join(dir, '.dsh', 'delegation', 'snapshots'))).toContain('run-locked')
     await sweepReviewSnapshots(dir, defaultGit, Date.now() + 11 * 60_000)
     await expect(readFile(join(snapshot.worktree, 'a.txt'))).rejects.toThrow()
+  })
+})
+describe('finding history', () => {
+  function classedFindings(): (run: RunRecord) => { output: Array<{ type: 'text'; text: string }>; stopReason: 'completed' } {
+    return (run) => {
+      const digest = /- Digest: ([0-9a-f]{64})/.exec(run.prompt)?.[1] ?? '0'.repeat(64)
+      const body = {
+        digest,
+        verdict: 'FINDINGS',
+        findings: [
+          {
+            severity: 'P1',
+            class: 'missing-test',
+            title: 'Missing failure path',
+            evidence: 'src/file.ts:1 no failure test',
+            fix: 'add a failure test',
+          },
+        ],
+      }
+      return {
+        output: [{ type: 'text' as const, text: `\`\`\`json\n${JSON.stringify(body)}\n\`\`\`` }],
+        stopReason: 'completed' as const,
+      }
+    }
+  }
+
+  async function historyEntries(root: string): Promise<Array<Record<string, unknown>>> {
+    const raw = await readFile(findingHistoryPath(root), 'utf8')
+    return raw
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  it('stores the normalized class with the finding and in the formatted text', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, classedFindings())
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'), 'utf8'),
+    ) as { findings: Array<{ class?: string }> }
+    expect(record.findings[0]?.class).toBe('missing-test')
+    const rendered = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(rendered).toContain('P1 Missing failure path')
+    expect(rendered).toContain('class: missing-test')
+  })
+
+  it('retains earlier findings after a later PASS and adds one entry per run', async () => {
+    const root = await workspace()
+    const specPath = join(root, 'openspec', 'changes', 'change-a', 'specs', 'capability', 'spec.md')
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    subagents.respond = classedFindings()
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const findingsRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(findingsRun)).toContain('state=completed')
+
+    await writeFile(specPath, '# Spec\n\nChanged.\n', 'utf8')
+    subagents.respond = passResponder
+    const passRun = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await harness.waitForRun(passRun)).toContain('state=completed')
+
+    const entries = await historyEntries(root)
+    expect(entries.map((entry) => entry.verdict)).toEqual(['FINDINGS', 'PASS'])
+    expect((entries[0]?.findings as Array<{ class?: string }>)[0]?.class).toBe('missing-test')
+    expect(entries[1]?.findings).toEqual([])
+
+    const reused = text(
+      await harness.callTool('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(reused).toContain('reused record')
+    expect(await historyEntries(root)).toHaveLength(2)
+  })
+
+  it('keeps a machine path and a credential out of the history', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, findingsResponder('FINDINGS', 'P1'))
+    const harness = harnessFor(root, defaultTestConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await harness.waitForRun(runId)
+    const raw = await readFile(findingHistoryPath(root), 'utf8')
+    expect(raw).not.toContain('secret.ts')
+    expect(raw).not.toContain('ABCDEFGH12345678')
+    expect(raw).not.toContain(root)
+    expect(raw).not.toContain('iVBOR')
+    expect(raw).not.toContain('You are an independent reviewer')
+  })
+
+  it('names the gap in the run detail when neither the entry nor its gap marker is writable', async () => {
+    const root = await workspace()
+    const taskText = 'First task'
+    const taskId = taskIdFor(taskText)
+    await writeChange(root, 'change-a', [{ number: '1.1', text: taskText, checked: true }])
+    await mkdir(join(root, '.dsh'), { recursive: true })
+    await writeFile(join(root, '.dsh', 'review-learning'), 'blocked', 'utf8')
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent')
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a', task: taskId })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(record.verdict).toBe('PASS')
+    const portable = JSON.parse(
+      await readFile(join(root, 'openspec', 'changes', 'change-a', 'reviews', `${taskId}.json`), 'utf8'),
+    ) as { verdict: string }
+    expect(portable.verdict).toBe('PASS')
+    const runFile = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
+    ) as { state: string; detail?: string }
+    expect(runFile.state).toBe('completed')
+    expect(runFile.detail).toContain('history gap:')
+    expect(await harness.toolText('delegation_status', {})).toContain('task-review PASS 1/1')
+  })
+
+  it('leaves a FINDINGS record and its findings intact when the history cannot be written', async () => {
+    const root = await workspace()
+    const taskText = 'First task'
+    const taskId = taskIdFor(taskText)
+    await writeChange(root, 'change-a', [{ number: '1.1', text: taskText, checked: true }])
+    await mkdir(join(root, '.dsh'), { recursive: true })
+    await writeFile(join(root, '.dsh', 'review-learning'), 'blocked', 'utf8')
+    const subagents = new FakeSubagents()
+    subagents.addProvider('codex-subagent', {}, classedFindings())
+    const harness = harnessFor(root, taskReviewConfig(), subagents)
+    const runId = await harness.startReview({ rule: 'task-review', change: 'change-a', task: taskId })
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${taskId}.json`),
+        'utf8',
+      ),
+    ) as { verdict: string; findings: Array<{ class?: string }> }
+    expect(record.verdict).toBe('FINDINGS')
+    expect(record.findings[0]?.class).toBe('missing-test')
+    const runFile = JSON.parse(
+      await readFile(join(root, '.dsh', 'delegation', 'runs', `${runId}.json`), 'utf8'),
+    ) as { detail?: string }
+    expect(runFile.detail).toContain('history gap:')
   })
 })

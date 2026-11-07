@@ -46,6 +46,7 @@ import {
   laneOfTask,
   type NumberedTask,
   normalizeCheckboxes,
+  normalizeFindingClass,
   normalizeTaskText,
   type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
@@ -75,6 +76,7 @@ import {
   type QueueTimeoutInfo,
   ReviewQueue,
 } from './review-queue.js'
+import { appendFindingHistory } from './finding-history.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -2867,7 +2869,7 @@ class InvalidOutputError extends DelegationError {
 }
 
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
-function parseVerdict(text: string, expectedDigest: string): ParsedVerdict {
+export function parseVerdict(text: string, expectedDigest: string): ParsedVerdict {
   try {
     return parseVerdictInner(text, expectedDigest)
   } catch (error) {
@@ -2910,6 +2912,7 @@ function parseVerdictInner(text: string, expectedDigest: string): ParsedVerdict 
     }
     return {
       severity: finding.severity,
+      class: normalizeFindingClass(finding.class),
       title: sanitizeText(requireNonEmpty(finding.title, `finding #${index + 1}.title`)),
       evidence: sanitizeText(requireNonEmpty(finding.evidence, `finding #${index + 1}.evidence`)),
       fix: sanitizeText(requireNonEmpty(finding.fix, `finding #${index + 1}.fix`)),
@@ -3459,7 +3462,7 @@ function formatRecord(cwd: string, path: string, record: ReviewRecord, reused: b
   const head = reused ? 'reused record' : 'wrote record'
   const findings = record.findings.map(
     (finding) =>
-      `- ${finding.severity} ${finding.title}\n  evidence: ${finding.evidence}\n  fix: ${finding.fix}`,
+      `- ${finding.severity} ${finding.title}\n  class: ${normalizeFindingClass(finding.class)}\n  evidence: ${finding.evidence}\n  fix: ${finding.fix}`,
   )
   const lines = [
     `rule "${record.rule}" ${record.verdict} (${head} ${relativePath(cwd, path)})`,
@@ -4115,7 +4118,7 @@ class DelegationEngine {
           )
         }
       }
-      await this.publishRecord(run, {
+      const record = await this.publishRecord(run, {
         digest: prepared.digest,
         ...(prepared.worktreeDigest === undefined
           ? {}
@@ -4124,13 +4127,17 @@ class DelegationEngine {
         findings: parsed.findings,
         target: targetIdentity(result.provider, result.model, result.reasoningEffort),
       })
+      const historyDetail = await this.recordFindingHistory(run, record)
+      const detail = [
+        parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
+        historyDetail,
+      ]
+        .filter((part): part is string => part !== undefined)
+        .join('; ')
       await this.markRun(
         run,
         'completed',
-        this.withFallbackDetail(
-          prepared,
-          parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
-        ),
+        this.withFallbackDetail(prepared, detail === '' ? undefined : detail),
       )
       outcome = 'completed'
     } catch (error) {
@@ -4292,7 +4299,10 @@ class DelegationEngine {
         digest: fields.digest,
         ...(fields.worktreeDigest === undefined ? {} : { worktreeDigest: fields.worktreeDigest }),
         verdict: fields.verdict,
-        findings: fields.findings,
+        findings: fields.findings.map((finding) => ({
+          ...finding,
+          class: normalizeFindingClass(finding.class),
+        })),
         target: fields.target,
         session: currentThread(run.context.agent),
         runId: run.file.id,
@@ -4335,9 +4345,37 @@ class DelegationEngine {
     }
   }
 
-  /** Best-effort failure path: write a visible ERROR record when inputs were prepared. */
-  private async failRun(
+  /**
+   * Append one settled review's findings after its record is published. The
+   * helper never throws; when neither the entry nor its gap marker is writable,
+   * the run detail names the gap rather than changing any verdict.
+   */
+  private async recordFindingHistory(
     run: ManagedRun,
+    record: ReviewRecord,
+  ): Promise<string | undefined> {
+    const result = await appendFindingHistory(run.workspaceRoot, {
+      v: 1,
+      kind: 'run',
+      rule: record.rule,
+      change: record.change,
+      ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
+      verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
+      digest: record.digest,
+      findings: record.findings.map((finding) => ({
+        class: normalizeFindingClass(finding.class),
+        title: finding.title,
+        evidence: finding.evidence,
+        fix: finding.fix,
+      })),
+      time: record.time,
+    })
+    if (result.appended || result.gapAppended) return undefined
+    return `history gap: ${result.detail ?? 'the finding history could not be written'}`
+  }
+
+  /** Best-effort failure path: write a visible ERROR record when inputs were prepared. */
+  private async failRun(    run: ManagedRun,
     error: unknown,
     prepared: ReviewPreparation | undefined,
     failureClass?: FailureClass,
