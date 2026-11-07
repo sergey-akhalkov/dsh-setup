@@ -188,7 +188,13 @@ describe('Workflows Client half', () => {
     expect(options.id).toBe('workflows')
     expect(options.order).toBe(30)
     expect((options.label as () => string)()).toBe('view.label')
-    expect(typeof registrations[0]?.component).toBe('function')
+    const registered = registrations[0]?.component as (props: Record<string, unknown>) => Element
+    expect(typeof registered).toBe('function')
+    const tree = registered({ sessionId: 'session-42' })
+    expect(typeof tree.type).toBe('function')
+    expect((tree.type as { name?: string }).name).toBe('WorkflowsView')
+    expect(tree.props.sessionId).toBe('session-42')
+    expect((tree.props.t as (key: string) => string)('view.label')).toBe('view.label')
     expect(module.ENTRY_LIMITATION).toContain('tab is the entry')
   })
 
