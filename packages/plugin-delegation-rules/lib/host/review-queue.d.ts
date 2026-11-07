@@ -66,6 +66,8 @@ export interface ReviewQueueHooks<T extends QueueRun> {
     timeout(run: T, info: QueueTimeoutInfo): Promise<void>;
     /** Fire the settlement observer exactly once. */
     settled(run: T, state: SettledRunState): void;
+    /** Record bounded evidence when an unexpected fault is survived. */
+    internalFault?(run: T, message: string): void | Promise<void>;
     now(): Date;
 }
 /** Outcome of admitting one prepared run. */
@@ -125,6 +127,7 @@ export declare class ReviewQueue<T extends QueueRun> {
         run: T;
     } | {
         kind: 'conflict';
+        run: T;
     } | {
         kind: 'reserved';
     }>;

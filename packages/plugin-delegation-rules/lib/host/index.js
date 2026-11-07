@@ -2654,6 +2654,11 @@ class DelegationEngine {
             fail: (run, error, failureClass) => this.failRun(run, error, run.prepared, failureClass),
             timeout: (run, info) => this.timeoutRun(run, info),
             settled: (run, state) => this.notifySettled(run, state),
+            internalFault: async (run, message) => {
+                run.file.failureClass = 'queue-internal-error';
+                run.queueFaultDetail = `queue-internal-error: ${sanitizeText(message, MAX_ERROR_CHARS)}`;
+                await this.persistRun(run);
+            },
             now: () => this.services.now(),
         });
     }
@@ -2957,12 +2962,18 @@ class DelegationEngine {
         }
         if (reservation.kind === 'conflict') {
             const conflict = new QueueInternalError('review queue internal error: another run for the same review conversation is already active; let it settle, then start this review again');
-            // Never publish to the incumbent's record path: report this run failed
-            // without invalidating the active review's result.
             run.file.failureClass = 'queue-internal-error';
-            await this.markRun(run, 'failed', this.withQueueFault(run, conflict.message));
-            await this.discardSnapshot(run);
-            await this.settleReviewRun(run, 'failed');
+            if (reservation.run.recordPath === run.recordPath) {
+                // Never publish to the incumbent's record path: report this run failed
+                // without invalidating the active review's result.
+                await this.markRun(run, 'failed', this.withQueueFault(run, conflict.message));
+                await this.discardSnapshot(run);
+                await this.settleReviewRun(run, 'failed');
+            }
+            else {
+                // A different rule has its own record path; its ERROR is observable.
+                await this.failRun(run, conflict, run.prepared, 'queue-internal-error');
+            }
             throw conflict;
         }
         run.fallback = true;

@@ -435,12 +435,16 @@ describe('review queue admission', () => {
   })
 
   it('admits an independent run into a free slot even when the waiting list is full', async () => {
+    const internalFault = vi.fn(async (run: QueueRun) => {
+      run.file.failureClass = 'queue-internal-error'
+    })
     const hooks = {
       start: vi.fn(async () => undefined),
       persist: vi.fn(),
       fail: vi.fn(async () => undefined),
       timeout: vi.fn(async () => undefined),
       settled: vi.fn(),
+      internalFault,
       now: () => new Date('2026-01-01T00:00:00.000Z'),
     }
     const queue = new ReviewQueue<QueueRun>(
@@ -1242,12 +1246,16 @@ describe('review queue identity', () => {
 
 describe('review queue cancellation', () => {
   it('settles a queued run discarded without starting a target', async () => {
+    const internalFault = vi.fn(async (run: QueueRun) => {
+      run.file.failureClass = 'queue-internal-error'
+    })
     const hooks = {
       start: vi.fn(async () => undefined),
       persist: vi.fn(),
       fail: vi.fn(async () => undefined),
       timeout: vi.fn(async () => undefined),
       settled: vi.fn(),
+      internalFault,
       now: () => new Date('2026-01-01T00:00:00.000Z'),
     }
     const queue = new ReviewQueue<QueueRun>(
@@ -3082,6 +3090,13 @@ describe('queue-internal-error fallback', () => {
       }),
     ).rejects.toThrow(/already active/)
     expect(subagents.startCalls).toBe(1)
+    const conflictRecord = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review-extra', 'change-a', 'tasks', `${task}.json`),
+        'utf8',
+      ),
+    ) as { verdict: string }
+    expect(conflictRecord.verdict).toBe('ERROR')
     pending.releases.shift()?.()
     await harness.waitForRun(runIdFrom(first))
   })
@@ -3219,12 +3234,16 @@ describe('queue-internal-error fallback', () => {
 
 describe('queue fault during dispatch', () => {
   it('keeps ownership when the pump faults after dispatching a start', async () => {
+    const internalFault = vi.fn(async (run: QueueRun) => {
+      run.file.failureClass = 'queue-internal-error'
+    })
     const hooks = {
       start: vi.fn(async () => undefined),
       persist: vi.fn(),
       fail: vi.fn(async () => undefined),
       timeout: vi.fn(async () => undefined),
       settled: vi.fn(),
+      internalFault,
       now: () => new Date('2026-01-01T00:00:00.000Z'),
     }
     const queue = new ReviewQueue<QueueRun>(
@@ -3254,6 +3273,8 @@ describe('queue fault during dispatch', () => {
     expect(admission).toMatchObject({ kind: 'accepted', phase: 'running' })
     expect(hooks.start).toHaveBeenCalledTimes(1)
     expect(queue.owns('run-a')).toBe(true)
+    expect(internalFault).toHaveBeenCalledTimes(1)
+    expect(run.file.failureClass).toBe('queue-internal-error')
     await queue.complete(run, 'completed')
     queue.dispose()
   })

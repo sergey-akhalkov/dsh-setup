@@ -105,6 +105,8 @@ export interface ReviewQueueHooks<T extends QueueRun> {
   timeout(run: T, info: QueueTimeoutInfo): Promise<void>
   /** Fire the settlement observer exactly once. */
   settled(run: T, state: SettledRunState): void
+  /** Record bounded evidence when an unexpected fault is survived. */
+  internalFault?(run: T, message: string): void | Promise<void>
   now(): Date
 }
 
@@ -323,6 +325,14 @@ export class ReviewQueue<T extends QueueRun> {
       if (entry !== undefined && this.startDispatched(entry)) {
         // A target start is already in flight: keep ownership and report its
         // outcome instead of rolling back and starting a second target.
+        try {
+          await this.hooks.internalFault?.(
+            run,
+            error instanceof Error ? error.message : String(error),
+          )
+        } catch {
+          // Evidence persistence must not break the surviving run.
+        }
         if (entry.startOutcome !== undefined) {
           await entry.startOutcome.catch(() => undefined)
         }
@@ -367,12 +377,16 @@ export class ReviewQueue<T extends QueueRun> {
    */
   async reserve(
     run: T,
-  ): Promise<{ kind: 'duplicate'; run: T } | { kind: 'conflict' } | { kind: 'reserved' }> {
+  ): Promise<{ kind: 'duplicate'; run: T } | { kind: 'conflict'; run: T } | { kind: 'reserved' }> {
     const existing = this.identities.get(run.file.identity)
     if (existing !== undefined && !existing.finished) {
       return { kind: 'duplicate', run: existing.run }
     }
-    if (this.keys.has(run.file.key)) return { kind: 'conflict' }
+    const key = this.keys.get(run.file.key)
+    if (key !== undefined && key.head !== undefined) {
+      return { kind: 'conflict', run: key.head.run }
+    }
+    if (key !== undefined) return { kind: 'conflict', run: run }
     const entry: QueueEntry<T> = {
       run,
       phase: 'running',

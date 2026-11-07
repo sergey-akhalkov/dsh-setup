@@ -191,6 +191,12 @@ export class ReviewQueue {
             if (entry !== undefined && this.startDispatched(entry)) {
                 // A target start is already in flight: keep ownership and report its
                 // outcome instead of rolling back and starting a second target.
+                try {
+                    await this.hooks.internalFault?.(run, error instanceof Error ? error.message : String(error));
+                }
+                catch {
+                    // Evidence persistence must not break the surviving run.
+                }
                 if (entry.startOutcome !== undefined) {
                     await entry.startOutcome.catch(() => undefined);
                 }
@@ -236,8 +242,12 @@ export class ReviewQueue {
         if (existing !== undefined && !existing.finished) {
             return { kind: 'duplicate', run: existing.run };
         }
-        if (this.keys.has(run.file.key))
-            return { kind: 'conflict' };
+        const key = this.keys.get(run.file.key);
+        if (key !== undefined && key.head !== undefined) {
+            return { kind: 'conflict', run: key.head.run };
+        }
+        if (key !== undefined)
+            return { kind: 'conflict', run: run };
         const entry = {
             run,
             phase: 'running',
