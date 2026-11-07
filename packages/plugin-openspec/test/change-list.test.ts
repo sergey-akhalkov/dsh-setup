@@ -262,6 +262,7 @@ describe('openspec change list', () => {
         summary: 'Adds authentication for operators.',
         why: 'Adds authentication for operators.',
         requirementCount: 2,
+        deltaCapabilities: ['alpha'],
         commit: {
           short: 'abc1234',
           at: '2026-11-01T10:00:00+03:00',
@@ -296,6 +297,48 @@ describe('openspec change list', () => {
     if (process.platform === 'win32') {
       expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ windowsVerbatimArguments: true })
     }
+  })
+
+  it('reports each row delta capability ids, including a nested id and none', async () => {
+    const cwd = workspace(true)
+    writeChange(cwd, 'multi', {
+      specs: {
+        'identity/auth': '# Nested\n',
+        billing: '# Billing\n',
+      },
+    })
+    writeChange(cwd, 'none', {})
+    writeChange(cwd, '2026-10-27-old-work', { specs: { legacy: '# Old\n' } }, true)
+    const children = spawnQueue()
+    const pending = listWorkspaceChanges(cwd)
+    answerList(
+      children,
+      listOutput(cwd, [
+        { name: 'multi', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+        { name: 'none', completedTasks: 0, totalTasks: 0, status: 'no-tasks' },
+        {
+          name: '2026-10-27-old-work',
+          completedTasks: 1,
+          totalTasks: 1,
+          status: 'complete',
+          archived: true,
+        },
+      ]),
+      specsOutput(cwd, []),
+    )
+    const list = await pending
+    expect(list.changes.map((row) => row.deltaCapabilities)).toEqual([
+      ['billing', 'identity/auth'],
+      [],
+    ])
+    expect(list.archived[0]?.deltaCapabilities).toEqual(['legacy'])
+    // The rest of the row keeps its documented shape.
+    expect(list.changes[0]).toMatchObject({
+      name: 'multi',
+      phase: 'planning',
+      requirementCount: 0,
+      presence: { proposal: false, design: false, tasks: false, specs: 2 },
+    })
   })
 
   it('keeps the whole Why section for the card tooltip', () => {

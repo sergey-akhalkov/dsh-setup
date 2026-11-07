@@ -2,7 +2,7 @@
 
 ## 1. Host row fact — `packages/plugin-openspec/src/host/change-list.ts`, `packages/plugin-openspec/test/change-list.test.ts`
 
-- [ ] 1.1 Add `deltaCapabilities: readonly string[]` to `WorkspaceChange` and fill it from the same
+- [x] 1.1 Add `deltaCapabilities: readonly string[]` to `WorkspaceChange` and fill it from the same
       `deltaSpecFiles` result that already produces `presence.specs` and `requirementCount` (one walk,
       no second pass); keep it on active and archived rows and additive on the wire. Verify
       `change-list.test.ts` covers a change with two delta specs (one nested id such as `identity/auth`),

@@ -53,6 +53,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
   readonly why?: string | null
   /** Requirement headings across the change's delta spec files. */
   readonly requirementCount: number
+  /** Capability ids of the change's delta spec files; the client watches them. */
+  readonly deltaCapabilities: readonly string[]
   readonly commit: CommitFact | null
   readonly presence: ChangePresence
 }
@@ -553,8 +555,15 @@ export function deltaSpecFiles(root: string, changeDirectory: string): DeltaSpec
   return files.sort((left, right) => left.capability.localeCompare(right.capability))
 }
 
-/** The artifacts one change directory already carries. */
-export function presenceAt(workspace: string, directory: string): ChangePresence {
+/**
+ * The artifacts one change directory already carries.
+ * @param deltaFiles - an already computed delta walk to reuse; absent walks once here.
+ */
+export function presenceAt(
+  workspace: string,
+  directory: string,
+  deltaFiles?: readonly DeltaSpecFile[],
+): ChangePresence {
   const root = canonicalRoot(workspace)
   if (containedArtifact(root, directory, artifactReadMessage) === null) {
     return { proposal: false, design: false, tasks: false, specs: 0 }
@@ -563,7 +572,7 @@ export function presenceAt(workspace: string, directory: string): ChangePresence
     proposal: artifactPresent(root, join(directory, 'proposal.md')),
     design: artifactPresent(root, join(directory, 'design.md')),
     tasks: artifactPresent(root, join(directory, 'tasks.md')),
-    specs: deltaSpecFiles(root, directory).length,
+    specs: (deltaFiles ?? deltaSpecFiles(root, directory)).length,
   }
 }
 
@@ -920,11 +929,13 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
   const enrich = async (row: WorkspaceChangeRow, archived: boolean): Promise<WorkspaceChange> => {
     const path = archived ? `openspec/changes/archive/${row.name}` : `openspec/changes/${row.name}`
     const directory = resolve(workspace, path)
-    const presence = presenceAt(workspace, directory)
+    // One delta walk feeds the presence count, the requirement count, and the
+    // capability ids the client observes.
+    const specFiles = deltaSpecFiles(root, directory)
+    const presence = presenceAt(workspace, directory, specFiles)
     const facts = presence.proposal
       ? await proposalFactsAt(root, directory)
       : { summary: null, why: null }
-    const specFiles = presence.specs > 0 ? deltaSpecFiles(root, directory) : []
     const requirementCount = await deltaRequirementCount(specFiles)
     return {
       ...row,
@@ -934,6 +945,7 @@ export async function listWorkspaceChanges(workspace: string): Promise<Workspace
       summary: facts.summary,
       why: facts.why,
       requirementCount,
+      deltaCapabilities: specFiles.map((spec) => spec.capability),
       commit: commitFor(git, path),
       presence,
     }
