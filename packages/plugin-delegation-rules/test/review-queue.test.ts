@@ -461,6 +461,49 @@ describe('review queue admission', () => {
     expect(queue.summary().queued).toBe(0)
     queue.dispose()
   })
+
+  it('settles an expired waiting run when a slot frees before its timer callback', async () => {
+    let clock = new Date('2026-01-01T00:00:00.000Z')
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => clock,
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const running = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(running)).toEqual({ kind: 'accepted', phase: 'running' })
+    const waiting = fakeRun('run-b', 'key-b', 'identity-b')
+    expect(await queue.submit(waiting)).toEqual({ kind: 'accepted', phase: 'queued' })
+
+    // Move the clock past the acceptance deadline without dispatching timers,
+    // then free the slot: the queued run must settle instead of starting late.
+    clock = new Date(clock.getTime() + 400_000)
+    await queue.complete(running, 'completed')
+    await vi.waitFor(() => {
+      expect(hooks.settled).toHaveBeenCalledWith(waiting, 'failed')
+    })
+    expect(hooks.timeout).toHaveBeenCalledWith(waiting, { position: 1, waitMs: 400_000 })
+    const started = hooks.start.mock.calls.filter(
+      (call: unknown[]) => (call[0] as QueueRun).file.id === 'run-b',
+    )
+    expect(started).toHaveLength(0)
+    expect(queue.owns('run-b')).toBe(false)
+    queue.dispose()
+  })
 })
 
 describe('review queue cancellation', () => {

@@ -498,6 +498,18 @@ export class ReviewQueue<T extends QueueRun> {
   private pump(): void {
     const limit = this.limits.enabled ? this.limits.concurrency : Number.POSITIVE_INFINITY
     while (this.active.size < limit) {
+      if (this.limits.enabled) {
+        // A late timer dispatch can free a slot after the acceptance deadline:
+        // settle the expired run instead of starting it.
+        const expired = this.waiting.find(
+          (candidate) =>
+            candidate.phase === 'queued' && this.hooks.now().getTime() >= candidate.waitDeadlineMs,
+        )
+        if (expired !== undefined) {
+          void this.settleWaitTimeout(expired)
+          continue
+        }
+      }
       const entry = this.waiting.find((candidate) => this.startEligible(candidate))
       if (entry === undefined) return
       this.claim(entry)
