@@ -32,11 +32,11 @@
 
 ## 3. Documentation and generated tree — `docs/plugins.md`, `packages/setup`
 
-- [ ] 3.1 Update the panel's live-update section in `docs/plugins.md`: the Changes segment follows the
+- [x] 3.1 Update the panel's live-update section in `docs/plugins.md`: the Changes segment follows the
       files of its active rows, the 300 ms debounce, archived rows and the Archive segment stay manual,
       a newly created change needs the native refresh, and no polling or plugin-owned watcher exists.
       Verify `pnpm lint` and `pnpm validate:repo` pass.
-- [ ] 3.2 Run `pnpm build` first, then `pnpm gen` — the generator vendors the package's declared
+- [x] 3.2 Run `pnpm build` first, then `pnpm gen` — the generator vendors the package's declared
       publishable files, so generating before building would copy the previous `lib/**` into
       `packages/setup` — then commit the emitted `lib/**` and the regenerated vendored tree. Verify
       `pnpm gen:check` passes, the vendored `plugin-openspec/lib/client.js` carries the list
@@ -44,7 +44,7 @@
 
 ## 4. Integration gate
 
-- [ ] 4.1 Run `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, and `pnpm build && git diff --exit-code`;
+- [x] 4.1 Run `pnpm check`, `pnpm gen:check`, `pnpm validate:repo`, and `pnpm build && git diff --exit-code`;
       verify every command exits zero and the build produces no drift.
 
 ## Workflow follow-up

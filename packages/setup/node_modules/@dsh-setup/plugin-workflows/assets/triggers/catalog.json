@@ -1,0 +1,67 @@
+{
+  "triggers": [
+    {
+      "id": "agent-turn-start",
+      "event": "agent.turn-start",
+      "filter": {},
+      "mode": "shadow",
+      "dedupe": "none"
+    },
+    {
+      "id": "agent-turn-stop",
+      "event": "agent.turn-stop",
+      "filter": {},
+      "mode": "shadow",
+      "dedupe": "none"
+    },
+    {
+      "id": "delegate-result",
+      "event": "tool.result",
+      "filter": { "tool": "delegate" },
+      "mode": "shadow",
+      "dedupe": "none"
+    },
+    {
+      "id": "worker-start",
+      "event": "subagent.start",
+      "filter": {},
+      "mode": "shadow",
+      "dedupe": "none"
+    },
+    {
+      "id": "worker-end",
+      "event": "subagent.end",
+      "filter": {},
+      "mode": "shadow",
+      "dedupe": "none"
+    },
+    {
+      "id": "openspec-tasks-checked",
+      "event": "fs.change",
+      "filter": { "path": "openspec/changes/**/tasks.md", "change": "created-or-modified" },
+      "mode": "shadow",
+      "dedupe": "path+content-hash"
+    },
+    {
+      "id": "openspec-review-recorded",
+      "event": "fs.change",
+      "filter": { "path": "openspec/changes/**/reviews/*.json", "change": "created-or-modified" },
+      "mode": "shadow",
+      "dedupe": "path+content-hash"
+    },
+    {
+      "id": "openspec-change-created",
+      "event": "fs.change",
+      "filter": { "path": "openspec/changes/*/proposal.md", "change": "created-or-modified" },
+      "mode": "shadow",
+      "dedupe": "path+content-hash"
+    },
+    {
+      "id": "openspec-change-archived",
+      "event": "fs.change",
+      "filter": { "path": "openspec/changes/archive/**", "change": "created-or-modified" },
+      "mode": "shadow",
+      "dedupe": "none"
+    }
+  ]
+}

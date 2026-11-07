@@ -50,9 +50,16 @@ export interface UnparseableCheckedLine {
     text: string;
 }
 export declare function unparseableCheckedLines(markdown: string): UnparseableCheckedLine[];
+/** The fixed learning vocabulary; a finding is counted by its class. */
+export declare const FINDING_CLASSES: readonly ["spec-ambiguity", "missing-test", "path-boundary", "state-persistence", "stale-input", "api-contract", "plan-shape", "docs-drift", "security", "other"];
+export type FindingClass = (typeof FINDING_CLASSES)[number];
+/** A valid class passes through; an absent or unknown one is the safe `other`. */
+export declare function normalizeFindingClass(value: unknown): FindingClass;
 /** One review finding; the engine and the portable record share this shape. */
 export interface ReviewFinding {
     severity: 'P0' | 'P1';
+    /** Optional so records written before classification stay readable. */
+    class?: FindingClass;
     title: string;
     evidence: string;
     fix: string;
@@ -82,6 +89,12 @@ export interface PortableTaskReviewRecord {
     target: ReviewTarget;
     time: string;
 }
+/** A field value that could leak the reviewing machine into a committed record. */
+export declare function hasMachinePath(text: string): boolean;
+/** Default bound for one redacted field; callers pass a smaller bound when needed. */
+export declare const MAX_SANITIZE_CHARS = 2000;
+/** Redact machine paths and credentials, then bound the result. */
+export declare function sanitizeText(text: string, maximum?: number): string;
 export declare function isReviewFinding(value: unknown): value is ReviewFinding;
 /**
  * Validate the committed record: only the sanitized fields may appear, so a

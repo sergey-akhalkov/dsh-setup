@@ -94,3 +94,7 @@
           answer: 300000
           patch: 1800000
         failureStreak: 3
+        reviewLearning:
+          enabled: true
+          window: 50
+          maxLessons: 200

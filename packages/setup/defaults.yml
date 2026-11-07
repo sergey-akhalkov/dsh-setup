@@ -235,3 +235,7 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
+# The Workflows view is read-only in this release; the row has no owner-tunable
+# options yet, so the default restates an empty config.
+- id: dsh-setup-workflows
+  config: {}

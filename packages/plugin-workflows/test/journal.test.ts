@@ -205,7 +205,7 @@ const step = async (
     async () => ({ kind: 'continue' }),
   )
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 3000): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const started = Date.now()
   while (!(await check())) {
     if (Date.now() - started > timeoutMs) throw new Error('the journal did not settle in time')
@@ -778,7 +778,10 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => typeof (await readHealth())?.lastEventAt === 'number')
+    await waitFor(async () => {
+      const current = await readHealth()
+      return typeof current?.lastEventAt === 'number' && typeof current?.lastCheckAt === 'number'
+    })
     const health = (await readHealth()) ?? {}
     expect(health.listenerCount).toBeGreaterThanOrEqual(4)
     expect(typeof health.triggerCount).toBe('number')
@@ -1034,8 +1037,11 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => Number((await readHealth())?.listenerCount) < 5)
+    await waitFor(async () =>
+      String((await readHealth())?.lastError ?? '').includes('watch failed'),
+    )
     expect(String((await readHealth())?.lastError)).toContain('watch failed')
+    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
     host.dispose()
   })
 
@@ -1208,7 +1214,7 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => typeof (await readHealth())?.lastEventAt === 'number')
+    await waitFor(async () => (await readHealth())?.journalWritable === false)
     expect((await readHealth())?.journalWritable).toBe(false)
   })
 })

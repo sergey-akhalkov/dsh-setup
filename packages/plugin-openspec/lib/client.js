@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
       CapabilityBody: () => CapabilityBody,
       CapabilityView: () => CapabilityView,
       ChangeBody: () => ChangeBody,
+      ChangeListObservation: () => ChangeListObservation,
       ChangeView: () => ChangeView,
       FileWatch: () => FileWatch,
       InlineText: () => InlineText,
@@ -171,6 +172,13 @@ window.__ModuleLoader__.load({
         changeArtifactPath(name, "tasks"),
         ...capabilities.map((capability) => deltaSpecPath(name, capability))
       ];
+    }
+    function changeListWatchAddresses(sessionId, rows) {
+      return rows.filter((row) => row.archived !== true).flatMap(
+        (row) => changeWatchPaths(row.name, row.deltaCapabilities ?? []).map(
+          (path) => fileAddress(sessionId, path)
+        )
+      );
     }
     function derivePhase(row) {
       if (row.archived === true) return "archived";
@@ -358,12 +366,18 @@ window.__ModuleLoader__.load({
     function decodePhase(value) {
       return value === "planning" || value === "ready-to-apply" || value === "applying" || value === "complete" || value === "archived" ? value : void 0;
     }
+    function decodeDeltaCapabilities(value) {
+      if (value === void 0) return void 0;
+      if (!Array.isArray(value)) return [];
+      return value.filter((entry) => typeof entry === "string" && entry.trim() !== "");
+    }
     function decodeChangeRow(value) {
       if (!isRecord(value) || typeof value.name !== "string" || value.name.trim() === "")
         return void 0;
       const completedTasks = integer(value.completedTasks) ?? 0;
       const totalTasks = integer(value.totalTasks) ?? 0;
       const phase = decodePhase(value.phase);
+      const deltaCapabilities2 = decodeDeltaCapabilities(value.deltaCapabilities);
       return {
         name: value.name,
         completedTasks,
@@ -376,6 +390,7 @@ window.__ModuleLoader__.load({
         ...value.summary === void 0 ? {} : { summary: summaryText(value.summary) },
         ...value.why === void 0 ? {} : { why: summaryText(value.why) },
         ...value.requirementCount === void 0 ? {} : { requirementCount: integer(value.requirementCount) ?? 0 },
+        ...deltaCapabilities2 === void 0 ? {} : { deltaCapabilities: deltaCapabilities2 },
         ...value.modified === void 0 ? {} : { modified: stringOrNull(value.modified) },
         ...value.commit === void 0 ? {} : { commit: decodeCommit(value.commit) }
       };
@@ -832,7 +847,8 @@ window.__ModuleLoader__.load({
             t,
             draft,
             open,
-            storage: props.storage
+            storage: props.storage,
+            useResource: props.useResource
           }
         );
       } else if (target.view === "change") {
@@ -1023,6 +1039,22 @@ window.__ModuleLoader__.load({
         [t]
       );
     }
+    function ChangeListObservation(props) {
+      const notify = useLiveReload(props.reload);
+      const observation = useObservation(notify);
+      const addresses = changeListWatchAddresses(props.sessionId, props.rows);
+      observation.add(addresses);
+      return addresses.map((address) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        FileWatch,
+        {
+          address,
+          useResource: props.useResource,
+          settle: observation.settle,
+          change: observation.change
+        },
+        address
+      ));
+    }
     function RootBody(props) {
       const { tab, initialSegment, sessionId, t, draft, open } = props;
       const storage = props.storage ?? defaultSegmentStorage();
@@ -1033,6 +1065,9 @@ window.__ModuleLoader__.load({
       const [archiveQuery, setArchiveQuery] = (0, import_react.useState)("");
       const changes = useRead(() => requestChangeList(sessionId));
       const capabilities = useRead(() => requestCapabilities(sessionId));
+      const knownRows = (0, import_react.useRef)([]);
+      if (changes.state.phase === "ready") knownRows.current = changes.state.value.changes;
+      const useResource = props.useResource ?? noResource;
       const started = (0, import_react.useRef)({ specs: false });
       const loadSpecs = () => {
         started.current.specs = true;
@@ -1052,32 +1087,43 @@ window.__ModuleLoader__.load({
         writeSegment(storage, sessionId, next);
         if (next === "specs" && !started.current.specs) loadSpecs();
       };
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-        RootView,
-        {
-          segment,
-          changes: changes.state,
-          capabilities: capabilities.state,
-          specQuery,
-          archiveQuery,
-          t,
-          onSegment: choose,
-          onSpecQuery: setSpecQuery,
-          onArchiveQuery: setArchiveQuery,
-          specOrder,
-          onSpecOrder: setSpecOrder,
-          onRetry: () => {
-            if (segment === "specs") loadSpecs();
-            else changes.reload();
-          },
-          onOpenChange: (name, archived) => open(archived ? archivedChangeAddress(name) : changeAddress(name)),
-          onOpenArtifact: (name, archived, artifact) => open(archived ? archivedChangeAddress(name, artifact) : changeAddress(name, artifact)),
-          onOpenCapability: (id) => open(capabilityAddress(id)),
-          onExplore: () => draft(EXPLORE_DRAFT),
-          onPropose: () => draft(PROPOSE_DRAFT),
-          onSeeArchive: () => choose("archive")
-        }
-      );
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+        segment === "changes" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          ChangeListObservation,
+          {
+            sessionId,
+            rows: knownRows.current,
+            useResource,
+            reload: changes.reload
+          }
+        ) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          RootView,
+          {
+            segment,
+            changes: changes.state,
+            capabilities: capabilities.state,
+            specQuery,
+            archiveQuery,
+            t,
+            onSegment: choose,
+            onSpecQuery: setSpecQuery,
+            onArchiveQuery: setArchiveQuery,
+            specOrder,
+            onSpecOrder: setSpecOrder,
+            onRetry: () => {
+              if (segment === "specs") loadSpecs();
+              else changes.reload();
+            },
+            onOpenChange: (name, archived) => open(archived ? archivedChangeAddress(name) : changeAddress(name)),
+            onOpenArtifact: (name, archived, artifact) => open(archived ? archivedChangeAddress(name, artifact) : changeAddress(name, artifact)),
+            onOpenCapability: (id) => open(capabilityAddress(id)),
+            onExplore: () => draft(EXPLORE_DRAFT),
+            onPropose: () => draft(PROPOSE_DRAFT),
+            onSeeArchive: () => choose("archive")
+          }
+        )
+      ] });
     }
     function ChangeBody(props) {
       const { tab, name, sessionId, t, draft } = props;

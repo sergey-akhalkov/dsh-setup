@@ -5,7 +5,7 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 ## 1. Package and bundle wiring (lane 1, owns `packages/plugin-workflows/package.json`, `packages/plugin-workflows/cordis.fragment.yml`, `packages/plugin-workflows/tsconfig.json`, `packages/plugin-workflows/src/host/index.ts`, `packages/plugin-workflows/src/client/index.tsx`, `packages/plugin-workflows/locale/en.json`, `packages/plugin-workflows/icon.svg`, `packages/setup/defaults.yml`)
 
 - [x] 1.1 Create the package from the `plugin-observability` shape with the Host entry, the Client entry, `cordis.fragment.yml` row `dsh-setup-workflows`, `dsh.client.platform: web`, the conversation UI injection, the primitives external, locale, icon, and the `>=0.2.2-rc.1 <0.3.0` engine range; verify with `pnpm install --frozen-lockfile=false`, `pnpm build`, and `pnpm gen:check` after the next generation step.
-- [ ] 1.2 Add the default row to `packages/setup/defaults.yml` and the plugin documentation rows; run `pnpm gen` and verify the generated setup tree contains the row and the vendored plugin files.
+- [x] 1.2 Add the default row to `packages/setup/defaults.yml` and the plugin documentation rows; run `pnpm gen` and verify the generated setup tree contains the row and the vendored plugin files.
 
 ## 2. Host recorder, journal, and health (lane 1, owns `packages/plugin-workflows/src/host/journal.ts`, `packages/plugin-workflows/src/host/redact.ts`, `packages/plugin-workflows/src/host/health.ts`, `packages/plugin-workflows/src/host/fs-change.ts`, `packages/plugin-workflows/test/journal.test.ts`, `packages/plugin-workflows/test/redact.test.ts`, `packages/plugin-workflows/test/health.test.ts`, `packages/plugin-workflows/test/fs-change.test.ts`)
 
@@ -48,8 +48,8 @@ Lane 1 (package and Host recorder) and lane 2 (Client view) own disjoint files. 
 
 ## 8. Documentation and generated output (lane 3, owns `docs/plugins.md`, `README.md`, `packages/setup/cordis.patch.yml`, `packages/setup/package.json`, `packages/setup/node_modules/@dsh-setup/**`, `packages/plugin-workflows/cordis.patch.yml`)
 
-- [ ] 8.1 Document the Workflows view, the shadow trigger catalog, the journal path, the read-only boundary, the retention limits, and the health states; verify the documented paths and commands match the implementation.
-- [ ] 8.2 Run `pnpm gen`, `pnpm build`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, and `openspec validate add-workflow-observability --strict`; verify all pass and the generated tree contains the vendored package.
+- [x] 8.1 Document the Workflows view, the shadow trigger catalog, the journal path, the read-only boundary, the retention limits, and the health states; verify the documented paths and commands match the implementation.
+- [x] 8.2 Run `pnpm gen`, `pnpm build`, `pnpm gen:check`, `pnpm validate:repo`, `pnpm validate:composition`, and `openspec validate add-workflow-observability --strict`; verify all pass and the generated tree contains the vendored package.
 
 ## Workflow follow-up
 

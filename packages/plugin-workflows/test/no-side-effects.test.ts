@@ -49,7 +49,7 @@ interface FakeHost {
   readonly workspace: string
   readonly agent: {
     id: string
-    session: { id: string; header: { origin?: 'subagent' } }
+    session: { id: string; header: { origin?: string } }
     ctx: { on(name: string, listener: Listener): () => void }
     steer(message: unknown): void
     inject(message: unknown): void

@@ -105,6 +105,10 @@
           answer: 300000
           patch: 1800000
         failureStreak: 3
+        reviewLearning:
+          enabled: true
+          window: 50
+          maxLessons: 200
     - id: dsh-setup-goal-continuity
       name: "@dsh-setup/plugin-goal-continuity"
       config:
@@ -209,6 +213,8 @@
       name: "@dsh-setup/plugin-serena"
     - id: dsh-setup-verification-gate
       name: "@dsh-setup/plugin-verification-gate"
+    - id: dsh-setup-workflows
+      name: "@dsh-setup/plugin-workflows"
     - id: dsh-setup-working-principles
       name: "@dsh-setup/plugin-working-principles"
 - id: agent-default-model
@@ -419,3 +425,5 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
+- id: dsh-setup-workflows
+  config: {}
