@@ -320,6 +320,15 @@ export class ReviewQueue<T extends QueueRun> {
     return { replaced: true }
   }
 
+  /** Wait out an incumbent's in-flight start so a duplicate handle is settled. */
+  async whenAdmitted(runId: string): Promise<void> {
+    const entry = this.entries.get(runId)
+    if (entry === undefined || entry.finished) return
+    if (entry.phase === 'starting' && entry.startOutcome !== undefined) {
+      await entry.startOutcome
+    }
+  }
+
   /** Mark the run's terminal state, release its slot, and settle exactly once. */
   async complete(run: T, state: SettledRunState): Promise<void> {
     const entry = this.entries.get(run.file.id)

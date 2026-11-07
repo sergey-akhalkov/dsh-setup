@@ -265,6 +265,51 @@ describe('review queue admission', () => {
     await harness.waitForRun(runIdFrom(queued))
   })
 
+  it('returns a settled handle when a duplicate joins an in-flight start', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const originalStart = subagents.startActivation.bind(subagents)
+    let releaseStart: () => void = () => undefined
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    let enteredStart: () => void = () => undefined
+    const firstStarted = new Promise<void>((resolve) => {
+      enteredStart = resolve
+    })
+    let holding = false
+    subagents.startActivation = async (spec) => {
+      if (!holding) {
+        holding = true
+        enteredStart()
+        await startGate
+      }
+      return originalStart(spec)
+    }
+    const harness = await harnessFor(root, defaultTestConfig(), subagents)
+
+    const firstCall = harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    await firstStarted
+    const duplicateCall = harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-a',
+    })
+    releaseStart()
+    const first = await firstCall
+    const duplicate = await duplicateCall
+    expect(first).toContain('review started')
+    expect(duplicate).toContain('review already pending')
+    expect(duplicate).toContain('state: running')
+    expect(duplicate).not.toContain('state: starting')
+    expect(subagents.startCalls).toBe(1)
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(runIdFrom(first))).toContain('state=completed')
+  })
+
   it('does not serialize independent admissions behind a pending target start', async () => {
     const root = await workspace()
     await writeChange(root, 'change-a', [])

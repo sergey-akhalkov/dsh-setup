@@ -117,6 +117,8 @@ export declare class ReviewQueue<T extends QueueRun> {
         collision?: T;
         replaced: boolean;
     }>;
+    /** Wait out an incumbent's in-flight start so a duplicate handle is settled. */
+    whenAdmitted(runId: string): Promise<void>;
     /** Mark the run's terminal state, release its slot, and settle exactly once. */
     complete(run: T, state: SettledRunState): Promise<void>;
     /** A queued run cancelled before any target started settles discarded. */

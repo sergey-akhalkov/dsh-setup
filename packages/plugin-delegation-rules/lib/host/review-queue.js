@@ -176,6 +176,15 @@ export class ReviewQueue {
         this.identities.set(identity, entry);
         return { replaced: true };
     }
+    /** Wait out an incumbent's in-flight start so a duplicate handle is settled. */
+    async whenAdmitted(runId) {
+        const entry = this.entries.get(runId);
+        if (entry === undefined || entry.finished)
+            return;
+        if (entry.phase === 'starting' && entry.startOutcome !== undefined) {
+            await entry.startOutcome;
+        }
+    }
     /** Mark the run's terminal state, release its slot, and settle exactly once. */
     async complete(run, state) {
         const entry = this.entries.get(run.file.id);

@@ -2681,6 +2681,9 @@ class DelegationEngine {
         if (admission.kind === 'duplicate') {
             await this.discardSnapshot(run);
             this.runs.delete(run.file.id);
+            // A duplicate can join an in-flight start; wait it out so the handle
+            // reports a settled admission state (running or queued), never starting.
+            await this.queue.whenAdmitted(admission.run.file.id);
             return this.runHandleText(admission.run, 'duplicate');
         }
         if (admission.kind === 'accepted' && admission.phase !== 'running') {
