@@ -709,7 +709,7 @@ export async function delegationObservations(workspace: string): Promise<Map<str
   const directory = join(workspace, WORKFLOW_EVENTS_DIR)
   const observed = new Map<string, { session: string; at: number }>()
   for (const name of await listFiles(directory)) {
-    if (!name.endsWith('.jsonl')) continue
+    if (!/\.jsonl(?:\.1)?$/u.test(name)) continue
     let raw = ''
     try {
       raw = await readFile(join(directory, name), 'utf8')

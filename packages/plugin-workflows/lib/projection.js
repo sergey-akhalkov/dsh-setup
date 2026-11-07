@@ -493,7 +493,9 @@ export async function portableReviewRuns(workspace, localRecords) {
                         id: 'target',
                         title: 'Target',
                         state: 'target',
-                        evidence: isRecord(record.target) ? safeError(JSON.stringify(record.target)) : undefined,
+                        evidence: isRecord(record.target)
+                            ? safeError(JSON.stringify(record.target))
+                            : undefined,
                     },
                     { id: 'digest', title: 'Digest', state: 'digest', evidence: safeText(digest) },
                     { id: 'task', title: 'Task', state: stableTask },
@@ -513,7 +515,7 @@ export async function delegationObservations(workspace) {
     const directory = join(workspace, WORKFLOW_EVENTS_DIR);
     const observed = new Map();
     for (const name of await listFiles(directory)) {
-        if (!name.endsWith('.jsonl'))
+        if (!/\.jsonl(?:\.1)?$/u.test(name))
             continue;
         let raw = '';
         try {

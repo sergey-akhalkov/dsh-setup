@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -73,7 +73,7 @@ async function journalLine(
     bytes: summary.length,
     truncated: false,
   })
-  await writeFile(join(directory, `${session}.jsonl`), `${line}\n`, { encoding: 'utf8' })
+  await appendFile(join(directory, `${session}.jsonl`), `${line}\n`, { encoding: 'utf8' })
 }
 
 async function fileHash(file: string): Promise<string> {
@@ -831,6 +831,126 @@ describe('merged session timeline', () => {
       expect(failed?.error).not.toContain('SYNTHETIC-SECRET')
       expect(await fileHash(detailFile)).toBe(hash)
     }
+  })
+
+  it('orders the timeline by time and uses the id as a stable tie-breaker', async () => {
+    const workspace = await tempWorkspace()
+    await writeRaw(
+      workspace,
+      `${'.dsh/work-checkpoints'}/${hashSession('session-1')}/2.json`,
+      JSON.stringify({
+        version: 2,
+        checkpoint: 'checkpoint-2-late',
+        revision: 1,
+        turn: 2,
+        outcome: 'continue',
+        verified: [],
+        lanes: [],
+        laneAges: [],
+        bottleneck: {
+          id: 'lane-a',
+          owner: 'lead',
+          action: 'lead_action',
+          targets: ['packages/plugin-workflows'],
+        },
+        bottleneckKey: 'e2d946de2649d514',
+        derivedRemaining: [],
+        parallelComputed: false,
+        next: 'x',
+        time: '2026-11-07T10:08:00.000Z',
+        session: '[REDACTED]',
+      }),
+    )
+    await install(
+      workspace,
+      `${DELEGATION_DIR}/runs/run-settled.json`,
+      'delegation-run-settled.json',
+    )
+    await journalLine(
+      workspace,
+      'session-1',
+      'delegate review started; run: run-mw6abcde-1234abce',
+      1000,
+    )
+    await install(
+      workspace,
+      'openspec/changes/add-workflow-observability/reviews/abc123.json',
+      'portable-review.json',
+    )
+    await writeJson(
+      workspace,
+      `${DELEGATION_DIR}/task-review/add-workflow-observability/tasks/abc123.json`,
+      {
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        phase: 'task',
+        scope: 'task',
+        taskId: '0123456789abcdef',
+        digest: `${'a'.repeat(64)}`,
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        session: 'session-1',
+        runId: 'run-mw6abcde-99999999',
+        time: '2026-11-07T10:12:00.000Z',
+      },
+    )
+    const runs = await sessionRuns(workspace, 'session-1')
+    // Delegation (10:05) must precede the checkpoint (10:08), then the review.
+    expect(runs.map((run) => run.source)).toEqual(['delegation', 'checkpoint', 'review'])
+
+    const sameTime = await tempWorkspace()
+    for (const id of ['run-mw6abcde-bbbbbbbb', 'run-mw6abcde-aaaaaaaa']) {
+      await writeJson(sameTime, `${DELEGATION_DIR}/runs/${id}.json`, {
+        id,
+        rule: 'task-review',
+        change: 'add-workflow-observability',
+        key: 'k',
+        identity: 'i',
+        state: 'running',
+        record: `.dsh/delegation/task-review/x/tasks/${id}.json`,
+        startedAt: '2026-11-07T10:05:00.000Z',
+      })
+    }
+    await journalLine(
+      sameTime,
+      'session-1',
+      'delegate review started; run: run-mw6abcde-bbbbbbbb',
+      1000,
+    )
+    await journalLine(
+      sameTime,
+      'session-1',
+      'delegate review started; run: run-mw6abcde-aaaaaaaa',
+      1000,
+    )
+    const tied = (await sessionRuns(sameTime, 'session-1')).map((run) => run.id)
+    expect(tied).toEqual(['delegation:run-mw6abcde-aaaaaaaa', 'delegation:run-mw6abcde-bbbbbbbb'])
+  })
+
+  it('attributes a run from an observation in a rotated journal file', async () => {
+    const workspace = await tempWorkspace()
+    await install(
+      workspace,
+      `${DELEGATION_DIR}/runs/run-settled.json`,
+      'delegation-run-settled.json',
+    )
+    const line = JSON.stringify({
+      v: 1,
+      at: 1000,
+      session: 'session-1',
+      kind: 'tools/result',
+      subject: 'delegate',
+      callId: 'call-1',
+      ok: true,
+      summary: 'delegate review started; run: run-mw6abcde-1234abce',
+      bytes: 50,
+      truncated: false,
+    })
+    await mkdir(join(workspace, WORKFLOW_EVENTS_DIR), { recursive: true })
+    await writeFile(join(workspace, WORKFLOW_EVENTS_DIR, 'session-1.jsonl.1'), `${line}\n`, 'utf8')
+    const runs = await sessionRuns(workspace, 'session-1')
+    expect(runs.some((run) => run.id === 'delegation:run-mw6abcde-1234abce')).toBe(true)
   })
 
   it('reads only the requesting workspace', async () => {
