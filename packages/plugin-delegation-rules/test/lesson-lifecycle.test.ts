@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   executeReviewLesson,
@@ -215,6 +216,90 @@ describe('review_lesson lifecycle', () => {
     ).rejects.toThrow(/only a proposed lesson can be accepted or rejected/)
     expect(questions.calls).toHaveLength(0)
     expect((await readLessons(root)).lessons[0]?.status).toBe('accepted')
+  })
+
+  it('sends the required bounded question contents and options', async () => {
+    const root = await workspace()
+    const questions = new FakeQuestions()
+    await executeReviewLesson(
+      { ...PROPOSAL, body: 'y'.repeat(4_000) },
+      context(root, questions),
+    )
+    const id = (await readLessons(root)).lessons[0]?.id ?? ''
+    const proposed = (await readLessons(root)).lessons[0]
+    if (proposed === undefined) throw new Error('expected the proposed lesson')
+    const revisionAtAsk = lessonRevision(proposed)
+    questions.selected = ['Accept']
+    await executeReviewLesson({ action: 'decide', id, decision: 'accept' }, context(root, questions))
+    const decideQuestion = questions.calls[0]?.questions[0]
+    expect(decideQuestion?.id).toBe('review-lesson')
+    expect(decideQuestion?.question).toContain('Resolve a target by path components')
+    expect(decideQuestion?.detail).toContain('Class: path-boundary')
+    expect(decideQuestion?.detail).toContain(`Revision: ${revisionAtAsk}`)
+    expect(decideQuestion?.detail).toContain('Source: change add-x, task 3.1, 1 finding hash(es)')
+    const decideBody = decideQuestion?.detail?.split('\n').find((line) => line.startsWith('Body: ')) ?? ''
+    expect(decideBody.length).toBeLessThanOrEqual('Body: '.length + 300)
+    expect(decideBody.endsWith('…')).toBe(true)
+    expect(decideQuestion?.options?.map((option) => option.label)).toEqual(['Accept', 'Reject'])
+
+    questions.selected = ['Apply']
+    await executeReviewLesson(
+      { action: 'apply', id, target: 'openspec/specs/a/spec.md' },
+      context(root, questions),
+    )
+    const applyQuestion = questions.calls[1]?.questions[0]
+    expect(applyQuestion?.detail).toContain('Target: openspec/specs/a/spec.md')
+    expect(applyQuestion?.options?.map((option) => option.label)).toEqual(['Apply', 'Cancel'])
+  })
+
+  it('leaves an accepted lesson unchanged when the user cancels apply', async () => {
+    const root = await workspace()
+    const questions = new FakeQuestions()
+    await executeReviewLesson(PROPOSAL, context(root, questions))
+    const id = (await readLessons(root)).lessons[0]?.id ?? ''
+    questions.selected = ['Accept']
+    await executeReviewLesson({ action: 'decide', id, decision: 'accept' }, context(root, questions))
+    const before = await readFile(lessonStorePath(root), 'utf8')
+
+    questions.selected = ['Cancel']
+    const result = await executeReviewLesson(
+      { action: 'apply', id, target: 'openspec/specs/a/spec.md' },
+      context(root, questions),
+    )
+    expect(result).toContain('unchanged')
+    expect(result).toContain('did not confirm the target')
+    expect(await readFile(lessonStorePath(root), 'utf8')).toBe(before)
+    expect((await readLessons(root)).lessons[0]?.status).toBe('accepted')
+  })
+
+  it('bounds the question even when persisted source fields are oversized', async () => {
+    const root = await workspace()
+    const huge = 'z'.repeat(100_000)
+    await mkdir(dirname(lessonStorePath(root)), { recursive: true })
+    await writeFile(
+      lessonStorePath(root),
+      `${JSON.stringify({
+        v: 1,
+        id: 'lesson-0000000000000001',
+        class: 'other',
+        title: 'Oversized source lesson',
+        body: 'Short body.',
+        appliesTo: { rules: [], capabilities: [] },
+        status: 'proposed',
+        source: { change: huge, taskId: huge },
+        createdAt: 1_000,
+      })}\n`,
+      'utf8',
+    )
+    const questions = new FakeQuestions()
+    questions.selected = ['Accept']
+    await executeReviewLesson(
+      { action: 'decide', id: 'lesson-0000000000000001', decision: 'accept' },
+      context(root, questions),
+    )
+    const question = questions.calls[0]?.questions[0]
+    expect(question?.detail?.length).toBeLessThanOrEqual(1_000)
+    expect(question?.detail).toContain('Class: other')
   })
 
   it('leaves the lesson unchanged on a cancelled or mismatched answer', async () => {

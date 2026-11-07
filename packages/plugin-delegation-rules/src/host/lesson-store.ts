@@ -171,11 +171,11 @@ function parseLesson(value: unknown): Lesson | undefined {
   const source: LessonSource = {}
   if (value.source.change !== undefined) {
     if (typeof value.source.change !== 'string') return undefined
-    source.change = value.source.change
+    source.change = clip(value.source.change, 120)
   }
   if (value.source.taskId !== undefined) {
     if (typeof value.source.taskId !== 'string') return undefined
-    source.taskId = value.source.taskId
+    source.taskId = clip(value.source.taskId, 32)
   }
   if (value.source.findingHashes !== undefined) {
     if (
@@ -185,6 +185,8 @@ function parseLesson(value: unknown): Lesson | undefined {
       return undefined
     }
     source.findingHashes = value.source.findingHashes
+      .slice(0, MAX_SOURCE_HASHES)
+      .map((hash) => clip(hash, 120))
   }
   return {
     v: 1,
