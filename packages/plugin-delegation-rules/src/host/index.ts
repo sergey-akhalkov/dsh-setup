@@ -1652,15 +1652,7 @@ function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
     .replace(/(["'=(])\/[^\s"'`)]+/g, '$1[path]')
     .replace(/\bauthorization["']?\s*[=:]\s*["']?[^\s"',;}]+(?:\s+[^\s"',;}]+)?["']?/gi, '[secret]')
     .replace(
-      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|passphrase|x-api-key|cookie|set-cookie)["']?\s*[=:]\s*"(?:[^"\\]|\\.)*"/gi,
-      '[secret]',
-    )
-    .replace(
-      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|passphrase|x-api-key|cookie|set-cookie)["']?\s*[=:]\s*'(?:[^'\\]|\\.)*'/gi,
-      '[secret]',
-    )
-    .replace(
-      /\b(?:api[_-]?key|apikey|token|password|passwd|secret|client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|passphrase|x-api-key|cookie|set-cookie)["']?\s*[=:]\s*[^\s"',;}]+/gi,
+      /\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*["']?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"',;}]+)/gi,
       '[secret]',
     )
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
