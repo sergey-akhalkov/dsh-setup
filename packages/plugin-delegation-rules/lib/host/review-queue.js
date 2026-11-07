@@ -489,8 +489,8 @@ export class ReviewQueue {
             entry.failureClass = failure.failureClass;
             if (this.limits.enabled && failure.transient && entry.attempts < this.limits.maxAttempts) {
                 // A slow start can consume the wait timer and then fail after the
-                // acceptance deadline; a never-started run must not begin retrying.
-                if (this.hooks.now().getTime() >= entry.waitDeadlineMs) {
+                // acceptance deadline; only a never-admitted run must not retry.
+                if (!entry.admitted && this.hooks.now().getTime() >= entry.waitDeadlineMs) {
                     await this.settleWaitTimeout(entry);
                     return;
                 }

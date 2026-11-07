@@ -2186,4 +2186,65 @@ describe('review retry-after and run retries', () => {
       vi.restoreAllMocks()
     }
   })
+  it('keeps retrying after the admission deadline when an admitted retry start fails', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      let responderCalls = 0
+      subagents.addProvider('codex-subagent', {}, (run) => {
+        responderCalls += 1
+        if (responderCalls === 1) {
+          return {
+            output: [],
+            stopReason: 'error' as const,
+            diagnostic: 'subagent limit reached (active child limit: 8)',
+          }
+        }
+        return passResponder(run)
+      })
+      const original = subagents.startActivation.bind(subagents)
+      let startCalls = 0
+      subagents.startActivation = async (spec) => {
+        startCalls += 1
+        if (startCalls === 2) {
+          throw new Error('subagent limit reached (active child limit: 8)')
+        }
+        return original(spec)
+      }
+      let clock = new Date('2026-01-01T00:00:00.000Z')
+      const harness = new Harness({
+        cwd: root,
+        config: {
+          ...defaultTestConfig(),
+          reviewQueue: {
+            concurrency: 1,
+            maxAttempts: 3,
+            baseDelayMs: 10,
+            maxDelayMs: 20,
+            waitTimeoutMs: 100,
+          },
+        },
+        agents: subagents,
+        now: () => clock,
+      })
+      const runId = await harness.startReview({ rule: 'spec-review', change: 'change-a' })
+      await flush()
+      clock = new Date(clock.getTime() + 150)
+      await vi.advanceTimersByTimeAsync(10)
+      await flush()
+      await vi.advanceTimersByTimeAsync(20)
+      await flush()
+      expect(await harness.waitForRun(runId)).toContain('state=completed')
+      expect(startCalls).toBe(3)
+      expect(responderCalls).toBe(2)
+      expect((await readRun(root, runId)).attempts).toBe(3)
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
 })
