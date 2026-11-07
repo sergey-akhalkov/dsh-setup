@@ -503,6 +503,14 @@ function hashParts(parts) {
     }
     return hash.digest('hex');
 }
+/** Stable hash of the source input set a queued review re-checks before start. */
+function signatureHash(signature) {
+    const entries = [...signature.entries].sort(([left], [right]) => left.localeCompare(right));
+    return hashParts([
+        'queue-signature-v1',
+        ...entries.map(([path, value]) => `${path}\u0000${value}`),
+    ]);
+}
 async function readTasks(changeDir) {
     return parseTasksText(await readFile(join(changeDir, 'tasks.md'), 'utf8'));
 }
@@ -2675,6 +2683,9 @@ class DelegationEngine {
             this.runs.delete(run.file.id);
             return this.runHandleText(admission.run, 'duplicate');
         }
+        if (admission.kind === 'accepted' && admission.phase !== 'running') {
+            run.waitedInQueue = true;
+        }
         if (admission.kind === 'full') {
             const error = new DelegationError(`review queue full: ${admission.depth} waiting run(s) at maxQueued=${admission.maxQueued}; let the current reviews settle, then start this review again`);
             await this.failRun(run, error, run.prepared, 'queue-full');
@@ -2728,11 +2739,25 @@ class DelegationEngine {
     }
     /** Start one admitted target; the queue owns the slot and settlement. */
     async startPreparedReview(run) {
-        const prepared = run.prepared;
+        let prepared = run.prepared;
         if (prepared === undefined) {
             fail(`run ${run.file.id} reached the queue without a prepared review; start the review again`);
         }
         if (run.baselineCaptured !== true) {
+            // Only a run that actually waited re-checks its inputs; a direct start
+            // keeps the prepared signature it captured before hashing.
+            if (run.waitedInQueue === true &&
+                run.reprepared !== true &&
+                (await this.queuedInputsChanged(run))) {
+                await this.reprepareQueuedRun(run);
+                // A collision settled this run as the duplicate; its successor proceeds.
+                if (run.file.state === 'discarded' || run.file.state === 'failed')
+                    return;
+                prepared = run.prepared;
+                if (prepared === undefined) {
+                    fail(`run ${run.file.id} lost its prepared review after re-preparation`);
+                }
+            }
             // Start-eligible means the record's predecessor has settled: snapshot the
             // authoritative record now, but never again before a retry.
             const current = await inspectRecord(run.recordPath);
@@ -2752,6 +2777,32 @@ class DelegationEngine {
             ? 'live worktree'
             : `snapshot ${prepared.snapshotTree.slice(0, 8)}`));
         void this.completeReviewRun(run, started, prepared);
+    }
+    /** Whether the live source inputs moved since this run was prepared. */
+    async queuedInputsChanged(run) {
+        const prepared = run.prepared;
+        if (prepared === undefined)
+            return false;
+        const current = await reviewedInputs(run.context.cwd, run.context.rule, run.context.change, this.services, run.context.signal);
+        return signatureHash(current) !== prepared.queueSignature;
+    }
+    /**
+     * Rebuild the digest/snapshot for a queued run whose inputs moved. The
+     * identity is replaced atomically; a collision settles this run as the
+     * duplicate and the incumbent proceeds.
+     */
+    async reprepareQueuedRun(run) {
+        await this.discardSnapshot(run);
+        const next = await this.prepareReview(run);
+        run.prepared = next;
+        const identity = `${run.workspaceRoot}\u0000${reviewIdentity(run.context.rule, run.context.change.name, run.context.task, next.digest, reviewerLabel(this.target(run.context.rule)))}`;
+        const replaced = await this.queue.replaceIdentity(run, identity);
+        if (!replaced.replaced) {
+            await this.discardSnapshot(run);
+            return;
+        }
+        run.reprepared = true;
+        await this.markRun(run, 'starting', this.withFallbackDetail(next, 're-prepared while queued'));
     }
     async prepareReview(run) {
         const { rule, change, cwd, signal } = run.context;
@@ -2773,6 +2824,9 @@ class DelegationEngine {
                 if (!frozen.checked) {
                     fail(`task "${frozen.number} ${frozen.text}" is not checked in the frozen snapshot of change "${change.name}"; re-run the review`);
                 }
+                // The source set is tracked even for a frozen snapshot so a queued run
+                // can re-prepare when the live inputs moved while it waited.
+                const queueInputs = await reviewedInputs(cwd, rule, change, this.services, signal);
                 return {
                     digest: hashParts([
                         'task-review-v2',
@@ -2783,6 +2837,7 @@ class DelegationEngine {
                     ]),
                     worktreeDigest: hashParts(['task-review-snapshot-v1', snapshot.tree]),
                     path,
+                    queueSignature: signatureHash(queueInputs),
                     reviewCwd: snapshot.worktree,
                     snapshotTree: snapshot.tree,
                 };
@@ -2802,6 +2857,7 @@ class DelegationEngine {
                 worktreeDigest: worktree,
                 path,
                 signature,
+                queueSignature: signatureHash(signature),
                 fallbackReason,
             };
         }
@@ -2822,6 +2878,7 @@ class DelegationEngine {
             ...(worktree === undefined ? {} : { worktreeDigest: worktree }),
             path,
             signature,
+            queueSignature: signatureHash(signature),
         };
     }
     /** Background completion: verdict + mutation guard + authoritative publish. */

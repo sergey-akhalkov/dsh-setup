@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { specDigest } from '../src/host/index.js'
 import { type QueueRun, ReviewQueue } from '../src/host/review-queue.js'
 import {
   type BundleConfigLike,
@@ -697,6 +698,134 @@ describe('review queue admission', () => {
     expect(second.runId).toBe(successorRun)
     expect(second.digest).not.toBe(first.digest)
     expect(second.verdict).toBe('PASS')
+  })
+
+  it('re-prepares a queued run when its reviewed inputs change', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(
+      root,
+      { ...defaultTestConfig(), reviewQueue: { concurrency: 1 } },
+      subagents,
+    )
+
+    const holder = await harness.startReview({ rule: 'spec-review', change: 'change-b' })
+    const queued = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const queuedRun = runIdFrom(queued)
+    expect(queued).toContain('review queued')
+
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
+      '# Proposal\n\nChanged while queued.\n',
+      'utf8',
+    )
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(holder)).toContain('state=completed')
+    await subagents.waitForStarts(2)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(queuedRun)).toContain('state=completed')
+
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { digest: string; verdict: string }
+    expect(record.verdict).toBe('PASS')
+    expect(record.digest).toBe(await specDigest(join(root, 'openspec', 'changes', 'change-a')))
+  })
+
+  it('settles a re-preparing queued head discarded when a successor holds the new identity', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(
+      root,
+      { ...defaultTestConfig(), reviewQueue: { concurrency: 1 } },
+      subagents,
+    )
+
+    const holder = await harness.startReview({ rule: 'spec-review', change: 'change-b' })
+    const predecessor = await harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-a',
+    })
+    const predecessorRun = runIdFrom(predecessor)
+    expect(predecessor).toContain('review queued')
+
+    await writeFile(
+      join(root, 'openspec', 'changes', 'change-a', 'proposal.md'),
+      '# Proposal\n\nNew digest.\n',
+      'utf8',
+    )
+    const successor = await harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-a',
+    })
+    const successorRun = runIdFrom(successor)
+    expect(successorRun).not.toBe(predecessorRun)
+    expect(successor).toContain('review queued')
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(holder)).toContain('state=completed')
+    expect(await harness.waitForRun(predecessorRun)).toContain('state=discarded')
+    const predecessorFile = await readRun(root, predecessorRun)
+    expect(String(predecessorFile.detail)).toContain(`duplicate of run ${successorRun}`)
+
+    await subagents.waitForStarts(2)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(successorRun)).toContain('state=completed')
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { digest: string; runId: string }
+    expect(record.runId).toBe(successorRun)
+    const startedForDigest = subagents.runs.filter((run) => run.prompt.includes(record.digest))
+    expect(startedForDigest).toHaveLength(1)
+  })
+
+  it('starts an unchanged queued run without a re-preparation', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(
+      root,
+      { ...defaultTestConfig(), reviewQueue: { concurrency: 1 } },
+      subagents,
+    )
+
+    const holder = await harness.startReview({ rule: 'spec-review', change: 'change-b' })
+    const queued = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    const queuedRun = runIdFrom(queued)
+    expect(queued).toContain('review queued')
+
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(holder)).toContain('state=completed')
+    await subagents.waitForStarts(2)
+    pending.releases.shift()?.()
+    expect(await harness.waitForRun(queuedRun)).toContain('state=completed')
+
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { digest: string }
+    expect(record.digest).toBe(await specDigest(join(root, 'openspec', 'changes', 'change-a')))
+    expect(subagents.startCalls).toBe(2)
   })
 })
 
