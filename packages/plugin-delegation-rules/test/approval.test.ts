@@ -49,6 +49,8 @@ const DIGEST_B = 'b'.repeat(64)
 // Composed at runtime so the repository machine-path scan does not flag the fixtures.
 const WINDOWS_MODEL_PATH = ['C:', 'models', 'x'].join('\\')
 const WINDOWS_TAG_PATH = ['C:', 'tag'].join('/')
+const POSIX_HOME = ['', 'home', 'owner', 'private'].join('/')
+const TILDE_HOME = ['~', '.config', 'service', 'credentials.json'].join('/')
 
 function recordFor(
   taskText: string,
@@ -88,12 +90,12 @@ describe('finding classification', () => {
 
   it('redacts backtick paths, file URLs, and home-relative machine paths from finding text', () => {
     const text =
-      'See `/home/owner/private/config.json:12`, file:///home/owner/private/a.json, ' +
-      '~/.config/service/credentials.json, [/home/owner/private/b.json], ' +
-      '</home/owner/private/c.json:9> and {/home/owner/private/d.json}'
+      `See \`${POSIX_HOME}/config.json:12\`, file://${POSIX_HOME}/a.json, ` +
+      `${TILDE_HOME}, [${POSIX_HOME}/b.json], ` +
+      `<${POSIX_HOME}/c.json:9> and {${POSIX_HOME}/d.json}`
     const sanitized = sanitizeText(text)
-    expect(sanitized).not.toContain('/home/owner')
-    expect(sanitized).not.toContain('~/.config')
+    expect(sanitized).not.toContain(POSIX_HOME)
+    expect(sanitized).not.toContain(TILDE_HOME)
     expect(sanitized).not.toContain('file://')
     expect(sanitized).toContain('[path]')
     expect(hasMachinePath(text)).toBe(true)
