@@ -219,9 +219,42 @@ describe('review queue admission', () => {
     expect(record.verdict).toBe('ERROR')
     expect(record.error).toContain('review queue wait timed out')
     expect(record.error).toContain('no target started')
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toMatch(new RegExp(`run ${timedRun}: .*state=failed`))
 
     pending.releases.shift()?.()
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
+  })
+
+  it('returns a running handle for a free slot and a positioned queued handle otherwise', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    await writeChange(root, 'change-b', [])
+    const subagents = new FakeSubagents()
+    const pending = deferred()
+    subagents.addProvider('codex-subagent', {}, pending.responder)
+    const harness = await harnessFor(
+      root,
+      { ...defaultTestConfig(), reviewQueue: { concurrency: 1 } },
+      subagents,
+    )
+
+    const running = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' })
+    expect(running).toContain('review started')
+    expect(running).toContain('state: running')
+    expect(running).toMatch(/^run: \S+$/m)
+    expect(running).toContain('record: .dsh/delegation/spec-review/change-a/spec.json')
+
+    const queued = await harness.toolText('delegate', { rule: 'spec-review', change: 'change-b' })
+    expect(queued).toContain('review queued')
+    expect(queued).toContain('state: queued')
+    expect(queued).toMatch(/^queue position: 1$/m)
+
+    pending.releases.shift()?.()
+    await harness.waitForRun(runIdFrom(running))
+    await subagents.waitForStarts(2)
+    pending.releases.shift()?.()
+    await harness.waitForRun(runIdFrom(queued))
   })
 
   it('does not serialize independent admissions behind a pending target start', async () => {
