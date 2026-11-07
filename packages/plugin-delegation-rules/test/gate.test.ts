@@ -146,6 +146,57 @@ describe('strict whole-spec gate', () => {
     expect(steerTexts(harness.agent)).toHaveLength(1)
   })
 
+  it('reads approval from the record, not the run status', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', [])
+    const subagents = registered()
+    const harness = harnessFor(root, specOnly(), subagents)
+    await harness.preStep(1)
+    await harness.writeResult(
+      join(dir, 'proposal.md'),
+      '# Proposal\n\nWhy.\n',
+      '# Proposal\n\nChanged.\n',
+    )
+    const runId = runIdFrom(
+      await harness.toolText('delegate', { rule: 'spec-review', change: 'change-a' }),
+    )
+    expect(await harness.waitForRun(runId)).toContain('state=completed')
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+
+    const runPath = join(root, '.dsh', 'delegation', 'runs', `${runId}.json`)
+    const run = JSON.parse(await readFile(runPath, 'utf8')) as { state: string }
+    run.state = 'interrupted'
+    await writeFile(runPath, JSON.stringify(run), 'utf8')
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+
+    // A completed run status without a record does not approve a new change.
+    const other = await writeChange(root, 'change-b', [])
+    await harness.preStep(2)
+    await harness.writeResult(
+      join(other, 'proposal.md'),
+      '# Proposal\n\nWhy.\n',
+      '# Proposal\n\nChanged.\n',
+    )
+    await writeFile(
+      join(root, '.dsh', 'delegation', 'runs', 'run-completed.json'),
+      JSON.stringify({
+        id: 'run-completed',
+        rule: 'spec-review',
+        change: 'change-b',
+        key: 'k-b',
+        identity: 'i-b',
+        state: 'completed',
+        record: '.dsh/delegation/spec-review/change-b/spec.json',
+        startedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    await harness.turnStopping(2)
+    expect(steerTexts(harness.agent).length).toBeGreaterThan(0)
+  })
+
   it('accepts a matching ERROR record with the failure visible', async () => {
     const root = await workspace()
     const dir = await writeChange(root, 'change-a', [])

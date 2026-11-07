@@ -1732,6 +1732,17 @@ function isActiveRunState(state) {
 function isRunTimestamp(value) {
     return typeof value === 'string' && RUN_TIMESTAMP.test(value);
 }
+/** A normalized workspace-relative record path; nested session roots are valid. */
+function isSafeRecordPath(value) {
+    if (value === '' || value.startsWith('/') || /^[A-Za-z]:/.test(value) || value.includes('\\')) {
+        return false;
+    }
+    const segments = value.split('/');
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+        return false;
+    }
+    return segments.includes('.dsh') && segments.includes('delegation');
+}
 function parseRunFile(value) {
     if (!isRecord(value))
         return undefined;
@@ -1743,9 +1754,7 @@ function parseRunFile(value) {
         typeof value.identity !== 'string' ||
         !isRunState(value.state) ||
         typeof value.record !== 'string' ||
-        !value.record.startsWith('.dsh/delegation/') ||
-        value.record.includes('..') ||
-        value.record.includes('\\') ||
+        !isSafeRecordPath(value.record) ||
         typeof value.startedAt !== 'string') {
         return undefined;
     }
@@ -3516,8 +3525,15 @@ class DelegationEngine {
                 run.detail = `recovered from the published ${current.record.verdict} record`;
             }
             else if (current.kind === 'record') {
-                run.state = 'discarded';
-                run.detail = 'recovered: a newer review run holds the record';
+                // A record older than this run means the run is a rerun that crashed
+                // before publishing; only a newer publication supersedes it.
+                const publishedAt = Date.parse(current.record.time);
+                const startedAt = Date.parse(run.startedAt);
+                const superseded = Number.isFinite(publishedAt) && Number.isFinite(startedAt) && publishedAt >= startedAt;
+                run.state = superseded ? 'discarded' : 'interrupted';
+                run.detail = superseded
+                    ? 'recovered: a newer review run holds the record'
+                    : 'recovered after restart without an authoritative record; run a fresh review';
             }
             else {
                 run.state = 'interrupted';

@@ -4303,6 +4303,31 @@ describe('restart recovery', () => {
       ),
       'utf8',
     )
+    await writeFile(
+      join(runsDir, 'run-nested.json'),
+      JSON.stringify(
+        runFile(
+          'run-nested',
+          'change-e',
+          'running',
+          'packages/app/.dsh/delegation/spec-review/change-e/spec.json',
+        ),
+      ),
+      'utf8',
+    )
+    await writeFile(
+      join(runsDir, 'run-rerun.json'),
+      JSON.stringify({
+        ...runFile(
+          'run-rerun',
+          'change-a',
+          'running',
+          '.dsh/delegation/spec-review/change-a/spec.json',
+        ),
+        startedAt: '2099-01-01T00:00:00.000Z',
+      }),
+      'utf8',
+    )
 
     const fresh = new Harness({
       cwd: root,
@@ -4317,5 +4342,7 @@ describe('restart recovery', () => {
     }
     expect(status).toMatch(/run run-no-record: .*state=interrupted/)
     expect(status).toMatch(/run run-bad-record: .*state=interrupted/)
+    expect(status).toMatch(/run run-nested: .*state=interrupted/)
+    expect(status).toMatch(/run run-rerun: .*state=interrupted/)
   })
 })
