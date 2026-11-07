@@ -183,9 +183,9 @@ export function apply(ctx) {
     const record = (workspace, input, event) => {
         const health = healthFor(workspace);
         activeSession.set(workspace, input.session);
-        const sessionSeen = seen.get(input.session) ?? new Set();
+        const sessionSeen = seen.get(input.session) ?? new Map();
         seen.set(input.session, sessionSeen);
-        const records = evaluateEvent(triggers, event, sessionSeen);
+        const records = evaluateEvent(triggers, event, sessionSeen, true, input.at);
         const { record: bounded } = journal.record({
             ...input,
             ...(records.length === 0 ? {} : { triggers: records }),

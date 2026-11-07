@@ -113,14 +113,18 @@ describe('shadow trigger evaluation', () => {
       change: 'modified',
       hash: 'abc',
     })
-    const seen = new Set<string>()
-    const first = evaluateEvent(triggers, observed, seen)
+    const seen = new Map<string, number>()
+    const first = evaluateEvent(triggers, observed, seen, true, 1000)
     expect(first).toHaveLength(1)
     expect(first[0]?.matched).toBe(true)
     expect(first[0]?.reason).toBe('would-fire')
-    const second = evaluateEvent(triggers, observed, seen)
+    const second = evaluateEvent(triggers, observed, seen, true, 1100)
     expect(second[0]?.matched).toBe(false)
     expect(second[0]?.reason).toBe('dedupe')
+    const changed = evaluateEvent(triggers, { ...observed, hash: 'def' }, seen, true, 1200)
+    expect(changed[0]?.reason).toBe('would-fire')
+    const restored = evaluateEvent(triggers, observed, seen, true, 1600)
+    expect(restored[0]?.reason).toBe('would-fire')
   })
 
   it('contains an internal evaluation error', () => {

@@ -43,9 +43,12 @@ export interface EvaluatedTrigger {
     readonly filter?: string;
     readonly detail?: string;
 }
+/** The de-duplication window; a distinct change after it fires again. */
+export declare const DEDUPE_WINDOW_MS = 250;
 /**
- * Evaluate the whole catalog for one event. Keys are added to `seen` after the
- * evaluation, so a second identical event reports `dedupe` and no action runs.
+ * Evaluate the whole catalog for one event. Keys are added to `seen` with their
+ * evaluation time; a second identical event inside the window reports `dedupe`,
+ * while the same content observed after the window is a new change.
  */
-export declare function evaluateEvent(triggers: readonly Trigger[], event: ObservedEvent, seen: Set<string>, ready?: boolean): EvaluatedTrigger[];
+export declare function evaluateEvent(triggers: readonly Trigger[], event: ObservedEvent, seen: Map<string, number>, ready?: boolean, now?: number, windowMs?: number): EvaluatedTrigger[];
 export declare function evaluate(trigger: Trigger, event: ObservedEvent, context: EvaluationContext): Evaluation;

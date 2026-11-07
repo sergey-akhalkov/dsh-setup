@@ -154,7 +154,7 @@ export function apply(ctx: Context): void {
   /** Latest turn per session, so a tool result belongs to a turn. */
   const turns = new Map<string, number>()
   /** De-duplication identities already evaluated for one session. */
-  const seen = new Map<string, Set<string>>()
+  const seen = new Map<string, Map<string, number>>()
   /** One health writer per workspace, created on its first event. */
   const healths = new Map<string, WorkflowHealth>()
   let pluginDisposed = false
@@ -239,9 +239,9 @@ export function apply(ctx: Context): void {
   const record = (workspace: string, input: JournalInput, event: ObservedEvent): void => {
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
-    const sessionSeen = seen.get(input.session) ?? new Set<string>()
+    const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
-    const records = evaluateEvent(triggers, event, sessionSeen)
+    const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
     const { record: bounded } = journal.record({
       ...input,
       ...(records.length === 0 ? {} : { triggers: records }),

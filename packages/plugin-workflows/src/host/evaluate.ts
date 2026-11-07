@@ -125,15 +125,21 @@ export interface EvaluatedTrigger {
   readonly detail?: string
 }
 
+/** The de-duplication window; a distinct change after it fires again. */
+export const DEDUPE_WINDOW_MS = 250
+
 /**
- * Evaluate the whole catalog for one event. Keys are added to `seen` after the
- * evaluation, so a second identical event reports `dedupe` and no action runs.
+ * Evaluate the whole catalog for one event. Keys are added to `seen` with their
+ * evaluation time; a second identical event inside the window reports `dedupe`,
+ * while the same content observed after the window is a new change.
  */
 export function evaluateEvent(
   triggers: readonly Trigger[],
   event: ObservedEvent,
-  seen: Set<string>,
+  seen: Map<string, number>,
   ready = true,
+  now = Date.now(),
+  windowMs = DEDUPE_WINDOW_MS,
 ): EvaluatedTrigger[] {
   const rows: EvaluatedTrigger[] = []
   const keys: string[] = []
@@ -141,7 +147,10 @@ export function evaluateEvent(
     const key = evaluationKey(trigger, event)
     const evaluation = evaluate(trigger, event, {
       ready,
-      isDuplicate: (candidate) => seen.has(candidate),
+      isDuplicate: (candidate) => {
+        const at = seen.get(candidate)
+        return at !== undefined && now - at <= windowMs
+      },
     })
     rows.push({
       id: trigger.id,
@@ -153,7 +162,7 @@ export function evaluateEvent(
     })
     if (key !== undefined) keys.push(key)
   }
-  for (const key of keys) seen.add(key)
+  for (const key of keys) seen.set(key, now)
   return rows
 }
 export function evaluate(
