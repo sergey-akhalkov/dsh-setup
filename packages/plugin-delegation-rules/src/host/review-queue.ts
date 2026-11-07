@@ -305,6 +305,12 @@ export class ReviewQueue<T extends QueueRun> {
     return this.entries.has(runId) && !(this.entries.get(runId)?.finished ?? true)
   }
 
+  /** Whether this queued run still holds the current identity mapping. */
+  ownsIdentity(runId: string, identity: string): boolean {
+    const entry = this.entries.get(runId)
+    return entry !== undefined && !entry.finished && this.identities.get(identity) === entry
+  }
+
   summary(): { enabled: boolean; concurrency: number; active: number; queued: number } {
     return {
       enabled: this.limits.enabled,

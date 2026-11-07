@@ -2914,6 +2914,19 @@ class DelegationEngine {
                 current.kind === 'record' ? JSON.stringify(current.record) : undefined;
             run.baselineCaptured = true;
         }
+        // Never retry into a run whose authoritative record changed while it
+        // waited: the newer publication already decides this review.
+        if (run.baselineCaptured === true) {
+            const current = await inspectRecord(run.recordPath);
+            const fingerprint = current.kind === 'record' ? JSON.stringify(current.record) : undefined;
+            if (current.kind === 'record' &&
+                current.record.runId !== run.file.id &&
+                fingerprint !== run.existingFingerprint) {
+                await this.markRun(run, 'discarded', 'a newer review record was published while this run waited; its completion is discarded');
+                await this.settleReviewRun(run, 'discarded');
+                return;
+            }
+        }
         if (run.waitedInQueue === true && (await this.queuedInputsChanged(run))) {
             if (run.reprepared === true) {
                 // The single re-preparation is spent: a later change must surface as a
@@ -3230,6 +3243,10 @@ class DelegationEngine {
     async publishRecord(run, fields) {
         const release = await acquirePublishLock(run.recordPath);
         try {
+            if (this.queue.owns(run.file.id) &&
+                !this.queue.ownsIdentity(run.file.id, run.file.identity)) {
+                throw new DiscardedRun('this run no longer owns the current review identity; its completion was discarded');
+            }
             const current = await inspectRecord(run.recordPath);
             if (current.kind === 'record' && current.record.runId !== run.file.id) {
                 if (JSON.stringify(current.record) !== run.existingFingerprint) {

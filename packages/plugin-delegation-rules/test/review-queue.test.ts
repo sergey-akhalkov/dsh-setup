@@ -3512,3 +3512,82 @@ describe('background promotion faults', () => {
     queue.dispose()
   })
 })
+
+describe('record integrity', () => {
+  it('tracks the current identity after a replacement', async () => {
+    const hooks = {
+      start: vi.fn(async () => undefined),
+      persist: vi.fn(),
+      fail: vi.fn(async () => undefined),
+      timeout: vi.fn(async () => undefined),
+      settled: vi.fn(),
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    }
+    const queue = new ReviewQueue<QueueRun>(
+      {
+        enabled: true,
+        concurrency: 1,
+        maxQueued: 2,
+        maxAttempts: 3,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        waitTimeoutMs: 300_000,
+      },
+      hooks,
+    )
+    const run = fakeRun('run-a', 'key-a', 'identity-a')
+    expect(await queue.submit(run)).toMatchObject({ phase: 'running' })
+    expect(await queue.replaceIdentity(run, 'identity-a2')).toEqual({ replaced: true })
+    expect(queue.ownsIdentity('run-a', 'identity-a2')).toBe(true)
+    expect(queue.ownsIdentity('run-a', 'identity-a')).toBe(false)
+    await queue.complete(run, 'completed')
+    queue.dispose()
+  })
+
+  it('discards a retry when another run publishes while it waits', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [])
+    const aAgents = new FakeSubagents()
+    let aCalls = 0
+    aAgents.addProvider('codex-subagent', {}, (run) => {
+      aCalls += 1
+      if (aCalls === 1) {
+        return {
+          output: [],
+          stopReason: 'error' as const,
+          diagnostic: 'subagent limit reached (active child limit: 8)',
+        }
+      }
+      return passResponder(run)
+    })
+    const aHarness = await harnessFor(
+      root,
+      {
+        ...defaultTestConfig(),
+        reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 300, maxDelayMs: 300 },
+      },
+      aAgents,
+    )
+    const aRun = await aHarness.startReview({ rule: 'spec-review', change: 'change-a' })
+    await new Promise((resolve) => {
+      realSetTimeout(resolve, 60)
+    })
+
+    const bAgents = new FakeSubagents()
+    bAgents.addProvider('codex-subagent', {}, passResponder)
+    const bHarness = await harnessFor(root, defaultTestConfig(), bAgents)
+    const bRun = await bHarness.startReview({ rule: 'spec-review', change: 'change-a' })
+    expect(await bHarness.waitForRun(bRun)).toContain('state=completed')
+
+    expect(await aHarness.waitForRun(aRun)).toContain('state=discarded')
+    expect(aCalls).toBe(1)
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'spec-review', 'change-a', 'spec.json'),
+        'utf8',
+      ),
+    ) as { runId: string; verdict: string }
+    expect(record.runId).toBe(bRun)
+    expect(record.verdict).toBe('PASS')
+  })
+})

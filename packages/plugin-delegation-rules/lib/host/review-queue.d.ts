@@ -107,6 +107,8 @@ export declare class ReviewQueue<T extends QueueRun> {
     /** Stop every pending timer; the engine calls this when the plugin unloads. */
     dispose(): void;
     owns(runId: string): boolean;
+    /** Whether this queued run still holds the current identity mapping. */
+    ownsIdentity(runId: string, identity: string): boolean;
     summary(): {
         enabled: boolean;
         concurrency: number;
