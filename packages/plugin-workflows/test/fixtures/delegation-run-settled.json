@@ -1,0 +1,11 @@
+{
+  "id": "run-mw6abcde-1234abce",
+  "rule": "task-review",
+  "change": "add-workflow-observability",
+  "taskId": "abc124",
+  "key": "workspace/change/task2",
+  "identity": "kind/change/task2",
+  "state": "completed",
+  "record": ".dsh/delegation/task-review/add-workflow-observability/tasks/abc124.json",
+  "startedAt": "2026-11-07T10:05:00.000Z"
+}
