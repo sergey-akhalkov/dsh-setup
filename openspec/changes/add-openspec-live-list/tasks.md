@@ -14,7 +14,7 @@
       addresses through the existing `changeWatchPaths` and `fileAddress` helpers. Verify a unit test
       shows a row with two delta specs yields the proposal, design, tasks, and two delta addresses, while
       a row missing the field (older host) yields only the three fixed artifacts.
-- [ ] 2.2 Pass `useResource` from `OpenSpecTab` into `RootBody`; retain the last ready row set in a ref
+- [x] 2.2 Pass `useResource` from `OpenSpecTab` into `RootBody`; retain the last ready row set in a ref
       and render a Changes-only observation component as a sibling of the read content — never inside the
       ready branch — that owns `useLiveReload(changes.reload)` plus `useObservation` and one hidden
       `FileWatch` per address of the active rows, with archived rows contributing no address. A list
