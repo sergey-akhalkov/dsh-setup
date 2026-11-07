@@ -3161,7 +3161,7 @@ class DelegationEngine {
         if (run.file.taskId !== undefined)
             lines.push(`task id: ${run.file.taskId}`);
         lines.push(`record: ${run.file.record}`);
-        if (mode === 'queued' && run.file.queuePosition !== undefined) {
+        if (run.file.state === 'queued' && run.file.queuePosition !== undefined) {
             lines.push(`queue position: ${run.file.queuePosition}`);
         }
         if (mode === 'retry-wait') {

@@ -250,6 +250,14 @@ describe('review queue admission', () => {
     expect(queued).toContain('state: queued')
     expect(queued).toMatch(/^queue position: 1$/m)
 
+    const duplicate = await harness.toolText('delegate', {
+      rule: 'spec-review',
+      change: 'change-b',
+    })
+    expect(duplicate).toContain('review already pending')
+    expect(duplicate).toContain('state: queued')
+    expect(duplicate).toMatch(/^queue position: 1$/m)
+
     pending.releases.shift()?.()
     await harness.waitForRun(runIdFrom(running))
     await subagents.waitForStarts(2)
