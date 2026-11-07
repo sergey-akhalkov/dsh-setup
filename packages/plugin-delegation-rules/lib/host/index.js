@@ -3167,6 +3167,7 @@ class DelegationEngine {
                 if (unconfirmed) {
                     // A possibly-still-running child owns its key, slot, and snapshot
                     // until teardown is confirmed, regardless of publication outcome.
+                    let terminal = 'failed';
                     try {
                         await this.publishRecord(run, {
                             digest: prepared.digest,
@@ -3181,6 +3182,8 @@ class DelegationEngine {
                         await this.markRun(run, 'failed', this.withQueueFault(run, this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)) ?? ''));
                     }
                     catch (publishError) {
+                        if (publishError instanceof DiscardedRun)
+                            terminal = 'discarded';
                         try {
                             await this.markRun(run, publishError instanceof DiscardedRun ? 'discarded' : 'failed', this.withFallbackDetail(prepared, sanitizeText(this.withQueueFault(run, errorMessage(publishError)), MAX_ERROR_CHARS)));
                         }
@@ -3190,10 +3193,11 @@ class DelegationEngine {
                     }
                     if (queued) {
                         skipCleanup = true;
+                        outcome = terminal;
                         this.queue.quarantine(run, async () => {
                             await started.activation.dispose();
                             await this.discardSnapshot(run);
-                        });
+                        }, terminal);
                         return;
                     }
                 }

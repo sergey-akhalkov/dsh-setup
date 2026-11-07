@@ -154,7 +154,7 @@ export declare class ReviewQueue<T extends QueueRun> {
      * its child teardown is confirmed. The settlement observer fires once here;
      * `teardown` is retried with backoff and releases the slot on success.
      */
-    quarantine(run: T, teardown: () => Promise<void>): void;
+    quarantine(run: T, teardown: () => Promise<void>, outcome?: SettledRunState): void;
     private confirmTeardown;
     /**
      * Re-enter a transiently failed run after its backoff. The caller has already

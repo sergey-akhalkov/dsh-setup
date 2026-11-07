@@ -3856,3 +3856,88 @@ describe('settlement observer timing', () => {
     }
   })
 })
+
+describe('quarantined timeout supersession', () => {
+  it('notifies discarded when a quarantined attempt is superseded', async () => {
+    const root = await workspace()
+    await writeChange(root, 'change-a', [{ number: '1.1', text: 'Reviewed task', checked: true }])
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'engine.ts'), 'source\n', 'utf8')
+    const baseConfig = {
+      targets: { codex: { provider: 'codex-subagent' } },
+      rules: [
+        {
+          id: 'task-review',
+          when: 'spec-task-ready' as const,
+          to: 'codex',
+          contract: 'review' as const,
+          scope: 'task' as const,
+          gate: 'strict' as const,
+          instruction: 'bundled:review-task',
+        },
+      ],
+      reviewQueue: { concurrency: 1, maxAttempts: 2, baseDelayMs: 50, maxDelayMs: 50 },
+    }
+    const aAgents = new FakeSubagents()
+    aAgents.addProvider('codex-subagent', {}, () => new Promise(() => {}))
+    const originalStart = aAgents.startActivation.bind(aAgents)
+    let disposals = 0
+    aAgents.startActivation = async (spec) => {
+      const activation = await originalStart(spec)
+      return {
+        ...activation,
+        dispose: async () => {
+          disposals += 1
+          if (disposals <= 2) throw new Error('teardown unconfirmed')
+        },
+      }
+    }
+    const aGit = new FakeGit()
+    aGit.files = ['src/engine.ts']
+    const aHarness = await harnessFor(
+      root,
+      { ...baseConfig, timeouts: { review: 150 } },
+      aAgents,
+      aGit,
+    )
+    const task = taskIdFor('Reviewed task')
+    const aRun = await aHarness.startReview({ rule: 'task-review', change: 'change-a', task })
+    await new Promise((resolve) => {
+      realSetTimeout(resolve, 5)
+    })
+
+    const bAgents = new FakeSubagents()
+    bAgents.addProvider('codex-subagent', {}, passResponder)
+    const bGit = new FakeGit()
+    bGit.files = ['src/engine.ts']
+    const bHarness = await harnessFor(root, baseConfig, bAgents, bGit)
+    const bRun = await bHarness.startReview({ rule: 'task-review', change: 'change-a', task })
+    expect(await bHarness.waitForRun(bRun)).toContain('state=completed')
+    const recordPath = join(
+      root,
+      '.dsh',
+      'delegation',
+      'task-review',
+      'change-a',
+      'tasks',
+      `${task}.json`,
+    )
+    const early = JSON.parse(await readFile(recordPath, 'utf8')) as { runId: string }
+    expect(early.runId).toBe(bRun)
+
+    const finalRecord = JSON.parse(await readFile(recordPath, 'utf8')) as { runId: string }
+    expect(finalRecord.runId).toBe(bRun)
+    expect(await aHarness.waitForRun(aRun)).toContain('state=discarded')
+    expect(aHarness.settledRuns.filter((entry) => entry.runId === aRun)).toEqual([
+      { runId: aRun, state: 'discarded' },
+    ])
+    const record = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${task}.json`),
+        'utf8',
+      ),
+    ) as { runId: string; verdict: string }
+    expect(record.runId).toBe(bRun)
+    expect(record.verdict).toBe('PASS')
+  })
+})

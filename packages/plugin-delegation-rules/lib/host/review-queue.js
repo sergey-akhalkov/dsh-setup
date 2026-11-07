@@ -382,7 +382,7 @@ export class ReviewQueue {
      * its child teardown is confirmed. The settlement observer fires once here;
      * `teardown` is retried with backoff and releases the slot on success.
      */
-    quarantine(run, teardown) {
+    quarantine(run, teardown, outcome = 'failed') {
         const entry = this.entries.get(run.file.id);
         if (entry === undefined || entry.finished)
             return;
@@ -401,7 +401,7 @@ export class ReviewQueue {
         this.forgetIdentity(entry);
         // Keep `active` and the key head: followers and fresh same-key runs wait.
         try {
-            this.hooks.settled(entry.run, 'failed');
+            this.hooks.settled(entry.run, outcome);
         }
         catch {
             // The observer is a seam; it must not change quarantine cleanup.
