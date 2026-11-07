@@ -2464,8 +2464,7 @@ async function startTarget(services, request) {
     catch (error) {
         // Classify the untruncated cause; expose only the bounded, redacted text.
         const providerMessage = errorMessage(error);
-        const hint = error.retryAfterMs ??
-            error.retryAfter;
+        const hint = isRecord(error) ? (error.retryAfterMs ?? error.retryAfter) : undefined;
         const retryAfterMs = typeof hint === 'number' && Number.isFinite(hint) && hint > 0 ? Math.round(hint) : undefined;
         throw new ProviderStartError(`rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`, providerMessage, retryAfterMs);
     }

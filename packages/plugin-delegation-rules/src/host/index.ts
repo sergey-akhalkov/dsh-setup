@@ -3183,9 +3183,7 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
   } catch (error) {
     // Classify the untruncated cause; expose only the bounded, redacted text.
     const providerMessage = errorMessage(error)
-    const hint =
-      (error as { retryAfterMs?: unknown }).retryAfterMs ??
-      (error as { retryAfter?: unknown }).retryAfter
+    const hint = isRecord(error) ? (error.retryAfterMs ?? error.retryAfter) : undefined
     const retryAfterMs =
       typeof hint === 'number' && Number.isFinite(hint) && hint > 0 ? Math.round(hint) : undefined
     throw new ProviderStartError(

@@ -2320,4 +2320,43 @@ describe('review retry-after and run retries', () => {
       vi.restoreAllMocks()
     }
   })
+  it('retries a nullish provider start rejection', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(1)
+      const root = await workspace()
+      await writeChange(root, 'change-a', [])
+      const subagents = new FakeSubagents()
+      subagents.addProvider('codex-subagent')
+      const original = subagents.startActivation.bind(subagents)
+      let calls = 0
+      subagents.startActivation = async (spec) => {
+        calls += 1
+        if (calls === 1) throw null
+        return original(spec)
+      }
+      const harness = await harnessFor(
+        root,
+        {
+          ...defaultTestConfig(),
+          reviewQueue: { concurrency: 1, maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 20 },
+        },
+        subagents,
+      )
+      const handle = await harness.toolText('delegate', {
+        rule: 'spec-review',
+        change: 'change-a',
+      })
+      expect(handle).toContain('review retrying')
+      await flush()
+      await vi.advanceTimersByTimeAsync(10)
+      await flush()
+      expect(calls).toBe(2)
+      expect(await harness.waitForRun(runIdFrom(handle))).toContain('state=completed')
+      vi.clearAllTimers()
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+  })
 })
