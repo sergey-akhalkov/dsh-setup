@@ -232,8 +232,7 @@ function parseStored(value: unknown): { run: WorkflowRun; signature: unknown } |
  */
 /** Compare the run's bound workspace with the workspace asking for it. */
 function sameWorkspace(left: string, right: string): boolean {
-  const normalize = (value: string): string =>
-    value.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const normalize = (value: string): string => value.replaceAll('\\', '/').replace(/\/+$/u, '')
   const a = normalize(left)
   const b = normalize(right)
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
