@@ -88,6 +88,46 @@ describe('intake drafts', () => {
       /drafts directory is a link/u,
     )
   })
+
+  it('refuses a link redirecting a draft into openspec/changes', async () => {
+    const workspace = await tempWorkspace()
+    await mkdir(join(workspace, DRAFTS_ROOT), { recursive: true })
+    await symlink(
+      workspace,
+      join(workspace, DRAFTS_ROOT, 'auth'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    await expect(
+      writeDraft(workspace, 'auth', 'openspec/changes/auth/requirements.md', 'x'),
+    ).rejects.toThrow(/link|escapes/u)
+    expect(await readdir(join(workspace, 'openspec')).catch(() => undefined)).toBeUndefined()
+  })
+
+  it('creates nothing outside the workspace before refusing a linked ancestor', async () => {
+    const workspace = await tempWorkspace()
+    const outside = await tempWorkspace()
+    await mkdir(join(workspace, '.dsh'), { recursive: true })
+    await symlink(
+      outside,
+      join(workspace, '.dsh', 'workflows'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    await expect(writeDraft(workspace, 'auth', 'requirements.md', 'x')).rejects.toThrow(/link/u)
+    expect(await readdir(outside)).toEqual([])
+
+    const second = await tempWorkspace()
+    const outsideSecond = await tempWorkspace()
+    await mkdir(join(second, DRAFTS_ROOT), { recursive: true })
+    await symlink(
+      outsideSecond,
+      join(second, DRAFTS_ROOT, 'auth'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    await expect(writeDraft(second, 'auth', 'requirements.md', 'x')).rejects.toThrow(
+      /link|escapes/u,
+    )
+    expect(await readdir(outsideSecond)).toEqual([])
+  })
 })
 
 describe('change-intake engine', () => {
@@ -149,6 +189,7 @@ describe('change-intake engine', () => {
       stepStartedAt: 2_500,
     }
     let delegateCalls = 0
+    const hostShell = process.platform === 'win32' ? 'pwsh' : 'bash'
     let run = newRun(definition, workspace)
 
     const advance = (): ReturnType<typeof advanceIntake> =>
@@ -164,12 +205,12 @@ describe('change-intake engine', () => {
         toolRunner: {
           async call(request) {
             if (request.name === 'delegate') delegateCalls += 1
-            expect(request.name).toBe('shell')
+            expect(request.name).toBe(hostShell)
             const command = String(request.arguments.command ?? '')
             expect(command).toBe('openspec new change auth')
             toolCalls.push({
               callId: request.callId,
-              name: 'shell',
+              name: hostShell,
               arguments: { ...request.arguments },
               ok: true,
             })

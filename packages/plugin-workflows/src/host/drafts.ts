@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
 import { isInside } from './fs-change.js'
 
@@ -41,22 +41,27 @@ export function draftPath(name: string, artifact: string): string {
 /** Resolve the drafts root, refusing a link that leaves the workspace. */
 async function draftsRoot(workspace: string): Promise<{ root: string; directory: string }> {
   const root = await realpath(workspace)
-  const relative = DRAFTS_ROOT
-  const directory = join(root, relative)
-  await mkdir(directory, { recursive: true })
-  const info = await lstat(join(root, '.dsh', 'workflows')).catch(() => undefined)
-  if (info?.isSymbolicLink() === true) {
-    throw new Error('the workflows directory is a link; drafts are refused')
+  let current = root
+  for (const segment of DRAFTS_ROOT.split('/')) {
+    const candidate = join(current, segment)
+    const info = await lstat(candidate).catch(() => undefined)
+    if (info === undefined) {
+      // Create only beneath an already verified parent, one segment at a time.
+      await mkdir(candidate)
+    } else if (info.isSymbolicLink()) {
+      throw new Error(
+        segment === 'drafts'
+          ? 'the drafts directory is a link; drafts are refused'
+          : `the drafts ${segment} directory is a link; drafts are refused`,
+      )
+    }
+    const real = await realpath(candidate).catch(() => undefined)
+    if (real === undefined || !isInside(root, real)) {
+      throw new Error('the drafts directory escapes the workspace; drafts are refused')
+    }
+    current = real
   }
-  const draftsInfo = await lstat(directory).catch(() => undefined)
-  if (draftsInfo?.isSymbolicLink() === true) {
-    throw new Error('the drafts directory is a link; drafts are refused')
-  }
-  const real = await realpath(directory)
-  if (!isInside(root, real)) {
-    throw new Error('the drafts directory escapes the workspace; drafts are refused')
-  }
-  return { root, directory: real }
+  return { root, directory: current }
 }
 
 export interface DraftWrite {
@@ -73,12 +78,28 @@ export async function writeDraft(
 ): Promise<DraftWrite> {
   const relative = draftPath(name, artifact)
   const { root, directory } = await draftsRoot(workspace)
-  const target = join(directory, name, relative.slice(`${DRAFTS_ROOT}/${name}/`.length))
-  await mkdir(dirname(target), { recursive: true })
-  const realParent = await realpath(dirname(target))
-  if (!isInside(root, realParent)) {
-    throw new Error(`the draft path "${relative}" escapes the workspace`)
+  const artifactPath = relative.slice(`${DRAFTS_ROOT}/${name}/`.length)
+  const segments = [name, ...dirname(artifactPath).split('/')]
+  // Walk and create only beneath verified, canonical non-link parents, then
+  // prove the parent stays inside the intended draft directory (a link back
+  // into the workspace must not let a draft create openspec/changes).
+  let current = directory
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue
+    const candidate = join(current, segment)
+    const info = await lstat(candidate).catch(() => undefined)
+    if (info === undefined) {
+      await mkdir(candidate)
+    } else if (info.isSymbolicLink()) {
+      throw new Error(`the draft path "${relative}" uses a link; drafts are refused`)
+    }
+    const real = await realpath(candidate).catch(() => undefined)
+    if (real === undefined || !isInside(root, real) || !isInside(directory, real)) {
+      throw new Error(`the draft path "${relative}" escapes the workspace`)
+    }
+    current = real
   }
+  const target = join(current, basename(artifactPath))
   const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(temporary, content, 'utf8')
   try {
@@ -98,8 +119,12 @@ export async function readDraft(
 ): Promise<string | undefined> {
   const relative = draftPath(name, artifact)
   const root = await realpath(workspace)
+  const directory = await realpath(join(root, draftDirectory(name))).catch(() => undefined)
+  if (directory === undefined) return undefined
   const target = await realpath(join(root, relative)).catch(() => undefined)
-  if (target === undefined || !isInside(root, target)) return undefined
+  if (target === undefined || !isInside(root, target) || !isInside(directory, target)) {
+    return undefined
+  }
   return readFile(target, 'utf8')
 }
 
