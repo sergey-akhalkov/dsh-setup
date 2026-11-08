@@ -999,9 +999,14 @@ export function apply(ctx: Context): void {
         if (agent === undefined) return await next()
         const workspace = workspaceFor(services, agent.session)
         if (workspace === undefined) return await next()
-        await ensureAuth()
-        const auth = storedAuth
-        if (auth === undefined) return await next()
+        let auth = storedAuth
+        if (auth === undefined) {
+          try {
+            auth = await ensureAuth()
+          } catch {
+            auth = undefined
+          }
+        }
         const command = shellCommandOf(exec)
         const create = command === undefined ? undefined : parseOpenspecCommand(command)
         const sessionId = String(agent.session.id)
@@ -1025,6 +1030,7 @@ export function apply(ctx: Context): void {
         const currentMetrics = turnMetrics.get(sessionId)
         const triggerRows: TriggerEvaluationRecord[] = []
         let concurrentIntakeReason: string | undefined
+        let keyUnavailableReason: string | undefined
         let intakeDecision: Awaited<ReturnType<typeof evaluateIntakeGate>> | undefined
         for (const definition of definitions) {
           const applicability =
@@ -1092,6 +1098,16 @@ export function apply(ctx: Context): void {
             // matched (or deduped to an existing intake); a shadow or filtered
             // trigger never creates a run and must not invoke the intake gate.
             if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
+              if (auth === undefined) {
+                triggerRows.push({
+                  ...row,
+                  matched: true,
+                  reason: 'run-suppressed',
+                  detail: 'the host key is unavailable; no run was created',
+                })
+                keyUnavailableReason = `workflows: the host key is unavailable, so the intake run for "${create.name}" was not created; the call was refused`
+                continue
+              }
               const decision = await evaluateIntakeGate({
                 name: create.name,
                 session: sessionId,
@@ -1145,6 +1161,15 @@ export function apply(ctx: Context): void {
               continue
             }
             // A non-intake active definition starts its own observational run.
+            if (auth === undefined) {
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-suppressed',
+                detail: 'the host key is unavailable; no run was created',
+              })
+              continue
+            }
             try {
               const run = await startRunFor(workspace, sessionId, auth, definition)
               if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
@@ -1177,6 +1202,9 @@ export function apply(ctx: Context): void {
         if (concurrentIntakeReason !== undefined) {
           return { kind: 'deny', reason: concurrentIntakeReason }
         }
+        if (keyUnavailableReason !== undefined) {
+          return { kind: 'deny', reason: keyUnavailableReason }
+        }
         if (command !== undefined) {
           const archive = parseArchiveCommand(command)
           if (archive?.kind === 'archive') {
@@ -1194,8 +1222,8 @@ export function apply(ctx: Context): void {
             )
             const decision = evaluateArchiveGate({
               change: archive.change,
-              runs: await listAuthenticatedRuns(workspace, auth),
-              receipts: await listReceipts(workspace, auth),
+              runs: auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth),
+              receipts: auth === undefined ? [] : await listReceipts(workspace, auth),
               specRecord,
             })
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }

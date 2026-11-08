@@ -6,6 +6,7 @@ import {
   FS_CHANGE_DEBOUNCE_MS,
   type FsChangeEvent,
   type FsChangeWatcher,
+  fileEntry,
   isInside,
   startFsChangeWatcher,
 } from '../src/host/fs-change.ts'
@@ -478,4 +479,16 @@ describe('openspec change watcher', () => {
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(events).toEqual([])
   })
+})
+
+it('gives two oversized revisions distinct hashes', async () => {
+  const workspace = await tempWorkspace()
+  const file = join(workspace, 'big.md')
+  await writeFile(file, 'a'.repeat(300 * 1024), 'utf8')
+  const first = await fileEntry(file)
+  await writeFile(file, 'b'.repeat(320 * 1024), 'utf8')
+  const second = await fileEntry(file)
+  expect(first?.hash).toMatch(/^[a-f0-9]{16}$/u)
+  expect(second?.hash).toMatch(/^[a-f0-9]{16}$/u)
+  expect(second?.hash).not.toBe(first?.hash)
 })

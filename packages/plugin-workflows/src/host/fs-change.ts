@@ -108,12 +108,16 @@ async function listEntries(
 }
 
 /** Read one file's identity; oversized files use size and mtime instead of bytes. */
-async function fileEntry(file: string): Promise<SnapshotEntry | undefined> {
+export async function fileEntry(file: string): Promise<SnapshotEntry | undefined> {
   try {
     const info = await stat(file)
     if (!info.isFile()) return undefined
     if (info.size > MAX_HASH_BYTES) {
-      return { sig: `${String(info.size)}:${String(info.mtimeMs)}`, hash: '' }
+      const sig = `${String(info.size)}:${String(info.mtimeMs)}`
+      return {
+        sig,
+        hash: createHash('sha256').update(sig).digest('hex').slice(0, 16),
+      }
     }
     const content = await readFile(file)
     const hash = createHash('sha256').update(content).digest('hex').slice(0, 16)

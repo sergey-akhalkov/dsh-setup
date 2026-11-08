@@ -793,3 +793,48 @@ describe('startup active events', () => {
     expect(runs).toHaveLength(1)
   })
 })
+
+describe('pre-execute without a host key', () => {
+  it('still journals the evaluation and refuses a matching active intake', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = 'not-hex'
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    let nextCalled = false
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'no-key-call',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string; reason?: string } | undefined
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () =>
+      (await readFile(file, 'utf8').catch(() => '')).includes('definition:'),
+    )
+    const rows = (await readFile(file, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { readonly triggers?: Array<Record<string, unknown>> })
+    const intake = rows
+      .flatMap((entry) =>
+        Array.isArray(entry.triggers)
+          ? (entry.triggers as Array<Record<string, unknown>>).filter(
+              (row) => row.id === 'definition:change-intake',
+            )
+          : [],
+      )
+      .find((row) => row.reason === 'run-suppressed')
+    expect(intake).toBeDefined()
+    expect(String(intake?.detail)).toContain('host key is unavailable')
+    expect(nextCalled).toBe(false)
+    expect(decision?.kind).toBe('deny')
+    expect(decision?.reason).toContain('host key is unavailable')
+  })
+})
