@@ -526,7 +526,7 @@ describe('archive gate', () => {
     await mkdir(join(workspace, '.dsh', 'workflows', 'receipts'), { recursive: true })
     await writeFile(
       join(workspace, '.dsh', 'workflows', 'receipts', 'auth.json'),
-      `${JSON.stringify({ v: 1, kind: 'adoption', change: 'auth', digest: DIGEST, issuedAt: 1, signature: 'f'.repeat(64) })}\n`,
+      `${JSON.stringify({ v: 1, kind: 'adoption', change: 'auth', digest: DIGEST, issuedAt: 1, workspaceKey: workspace, signature: 'f'.repeat(64) })}\n`,
       'utf8',
     )
     expect(await listReceipts(workspace, gateAuth())).toEqual([])

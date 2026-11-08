@@ -140,7 +140,7 @@ describe('workflow security', () => {
     await mkdir(join(workspace, '.dsh', 'workflows', 'receipts'), { recursive: true })
     await writeFile(
       receiptPath(workspace, 'auth'),
-      `${JSON.stringify({ v: 1, kind: 'adoption', change: 'auth', digest: 'a'.repeat(64), issuedAt: 1, signature: 'f'.repeat(64) })}\n`,
+      `${JSON.stringify({ v: 1, kind: 'adoption', change: 'auth', digest: 'a'.repeat(64), issuedAt: 1, workspaceKey: workspace, signature: 'f'.repeat(64) })}\n`,
       'utf8',
     )
     expect(await readReceipt(workspace, 'auth', auth())).toBeUndefined()

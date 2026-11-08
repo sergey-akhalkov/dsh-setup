@@ -243,6 +243,7 @@ describe('run store', () => {
       change: 'auth',
       digest: DIGEST,
       issuedAt: 1_000,
+      workspaceKey: workspace,
       signature: 'f'.repeat(64),
     }
     await writeFile(receiptPath(workspace, 'auth'), `${JSON.stringify(forged, null, 2)}\n`, 'utf8')
@@ -255,6 +256,16 @@ describe('run store', () => {
     expect(await readReceipt(workspace, 'auth', auth())).toBeUndefined()
     const valid = await issueAdoptionReceipt(workspace, 'auth', DIGEST, auth(), 2_000)
     expect((await readReceipt(workspace, 'auth', auth()))?.signature).toBe(valid.signature)
+    const stored = JSON.parse(await readFile(receiptPath(workspace, 'auth'), 'utf8')) as Record<
+      string,
+      unknown
+    >
+    await writeFile(
+      receiptPath(workspace, 'auth'),
+      `${JSON.stringify({ ...stored, digest: 'b'.repeat(64) }, null, 2)}\n`,
+      'utf8',
+    )
+    expect(await readReceipt(workspace, 'auth', auth())).toBeUndefined()
   })
 
   it('refuses a receipt for a run that is not a completed change-intake', async () => {
