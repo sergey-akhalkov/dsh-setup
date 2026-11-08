@@ -204,3 +204,22 @@ describe('archive command parser', () => {
     }
   })
 })
+it('accepts ordinary archive and move options', () => {
+  expect(parseArchiveCommand('openspec archive auth --yes')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'openspec',
+  })
+  expect(
+    parseArchiveCommand('git mv -f openspec/changes/auth openspec/changes/archive/auth'),
+  ).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'git',
+  })
+  expect(parseArchiveCommand('mv -f openspec/changes/auth openspec/changes/archive/')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'mv',
+  })
+})
