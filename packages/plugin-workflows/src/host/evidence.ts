@@ -818,6 +818,22 @@ export function collectEvidencePaths(
 }
 
 /** A bounded one-line description of an evidence contract for the steer. */
+function describeArgs(
+  args: Readonly<Record<string, unknown>>,
+  context: EvidenceContext,
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string') {
+      const checked = resolveEvidenceText(value, context, undefined)
+      resolved[key] = checked.ok ? checked.text : value
+    } else {
+      resolved[key] = value
+    }
+  }
+  return resolved
+}
+
 export function describeEvidence(value: Evidence, context: EvidenceContext): string {
   switch (value.kind) {
     case 'file': {
@@ -851,7 +867,7 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
           ? undefined
           : resolveEvidenceText(value.command, context, undefined)
       const args =
-        value.args === undefined ? '' : ` args ${JSON.stringify(value.args).slice(0, 200)}`
+        value.args === undefined ? '' : ` args ${JSON.stringify(describeArgs(value.args, context))}`
       return `completed tool call ${value.name}${command === undefined ? '' : ` "${command.ok ? command.text : value.command}"`}${args}`
     }
     case 'check': {

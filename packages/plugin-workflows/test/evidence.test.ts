@@ -753,3 +753,26 @@ describe('resolved evidence descriptions', () => {
     expect(record).toContain('digest=current')
   })
 })
+
+it('renders tool arguments that the verifier accepts, without truncation', async () => {
+  const context = { workspace: '/workspace', values: { name: 'auth' } }
+  const described = describeEvidence(
+    { kind: 'tool', name: 'shell', args: { change: '{name}' } },
+    context,
+  )
+  expect(described).toContain('"change":"auth"')
+  const verified = await verifyEvidence(
+    { kind: 'tool', name: 'shell', args: { change: '{name}' } },
+    {
+      ...context,
+      toolCalls: [{ callId: 'call-1', name: 'shell', arguments: { change: 'auth' }, ok: true }],
+    },
+  )
+  expect(verified.ok).toBe(true)
+  const long = describeEvidence(
+    { kind: 'tool', name: 'shell', args: { prefix: 'a'.repeat(220), required: 'expected-tail' } },
+    context,
+  )
+  expect(long).toContain('expected-tail')
+  expect(long).toContain('a'.repeat(220))
+})
