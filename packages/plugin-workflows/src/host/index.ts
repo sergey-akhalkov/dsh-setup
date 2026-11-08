@@ -43,7 +43,9 @@ import { listReceipts } from './receipts.js'
 import { cancelRun, recoverRuns, resumeRun } from './resume.js'
 import {
   createRun,
+  DEFAULT_MAX_RUNS,
   listAuthenticatedRuns,
+  openRunCount,
   pruneRuns,
   readAuthenticatedRun,
   runFailure,
@@ -478,6 +480,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workspace: string,
     definition: Definition,
     event: DefinitionEvent,
+    blocked = false,
   ): StartRunOutcome => {
     const auth = storedAuth
     if (auth === undefined) {
@@ -487,6 +490,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         reason: 'the host key is not ready yet; no unsigned run is created',
       }
     }
+    if (blocked) {
+      return {
+        ok: false,
+        reason: `the run limit (${String(DEFAULT_MAX_RUNS)}) is reached; finish or cancel an open run first`,
+      }
+    }
+    reserveStart(workspace)
     try {
       const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event)
       const run = createRun({
@@ -503,6 +513,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return { ok: true, runId: run.id }
     } catch (error) {
       return { ok: false, reason: runFailure(error) }
+    } finally {
+      releaseStart(workspace)
     }
   }
   /** Mark unfinished runs from a previous process interrupted, never completed. */
@@ -634,13 +646,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // A run start is suppressed and journaled if the key cannot load.
       }
     }
+    const knownRuns =
+      storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth)
+    const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns)
     const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
     const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
     const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) =>
       evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
         isDuplicate: (key) => sessionSeen.has(key),
         markKey: (key) => sessionSeen.set(key, input.at),
-        startRun: (definition, matched) => startDefinitionRun(workspace, definition, matched),
+        startRun: (definition, matched) =>
+          startDefinitionRun(workspace, definition, matched, runLimitReached),
         resolveApplicability: (definition) => {
           if (definition.trigger.applicability !== 'checkpoint-required') return undefined
           const current =
@@ -787,6 +803,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
             if (classification !== undefined && intentDefinitions.length > 0) {
               await recoverIfNeeded(activeWorkspace)
+              const intentAuth = storedAuth
+              const intentRuns =
+                intentAuth === undefined
+                  ? []
+                  : await listAuthenticatedRuns(activeWorkspace, intentAuth)
+              const intentFull = intentAuth !== undefined && atRunLimit(activeWorkspace, intentRuns)
               const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
               seen.set(sessionId, sessionSeen)
               const rows = evaluateIntents(intentDefinitions, classification, {
@@ -807,6 +829,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       reason: 'the host key is unavailable; no run was created',
                     }
                   }
+                  if (intentFull) {
+                    return {
+                      ok: false,
+                      reason: `the run limit (${String(DEFAULT_MAX_RUNS)}) is reached; finish or cancel an open run first`,
+                    }
+                  }
+                  reserveStart(activeWorkspace)
                   try {
                     const key = intentDedupeKey(definition, classification, {
                       session: sessionId,
@@ -830,6 +859,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     return { ok: true, runId: run.id }
                   } catch (error) {
                     return { ok: false, reason: runFailure(error) }
+                  } finally {
+                    releaseStart(activeWorkspace)
                   }
                 },
               })
@@ -1069,6 +1100,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   /* ------------------------------------------------------------------ */
 
   const ownedCalls = new OwnedCalls()
+  /** In-flight run starts count against maxRuns until their write settles. */
+  const reservedStarts = new Map<string, number>()
+  const reserveStart = (workspace: string): void => {
+    reservedStarts.set(workspace, (reservedStarts.get(workspace) ?? 0) + 1)
+  }
+  const releaseStart = (workspace: string): void => {
+    const left = (reservedStarts.get(workspace) ?? 1) - 1
+    if (left <= 0) reservedStarts.delete(workspace)
+    else reservedStarts.set(workspace, left)
+  }
+  const atRunLimit = (workspace: string, runs: readonly WorkflowRun[]): boolean =>
+    openRunCount(runs) + (reservedStarts.get(workspace) ?? 0) >= DEFAULT_MAX_RUNS
   /** Dedupe keys whose triggering call has not finished starting its run yet. */
   const inFlightTriggers = new Set<string>()
   let promptRuns: WorkflowRun[] = []
@@ -1111,18 +1154,29 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     context: Readonly<Record<string, unknown>> = {},
     dedupeKey?: string,
   ): Promise<WorkflowRun> => {
-    const run = createRun({
-      definition: definition.id,
-      trigger: definition.trigger.kind,
-      session: sessionId,
-      workspace,
-      context,
-      steps: definition.steps.map((step) => step.id),
-      now: journal.time(),
-      ...(dedupeKey === undefined ? {} : { dedupeKey }),
-    })
-    await writeRun(workspace, run, auth)
-    return run
+    const runs = await listAuthenticatedRuns(workspace, auth)
+    if (atRunLimit(workspace, runs)) {
+      throw new Error(
+        `the run limit (${String(DEFAULT_MAX_RUNS)}) is reached; finish or cancel an open run first`,
+      )
+    }
+    reserveStart(workspace)
+    try {
+      const run = createRun({
+        definition: definition.id,
+        trigger: definition.trigger.kind,
+        session: sessionId,
+        workspace,
+        context,
+        steps: definition.steps.map((step) => step.id),
+        now: journal.time(),
+        ...(dedupeKey === undefined ? {} : { dedupeKey }),
+      })
+      await writeRun(workspace, run, auth)
+      return run
+    } finally {
+      releaseStart(workspace)
+    }
   }
   const seeding = new Map<string, Promise<void>>()
   /** Restore persisted trigger identities after a reload; one shared read per session. */
@@ -1177,6 +1231,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const definitions = await definitionsFor(workspace)
         await recoverIfNeeded(workspace)
         await seedTriggerIdentities(workspace, sessionId).catch(() => undefined)
+        const knownRuns = auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth)
         const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
         seen.set(sessionId, sessionSeen)
         const observed: DefinitionEvent = {
@@ -1196,6 +1251,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const currentMetrics = turnMetrics.get(sessionId)
         const triggerRows: TriggerEvaluationRecord[] = []
         let concurrentIntakeReason: string | undefined
+        let capacityReason: string | undefined
         let keyUnavailableReason: string | undefined
         let intakeDecision: Awaited<ReturnType<typeof evaluateIntakeGate>> | undefined
         for (const definition of definitions) {
@@ -1264,6 +1320,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             // matched (or deduped to an existing intake); a shadow or filtered
             // trigger never creates a run and must not invoke the intake gate.
             if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
+              if (atRunLimit(workspace, knownRuns)) {
+                triggerRows.push({
+                  ...row,
+                  matched: true,
+                  reason: 'run-suppressed',
+                  detail: 'the run limit is reached; no intake run was created',
+                })
+                capacityReason = `workflows: the run limit (${String(DEFAULT_MAX_RUNS)}) is reached, so the intake run for "${create.name}" was not created; the call was refused`
+                continue
+              }
               if (auth === undefined) {
                 triggerRows.push({
                   ...row,
@@ -1280,7 +1346,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 workspace,
                 callId: String(exec.callId),
                 definition,
-                runs: await listAuthenticatedRuns(workspace, auth),
+                runs: knownRuns,
                 receipts: await listReceipts(workspace, auth),
                 ownedCallIds: new Set(ownedCalls.list()),
                 changeExists: await changeDirectoryExists(workspace, create.name),
@@ -1343,6 +1409,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               })
               continue
             }
+            if (atRunLimit(workspace, knownRuns)) {
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-suppressed',
+                detail: 'the run limit is reached; no run was created',
+              })
+              continue
+            }
             try {
               const run = await startRunFor(workspace, sessionId, auth, definition, {}, dedupeKey)
               if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
@@ -1377,6 +1452,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         if (keyUnavailableReason !== undefined) {
           return { kind: 'deny', reason: keyUnavailableReason }
+        }
+        if (capacityReason !== undefined) {
+          return { kind: 'deny', reason: capacityReason }
         }
         if (command !== undefined) {
           const archive = parseArchiveCommand(command)
@@ -1459,6 +1537,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             onError: (error) => publishListenerError(workspace, error),
           })
           if (outcome.run !== run) await writeRun(workspace, outcome.run, auth)
+          // One main-step owner per session per turn: steering a second run
+          // would interleave two obligations.
+          if (outcome.kind !== 'allow') break
         }
       } catch (error) {
         publishListenerError(workspaceFor(services, payload.agent.session), error)

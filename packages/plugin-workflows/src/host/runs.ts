@@ -582,10 +582,20 @@ export function boundContext(
   maxBytes = MAX_CONTEXT_BYTES,
 ): Readonly<Record<string, unknown>> {
   const text = JSON.stringify(context)
-  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return context
-  return {
-    truncated: true,
-    bytes: Buffer.byteLength(text, 'utf8'),
-    keys: Object.keys(context).slice(0, 20),
+  const bytes = Buffer.byteLength(text, 'utf8')
+  if (bytes <= maxBytes) return context
+  const candidate: Record<string, unknown> = { truncated: true, bytes }
+  const keys: string[] = []
+  for (const key of Object.keys(context).slice(0, 20)) {
+    if (keys.length >= 20) break
+    const name = key.slice(0, 32)
+    const next = { ...candidate, keys: [...keys, name] }
+    if (Buffer.byteLength(JSON.stringify(next), 'utf8') > maxBytes) break
+    keys.push(name)
+    candidate.keys = keys
   }
+  if (Buffer.byteLength(JSON.stringify(candidate), 'utf8') > maxBytes) {
+    return { truncated: true }
+  }
+  return candidate
 }

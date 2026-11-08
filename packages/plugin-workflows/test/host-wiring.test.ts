@@ -35,14 +35,18 @@ function fakeHost(workspace: string): {
   readonly ctx: Record<string, unknown>
   readonly agent: Record<string, unknown>
   readonly commands: Array<Record<string, unknown>>
+  readonly steers: readonly unknown[]
   emit(name: string, ...args: unknown[]): Promise<unknown>
 } {
   const listeners = new Map<string, Listener[]>()
+  const steers: unknown[] = []
   const agent = {
     id: 'session-1',
     session: { id: 'session-1', header: { origin: 'root' as const } },
     ctx: { on: () => () => {} },
-    steer: () => {},
+    steer: (message: unknown) => {
+      steers.push(message)
+    },
     inject: () => {},
   }
   const commands: Array<Record<string, unknown>> = []
@@ -90,6 +94,7 @@ function fakeHost(workspace: string): {
     ctx,
     agent,
     commands,
+    steers,
     async emit(name, ...args): Promise<unknown> {
       let result: unknown
       for (const listener of listeners.get(name) ?? []) result = await listener(...args)
@@ -1221,5 +1226,122 @@ describe('recovery and resume ordering', () => {
     })
     const resumed = await runs.readAuthenticatedRun(workspace, 'run-blocked-0', auth)
     expect(resumed?.status).toBe('running')
+  })
+})
+
+describe('one main step per session', () => {
+  it('steers only the first of two eligible runs in a turn', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    for (const id of ['run-two-a', 'run-two-b']) {
+      const run = runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        steps: ['requirements', 'spec'],
+        id,
+      })
+      await runs.writeRun(workspace, run, auth)
+    }
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(async () => host.steers.length > 0)
+    expect(host.steers).toHaveLength(1)
+  })
+})
+
+describe('run admission at capacity', () => {
+  it('suppresses a new run when open runs reach maxRuns', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'capacity-watch',
+      name: 'Capacity watch',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'callId',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'capacity.json'),
+        `${JSON.stringify(definition, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'capacity.json'), auth)
+    for (let index = 0; index < 20; index += 1) {
+      const run = runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        steps: ['requirements'],
+        id: `run-cap-${String(index)}`,
+      })
+      await runs.writeRun(workspace, run, auth)
+    }
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'tools/pre-execute',
+      { agent: host.agent, callId: 'capacity-call', name: 'read', arguments: {} },
+      async () => ({ kind: 'continue' }),
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      return rows.some(
+        (entry) =>
+          Array.isArray(entry.triggers) &&
+          (entry.triggers as Array<Record<string, unknown>>).some(
+            (row) =>
+              row.id === 'definition:capacity-watch' &&
+              row.reason === 'run-suppressed' &&
+              String(row.detail).includes('run limit'),
+          ),
+      )
+    })
+    const { readdir } = await import('node:fs/promises')
+    const files = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(files).toHaveLength(20)
   })
 })

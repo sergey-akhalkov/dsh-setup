@@ -525,3 +525,11 @@ it('refuses a receipt write through a directory link that leaves the workspace',
   )
   expect(await readdir(external)).toEqual([])
 })
+
+it('keeps a truncated context under the byte cap even for oversized keys', () => {
+  const bounded = boundContext({ ['k'.repeat(10_000)]: 'v' }, 200)
+  expect(bounded.truncated).toBe(true)
+  expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThanOrEqual(200)
+  const multibyte = boundContext({ ['é'.repeat(500)]: 'ü'.repeat(500) }, 200)
+  expect(Buffer.byteLength(JSON.stringify(multibyte), 'utf8')).toBeLessThanOrEqual(200)
+})
