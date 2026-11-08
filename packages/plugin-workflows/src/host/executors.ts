@@ -324,6 +324,19 @@ export function validateJsonLogic(rule: unknown, depth = 0): void {
     case 'missing_some':
       expect(2, 2)
       break
+    case 'substr':
+      expect(2, 3)
+      break
+    case 'map':
+    case 'filter':
+      expect(2, 2)
+      break
+    case 'reduce':
+      expect(2, 3)
+      break
+    case 'merge':
+      expect(1)
+      break
     case 'if':
       expect(2)
       break
@@ -470,6 +483,36 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       if (operator === 'all') return results.length > 0 && results.every(Boolean)
       return !results.some(Boolean)
     }
+    case 'substr': {
+      const text = String(value(args[0]))
+      const start = Number(value(args[1]))
+      return args.length >= 3 ? text.substr(start, Number(value(args[2]))) : text.substr(start)
+    }
+    case 'map': {
+      const collection = value(args[0])
+      return (Array.isArray(collection) ? collection : []).map((entry) =>
+        evaluateJsonLogic(args[1], entry, depth + 1),
+      )
+    }
+    case 'filter': {
+      const collection = value(args[0])
+      return (Array.isArray(collection) ? collection : []).filter((entry) =>
+        truthy(evaluateJsonLogic(args[1], entry, depth + 1)),
+      )
+    }
+    case 'reduce': {
+      const collection = value(args[0])
+      let accumulator: unknown = args.length >= 3 ? value(args[2]) : undefined
+      for (const entry of Array.isArray(collection) ? collection : []) {
+        accumulator = evaluateJsonLogic(args[1], { current: entry, accumulator }, depth + 1)
+      }
+      return accumulator
+    }
+    case 'merge':
+      return args.flatMap((entry) => {
+        const evaluated = value(entry)
+        return Array.isArray(evaluated) ? evaluated : [evaluated]
+      })
     case 'missing_some': {
       const minimum = Number(value(args[0]))
       const collection = value(args[1])

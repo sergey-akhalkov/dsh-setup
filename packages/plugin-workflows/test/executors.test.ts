@@ -803,6 +803,19 @@ describe('loop executor', () => {
       values: { score: '1 invalid' },
     })
     expect(maxStop.run.status).toBe('blocked')
+    const substringStop = runLoopStep({
+      definition: loopDefinition,
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { '==': [{ substr: [{ var: 'context.name' }, 0, 4] }, 'auth'] },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { name: 'auth-flow' },
+    })
+    expect(substringStop.next).toBe('end')
     const invalid = runLoopStep({
       definition: loopDefinition,
       run: loopRun(),
