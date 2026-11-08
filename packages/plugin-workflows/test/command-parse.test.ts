@@ -336,3 +336,10 @@ it('parses destination options and named source parameters for moves', () => {
     ),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
 })
+it('accepts PowerShell switches through the mv alias', () => {
+  expect(parseArchiveCommand('mv -Force openspec/changes/auth openspec/changes/archive/')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'mv',
+  })
+})

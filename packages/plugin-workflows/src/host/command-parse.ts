@@ -224,6 +224,11 @@ export function parseArchiveCommand(
       '--interactive',
       '-u',
       '--update',
+      '-force',
+      '-whatif',
+      '-confirm',
+      '-passthru',
+      '-debug',
     ])
     const positional: string[] = []
     let source: string | undefined
