@@ -552,3 +552,73 @@ describe('pre-execute trigger gates', () => {
     })
   })
 })
+
+describe('concurrent pre-execute evaluation', () => {
+  it('creates one run for two concurrent matching calls with one dedupe key', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'turn-watch',
+      name: 'Turn watch',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'turn',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(join(workspace, 'turn.json'), `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
+    })
+    await installDefinition(workspace, join(workspace, 'turn.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 5,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const call = async (callId: string): Promise<unknown> =>
+      host.emit(
+        'tools/pre-execute',
+        { agent: host.agent, callId, name: 'read', arguments: {} },
+        async () => ({ kind: 'continue' }),
+      )
+    await Promise.all([call('call-a'), call('call-b')])
+    const { readdir } = await import('node:fs/promises')
+    const runs = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(runs).toHaveLength(1)
+  })
+})

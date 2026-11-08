@@ -922,6 +922,8 @@ export function apply(ctx: Context): void {
   /* ------------------------------------------------------------------ */
 
   const ownedCalls = new OwnedCalls()
+  /** Dedupe keys whose triggering call has not finished starting its run yet. */
+  const inFlightTriggers = new Set<string>()
   let promptRuns: WorkflowRun[] = []
   const optionalService = <T>(name: string): T | undefined => {
     try {
@@ -1007,6 +1009,7 @@ export function apply(ctx: Context): void {
         }
         const currentMetrics = turnMetrics.get(sessionId)
         const triggerRows: TriggerEvaluationRecord[] = []
+        let concurrentIntakeReason: string | undefined
         let intakeDecision: Awaited<ReturnType<typeof evaluateIntakeGate>> | undefined
         for (const definition of definitions) {
           const applicability =
@@ -1050,77 +1053,96 @@ export function apply(ctx: Context): void {
             triggerRows.push({ ...row, reason: 'would-fire' })
             continue
           }
-          // An intake call is authorized only after the active trigger matched
-          // (or deduped to an existing intake); a shadow or filtered trigger
-          // never creates a run and must not invoke the intake gate.
-          if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
-            const definitionRef = definition
-            const decision = await evaluateIntakeGate({
-              name: create.name,
-              session: sessionId,
-              workspace,
-              callId: String(exec.callId),
-              definition: definitionRef,
-              runs: await listAuthenticatedRuns(workspace, auth),
-              receipts: await listReceipts(workspace, auth),
-              ownedCallIds: new Set(ownedCalls.list()),
-              changeExists: await changeDirectoryExists(workspace, create.name),
-              startRun: async (entry, name) => {
-                const run = await startRunFor(workspace, sessionId, auth, entry, { name })
-                return { runId: run.id }
-              },
-              resumeRun: async (runId) => {
-                const resumed = await resumeRun(workspace, runId, auth)
-                await writeRun(workspace, resumed.run, auth)
-                return { stepId: resumed.stepId }
-              },
-            })
-            intakeDecision = decision
-            if (decision.kind === 'deny' && decision.action === 'started') {
-              const key = obligationDedupeKey('change-intake', definition.trigger, observed)
-              if (key !== undefined) sessionSeen.set(key, journal.time())
-              triggerRows.push({
-                ...row,
-                matched: true,
-                reason: 'run-created',
-                ...(decision.runId === undefined ? {} : { runId: decision.runId }),
-                detail: decision.reason,
-              })
-            } else if (decision.kind === 'deny') {
-              triggerRows.push({
-                ...row,
-                matched: true,
-                reason: 'run-suppressed',
-                ...(decision.runId === undefined ? {} : { runId: decision.runId }),
-                detail: decision.reason,
-              })
-            } else {
-              triggerRows.push({
-                ...row,
-                matched: true,
-                reason: 'run-suppressed',
-                detail: decision.reason,
-              })
-            }
-            continue
-          }
-          if (!evaluation.matched) {
-            triggerRows.push(row)
-            continue
-          }
-          // A non-intake active definition starts its own observational run.
-          try {
-            const run = await startRunFor(workspace, sessionId, auth, definition)
-            const key = obligationDedupeKey(definition.id, definition.trigger, observed)
-            if (key !== undefined) sessionSeen.set(key, journal.time())
-            triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
-          } catch (error) {
+          const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, observed)
+          // A concurrent call that already reserved the key must not start a
+          // second run or invoke the intake gate again.
+          if (dedupeKey !== undefined && inFlightTriggers.has(dedupeKey)) {
             triggerRows.push({
               ...row,
               matched: true,
               reason: 'run-suppressed',
-              detail: boundedError(error),
+              detail: 'a matching event is already being evaluated',
             })
+            if (createsIntake) {
+              concurrentIntakeReason = `an intake evaluation for "${create.name}" is already in progress; no second run was created`
+            }
+            continue
+          }
+          const reserve = evaluation.matched && dedupeKey !== undefined
+          if (reserve) inFlightTriggers.add(dedupeKey)
+          try {
+            // An intake call is authorized only after the active trigger
+            // matched (or deduped to an existing intake); a shadow or filtered
+            // trigger never creates a run and must not invoke the intake gate.
+            if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
+              const decision = await evaluateIntakeGate({
+                name: create.name,
+                session: sessionId,
+                workspace,
+                callId: String(exec.callId),
+                definition,
+                runs: await listAuthenticatedRuns(workspace, auth),
+                receipts: await listReceipts(workspace, auth),
+                ownedCallIds: new Set(ownedCalls.list()),
+                changeExists: await changeDirectoryExists(workspace, create.name),
+                startRun: async (entry, name) => {
+                  const run = await startRunFor(workspace, sessionId, auth, entry, { name })
+                  return { runId: run.id }
+                },
+                resumeRun: async (runId) => {
+                  const resumed = await resumeRun(workspace, runId, auth)
+                  await writeRun(workspace, resumed.run, auth)
+                  return { stepId: resumed.stepId }
+                },
+              })
+              intakeDecision = decision
+              if (decision.kind === 'deny' && decision.action === 'started') {
+                if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
+                triggerRows.push({
+                  ...row,
+                  matched: true,
+                  reason: 'run-created',
+                  ...(decision.runId === undefined ? {} : { runId: decision.runId }),
+                  detail: decision.reason,
+                })
+              } else if (decision.kind === 'deny') {
+                triggerRows.push({
+                  ...row,
+                  matched: true,
+                  reason: 'run-suppressed',
+                  ...(decision.runId === undefined ? {} : { runId: decision.runId }),
+                  detail: decision.reason,
+                })
+              } else {
+                triggerRows.push({
+                  ...row,
+                  matched: true,
+                  reason: 'run-suppressed',
+                  detail: decision.reason,
+                })
+              }
+              continue
+            }
+            if (!evaluation.matched) {
+              triggerRows.push(row)
+              continue
+            }
+            // A non-intake active definition starts its own observational run.
+            try {
+              const run = await startRunFor(workspace, sessionId, auth, definition)
+              if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
+              triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
+            } catch (error) {
+              if (reserve && dedupeKey !== undefined) sessionSeen.delete(dedupeKey)
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-suppressed',
+                detail: boundedError(error),
+              })
+            }
+          } finally {
+            if (reserve && dedupeKey !== undefined) inFlightTriggers.delete(dedupeKey)
           }
         }
         await recordEngineEvaluation(
@@ -1134,6 +1156,9 @@ export function apply(ctx: Context): void {
         )
         if (intakeDecision?.kind === 'deny') {
           return { kind: 'deny', reason: intakeDecision.reason }
+        }
+        if (concurrentIntakeReason !== undefined) {
+          return { kind: 'deny', reason: concurrentIntakeReason }
         }
         if (command !== undefined) {
           const archive = parseArchiveCommand(command)
