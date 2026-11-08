@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
 import { isInside } from './fs-change.js'
 import type { HostAuth } from './host-auth.js'
-import { readAuthenticatedRun } from './runs.js'
+import { readAuthenticatedRun, sameWorkspace } from './runs.js'
 
 /**
  * Host-authenticated completion and adoption receipts. A receipt is the durable
@@ -27,6 +27,8 @@ export interface ReceiptBody {
   readonly change: string
   readonly digest: string
   readonly issuedAt: number
+  /** The workspace that issued this receipt; a copied receipt authorizes nothing. */
+  readonly workspaceKey: string
 }
 
 export interface WorkflowReceipt extends ReceiptBody {
@@ -53,8 +55,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function writeAtomic(file: string, text: string): Promise<void> {
+async function writeAtomic(file: string, text: string, workspace: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
+  const root = await realpath(workspace)
+  const realDirectory = await realpath(dirname(file))
+  if (!isInside(root, realDirectory)) {
+    throw new Error('receipt refused: the receipts directory escapes the workspace')
+  }
   const temporary = `${file}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(temporary, text, 'utf8')
   try {
@@ -65,8 +72,14 @@ async function writeAtomic(file: string, text: string): Promise<void> {
   }
 }
 
-function bodyOf(kind: ReceiptKind, change: string, digest: string, issuedAt: number): ReceiptBody {
-  return { v: RECEIPT_VERSION, kind, change, digest, issuedAt }
+function bodyOf(
+  kind: ReceiptKind,
+  change: string,
+  digest: string,
+  issuedAt: number,
+  workspaceKey: string,
+): ReceiptBody {
+  return { v: RECEIPT_VERSION, kind, change, digest, issuedAt, workspaceKey }
 }
 
 /** Write one signed receipt atomically; the caller has already verified. */
@@ -86,12 +99,16 @@ export async function writeReceipt(
   if (!DIGEST.test(input.digest)) {
     throw new Error('receipt refused: the verified spec digest must be 64 hex characters')
   }
-  const body = bodyOf(input.kind, input.change, input.digest, input.now ?? Date.now())
+  const body = bodyOf(input.kind, input.change, input.digest, input.now ?? Date.now(), workspace)
   const receipt: WorkflowReceipt = {
     ...body,
     signature: input.auth.sign(RECEIPT_DOMAIN, body),
   }
-  await writeAtomic(receiptPath(workspace, input.change), `${JSON.stringify(receipt, null, 2)}\n`)
+  await writeAtomic(
+    receiptPath(workspace, input.change),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+    workspace,
+  )
   return receipt
 }
 
@@ -104,6 +121,7 @@ function parseReceipt(value: unknown): WorkflowReceipt | undefined {
     typeof value.digest !== 'string' ||
     !DIGEST.test(value.digest) ||
     typeof value.issuedAt !== 'number' ||
+    typeof value.workspaceKey !== 'string' ||
     typeof value.signature !== 'string'
   ) {
     return undefined
@@ -137,7 +155,8 @@ export async function readReceipt(
   }
   if (receipt === undefined || receipt.change !== change) return undefined
   const { signature, ...body } = receipt
-  return auth.verify(RECEIPT_DOMAIN, body, signature) ? receipt : undefined
+  if (!auth.verify(RECEIPT_DOMAIN, body, signature)) return undefined
+  return sameWorkspace(receipt.workspaceKey, workspace) ? receipt : undefined
 }
 
 /** Every verified receipt in one workspace, newest first. */

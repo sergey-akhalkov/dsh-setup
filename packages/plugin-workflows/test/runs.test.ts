@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   unlink,
   utimes,
   writeFile,
@@ -16,8 +17,10 @@ import { HostAuth } from '../src/host/host-auth.ts'
 import {
   issueAdoptionReceipt,
   issueCompletionReceipt,
+  listReceipts,
   readReceipt,
   receiptPath,
+  receiptsDirectory,
 } from '../src/host/receipts.ts'
 import {
   cancelRun,
@@ -460,4 +463,54 @@ it('keeps the previous authenticated file when synchronous replacement fails', a
     }),
   ).toThrow(/rename failed/u)
   expect((await readAuthenticatedRun(workspace, original.id, auth()))?.status).toBe('completed')
+})
+
+it('refuses a receipt copied from another workspace', async () => {
+  const source = await tempWorkspace()
+  const target = await tempWorkspace()
+  const run = await writeAndComplete(source, 'auth', 1_000)
+  await issueCompletionReceipt(source, run.id, DIGEST, auth(), 1_100)
+  const bytes = await readFile(receiptPath(source, 'auth'), 'utf8')
+  await mkdir(receiptsDirectory(target), { recursive: true })
+  await writeFile(receiptPath(target, 'auth'), bytes, 'utf8')
+  expect(await readReceipt(target, 'auth', auth())).toBeUndefined()
+  expect(await listReceipts(target, auth())).toEqual([])
+})
+
+it('refuses run writes through a directory link that leaves the workspace', async () => {
+  const workspace = await tempWorkspace()
+  const external = await tempWorkspace()
+  await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
+  try {
+    await symlink(
+      external,
+      join(workspace, '.dsh', 'workflows', 'runs'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+  } catch {
+    return
+  }
+  const run = intakeRun(workspace, 'auth', 1_000)
+  await expect(writeRun(workspace, run, auth())).rejects.toThrow(/escapes the workspace/u)
+  expect(() => writeRunSync(workspace, run, auth())).toThrow(/escapes the workspace/u)
+  expect(await readdir(external)).toEqual([])
+})
+
+it('refuses a receipt write through a directory link that leaves the workspace', async () => {
+  const workspace = await tempWorkspace()
+  const external = await tempWorkspace()
+  await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
+  try {
+    await symlink(
+      external,
+      join(workspace, '.dsh', 'workflows', 'receipts'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+  } catch {
+    return
+  }
+  await expect(issueAdoptionReceipt(workspace, 'auth', DIGEST, auth(), 1_000)).rejects.toThrow(
+    /escapes the workspace/u,
+  )
+  expect(await readdir(external)).toEqual([])
 })

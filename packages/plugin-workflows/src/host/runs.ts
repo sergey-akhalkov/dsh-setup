@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import {
   mkdir,
   readdir,
@@ -163,6 +163,9 @@ export function writeRunSync(
 ): void {
   const directory = runsDirectory(workspace)
   mkdirSync(directory, { recursive: true })
+  if (!isInside(realpathSync(workspace), realpathSync(directory))) {
+    throw new Error('run refused: the runs directory escapes the workspace')
+  }
   const stored: StoredRun = {
     ...run,
     signature: auth.sign(RUN_DOMAIN, run),
@@ -194,6 +197,9 @@ export async function writeRun(
 ): Promise<void> {
   const directory = runsDirectory(workspace)
   await mkdir(directory, { recursive: true })
+  if (!isInside(await realpath(workspace), await realpath(directory))) {
+    throw new Error('run refused: the runs directory escapes the workspace')
+  }
   const stored: StoredRun = {
     ...run,
     signature: auth.sign(RUN_DOMAIN, run),
@@ -231,7 +237,7 @@ function parseStored(value: unknown): { run: WorkflowRun; signature: unknown } |
  * absent: no caller may resume, admit, or issue a receipt from it.
  */
 /** Compare the run's bound workspace with the workspace asking for it. */
-function sameWorkspace(left: string, right: string): boolean {
+export function sameWorkspace(left: string, right: string): boolean {
   const normalize = (value: string): string => value.replaceAll('\\', '/').replace(/\/+$/u, '')
   const a = normalize(left)
   const b = normalize(right)
