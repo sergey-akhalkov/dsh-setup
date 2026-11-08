@@ -1435,3 +1435,73 @@ it('resumes at the selected successor even when a shared step is listed first', 
     await rm(workspace, { recursive: true, force: true })
   }
 })
+
+it('persists the loop successor and resumes at it', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'workflows-loop-order-'))
+  try {
+    const definition = validateDefinition({
+      v: 1,
+      id: 'loop-order-demo',
+      name: 'Loop order demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'iterate',
+          title: 'Iterate',
+          executor: 'loop',
+          loop: {
+            maxIterations: 3,
+            stop: { '==': [{ var: 'iteration' }, 1] },
+            next: 'first',
+            cap: 'blocked',
+          },
+        },
+        {
+          id: 'last',
+          title: 'Last',
+          executor: 'main',
+          prompt: 'Last.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'end',
+        },
+        {
+          id: 'first',
+          title: 'First',
+          executor: 'main',
+          prompt: 'First.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'last',
+        },
+      ],
+    })
+    const auth = HostAuth.fromKey('workflows-loop-order-key-012345678')
+    const run = createRun({
+      definition: definition.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['iterate', 'last', 'first'],
+    })
+    const iterate = definition.steps[0] as (typeof definition.steps)[number]
+    const outcome = runLoopStep({ run, step: iterate, values: {} })
+    expect(outcome.next).toBe('first')
+    expect(pendingStep(outcome.run)).toBe('first')
+    await writeRun(workspace, outcome.run, auth)
+    const reloaded = await readAuthenticatedRun(workspace, outcome.run.id, auth)
+    expect(pendingStep(reloaded as WorkflowRun)).toBe('first')
+    const first = settleStep(reloaded as WorkflowRun, 'first', 'done', { at: 2_000 })
+    expect(pendingStep(first)).toBe('last')
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
+})

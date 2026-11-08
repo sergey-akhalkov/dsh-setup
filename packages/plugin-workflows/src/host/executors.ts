@@ -647,8 +647,9 @@ export function runLoopStep(input: LoopStepInput): LoopStepResult {
         } satisfies JsonLogicData),
       )
       if (stop) {
+        const settled = settleStep(input.run, input.step.id, 'done', { at: input.now })
         return {
-          run: settleStep(input.run, input.step.id, 'done', { at: input.now }),
+          run: { ...settled, nextStep: spec.next === 'end' ? undefined : spec.next },
           next: spec.next,
         }
       }
