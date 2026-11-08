@@ -868,6 +868,25 @@ describe('authorization write guard', () => {
     }
   })
 
+  it('refuses dot-prefixed paths with repeated separators', () => {
+    for (const tool of ['write', 'edit']) {
+      for (const path of [
+        './/.dsh/workflows/definitions/mine.json',
+        './.dsh/workflows/approved.json',
+        './//.dsh/workflows/receipts/auth.json',
+      ]) {
+        expect(
+          authorizationWriteDecision({
+            workspace: '/workspace',
+            exec: { name: tool, arguments: { path } },
+            ownedCallIds: new Set(),
+          }),
+          `${tool} ${path}`,
+        ).toMatchObject({ kind: 'deny' })
+      }
+    }
+  })
+
   it('allows the host-owned install/receipt call and leaves another path untouched', () => {
     expect(decision('.dsh/workflows/receipts/auth.json', 'owned-host-call')).toEqual({
       kind: 'allow',

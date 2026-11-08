@@ -418,7 +418,7 @@ export function recognizeFileWrite(exec: {
 
 /** Normalize a model path into a workspace-relative slash path, or refuse it. */
 function workspaceRelativePath(workspace: string, path: string): string | undefined {
-  const normalized = path.replaceAll('\\', '/').replace(/^\.\//u, '')
+  const normalized = path.replaceAll('\\', '/')
   // A drive-relative target (D:foo) resolves against that drive's current
   // directory and a UNC or extended-length prefix names another namespace;
   // neither can be compared safely with the workspace prefixes, so refuse them.
