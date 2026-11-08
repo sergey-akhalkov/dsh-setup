@@ -124,7 +124,23 @@ function fakeHost(
         }
       }
       return {
-        results: input.calls.map((call) => ({ callId: call.id, result: { isError: false } })),
+        results: input.calls.map((call) => ({
+          callId: call.id,
+          result: {
+            isError: false,
+            value: {
+              kind: 'foreground',
+              cwd: workspace,
+              exitCode: 0,
+              signal: null,
+              timedOut: false,
+              aborted: false,
+              timeoutMs: 120_000,
+              stdout: { text: '', truncated: false },
+              stderr: { text: '', truncated: false },
+            },
+          },
+        })),
       }
     }
   }
@@ -1881,7 +1897,8 @@ describe('intake runtime', () => {
     }
     run = runs.requestStep(run, 'spec', 1_200)
     await runs.writeRun(workspace, run, auth)
-    const check = (callId: string, exitCode: number): Promise<unknown> =>
+    const outside = await tempWorkspace()
+    const canonical = (callId: string, overrides: Record<string, unknown>): Promise<unknown> =>
       host.emit(
         'tools/result',
         {
@@ -1890,16 +1907,39 @@ describe('intake runtime', () => {
           callId,
           arguments: { command: 'openspec validate auth --strict' },
         },
-        { isError: false, content: [], value: { exitCode } },
+        {
+          isError: false,
+          content: [],
+          value: {
+            kind: 'foreground',
+            cwd: workspace,
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            aborted: false,
+            timeoutMs: 120_000,
+            stdout: { text: '', truncated: false },
+            stderr: { text: '', truncated: false },
+            ...overrides,
+          },
+        },
       )
-    await check('check-fail', 1)
+    const specState = async (): Promise<string | undefined> =>
+      (await runs.readAuthenticatedRun(workspace, 'run-spec-check', auth))?.steps.find(
+        (step) => step.id === 'spec',
+      )?.state
+    await canonical('check-fail', { exitCode: 1 })
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    let stored = await runs.readAuthenticatedRun(workspace, 'run-spec-check', auth)
-    expect(stored?.steps.find((step) => step.id === 'spec')?.state).toBe('open')
-    await check('check-pass', 0)
+    expect(await specState()).toBe('open')
+    await canonical('check-external', { cwd: outside })
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
-    stored = await runs.readAuthenticatedRun(workspace, 'run-spec-check', auth)
-    expect(stored?.steps.find((step) => step.id === 'spec')?.state).toBe('done')
+    expect(await specState()).toBe('open')
+    await canonical('check-background', { kind: 'background' })
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+    expect(await specState()).toBe('open')
+    await canonical('check-pass', {})
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 4 })
+    expect(await specState()).toBe('done')
   })
 
   it('dispatches create-change through the tool service and completes approval with a receipt', async () => {

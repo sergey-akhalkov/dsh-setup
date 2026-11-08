@@ -1042,6 +1042,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
             ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
             ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
+            ...(shellOutcome.cwd === undefined ? {} : { cwd: shellOutcome.cwd }),
           })
           if (results.length > 50) results.shift()
           sessionShellResults.set(sessionId, results)
@@ -1277,29 +1278,69 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   /** Decode the canonical shell result instead of inferring success from isError. */
   interface ShellOutcome {
-    readonly exitCode: number
+    readonly readable: boolean
     readonly ok: boolean
+    readonly exitCode: number
     readonly timedOut?: boolean
     readonly signal?: string
     readonly sandboxDenied?: boolean
     readonly background?: boolean
+    readonly cwd?: string
   }
   const shellOutcomeOf = (result: unknown): ShellOutcome => {
     const record =
-      typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
+      typeof result === 'object' && result !== null
+        ? (result as Record<string, unknown>)
+        : undefined
     const value =
-      typeof record.value === 'object' && record.value !== null
+      record !== undefined && typeof record.value === 'object' && record.value !== null
         ? (record.value as Record<string, unknown>)
-        : {}
-    const isError = record.isError === true
-    const exitCode = typeof value.exitCode === 'number' ? value.exitCode : isError ? 1 : 0
+        : undefined
+    const unreadable: ShellOutcome = {
+      readable: false,
+      ok: false,
+      exitCode: 1,
+    }
+    if (record === undefined || value === undefined) return unreadable
+    if (value.kind !== 'foreground') return { ...unreadable, background: true }
+    const exitCode = value.exitCode
+    const signal = value.signal
+    if (typeof exitCode !== 'number' && exitCode !== null) return unreadable
+    if (typeof signal !== 'string' && signal !== null) return unreadable
+    if (typeof value.timedOut !== 'boolean' || typeof value.aborted !== 'boolean') {
+      return unreadable
+    }
+    let denied = false
+    let runnerFailed = false
+    if (value.sandbox !== undefined) {
+      const sandbox = value.sandbox
+      if (
+        typeof sandbox !== 'object' ||
+        sandbox === null ||
+        typeof (sandbox as Record<string, unknown>).denied !== 'boolean'
+      ) {
+        return unreadable
+      }
+      const sandboxRecord = sandbox as Record<string, unknown>
+      denied = sandboxRecord.denied === true
+      runnerFailed = sandboxRecord.runnerFailed === true
+    }
+    const ok =
+      record.isError !== true &&
+      exitCode === 0 &&
+      signal === null &&
+      value.timedOut === false &&
+      value.aborted === false &&
+      !denied &&
+      !runnerFailed
     return {
-      exitCode,
-      ok: !isError && exitCode === 0,
+      readable: true,
+      ok,
+      exitCode: typeof exitCode === 'number' ? exitCode : 1,
       ...(value.timedOut === true ? { timedOut: true } : {}),
-      ...(typeof value.signal === 'string' ? { signal: value.signal } : {}),
-      ...(value.sandboxDenied === true ? { sandboxDenied: true } : {}),
-      ...(value.background === true ? { background: true } : {}),
+      ...(typeof signal === 'string' ? { signal } : {}),
+      ...(denied ? { sandboxDenied: true } : {}),
+      ...(typeof value.cwd === 'string' && value.cwd !== '' ? { cwd: value.cwd } : {}),
     }
   }
   /** A host-owned tool dispatch through the registered tool service, if present. */
@@ -1353,6 +1394,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(outcome.timedOut === true ? { timedOut: true } : {}),
             ...(outcome.signal === undefined ? {} : { signal: outcome.signal }),
             ...(outcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
+            ...(outcome.cwd === undefined ? {} : { cwd: outcome.cwd }),
           })
           if (results.length > 50) results.shift()
           sessionShellResults.set(sessionId, results)

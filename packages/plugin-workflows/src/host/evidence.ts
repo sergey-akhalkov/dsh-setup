@@ -71,6 +71,8 @@ export interface ShellResultObservation {
   readonly signal?: string
   readonly timedOut?: boolean
   readonly sandboxDenied?: boolean
+  /** The run's resolved working directory; when present it must be the workspace. */
+  readonly cwd?: string
 }
 
 /** One recorded user answer, from the user-questions service. */
@@ -696,6 +698,14 @@ function toolCheck(
   return { ok: true, evidence: { kind: 'tool', callId: call.callId, detail: evidence.name } }
 }
 
+/** Whether a recorded working directory names the workspace root. */
+function sameCheckDirectory(left: string, right: string): boolean {
+  const norm = (value: string): string => value.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const a = norm(left)
+  const b = norm(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
 function checkResult(
   evidence: CheckEvidence,
   context: EvidenceContext,
@@ -713,7 +723,11 @@ function checkResult(
     )
   }
   const results = (context.shellResults ?? []).filter(
-    (candidate) => candidate.foreground && candidate.command === command.text,
+    (candidate) =>
+      candidate.foreground &&
+      candidate.command === command.text &&
+      // A validation run in another project never satisfies this workspace.
+      (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)),
   )
   const afterStart = results.filter((candidate) => candidate.at >= startedAt)
   if (afterStart.length === 0) {
