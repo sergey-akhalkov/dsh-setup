@@ -468,3 +468,24 @@ describe('definition trigger wiring regressions', () => {
     expect(rows[0]).toMatchObject({ reason: 'run-created', runId: 'run-created-1' })
   })
 })
+
+it('matches a Windows workspace path after separator normalization', () => {
+  const definition = obligation('win-workspace', {
+    kind: 'turn.stopping',
+    match: { workspace: 'D:/work/**' },
+    mode: 'shadow',
+    dedupe: 'turn',
+  })
+  const matched = evaluateDefinitionTrigger(
+    definition,
+    stopEvent({ workspace: 'D:\\work\\repo' }),
+    { isDuplicate: () => false },
+  )
+  expect(matched).toMatchObject({ matched: true, reason: 'would-fire' })
+  const mismatch = evaluateDefinitionTrigger(
+    definition,
+    stopEvent({ workspace: 'D:\\other\\repo' }),
+    { isDuplicate: () => false },
+  )
+  expect(mismatch).toMatchObject({ matched: false, reason: 'filter-mismatch' })
+})

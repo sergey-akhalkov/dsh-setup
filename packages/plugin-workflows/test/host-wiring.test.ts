@@ -727,3 +727,69 @@ describe('repeat under concurrency', () => {
     expect(runs).toHaveLength(2)
   })
 })
+
+describe('startup active events', () => {
+  it('signs and creates the run for an event received before the key is ready', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'early-active',
+      name: 'Early active',
+      version: 1,
+      trigger: { kind: 'tool.result', match: { tool: 'read' }, mode: 'active', dedupe: 'callId' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(join(workspace, 'early.json'), `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
+    })
+    await installDefinition(workspace, join(workspace, 'early.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    // No delay: the definitions and the host key are still loading.
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'early-read', name: 'read', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as { readonly triggers?: Array<Record<string, unknown>> })
+      return rows.some((entry) =>
+        Array.isArray(entry.triggers)
+          ? entry.triggers.some(
+              (row) => row.id === 'definition:early-active' && row.reason === 'run-created',
+            )
+          : false,
+      )
+    })
+    const { readdir } = await import('node:fs/promises')
+    const runs = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(runs).toHaveLength(1)
+  })
+})

@@ -232,7 +232,13 @@ function filterMismatch(
   event: DefinitionEvent,
 ): { readonly path?: string; readonly filter: string } | undefined {
   const match = trigger.match
-  if (match.workspace !== undefined && !globMatches(match.workspace, event.workspace ?? '')) {
+  if (
+    match.workspace !== undefined &&
+    !globMatches(
+      match.workspace.replaceAll('\\', '/'),
+      (event.workspace ?? '').replaceAll('\\', '/'),
+    )
+  ) {
     return { path: event.workspace, filter: `workspace: ${match.workspace}` }
   }
   if (match.session !== undefined && match.session !== event.session) {

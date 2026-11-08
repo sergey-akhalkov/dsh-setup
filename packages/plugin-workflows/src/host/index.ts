@@ -568,6 +568,17 @@ export function apply(ctx: Context): void {
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
     await loadDefinitions(workspace)
+    if (
+      (definitionsByWorkspace.get(workspace) ?? []).some(
+        (definition) => definition.trigger.mode === 'active',
+      )
+    ) {
+      try {
+        await ensureAuth()
+      } catch {
+        // A run start is suppressed and journaled if the key cannot load.
+      }
+    }
     const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
     const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
     const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) =>
