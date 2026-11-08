@@ -1345,3 +1345,107 @@ describe('run admission at capacity', () => {
     expect(files).toHaveLength(20)
   })
 })
+
+describe('configured maxRuns', () => {
+  function watchDefinition(id: string): Record<string, unknown> {
+    return {
+      v: 1,
+      id,
+      name: id,
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'callId',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+  }
+
+  async function installWatch(workspace: string, id: string): Promise<void> {
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const { writeFile: write } = await import('node:fs/promises')
+    await write(
+      join(workspace, `${id}.json`),
+      `${JSON.stringify(watchDefinition(id), null, 2)}\n`,
+      'utf8',
+    )
+    await installDefinition(workspace, join(workspace, `${id}.json`), auth)
+  }
+
+  it('refuses a second open run when maxRuns is configured to one', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await installWatch(workspace, 'one-watch')
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const first = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      steps: ['requirements'],
+      id: 'run-only-one',
+    })
+    await runs.writeRun(workspace, first, auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'tools/pre-execute',
+      { agent: host.agent, callId: 'over-limit', name: 'read', arguments: {} },
+      async () => ({ kind: 'continue' }),
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      return rows.some(
+        (entry) =>
+          Array.isArray(entry.triggers) &&
+          (entry.triggers as Array<Record<string, unknown>>).some(
+            (row) =>
+              row.id === 'definition:one-watch' &&
+              row.reason === 'run-suppressed' &&
+              String(row.detail).includes('run limit'),
+          ),
+      )
+    })
+    const { readdir } = await import('node:fs/promises')
+    const files = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(files).toHaveLength(1)
+  })
+
+  it('refuses an invalid configured maxRuns', async () => {
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    expect(() => apply(host.ctx as never, { maxRuns: 0 })).toThrow(
+      /maxRuns must be a positive integer/u,
+    )
+  })
+})

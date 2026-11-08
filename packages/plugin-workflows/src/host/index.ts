@@ -312,13 +312,19 @@ function toolSummary(name: string, isError: boolean, text: string): string {
 export interface WorkflowsConfig {
   /** The engine-level opt-in for the optional intent trigger; default false. */
   readonly allowIntent?: boolean
+  /** The open-run limit for every admission path; default 20. */
+  readonly maxRuns?: number
 }
 
 export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   if (config.allowIntent !== undefined && typeof config.allowIntent !== 'boolean') {
     throw new Error('workflows allowIntent must be a boolean')
   }
+  if (config.maxRuns !== undefined && (!Number.isInteger(config.maxRuns) || config.maxRuns < 1)) {
+    throw new Error('workflows maxRuns must be a positive integer')
+  }
   const engineAllowIntent = config.allowIntent === true
+  const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS
   // A malformed shipped trigger refuses the plugin load, naming the field.
   const triggers = loadCatalog()
   // A malformed or duplicate shipped definition refuses the plugin load too.
@@ -493,7 +499,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     if (blocked) {
       return {
         ok: false,
-        reason: `the run limit (${String(DEFAULT_MAX_RUNS)}) is reached; finish or cancel an open run first`,
+        reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
       }
     }
     reserveStart(workspace)
@@ -843,7 +849,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   if (intentFull) {
                     return {
                       ok: false,
-                      reason: `the run limit (${String(DEFAULT_MAX_RUNS)}) is reached; finish or cancel an open run first`,
+                      reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
                     }
                   }
                   reserveStart(activeWorkspace)
@@ -1122,7 +1128,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     else reservedStarts.set(workspace, left)
   }
   const atRunLimit = (workspace: string, runs: readonly WorkflowRun[]): boolean =>
-    openRunCount(runs) + (reservedStarts.get(workspace) ?? 0) >= DEFAULT_MAX_RUNS
+    openRunCount(runs) + (reservedStarts.get(workspace) ?? 0) >= maxRuns
   /** Dedupe keys whose triggering call has not finished starting its run yet. */
   const inFlightTriggers = new Set<string>()
   let promptRuns: WorkflowRun[] = []
@@ -1168,7 +1174,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const runs = await listAuthenticatedRuns(workspace, auth)
     if (atRunLimit(workspace, runs)) {
       throw new Error(
-        `the run limit (${String(DEFAULT_MAX_RUNS)}) is reached; finish or cancel an open run first`,
+        `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
       )
     }
     reserveStart(workspace)
@@ -1338,7 +1344,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   reason: 'run-suppressed',
                   detail: 'the run limit is reached; no intake run was created',
                 })
-                capacityReason = `workflows: the run limit (${String(DEFAULT_MAX_RUNS)}) is reached, so the intake run for "${create.name}" was not created; the call was refused`
+                capacityReason = `workflows: the run limit (${String(maxRuns)}) is reached, so the intake run for "${create.name}" was not created; the call was refused`
                 continue
               }
               if (auth === undefined) {
@@ -1568,6 +1574,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     session: String(agent.session.id),
     definitions,
     auth,
+    maxRuns,
     ...(userQuestions === undefined ? {} : { questions: userQuestions }),
     now: () => journal.time(),
     listRuns: async () => {
