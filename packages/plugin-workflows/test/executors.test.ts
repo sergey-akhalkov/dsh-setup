@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { collectEvidencePaths } from '../src/host/evidence.ts'
@@ -18,7 +21,9 @@ import {
   type ToolRunner,
   validateResultSchema,
 } from '../src/host/executors.ts'
-import { createRun, type WorkflowRun } from '../src/host/runs.ts'
+import { HostAuth } from '../src/host/host-auth.ts'
+import { pendingStep } from '../src/host/resume.ts'
+import { createRun, readAuthenticatedRun, type WorkflowRun, writeRun } from '../src/host/runs.ts'
 import type { SteerTarget } from '../src/host/steer.ts'
 
 const definition: Definition = validateDefinition({
@@ -468,7 +473,7 @@ function branchRun(): WorkflowRun {
     session: 'session-1',
     workspace: '/workspace',
     context: { flag: true },
-    steps: ['choose'],
+    steps: ['choose', 'yes', 'no'],
     now: 1_000,
   })
 }
@@ -480,8 +485,10 @@ describe('branch executor', () => {
     const truthy = runBranchStep({ run: branchRun(), step: choose, values: { flag: true } })
     expect(truthy.next).toBe('yes')
     expect(truthy.run.steps[0]?.state).toBe('done')
+    expect(pendingStep(truthy.run)).toBe('yes')
     const falsy = runBranchStep({ run: branchRun(), step: choose, values: { flag: false } })
     expect(falsy.next).toBe('no')
+    expect(pendingStep(falsy.run)).toBe('no')
     const invalid = runBranchStep({
       run: branchRun(),
       step: {
@@ -1198,4 +1205,30 @@ it('maps an abort from the question service to cancellation in the adapter', asy
   expect(
     await aborted.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
   ).toEqual({ cancelled: true })
+})
+it('persists the selected branch edge across a reload', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'workflows-branch-'))
+  try {
+    const definition = branchDefinition()
+    const choose = definition.steps[0] as (typeof definition.steps)[number]
+    const auth = HostAuth.fromKey('workflows-branch-test-key-0123456789')
+    const outcome = runBranchStep({
+      run: createRun({
+        definition: 'branch-demo',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { flag: false },
+        steps: ['choose', 'yes', 'no'],
+      }),
+      step: choose,
+      values: { flag: false },
+    })
+    await writeRun(workspace, outcome.run, auth)
+    const reloaded = await readAuthenticatedRun(workspace, outcome.run.id, auth)
+    expect(reloaded).toBeDefined()
+    if (reloaded !== undefined) expect(pendingStep(reloaded)).toBe('no')
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
 })

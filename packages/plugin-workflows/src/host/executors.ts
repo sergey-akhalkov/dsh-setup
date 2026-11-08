@@ -529,10 +529,15 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
     )
       ? spec.then
       : spec.else
-    return {
-      run: settleStep(input.run, input.step.id, 'done', { at: input.now }),
-      next: chosen,
+    let run = settleStep(input.run, input.step.id, 'done', { at: input.now })
+    const skipped = chosen === spec.then ? spec.else : spec.then
+    if (skipped !== input.step.id && run.steps.some((step) => step.id === skipped)) {
+      run = settleStep(run, skipped, 'cancelled', {
+        at: input.now,
+        reason: 'not selected by the branch',
+      })
     }
+    return { run, next: chosen }
   } catch (error) {
     return {
       run: setRunStatus(
