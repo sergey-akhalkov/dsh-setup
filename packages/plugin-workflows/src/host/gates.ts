@@ -114,15 +114,12 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
           detail,
         }
       }
-      if (steered.reason.includes('too long')) {
-        return {
-          kind: 'refuse',
-          run: incrementTurnBlocks(run, at),
-          stepId: step.id,
-          text: `step "${step.id}" cannot be steered: ${steered.reason}`,
-        }
+      const message = `step "${step.id}" could not be steered: ${steered.reason}`
+      return {
+        kind: 'allow',
+        run: addViolation(input.run, message, { step: step.id, at }),
+        reason: message,
       }
-      return { kind: 'allow', run: input.run, reason: steered.reason }
     }
     return { kind: 'refuse', run, stepId: step.id, text: steered.text }
   } catch (error) {

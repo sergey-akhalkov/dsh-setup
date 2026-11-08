@@ -714,9 +714,10 @@ it('refuses a contract too large for the resolved steer', () => {
     installedLegacy: new Set<string>(),
     maxBlocks: 3,
   })
-  expect(outcome.kind).toBe('refuse')
-  if (outcome.kind === 'refuse') expect(outcome.text).toMatch(/too long/u)
+  expect(outcome.kind).toBe('allow')
   expect(agent.messages).toHaveLength(0)
+  expect(outcome.run.violations).toHaveLength(1)
+  expect(outcome.run.turnBlocks ?? 0).toBe(0)
   expect(outcome.run.steps[0]?.requestedAt).toBeUndefined()
 })
 it('steers on every stop in one turn and resets attempts after a violation', () => {
