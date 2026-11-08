@@ -539,6 +539,20 @@ describe('branch executor', () => {
       values: {},
     })
     expect(triggerMatch.next).toBe('yes')
+    const arrayMissing = runBranchStep({
+      run: branchRun(),
+      step: {
+        ...choose,
+        branch: {
+          predicate: { '!': { missing: { var: 'context.required' } } },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'yes',
+          else: 'no',
+        },
+      } as (typeof definition.steps)[number],
+      values: { required: ['context.a', 'context.b'], a: 1, b: 2 },
+    })
+    expect(arrayMissing.next).toBe('yes')
   })
 })
 
@@ -622,6 +636,18 @@ describe('loop executor', () => {
       values: {},
     })
     expect(triggerStop.next).toBe('end')
+    const arrayStop = runLoopStep({
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { '!': { missing: { var: 'context.required' } } },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { required: ['context.a', 'context.b'], a: 1, b: 2 },
+    })
+    expect(arrayStop.next).toBe('end')
     const invalid = runLoopStep({
       run: loopRun(),
       step: {
@@ -1000,6 +1026,12 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
   expect(
     evaluateJsonLogic({ missing: ['context.approval'] }, { context: { approval: null } }),
   ).toEqual(['context.approval'])
+  expect(
+    evaluateJsonLogic(
+      { '!': { missing: { var: 'context.required' } } },
+      { context: { required: ['context.a', 'context.b'], a: 1, b: 2 } },
+    ),
+  ).toBe(true)
   expect(evaluateJsonLogic({ missing: ['context.absent'] }, { context: {} })).toEqual([
     'context.absent',
   ])

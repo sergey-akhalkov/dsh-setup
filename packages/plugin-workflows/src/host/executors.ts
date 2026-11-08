@@ -422,13 +422,16 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       return Math.max(...args.map((entry) => Number(value(entry))))
     case 'cat':
       return args.map((entry) => String(value(entry) ?? '')).join('')
-    case 'missing':
-      return args
-        .map((entry) => String(value(entry)))
-        .filter((name) => {
-          const found = lookup(data, name)
-          return found === undefined || found === null || found === ''
-        })
+    case 'missing': {
+      const names = args.flatMap((entry) => {
+        const evaluated = value(entry)
+        return Array.isArray(evaluated) ? evaluated.map(String) : [String(evaluated)]
+      })
+      return names.filter((name) => {
+        const found = lookup(data, name)
+        return found === undefined || found === null || found === ''
+      })
+    }
     case 'in': {
       const needle = value(args[0])
       const haystack = value(args[1])
