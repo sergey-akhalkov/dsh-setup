@@ -757,3 +757,87 @@ it('formats an object enum safely and fails the step with the child id', async (
   expect(run.status).toBe('failed')
   expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-enum' })
 })
+
+it('resolves nested tool arguments and refuses a checkpoint-shaped name', async () => {
+  const calls: Array<Readonly<Record<string, unknown>>> = []
+  const runner: ToolRunner = {
+    async call(request) {
+      calls.push(request.arguments)
+      return { ok: true }
+    },
+  }
+  const nested = await runToolStep({
+    run: toolRun(),
+    definition: toolDefinition,
+    step: {
+      ...toolDefinition.steps[0],
+      tool: {
+        name: 'shell',
+        args: { payload: { change: '{name}' }, list: ['{name}'] },
+      },
+    } as (typeof toolDefinition.steps)[number],
+    runner,
+    owned: new OwnedCalls(),
+    evidenceContext,
+  })
+  expect(calls[0]).toMatchObject({ payload: { change: 'auth' }, list: ['auth'] })
+  expect(nested.steps[0]?.state).toBe('done')
+
+  let dispatched = 0
+  const refusal = await runToolStep({
+    run: toolRun(),
+    definition: toolDefinition,
+    step: toolDefinition.steps[0] as (typeof toolDefinition.steps)[number],
+    runner: {
+      async call() {
+        dispatched += 1
+        return { ok: true }
+      },
+    },
+    owned: new OwnedCalls(),
+    evidenceContext: {
+      workspace: '/workspace',
+      values: { name: '.dsh/work-checkpoints/0123456789abcdef/1.json' },
+    },
+  })
+  expect(dispatched).toBe(0)
+  expect(refusal.steps[0]?.state).toBe('failed')
+  expect(refusal.steps[0]?.reason).toContain('not a change name')
+})
+
+it('keeps the call id on both failed dispatch paths', async () => {
+  const thrown = await runToolStep({
+    run: toolRun(),
+    definition: toolDefinition,
+    step: toolDefinition.steps[0] as (typeof toolDefinition.steps)[number],
+    runner: {
+      async call() {
+        throw new Error('boom')
+      },
+    },
+    owned: new OwnedCalls(),
+    evidenceContext,
+  })
+  expect(thrown.steps[0]?.evidence).toMatchObject({
+    kind: 'tool',
+    detail: 'the tool call failed',
+  })
+  expect(thrown.steps[0]?.evidence?.callId).toMatch(/^owned-/u)
+  const rejected = await runToolStep({
+    run: toolRun(),
+    definition: toolDefinition,
+    step: toolDefinition.steps[0] as (typeof toolDefinition.steps)[number],
+    runner: {
+      async call() {
+        return { ok: false, error: 'refused' }
+      },
+    },
+    owned: new OwnedCalls(),
+    evidenceContext,
+  })
+  expect(rejected.steps[0]?.evidence).toMatchObject({
+    kind: 'tool',
+    detail: 'the tool call failed',
+  })
+  expect(rejected.steps[0]?.evidence?.callId).toMatch(/^owned-/u)
+})

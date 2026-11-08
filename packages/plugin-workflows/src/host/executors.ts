@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { CHANGE_NAME } from './command-parse.js'
 import {
   type Definition,
   resultSchemaShapeError,
@@ -472,6 +473,45 @@ export interface ToolStepInput {
   readonly signal?: AbortSignal
 }
 
+function resolveToolValue(
+  value: unknown,
+  context: EvidenceContext,
+):
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly detail: string } {
+  if (typeof value === 'string') {
+    for (const match of value.matchAll(/\{([a-zA-Z][a-zA-Z0-9-]*)\}/gu)) {
+      if (match[1] !== 'name') continue
+      const entry = context.values.name
+      if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
+        return { ok: false, detail: `the name value "${String(entry)}" is not a change name` }
+      }
+    }
+    const resolved = resolveEvidenceText(value, context)
+    if (!resolved.ok) return { ok: false, detail: resolved.failure.detail }
+    return { ok: true, value: resolved.text }
+  }
+  if (Array.isArray(value)) {
+    const resolved: unknown[] = []
+    for (const entry of value) {
+      const checked = resolveToolValue(entry, context)
+      if (!checked.ok) return checked
+      resolved.push(checked.value)
+    }
+    return { ok: true, value: resolved }
+  }
+  if (typeof value === 'object' && value !== null) {
+    const resolved: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value)) {
+      const checked = resolveToolValue(entry, context)
+      if (!checked.ok) return checked
+      resolved[key] = checked.value
+    }
+    return { ok: true, value: resolved }
+  }
+  return { ok: true, value }
+}
+
 function interpolateArguments(
   value: Readonly<Record<string, unknown>>,
   context: EvidenceContext,
@@ -480,13 +520,9 @@ function interpolateArguments(
   | { readonly ok: false; readonly detail: string } {
   const args: Record<string, unknown> = {}
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== 'string') {
-      args[key] = entry
-      continue
-    }
-    const resolved = resolveEvidenceText(entry, context)
-    if (!resolved.ok) return { ok: false, detail: resolved.failure.detail }
-    args[key] = resolved.text
+    const resolved = resolveToolValue(entry, context)
+    if (!resolved.ok) return { ok: false, detail: resolved.detail }
+    args[key] = resolved.value
   }
   return { ok: true, args }
 }
@@ -525,18 +561,18 @@ export async function runToolStep(input: ToolStepInput): Promise<WorkflowRun> {
   }
   const rawArguments: Record<string, unknown> = {}
   if (spec.command !== undefined) {
-    const resolved = resolveEvidenceText(spec.command, input.evidenceContext)
+    const resolved = resolveToolValue(spec.command, input.evidenceContext)
     if (!resolved.ok) {
       return setRunStatus(
         settleStep(input.run, input.step.id, 'failed', {
           at: input.now,
-          reason: `the fixed command could not be resolved: ${resolved.failure.detail}`,
+          reason: `the fixed command could not be resolved: ${resolved.detail}`,
         }),
         'failed',
         input.now,
       )
     }
-    rawArguments.command = resolved.text
+    rawArguments.command = resolved.value
   }
   if (spec.args !== undefined) {
     const resolved = interpolateArguments(spec.args, input.evidenceContext)
@@ -563,7 +599,11 @@ export async function runToolStep(input: ToolStepInput): Promise<WorkflowRun> {
   } catch (error) {
     const reason = `the tool call failed: ${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}`
     return setRunStatus(
-      settleStep(input.run, input.step.id, 'failed', { at: input.now, reason }),
+      settleStep(input.run, input.step.id, 'failed', {
+        at: input.now,
+        reason,
+        evidence: { kind: 'tool', callId, detail: 'the tool call failed' },
+      }),
       'failed',
       input.now,
     )
@@ -573,6 +613,7 @@ export async function runToolStep(input: ToolStepInput): Promise<WorkflowRun> {
       settleStep(input.run, input.step.id, 'failed', {
         at: input.now,
         reason: `the tool call failed${outcome.error === undefined ? '' : `: ${outcome.error.slice(0, 200)}`}`,
+        evidence: { kind: 'tool', callId, detail: 'the tool call failed' },
       }),
       'failed',
       input.now,
