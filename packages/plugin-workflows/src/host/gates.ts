@@ -52,9 +52,10 @@ function stepIsOpen(run: WorkflowRun, stepId: string): boolean {
 }
 
 /**
- * The first open `blockTurnClose` step of the definition. A pending deferred
- * step is never selected and also stops the gate from advancing to a later
- * owned step: the legacy gate is the only steer while its record is missing.
+ * The first open `blockTurnClose` owned step, unless an earlier open step is
+ * deferred: an unresolved deferred prerequisite stops the selection no matter
+ * whether it blocks the turn close itself, because the legacy gate is the only
+ * steer for it.
  */
 export function selectBlockingStep(
   run: WorkflowRun,
@@ -63,10 +64,12 @@ export function selectBlockingStep(
 ): Step | undefined {
   const resolved = resolveOwnership(definition, installedLegacy)
   const ownership = new Map(resolved.steps.map((step) => [step.id, step.ownership]))
-  const firstOpen = definition.steps.find(
-    (step) => step.blockTurnClose === true && stepIsOpen(run, step.id),
-  )
-  return firstOpen !== undefined && ownership.get(firstOpen.id) === 'own' ? firstOpen : undefined
+  for (const step of definition.steps) {
+    if (!stepIsOpen(run, step.id)) continue
+    if (ownership.get(step.id) === 'defer') return undefined
+    if (step.blockTurnClose === true) return step
+  }
+  return undefined
 }
 
 /** Evaluate one root turn stop. */

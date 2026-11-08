@@ -91,6 +91,37 @@ describe('legacy composition', () => {
     expect(selectBlockingStep(reviewed, definition, INSTALLED)?.id).toBe('approval')
   })
 
+  it('stops at a deferred prerequisite even without a blockTurnClose flag', () => {
+    const base = intakeDefinition()
+    for (const flag of [undefined, false] as const) {
+      const steps = base.steps.map((step) => {
+        if (step.id !== 'spec-review') return step
+        const clone = { ...step }
+        if (flag === undefined) delete clone.blockTurnClose
+        else clone.blockTurnClose = false
+        return clone
+      })
+      const definition = { ...base, steps }
+      expect(selectBlockingStep(intakeRun(), definition, INSTALLED)).toBeUndefined()
+      const outcome = evaluateTurnClose({
+        run: intakeRun(),
+        definition,
+        agent: {
+          steer: () => {
+            throw new Error('a workflow steer must wait for the legacy review')
+          },
+        },
+        evidenceContext: { workspace: '/workspace', values: { name: 'auth' } },
+        turn: 1,
+        maxBlocks: 3,
+        installedLegacy: INSTALLED,
+      })
+      expect(outcome.kind).toBe('allow')
+      const reviewed = settleStep(intakeRun(), 'spec-review', 'done', { at: 2_000 })
+      expect(selectBlockingStep(reviewed, definition, INSTALLED)?.id).toBe('approval')
+    }
+  })
+
   it('reads the legacy record, completes the deferred step, and dispatches nothing', async () => {
     const definition = intakeDefinition()
     const run = intakeRun()
