@@ -285,6 +285,28 @@ export function validateJsonLogic(rule: unknown, depth = 0): void {
     case '!':
       expect(1, 1)
       break
+    case '!!':
+      expect(1, 1)
+      break
+    case '+':
+    case '*':
+    case 'cat':
+    case 'min':
+    case 'max':
+      expect(1)
+      break
+    case '-':
+      expect(1, 2)
+      break
+    case '/':
+      expect(2)
+      break
+    case '%':
+      expect(2, 2)
+      break
+    case 'missing':
+      expect(1)
+      break
     case 'if':
       expect(2)
       break
@@ -376,6 +398,37 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     }
     case '!':
       return !truthy(value(args[0]))
+    case '!!':
+      return truthy(value(args[0]))
+    case '+':
+      return args.reduce<number>((total, entry) => total + Number(value(entry)), 0)
+    case '-':
+      return args.length === 1
+        ? -Number(value(args[0]))
+        : args
+            .slice(1)
+            .reduce<number>((total, entry) => total - Number(value(entry)), Number(value(args[0])))
+    case '*':
+      return args.reduce<number>((total, entry) => total * Number(value(entry)), 1)
+    case '/':
+      return args
+        .slice(1)
+        .reduce<number>((total, entry) => total / Number(value(entry)), Number(value(args[0])))
+    case '%':
+      return Number(value(args[0])) % Number(value(args[1]))
+    case 'min':
+      return Math.min(...args.map((entry) => Number(value(entry))))
+    case 'max':
+      return Math.max(...args.map((entry) => Number(value(entry))))
+    case 'cat':
+      return args.map((entry) => String(value(entry) ?? '')).join('')
+    case 'missing':
+      return args
+        .map((entry) => String(value(entry)))
+        .filter((name) => {
+          const found = lookup(data, name)
+          return found === undefined || found === ''
+        })
     case 'in': {
       const needle = value(args[0])
       const haystack = value(args[1])
