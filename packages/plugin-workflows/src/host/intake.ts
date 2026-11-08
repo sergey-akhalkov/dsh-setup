@@ -1,3 +1,4 @@
+import { CHANGE_NAME } from './command-parse.js'
 import { type Definition, resolveOwnership, type Step } from './definitions.js'
 import {
   collectEvidencePaths,
@@ -14,7 +15,9 @@ import {
   type ToolRunner,
 } from './executors.js'
 import { runDeferredStep } from './gates.js'
-import { setRunStatus, settleStep, type WorkflowRun } from './runs.js'
+import type { HostAuth } from './host-auth.js'
+import { issueCompletionReceipt } from './receipts.js'
+import { setRunStatus, settleStep, type WorkflowRun, writeRun } from './runs.js'
 
 /**
  * The intake runner. It walks the declared steps in order, completes a main
@@ -34,6 +37,8 @@ export interface IntakeAdvanceInput {
   /** The deferred-step record reader; it must not call delegate. */
   readonly readRecord?: (step: Step) => Promise<EvidenceCheck>
   readonly installedLegacy: ReadonlySet<string>
+  /** When present, a completed intake writes its host-authenticated receipt. */
+  readonly auth?: HostAuth
   readonly now?: number
   readonly signal?: AbortSignal
 }
@@ -49,6 +54,8 @@ export interface IntakeAdvanceResult {
   readonly run: WorkflowRun
   readonly completed: boolean
   readonly waiting?: IntakeWaiting
+  /** A completion receipt could not be issued; the run is still completed. */
+  readonly receiptError?: string
 }
 
 function pendingStep(run: WorkflowRun, definition: Definition): Step | undefined {
@@ -80,7 +87,34 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
   for (let guard = 0; guard < input.definition.steps.length + 1; guard += 1) {
     const step = pendingStep(run, input.definition)
     if (step === undefined) {
-      return { run, completed: true }
+      const completedRun = run.status === 'completed' ? run : setRunStatus(run, 'completed', at)
+      if (input.auth !== undefined && input.definition.id === 'change-intake') {
+        const name = run.context.name
+        const digest = run.steps.find((entry) => entry.id === 'spec-review')?.evidence?.digest
+        if (typeof name === 'string' && CHANGE_NAME.test(name) && typeof digest === 'string') {
+          try {
+            if (completedRun !== run) {
+              await writeRun(input.evidenceContext.workspace, completedRun, input.auth)
+            }
+            await issueCompletionReceipt(
+              input.evidenceContext.workspace,
+              completedRun.id,
+              digest,
+              input.auth,
+              at,
+            )
+            return { run: completedRun, completed: true }
+          } catch (error) {
+            return {
+              run: completedRun,
+              completed: true,
+              receiptError:
+                error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+            }
+          }
+        }
+      }
+      return { run: completedRun, completed: true }
     }
     const ownership = resolved.steps.find((entry) => entry.id === step.id)?.ownership ?? 'own'
     if (ownership === 'defer') {

@@ -127,6 +127,7 @@ describe('change-intake engine', () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()
     const owned = new OwnedCalls()
+    const auth = HostAuth.fromKey('test-intake-advance-key-012345')
     const toolCalls: Array<{
       callId: string
       name: string
@@ -152,6 +153,7 @@ describe('change-intake engine', () => {
         evidenceContext: context,
         owned,
         installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+        auth,
         now: 2_000,
         toolRunner: {
           async call(request) {
@@ -215,6 +217,10 @@ describe('change-intake engine', () => {
     const finished = await advance()
     run = finished.run
     expect(finished.completed).toBe(true)
+    expect(await readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'intake',
+      change: 'auth',
+    })
     expect(run.steps.find((step) => step.id === 'spec')?.state).toBe('done')
     expect(run.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
     expect(run.steps.find((step) => step.id === 'approval')?.state).toBe('done')
