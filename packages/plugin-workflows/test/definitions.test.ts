@@ -494,3 +494,17 @@ it('refuses a dedupe identity the event kind cannot provide', () => {
     /trigger\.dedupe "name" is not available for trigger kind "fs\.change"/u,
   )
 })
+
+it('rejects a main evidence contract too large for the bounded steer', () => {
+  const raw = valid()
+  const steps = raw.steps as Array<Record<string, unknown>>
+  const step = steps[0] as Record<string, unknown>
+  step.evidence = {
+    kind: 'all',
+    items: Array.from({ length: 40 }, (_, index) => ({
+      kind: 'file',
+      path: `.dsh/workflows/drafts/{name}/part-${String(index)}.md`,
+    })),
+  }
+  expect(() => validateDefinition(raw)).toThrow(/too long to fit the bounded main-step steer/u)
+})

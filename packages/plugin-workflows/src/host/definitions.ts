@@ -749,6 +749,13 @@ function step(
         'a declaration item requires the step to be nonCritical',
       )
     }
+    if (executor === 'main' && JSON.stringify(checked).length > 1_200) {
+      fail(
+        definition,
+        `${field}.evidence`,
+        'is too long to fit the bounded main-step steer; shorten or split the contract',
+      )
+    }
     built.evidence = checked
   }
 
