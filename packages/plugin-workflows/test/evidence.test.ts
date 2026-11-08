@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -453,5 +453,37 @@ describe('glob limits and safety', () => {
       values,
     })
     expect(result).toMatchObject({ ok: false, failure: { reason: 'limit-exceeded' } })
+  })
+})
+
+describe('glob traversal edge cases', () => {
+  it('collects direct and nested files under a trailing **', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'assets/a.json', 'x')
+    await writeArtifact(workspace, 'assets/nested/b.json', 'y')
+    const result = await verifyEvidence(file('assets/**', { glob: true } as Partial<Evidence>), {
+      workspace,
+      values,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.evidence.bytes).toBeGreaterThanOrEqual(2)
+  })
+
+  it('fails when a glob cannot read a subtree', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'good.md', 'x')
+    await writeArtifact(workspace, 'locked/secret.md', 'y')
+    try {
+      await chmod(join(workspace, 'locked'), 0o000)
+    } catch {
+      return
+    }
+    const result = await verifyEvidence(file('**/*.md', { glob: true } as Partial<Evidence>), {
+      workspace,
+      values,
+    })
+    await chmod(join(workspace, 'locked'), 0o755).catch(() => undefined)
+    if (result.ok) return
+    expect(result.failure.reason).toBe('unreadable')
   })
 })

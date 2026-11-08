@@ -34,6 +34,7 @@ export type EvidenceFailureReason =
   | 'no-call'
   | 'check-failed'
   | 'limit-exceeded'
+  | 'unreadable'
   | 'no-answer'
   | 'rejected-answer'
   | 'unsupported'
@@ -327,6 +328,34 @@ export async function expandGlob(root: string, pattern: string): Promise<GlobExp
     if (info?.isDirectory() === true) return 'dir'
     return 'none'
   }
+  const collectAll = async (directory: string, depth: number): Promise<void> => {
+    if (failure !== undefined) return
+    if (found.length >= 200 || depth > 12) {
+      limitHit = true
+      return
+    }
+    const entries = await readdir(join(root, directory), { withFileTypes: true }).catch(
+      () => undefined,
+    )
+    if (entries === undefined) {
+      fail('unreadable', `the glob could not read "${directory === '' ? '.' : directory}"`)
+      return
+    }
+    for (const entry of entries) {
+      const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
+      if (entry.isFile()) {
+        found.push(candidate)
+        if (found.length >= 200) limitHit = true
+      } else if (entry.isDirectory()) {
+        await collectAll(candidate, depth + 1)
+      } else if (entry.isSymbolicLink()) {
+        const kind = await checkLink(candidate)
+        if (kind === 'file') found.push(candidate)
+        else if (kind === 'dir') await collectAll(candidate, depth + 1)
+      }
+      if (failure !== undefined || limitHit) return
+    }
+  }
   const walk = async (directory: string, index: number, depth: number): Promise<void> => {
     if (failure !== undefined) return
     if (found.length >= 200 || depth > 12) {
@@ -336,12 +365,19 @@ export async function expandGlob(root: string, pattern: string): Promise<GlobExp
     const segment = segments[index]
     if (segment === undefined) return
     if (segment === '**') {
+      if (index === segments.length - 1) {
+        await collectAll(directory, depth)
+        return
+      }
       // `**` matches zero or more segments; try each deeper directory and the tail.
       await walk(directory, index + 1, depth + 1)
       const entries = await readdir(join(root, directory), { withFileTypes: true }).catch(
         () => undefined,
       )
-      if (entries === undefined) return
+      if (entries === undefined) {
+        fail('unreadable', `the glob could not read "${directory === '' ? '.' : directory}"`)
+        return
+      }
       for (const entry of entries) {
         const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
         if (entry.isDirectory()) {
@@ -357,7 +393,10 @@ export async function expandGlob(root: string, pattern: string): Promise<GlobExp
     const entries = await readdir(join(root, directory), { withFileTypes: true }).catch(
       () => undefined,
     )
-    if (entries === undefined) return
+    if (entries === undefined) {
+      fail('unreadable', `the glob could not read "${directory === '' ? '.' : directory}"`)
+      return
+    }
     for (const entry of entries) {
       if (!globMatches(segment, entry.name)) continue
       const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
