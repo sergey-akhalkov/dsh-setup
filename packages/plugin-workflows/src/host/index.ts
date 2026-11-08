@@ -306,7 +306,16 @@ function toolSummary(name: string, isError: boolean, text: string): string {
  * `agent.steer`, `agent.inject`, or a tool, and a thrown observation is
  * contained so the turn is unaffected.
  */
-export function apply(ctx: Context): void {
+export interface WorkflowsConfig {
+  /** The engine-level opt-in for the optional intent trigger; default false. */
+  readonly allowIntent?: boolean
+}
+
+export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
+  if (config.allowIntent !== undefined && typeof config.allowIntent !== 'boolean') {
+    throw new Error('workflows allowIntent must be a boolean')
+  }
+  const engineAllowIntent = config.allowIntent === true
   // A malformed shipped trigger refuses the plugin load, naming the field.
   const triggers = loadCatalog()
   // A malformed or duplicate shipped definition refuses the plugin load too.
@@ -768,9 +777,7 @@ export function apply(ctx: Context): void {
               const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
               seen.set(sessionId, sessionSeen)
               const rows = evaluateIntents(intentDefinitions, classification, {
-                allowIntent: intentDefinitions.some(
-                  (definition) => definition.settings.allowIntent,
-                ),
+                allowIntent: engineAllowIntent,
                 confirmed: true,
                 enabled: true,
                 ready: true,

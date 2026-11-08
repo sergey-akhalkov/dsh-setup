@@ -25,7 +25,7 @@ Deterministic kinds the engine may evaluate: `turn.stopping`, `tool.pre-execute`
 
 A trigger is `shadow` or `active`, with a `dedupe` policy (`none`, `turn`, `path+content-hash`, `callId`, `name`) and optional `repeat` and `applicability` (`checkpoint-required`). A shadow match records `would-fire` and acts on nothing. An active match starts at most one run per dedupe key (a repeat starts a new run). A not-applicable trigger records `not-applicable` and creates no run. The Why-not table shows the effective vocabulary: the shadow reasons (`would-fire`, `event-mismatch`, `filter-mismatch`, `dedupe`, `disabled`, `not-ready`, `error`) plus the engine outcomes `run-created`, `run-suppressed`, and `not-applicable`.
 
-The optional intent trigger is shadow by default, records the classifier name, confidence, and reason, and can start a run only when `settings.allowIntent` is true and the definition was installed and user-confirmed.
+The optional intent trigger is shadow by default, records the classifier name, confidence, and reason, and can start a run only when both the plugin row's `config.allowIntent` (default false) and the definition's `settings.allowIntent` are true and the definition was installed and user-confirmed. The host classifies the latest user message with the bounded built-in heuristic (`heuristic-v1`); a definition matches only its declared `intent`, `classifier`, `session`, and `workspace` filters.
 
 ## Evidence
 
