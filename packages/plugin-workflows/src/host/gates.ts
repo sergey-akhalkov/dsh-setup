@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve } from 'node:path'
 import type { Definition, Step } from './definitions.js'
 import { resolveOwnership } from './definitions.js'
 import type { EvidenceCheck, EvidenceContext } from './evidence.js'
@@ -418,10 +419,17 @@ export function recognizeFileWrite(exec: {
 /** Normalize a model path into a workspace-relative slash path, or refuse it. */
 function workspaceRelativePath(workspace: string, path: string): string | undefined {
   const normalized = path.replaceAll('\\', '/').replace(/^\.\//u, '')
-  if (normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized)) {
-    // A model path outside the workspace is never a host write target; the
-    // host paths are workspace-relative, so an absolute target is refused.
-    return normalized
+  const absolute =
+    isAbsolute(normalized) || normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized)
+  if (absolute) {
+    // An absolute target inside the workspace is the same file as its relative
+    // form; one outside is not this guard's store.
+    const root = resolve(workspace)
+    const relativePath = relative(root, resolve(root, normalized)).replaceAll('\\', '/')
+    if (relativePath === '' || relativePath === '..' || relativePath.startsWith('../')) {
+      return relativePath === '' ? '' : normalized
+    }
+    return relativePath
   }
   const parts: string[] = []
   for (const segment of normalized.split('/')) {
@@ -433,14 +441,20 @@ function workspaceRelativePath(workspace: string, path: string): string | undefi
     }
     parts.push(segment)
   }
-  void workspace
   return parts.join('/')
 }
 
+/** The path comparison follows the filesystem's case semantics. */
+function foldPath(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
 function isProtectedWritePath(relative: string): boolean {
-  return PROTECTED_WRITE_PREFIXES.some(
-    (prefix) => relative === prefix || relative.startsWith(prefix),
-  )
+  const folded = foldPath(relative)
+  return PROTECTED_WRITE_PREFIXES.some((prefix) => {
+    const expected = foldPath(prefix)
+    return folded === expected || folded.startsWith(expected)
+  })
 }
 
 export interface AuthorizationWriteInput {

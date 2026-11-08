@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseArchiveCommand } from '../src/host/command-parse.ts'
 import {
@@ -726,6 +726,38 @@ describe('authorization write guard', () => {
         ownedCallIds: new Set(),
       }),
     ).toMatchObject({ kind: 'deny' })
+  })
+
+  it('refuses an absolute target inside the workspace through write and edit', () => {
+    for (const path of [
+      resolve('/workspace', '.dsh/workflows/definitions/mine.json'),
+      resolve('/workspace', '.dsh/workflows/approved.json'),
+      resolve('/workspace', '.dsh/workflows/receipts/auth.json'),
+      resolve('/workspace', '.dsh/workflows/runs/run-1.json'),
+    ]) {
+      for (const tool of ['write', 'edit']) {
+        expect(
+          authorizationWriteDecision({
+            workspace: '/workspace',
+            exec: { name: tool, arguments: { file_path: path } },
+            ownedCallIds: new Set(),
+          }),
+          `${tool} ${path}`,
+        ).toMatchObject({ kind: 'deny' })
+      }
+    }
+  })
+
+  it.skipIf(process.platform !== 'win32')('refuses mixed-case protected paths on Windows', () => {
+    for (const path of [
+      '.DSH/WORKFLOWS/definitions/mine.json',
+      '.DSH/WORKFLOWS/APPROVED.json',
+      '.Dsh/Workflows/Receipts/auth.json',
+      '.dsh/WORKFLOWS/RUNS/run-1.json',
+    ]) {
+      expect(decision(path), path).toMatchObject({ kind: 'deny' })
+    }
+    expect(decision('.DSH/WORKFLOWS/APPROVED.json', 'owned-host-call')).toEqual({ kind: 'allow' })
   })
 
   it('allows the host-owned install/receipt call and leaves another path untouched', () => {
