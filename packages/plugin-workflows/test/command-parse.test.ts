@@ -394,3 +394,15 @@ it('accepts PowerShell common parameters in moves', () => {
     ),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
 })
+it('accepts git keep-going and the PowerShell LiteralPath alias', () => {
+  expect(parseArchiveCommand('git mv -k openspec/changes/auth openspec/changes/archive/')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'git',
+  })
+  expect(
+    parseArchiveCommand(
+      'Move-Item -LP openspec/changes/auth -Destination openspec/changes/archive/',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+})

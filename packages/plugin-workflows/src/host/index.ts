@@ -1586,6 +1586,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             workspace,
             inside ? resolvedWorkdir : undefined,
           )
+          const normalizedCommand = command.replaceAll('\\\\', '/').toLowerCase()
+          const looksLikeMove =
+            /(?:^|\\s)(?:git\\s+mv|mv|move-item)\\s/iu.test(command) &&
+            normalizedCommand.includes('openspec/changes/archive')
+          if (archive === undefined && looksLikeMove) {
+            return {
+              kind: 'deny',
+              reason:
+                'the archive move could not be parsed safely; use openspec archive <name> or a plain move of openspec/changes/<name> into openspec/changes/archive/',
+            }
+          }
           if (archive?.kind === 'archive') {
             if (archive.multipleSources === true) {
               return {

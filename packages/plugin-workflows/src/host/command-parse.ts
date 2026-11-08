@@ -227,6 +227,8 @@ function parseMoveOperands(
     '--interactive',
     '-u',
     '--update',
+    '-k',
+    '--keep-going',
     '-force',
     '-whatif',
     '-confirm',
@@ -243,8 +245,8 @@ function parseMoveOperands(
     '-outbuffer',
     '-pipelinevariable',
   ])
-  const destinationNames = new Set(['-t', '--target-directory', '-destination', '-dest'])
-  const sourceNames = new Set(['-literalpath', '-path'])
+  const destinationNames = new Set(['-t', '--target-directory', '-destination', '-dest', '-target'])
+  const sourceNames = new Set(['-literalpath', '-lp', '-path', '-pspath'])
   const positional: string[] = []
   let source: string | undefined
   let destination: string | undefined
