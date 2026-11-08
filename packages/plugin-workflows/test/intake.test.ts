@@ -291,6 +291,64 @@ describe('change-intake engine', () => {
     expect(toolCalls).toHaveLength(1)
   })
 
+  it('keeps create-change open until .openspec.yaml exists without re-dispatching', async () => {
+    const workspace = await tempWorkspace()
+    const definition = intakeDefinition()
+    const owned = new OwnedCalls()
+    let run = newRun(definition, workspace)
+    for (const step of ['requirements', 'architecture', 'interface']) {
+      run = settleStep(run, step, 'done', { at: 1_500 })
+    }
+    const toolCalls: Array<{
+      callId: string
+      name: string
+      arguments: Record<string, unknown>
+      ok: boolean
+    }> = []
+    let dispatches = 0
+    const advance = (): ReturnType<typeof advanceIntake> =>
+      advanceIntake({
+        run,
+        definition,
+        values: { name: 'auth' },
+        evidenceContext: { workspace, values: { name: 'auth' }, toolCalls },
+        owned,
+        installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+        now: 2_000,
+        toolRunner: {
+          async call(request) {
+            dispatches += 1
+            toolCalls.push({
+              callId: request.callId,
+              name: request.name,
+              arguments: { ...request.arguments },
+              ok: true,
+            })
+            return { ok: true }
+          },
+        },
+      })
+    let result = await advance()
+    run = result.run
+    expect(run.steps.find((step) => step.id === 'create-change')?.state).toBe('open')
+    expect(result.waiting?.stepId).toBe('create-change')
+    result = await advance()
+    run = result.run
+    expect(dispatches).toBe(1)
+    expect(run.steps.find((step) => step.id === 'create-change')?.state).toBe('open')
+    await mkdir(join(workspace, 'openspec', 'changes', 'auth'), { recursive: true })
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', '.openspec.yaml'),
+      'version: 1\n',
+      'utf8',
+    )
+    result = await advance()
+    run = result.run
+    expect(run.steps.find((step) => step.id === 'create-change')?.state).toBe('done')
+    expect(dispatches).toBe(1)
+    expect(result.waiting?.stepId).toBe('spec')
+  })
+
   it('keeps spec open when strict validation fails and shows the paths the verifier checks', async () => {
     const workspace = await tempWorkspace()
     const definition = intakeDefinition()

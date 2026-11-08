@@ -410,6 +410,30 @@ describe('check and human evidence', () => {
     })
   })
 
+  it('lets the latest validation attempt decide after a success and a failure', async () => {
+    const workspace = await tempWorkspace()
+    const evidence: Evidence = { kind: 'check', command: 'openspec validate {name} --strict' }
+    const base = { workspace, values, stepStartedAt: 100 }
+    expect(
+      await verifyEvidence(evidence, {
+        ...base,
+        shellResults: [
+          shell({ callId: 'pass', at: 200 }),
+          shell({ callId: 'fail', at: 300, exitCode: 1 }),
+        ],
+      }),
+    ).toMatchObject({ ok: false, failure: { reason: 'check-failed' } })
+    expect(
+      await verifyEvidence(evidence, {
+        ...base,
+        shellResults: [
+          shell({ callId: 'fail', at: 200, exitCode: 1 }),
+          shell({ callId: 'pass', at: 300 }),
+        ],
+      }),
+    ).toMatchObject({ ok: true, evidence: { callId: 'pass' } })
+  })
+
   it('completes only on the declared user answer and refuses no', async () => {
     const workspace = await tempWorkspace()
     const evidence: Evidence = { kind: 'human', answer: 'yes' }

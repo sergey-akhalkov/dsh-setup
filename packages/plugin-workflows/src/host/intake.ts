@@ -151,7 +151,9 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
     }
     if (step.executor === 'tool') {
       const current = run.steps.find((entry) => entry.id === step.id)
-      const alreadyDispatched = current?.state === 'done'
+      // A dispatch already happened when the step still carries its tool
+      // evidence; the missing file is rechecked without dispatching again.
+      const alreadyDispatched = current?.state === 'done' || current?.evidence?.kind === 'tool'
       if (!alreadyDispatched) {
         if (input.toolRunner === undefined) {
           return {
@@ -179,8 +181,17 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         input.evidenceContext,
       )
       if (!check.ok) {
+        // The owned call alone is not the contract: keep the step open with
+        // its dispatch evidence so the next advance rechecks the missing file.
+        const dispatched = run.steps.find((entry) => entry.id === step.id)?.evidence
         return {
-          run: setRunStatus(run, 'blocked', at),
+          run: setRunStatus(
+            dispatched === undefined
+              ? run
+              : settleStep(run, step.id, 'open', { at, evidence: dispatched }),
+            'blocked',
+            at,
+          ),
           completed: false,
           waiting: waitingFor(step, input.evidenceContext),
         }

@@ -715,47 +715,53 @@ function checkResult(
   const results = (context.shellResults ?? []).filter(
     (candidate) => candidate.foreground && candidate.command === command.text,
   )
-  if (results.length === 0) {
+  const afterStart = results.filter((candidate) => candidate.at >= startedAt)
+  if (afterStart.length === 0) {
     return failure(
       'check-failed',
-      `no completed foreground result for "${command.text}"`,
+      results.length === 0
+        ? `no completed foreground result for "${command.text}"`
+        : `"${command.text}" has no qualifying result after the step start`,
       undefined,
       item,
     )
   }
-  let reason = `"${command.text}" has no qualifying result after the step start`
-  for (const result of results) {
-    if (result.at < startedAt) {
-      reason = `"${command.text}" last ran before the step was requested`
-      continue
-    }
-    if (result.timedOut === true) {
-      reason = `"${command.text}" timed out`
-      continue
-    }
-    if (result.signal !== undefined) {
-      reason = `"${command.text}" was stopped by ${result.signal}`
-      continue
-    }
-    if (result.sandboxDenied === true) {
-      reason = `"${command.text}" was refused by the sandbox`
-      continue
-    }
-    if (result.exitCode !== 0) {
-      reason = `"${command.text}" exited ${String(result.exitCode)}; a zero exit is required`
-      continue
-    }
-    return {
-      ok: true,
-      evidence: {
-        kind: 'check',
-        callId: result.callId,
-        at: result.at,
-        detail: command.text,
-      },
-    }
+  // The latest attempt decides: a later failure must not be hidden by an
+  // earlier success, while a retry that now succeeds still passes.
+  const latest = afterStart.reduce((last, candidate) =>
+    candidate.at >= last.at ? candidate : last,
+  )
+  if (latest.timedOut === true) {
+    return failure('check-failed', `"${command.text}" timed out`, undefined, item)
   }
-  return failure('check-failed', reason, undefined, item)
+  if (latest.signal !== undefined) {
+    return failure(
+      'check-failed',
+      `"${command.text}" was stopped by ${latest.signal}`,
+      undefined,
+      item,
+    )
+  }
+  if (latest.sandboxDenied === true) {
+    return failure('check-failed', `"${command.text}" was refused by the sandbox`, undefined, item)
+  }
+  if (latest.exitCode !== 0) {
+    return failure(
+      'check-failed',
+      `"${command.text}" exited ${String(latest.exitCode)}; a zero exit is required`,
+      undefined,
+      item,
+    )
+  }
+  return {
+    ok: true,
+    evidence: {
+      kind: 'check',
+      callId: latest.callId,
+      at: latest.at,
+      detail: command.text,
+    },
+  }
 }
 
 function humanResult(
