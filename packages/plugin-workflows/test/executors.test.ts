@@ -525,6 +525,20 @@ describe('branch executor', () => {
       values: { approval: null },
     })
     expect(nullMissing.next).toBe('no')
+    const triggerMatch = runBranchStep({
+      run: branchRun(),
+      step: {
+        ...choose,
+        branch: {
+          predicate: { '==': [{ var: 'trigger' }, 'turn.stopping'] },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'yes',
+          else: 'no',
+        },
+      } as (typeof definition.steps)[number],
+      values: {},
+    })
+    expect(triggerMatch.next).toBe('yes')
   })
 })
 
@@ -596,6 +610,18 @@ describe('loop executor', () => {
     })
     expect(nonnumeric.run.status).toBe('blocked')
     expect(nonnumeric.run.steps[0]?.reason).toContain('3-iteration cap')
+    const triggerStop = runLoopStep({
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { '==': [{ var: 'trigger' }, 'turn.stopping'] },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: {},
+    })
+    expect(triggerStop.next).toBe('end')
     const invalid = runLoopStep({
       run: loopRun(),
       step: {

@@ -195,7 +195,7 @@ export interface JsonLogicData {
   readonly context: Readonly<Record<string, unknown>>
   readonly steps: WorkflowRun['steps']
   readonly evidence: unknown
-  readonly trigger: Readonly<Record<string, unknown>>
+  readonly trigger: WorkflowRun['trigger']
   readonly iteration?: number
   readonly item?: unknown
 }
@@ -486,7 +486,7 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
         context: input.values,
         steps: input.run.steps,
         evidence: input.run.steps.map((step) => step.evidence ?? null),
-        trigger: { definition: input.run.definition, run: input.run.id },
+        trigger: input.run.trigger,
       } satisfies JsonLogicData),
     )
       ? spec.then
@@ -550,7 +550,7 @@ export function runLoopStep(input: LoopStepInput): LoopStepResult {
           context: input.values,
           steps: input.run.steps,
           evidence: input.run.steps.map((step) => step.evidence ?? null),
-          trigger: { definition: input.run.definition, run: input.run.id },
+          trigger: input.run.trigger,
           iteration,
           item: Array.isArray(source) ? source[iteration] : undefined,
         } satisfies JsonLogicData),
