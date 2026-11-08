@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Evidence } from '../src/host/definitions.ts'
 import {
   currentSpecDigest,
+  describeEvidence,
   type ShellResultObservation,
   type ToolCallObservation,
   verifyEvidence,
@@ -716,4 +717,39 @@ it('accepts a qualifying retry after an earlier failure or stale result and requ
     shellResults: [shell({ callId: 'historical', at: 1 })],
   })
   expect(missingStart).toMatchObject({ ok: false, failure: { reason: 'check-failed' } })
+})
+
+describe('resolved evidence descriptions', () => {
+  it('resolves the command, tool arguments, and record path the verifier checks', () => {
+    const context = { workspace: '/workspace', values: { name: 'auth' } }
+    expect(
+      describeEvidence({ kind: 'check', command: 'openspec validate {name} --strict' }, context),
+    ).toContain('openspec validate auth --strict')
+    expect(
+      describeEvidence(
+        {
+          kind: 'tool',
+          name: 'shell',
+          command: 'openspec new change {name}',
+          args: { argv: ['openspec', 'new', 'change', '{name}'] },
+        },
+        context,
+      ),
+    ).toContain('openspec new change auth')
+    const record = describeEvidence(
+      {
+        kind: 'record',
+        rule: 'spec-review',
+        change: '{name}',
+        phase: 'spec',
+        scope: 'whole',
+        verdict: 'PASS',
+        digest: 'current',
+      },
+      context,
+    )
+    expect(record).toContain('.dsh/delegation/spec-review/auth/spec.json')
+    expect(record).toContain('scope=whole')
+    expect(record).toContain('digest=current')
+  })
 })

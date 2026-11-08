@@ -342,3 +342,27 @@ describe('end-to-end intake receipt', () => {
     expect(await readReceipt(workspace, 'auth', auth)).toMatchObject({ change: 'auth' })
   })
 })
+
+it('keeps the evidence contract when the prompt exceeds the steer budget', () => {
+  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+  if (found === undefined) throw new Error('the change-intake definition is missing')
+  const definition = found
+  const base = definition.steps[0] as (typeof definition.steps)[number]
+  const step = { ...base, prompt: 'x'.repeat(5_000) }
+  const run = createRun({
+    definition: definition.id,
+    trigger: 'tool.pre-execute',
+    session: 'session-1',
+    workspace: '/workspace',
+    steps: [step.id],
+  })
+  const text = renderMainSteer({
+    run,
+    definition,
+    step,
+    evidenceContext: { workspace: '/workspace', values: { name: 'auth' } },
+  })
+  expect(text.length).toBeLessThanOrEqual(2000)
+  expect(text).toContain('Evidence required:')
+  expect(text).toContain('.dsh/workflows/drafts/auth/requirements.md')
+})

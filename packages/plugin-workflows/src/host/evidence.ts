@@ -803,7 +803,14 @@ export function collectEvidencePaths(
         const resolved = interpolate(value.path, context, item)
         return [resolved.ok ? (resolved.evidence.path ?? value.path) : value.path]
       }
-      return []
+      const rule = resolveEvidenceText(value.rule, context, item)
+      if (!rule.ok) return []
+      const change =
+        value.change === undefined ? undefined : resolveEvidenceText(value.change, context, item)
+      if (change !== undefined && !change.ok) return []
+      return change === undefined
+        ? []
+        : [`.dsh/delegation/${rule.text}/${change.text}/${value.phase ?? 'spec'}.json`]
     }
     default:
       return []
@@ -827,12 +834,30 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
       return `all of: ${value.items.map((item) => describeEvidence(item, context)).join('; ')}`
     case 'record': {
       const [path] = collectEvidencePaths(value, context)
-      return `record ${value.rule} ${value.verdict}${path === undefined ? '' : ` at ${path}`}`
+      const constraints = [
+        `rule=${value.rule}`,
+        `verdict=${value.verdict}`,
+        ...(value.change === undefined ? [] : [`change=${value.change}`]),
+        ...(value.phase === undefined ? [] : [`phase=${value.phase}`]),
+        ...(value.scope === undefined ? [] : [`scope=${value.scope}`]),
+        ...(value.task === undefined ? [] : [`task=${value.task}`]),
+        ...(value.digest === undefined ? [] : [`digest=${value.digest}`]),
+      ]
+      return `record ${constraints.join(' ')}${path === undefined ? '' : ` at ${path}`}`
     }
-    case 'tool':
-      return `completed tool call ${value.name}${value.command === undefined ? '' : ` "${value.command}"`}`
-    case 'check':
-      return `foreground command "${value.command}" exits 0`
+    case 'tool': {
+      const command =
+        value.command === undefined
+          ? undefined
+          : resolveEvidenceText(value.command, context, undefined)
+      const args =
+        value.args === undefined ? '' : ` args ${JSON.stringify(value.args).slice(0, 200)}`
+      return `completed tool call ${value.name}${command === undefined ? '' : ` "${command.ok ? command.text : value.command}"`}${args}`
+    }
+    case 'check': {
+      const command = resolveEvidenceText(value.command, context, undefined)
+      return `foreground command "${command.ok ? command.text : value.command}" exits 0`
+    }
     case 'human':
       return `user answer ${Array.isArray(value.answer) ? value.answer.join(' or ') : value.answer}`
     case 'declaration':
