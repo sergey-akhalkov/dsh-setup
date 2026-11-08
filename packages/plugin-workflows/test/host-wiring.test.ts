@@ -1705,3 +1705,31 @@ describe('main-step ownership across turns', () => {
     expect(owner?.steps.find((step) => step.id === 'requirements')?.requestedAt).toBeDefined()
   })
 })
+
+describe('archive workdir evidence root', () => {
+  it('denies an archive whose shell workdir is outside the session workspace', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const outside = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'archive-outside',
+        name: 'pwsh',
+        arguments: { command: 'openspec archive auth', workdir: outside },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string; reason?: string } | undefined
+    expect(decision?.kind).toBe('deny')
+    expect(decision?.reason).toMatch(/not the session workspace/u)
+    expect(nextCalled).toBe(false)
+  })
+})

@@ -97,7 +97,8 @@ function changeUnderChanges(path: string): string | undefined {
 }
 
 function targetsArchive(destination: string, name: string): boolean {
-  return destination === ARCHIVE_DIR || destination === `${ARCHIVE_DIR}/${name}`
+  if (destination === ARCHIVE_DIR) return true
+  return new RegExp(`^${ARCHIVE_DIR}/(?:\\d{4}-\\d{2}-\\d{2}-)?${name}$`, 'u').test(destination)
 }
 
 function archiveMove(
@@ -120,7 +121,8 @@ function archiveMove(
  */
 export function parseArchiveCommand(command: string): ArchiveIntent | undefined {
   const trimmed = command.trim()
-  if (isCompound(trimmed)) return undefined
+  // Moves carry Windows paths, so a backslash is data here; control characters are not.
+  if (trimmed === '' || CONTROL.test(trimmed)) return undefined
   const openspec = parseOpenspecCommand(trimmed)
   if (openspec?.kind === 'archive') {
     return { kind: 'archive', change: openspec.change, form: 'openspec' }
@@ -145,7 +147,7 @@ export function parseArchiveCommand(command: string): ArchiveIntent | undefined 
         flags.set((tokens[index] ?? '').toLowerCase(), tokens[index + 1] ?? '')
       }
       return archiveMove(
-        unquotedPath(flags.get('-path')),
+        unquotedPath(flags.get('-literalpath') ?? flags.get('-path')),
         unquotedPath(flags.get('-destination') ?? flags.get('-dest')),
         'Move-Item',
       )

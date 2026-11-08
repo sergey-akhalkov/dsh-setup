@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, normalize } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -1182,6 +1182,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const rawUserQuestions = optionalService<DshUserQuestions>('userQuestions')
   const userQuestions =
     rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions)
+  const shellWorkdirOf = (exec: Readonly<ToolExecution>): string | undefined => {
+    const args = exec.arguments
+    if (typeof args !== 'object' || args === null) return undefined
+    const record = args as Record<string, unknown>
+    const workdir = record.workdir ?? record.cwd
+    return typeof workdir === 'string' && workdir !== '' ? workdir : undefined
+  }
   const shellCommandOf = (exec: Readonly<ToolExecution>): string | undefined => {
     const args = exec.arguments
     if (typeof args !== 'object' || args === null) return undefined
@@ -1560,6 +1567,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (command !== undefined) {
           const archive = parseArchiveCommand(command)
           if (archive?.kind === 'archive') {
+            const declaredWorkdir = shellWorkdirOf(exec)
+            if (declaredWorkdir !== undefined) {
+              const resolved = normalize(
+                isAbsolute(declaredWorkdir) ? declaredWorkdir : join(workspace, declaredWorkdir),
+              )
+              const expected = normalize(workspace)
+              const same =
+                process.platform === 'win32'
+                  ? resolved.toLowerCase() === expected.toLowerCase()
+                  : resolved === expected
+              if (!same) {
+                return {
+                  kind: 'deny',
+                  reason: `the archive command runs in "${resolved}", not the session workspace "${expected}"; its evidence cannot authorize this archive`,
+                }
+              }
+            }
             const specRecord = await verifyEvidence(
               {
                 kind: 'record',
