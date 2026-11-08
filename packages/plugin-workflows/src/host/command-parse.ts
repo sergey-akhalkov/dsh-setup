@@ -86,8 +86,11 @@ export const ARCHIVE_DIR = 'openspec/changes/archive'
 
 function unquotedPath(token: string | undefined): string | undefined {
   if (token === undefined) return undefined
-  const withoutQuotes = token.replace(/^['"]|['"]$/gu, '')
-  return withoutQuotes.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const withoutQuotes = token.replace(/^['"]|['"]$/gu, '').replaceAll('\\', '/')
+  return withoutQuotes
+    .split('/')
+    .filter((part) => part !== '' && part !== '.')
+    .join('/')
 }
 
 function changeUnderChanges(path: string): string | undefined {
