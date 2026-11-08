@@ -20,7 +20,7 @@ import {
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import { verifyEvidence } from './evidence.js'
-import { type HumanQuestionService, OwnedCalls } from './executors.js'
+import { adaptUserQuestions, type DshUserQuestions, OwnedCalls } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
 import {
   authorizationWriteDecision,
@@ -1179,7 +1179,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return undefined
     }
   }
-  const userQuestions = optionalService<HumanQuestionService>('userQuestions')
+  const rawUserQuestions = optionalService<DshUserQuestions>('userQuestions')
+  const userQuestions =
+    rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions)
   const shellCommandOf = (exec: Readonly<ToolExecution>): string | undefined => {
     const args = exec.arguments
     if (typeof args !== 'object' || args === null) return undefined

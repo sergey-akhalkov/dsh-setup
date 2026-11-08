@@ -21,6 +21,81 @@ export const DEFAULT_MAIN_ATTEMPTS = 3
 /** The largest human question the host will ask. */
 export const MAX_HUMAN_PROMPT = 2000
 
+/** How long a human question may stay open before the declared action applies. */
+export const HUMAN_QUESTION_TIMEOUT_MS = 15 * 60_000
+
+/** The DSH `userQuestions` contract: one batch of questions in, one batch of answers out. */
+export interface DshUserQuestions {
+  ask(request: {
+    readonly questions: Array<{
+      readonly id: string
+      readonly question: string
+      readonly options?: Array<{ readonly label: string }>
+      readonly multiSelect?: boolean
+    }>
+    readonly signal?: AbortSignal
+  }): Promise<{
+    readonly answers: Array<{
+      readonly id: string
+      readonly selected?: readonly string[]
+      readonly custom?: string
+    }>
+  }>
+}
+
+/**
+ * Adapt the DSH question service to the single-question confirm shape the
+ * executors use. A stable id echoes the answer; timeout and cancellation map to
+ * the declared action.
+ */
+export function adaptUserQuestions(
+  raw: DshUserQuestions,
+  timeoutMs = HUMAN_QUESTION_TIMEOUT_MS,
+): HumanQuestionService {
+  let counter = 0
+  return {
+    ask: async (request) => {
+      const id = `workflows-${String((counter += 1))}`
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      const aborted = new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () => reject(new Error('workflows-question-timeout')),
+          { once: true },
+        )
+      })
+      try {
+        const answered = await Promise.race([
+          raw.ask({
+            questions: [
+              {
+                id,
+                question: request.question,
+                options: request.accepted.map((label) => ({ label })),
+                multiSelect: false,
+              },
+            ],
+            signal: controller.signal,
+          }),
+          aborted,
+        ])
+        const item = answered.answers.find((entry) => entry.id === id)
+        if (item === undefined) return {}
+        const custom = item.custom?.trim() ?? ''
+        if (custom !== '') return { answer: custom }
+        const selected = item.selected?.[0]?.trim() ?? ''
+        return selected === '' ? {} : { answer: selected }
+      } catch (error) {
+        if (controller.signal.aborted) return { timedOut: true }
+        throw error
+      } finally {
+        clearTimeout(timer)
+      }
+    },
+  }
+}
+
 export interface MainStepRequest {
   readonly run: WorkflowRun
   readonly definition: Definition
@@ -252,11 +327,12 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       return last
     }
     case 'or': {
+      let last: unknown = false
       for (const entry of args) {
-        const result = value(entry)
-        if (truthy(result)) return result
+        last = value(entry)
+        if (truthy(last)) return last
       }
-      return false
+      return last
     }
     case '!':
       return !truthy(value(args[0]))

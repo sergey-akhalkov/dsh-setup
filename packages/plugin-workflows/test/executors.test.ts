@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { collectEvidencePaths } from '../src/host/evidence.ts'
 import {
+  adaptUserQuestions,
   evaluateJsonLogic,
   type HumanQuestionService,
   OwnedCalls,
@@ -902,6 +903,46 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
     ],
   }
   expect(evaluateJsonLogic(multi, data)).toBe('medium')
+  expect(evaluateJsonLogic({ '===': [{ or: [false, 0] }, 0] }, {})).toBe(true)
   expect(() => evaluateJsonLogic({ '==': [] }, {})).toThrow(/operand/u)
   expect(() => evaluateJsonLogic({ and: [false, { nope: true }] }, {})).toThrow(/unknown operator/u)
+})
+
+it('adapts the DSH questions contract and maps timeout', async () => {
+  const requests: unknown[] = []
+  const answered = adaptUserQuestions({
+    async ask(request) {
+      requests.push(request)
+      return { answers: [{ id: request.questions[0]?.id ?? '', selected: ['yes'] }] }
+    },
+  })
+  expect(
+    await answered.ask({ question: 'Approve?', accepted: ['yes', 'no'], timeoutAction: 'block' }),
+  ).toEqual({ answer: 'yes' })
+  expect(requests[0]).toMatchObject({
+    questions: [
+      {
+        id: expect.stringMatching(/^workflows-\d+$/u),
+        question: 'Approve?',
+        options: [{ label: 'yes' }, { label: 'no' }],
+      },
+    ],
+  })
+  const custom = adaptUserQuestions({
+    async ask() {
+      return { answers: [{ id: 'workflows-1', custom: 'maybe' }] }
+    },
+  })
+  expect(
+    await custom.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
+  ).toEqual({ answer: 'maybe' })
+  const timedOut = adaptUserQuestions(
+    {
+      ask: async () => new Promise<never>(() => undefined),
+    },
+    5,
+  )
+  expect(
+    await timedOut.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
+  ).toEqual({ timedOut: true })
 })
