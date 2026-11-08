@@ -702,3 +702,58 @@ it('rejects array/object mismatches and a completed child without a result', asy
   expect(run.steps[0]?.reason).toContain('without a result')
   expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-empty' })
 })
+
+it('formats an object enum safely and fails the step with the child id', async () => {
+  expect(
+    validateResultSchema(
+      { type: 'object', enum: [{ toString: 'reserved field' }] },
+      {
+        other: true,
+      },
+    ),
+  ).toBeDefined()
+  const definition = validateDefinition({
+    v: 1,
+    id: 'object-enum-demo',
+    name: 'Object enum demo',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+    settings: {
+      allowModelStart: false,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+    },
+    steps: [
+      {
+        id: 'review',
+        title: 'Child review',
+        executor: 'subagent',
+        prompt: 'Review.',
+        subagent: {
+          provider: 'spawn',
+          schema: { type: 'object', enum: [{ toString: 'reserved field' }] },
+        },
+        evidence: { kind: 'file', path: '.dsh/out.json' },
+        next: 'end',
+      },
+    ],
+  })
+  const runner = new FakeRunner({ childId: 'child-enum', completed: true, result: { other: true } })
+  const run = await runSubagentStep({
+    run: createRun({
+      definition: definition.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace: '/workspace',
+      steps: ['review'],
+    }),
+    definition,
+    step: definition.steps[0] as (typeof definition.steps)[number],
+    runner,
+    evidenceContext,
+  })
+  expect(run.status).toBe('failed')
+  expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-enum' })
+})

@@ -665,7 +665,14 @@ export function validateResultSchema(
     if (!match) return `expected ${allowed.join(' or ')}, got ${actual}`
   }
   if (Array.isArray(schema.enum) && !schema.enum.some((entry) => jsonEqual(entry, value))) {
-    return `the value is not one of: ${schema.enum.map(String).join(', ')}`
+    const shown = schema.enum.map((entry) => {
+      try {
+        return JSON.stringify(entry) ?? String(entry)
+      } catch {
+        return Object.prototype.toString.call(entry)
+      }
+    })
+    return `the value is not one of: ${shown.join(', ')}`
   }
   if (Object.hasOwn(schema, 'const') && !jsonEqual(schema.const, value)) {
     return 'the value does not match the declared const'
