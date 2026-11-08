@@ -486,7 +486,11 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     case 'substr': {
       const text = String(value(args[0]))
       const start = Number(value(args[1]))
-      return args.length >= 3 ? text.substr(start, Number(value(args[2]))) : text.substr(start)
+      if (args.length < 3) return text.substr(start)
+      const length = Number(value(args[2]))
+      return length < 0
+        ? text.slice(start, Math.max(start, text.length + length))
+        : text.substr(start, length)
     }
     case 'map': {
       const collection = value(args[0])

@@ -816,6 +816,19 @@ describe('loop executor', () => {
       values: { name: 'auth-flow' },
     })
     expect(substringStop.next).toBe('end')
+    const negativeStop = runLoopStep({
+      definition: loopDefinition,
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { '==': [{ substr: [{ var: 'context.filename' }, 0, -4] }, 'auth'] },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { filename: 'auth.txt' },
+    })
+    expect(negativeStop.next).toBe('end')
     const invalid = runLoopStep({
       definition: loopDefinition,
       run: loopRun(),
