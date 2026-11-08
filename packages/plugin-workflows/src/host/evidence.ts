@@ -850,15 +850,20 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
       return `all of: ${value.items.map((item) => describeEvidence(item, context)).join('; ')}`
     case 'record': {
       const [path] = collectEvidencePaths(value, context)
+      const show = (text: string | undefined): string | undefined => {
+        if (text === undefined) return undefined
+        const resolved = resolveEvidenceText(text, context, undefined)
+        return resolved.ok ? resolved.text : text
+      }
       const constraints = [
-        `rule=${value.rule}`,
+        `rule=${show(value.rule) ?? value.rule}`,
         `verdict=${value.verdict}`,
-        ...(value.change === undefined ? [] : [`change=${value.change}`]),
-        ...(value.phase === undefined ? [] : [`phase=${value.phase}`]),
-        ...(value.scope === undefined ? [] : [`scope=${value.scope}`]),
-        ...(value.task === undefined ? [] : [`task=${value.task}`]),
-        ...(value.digest === undefined ? [] : [`digest=${value.digest}`]),
-      ]
+        show(value.change) === undefined ? '' : `change=${String(show(value.change))}`,
+        show(value.phase) === undefined ? '' : `phase=${String(show(value.phase))}`,
+        show(value.scope) === undefined ? '' : `scope=${String(show(value.scope))}`,
+        show(value.task) === undefined ? '' : `task=${String(show(value.task))}`,
+        value.digest === undefined ? '' : `digest=${value.digest}`,
+      ].filter((entry) => entry !== '')
       return `record ${constraints.join(' ')}${path === undefined ? '' : ` at ${path}`}`
     }
     case 'tool': {

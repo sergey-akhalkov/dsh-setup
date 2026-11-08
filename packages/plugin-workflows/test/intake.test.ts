@@ -420,3 +420,41 @@ it('keeps the contract when prompt redaction expands the text', () => {
   expect(text).toContain('Evidence required:')
   expect(text).toContain('.dsh/workflows/drafts/auth/requirements.md')
 })
+
+it('renders the resolved record task id in a main steer', () => {
+  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+  if (found === undefined) throw new Error('the change-intake definition is missing')
+  const definition = found
+  const base = definition.steps[0] as (typeof definition.steps)[number]
+  const step = {
+    ...base,
+    prompt: 'Wait for the review.',
+    evidence: {
+      kind: 'record' as const,
+      rule: 'task-review',
+      change: '{name}',
+      phase: 'task',
+      scope: 'task',
+      task: '{taskId}',
+      verdict: 'PASS',
+    },
+  }
+  const run = createRun({
+    definition: definition.id,
+    trigger: 'tool.pre-execute',
+    session: 'session-1',
+    workspace: '/workspace',
+    steps: [step.id],
+  })
+  const text = renderMainSteer({
+    run,
+    definition,
+    step,
+    evidenceContext: {
+      workspace: '/workspace',
+      values: { name: 'auth', taskId: '0123456789abcdef' },
+    },
+  })
+  expect(text).toContain('task=0123456789abcdef')
+  expect(text).not.toContain('{taskId}')
+})

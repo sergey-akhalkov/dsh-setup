@@ -751,6 +751,21 @@ describe('resolved evidence descriptions', () => {
     expect(record).toContain('.dsh/delegation/spec-review/auth/spec.json')
     expect(record).toContain('scope=whole')
     expect(record).toContain('digest=current')
+    const taskRecord = describeEvidence(
+      {
+        kind: 'record',
+        rule: 'task-review',
+        change: '{name}',
+        phase: 'task',
+        scope: 'task',
+        task: '{taskId}',
+        verdict: 'PASS',
+      },
+      { ...context, values: { name: 'auth', taskId: '0123456789abcdef' } },
+    )
+    expect(taskRecord).toContain('phase=task')
+    expect(taskRecord).toContain('task=0123456789abcdef')
+    expect(taskRecord).not.toContain('{taskId}')
   })
 })
 
