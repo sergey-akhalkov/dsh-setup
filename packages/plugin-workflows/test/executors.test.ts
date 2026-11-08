@@ -267,6 +267,7 @@ describe('subagent executor', () => {
     expect(run.status).toBe('failed')
     expect(run.steps[0]?.state).toBe('failed')
     expect(run.steps[0]?.reason).toContain('does not match the schema')
+    expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-2' })
     expect(runner.requests).toHaveLength(1)
   })
 
@@ -286,6 +287,7 @@ describe('subagent executor', () => {
     expect(run.status).toBe('failed')
     expect(run.steps[0]?.state).toBe('failed')
     expect(run.steps[0]?.reason).toContain('the child provider stopped')
+    expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-3' })
   })
 })
 
@@ -670,4 +672,17 @@ it('fails before dispatch when a subagent step has no schema', async () => {
   expect(run.steps[0]?.state).toBe('failed')
   expect(run.steps[0]?.reason).toContain('no provider or result schema')
   expect(runner.requests).toHaveLength(0)
+})
+
+it('uses own properties and structural JSON equality', () => {
+  expect(validateResultSchema({ type: 'object', required: ['constructor'] }, {})).toBeDefined()
+  expect(
+    validateResultSchema(
+      { type: 'object', properties: {}, additionalProperties: false },
+      { constructor: 'unexpected' },
+    ),
+  ).toBeDefined()
+  expect(validateResultSchema({ const: { verdict: 'PASS' } }, { verdict: 'PASS' })).toBeUndefined()
+  expect(validateResultSchema({ enum: [[1, 2]] }, [1, 2])).toBeUndefined()
+  expect(validateResultSchema({ const: { a: 1, b: 2 } }, { b: 2, a: 1 })).toBeUndefined()
 })

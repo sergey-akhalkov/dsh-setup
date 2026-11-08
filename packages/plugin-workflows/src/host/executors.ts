@@ -624,6 +624,27 @@ function typeOf(value: unknown): string {
 }
 
 /** Validate one value against the supported schema subset; returns an error. */
+function jsonEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length && left.every((entry, index) => jsonEqual(entry, right[index]))
+    )
+  }
+  if (typeof left === 'object' && left !== null && typeof right === 'object' && right !== null) {
+    const leftRecord = left as Record<string, unknown>
+    const rightRecord = right as Record<string, unknown>
+    const keys = Object.keys(leftRecord)
+    return (
+      keys.length === Object.keys(rightRecord).length &&
+      keys.every(
+        (key) => Object.hasOwn(rightRecord, key) && jsonEqual(leftRecord[key], rightRecord[key]),
+      )
+    )
+  }
+  return false
+}
+
 export function validateResultSchema(
   schema: ResultSchema,
   value: unknown,
@@ -640,16 +661,16 @@ export function validateResultSchema(
     )
     if (!match) return `expected ${allowed.join(' or ')}, got ${actual}`
   }
-  if (Array.isArray(schema.enum) && !schema.enum.some((entry) => entry === value)) {
+  if (Array.isArray(schema.enum) && !schema.enum.some((entry) => jsonEqual(entry, value))) {
     return `the value is not one of: ${schema.enum.map(String).join(', ')}`
   }
-  if (Object.hasOwn(schema, 'const') && schema.const !== value) {
+  if (Object.hasOwn(schema, 'const') && !jsonEqual(schema.const, value)) {
     return 'the value does not match the declared const'
   }
   if (Array.isArray(schema.required) && typeOf(value) === 'object') {
     const record = value as Record<string, unknown>
     for (const key of schema.required) {
-      if (typeof key !== 'string' || !(key in record))
+      if (typeof key !== 'string' || !Object.hasOwn(record, key))
         return `missing required field "${String(key)}"`
     }
   }
@@ -662,13 +683,13 @@ export function validateResultSchema(
         ? (schema.properties as Record<string, unknown>)
         : {}
     for (const [key, child] of Object.entries(properties)) {
-      if (!(key in record) || typeof child !== 'object' || child === null) continue
+      if (!Object.hasOwn(record, key) || typeof child !== 'object' || child === null) continue
       const error = validateResultSchema(child as ResultSchema, record[key], depth + 1)
       if (error !== undefined) return `${key}: ${error}`
     }
     if (schema.additionalProperties === false) {
       for (const key of Object.keys(record)) {
-        if (!(key in properties)) return `unexpected field "${key}"`
+        if (!Object.hasOwn(properties, key)) return `unexpected field "${key}"`
       }
     }
   }
@@ -746,7 +767,15 @@ export async function runSubagentStep(input: SubagentStepInput): Promise<Workflo
   if (!result.completed) {
     const reason = `the child did not complete${result.error === undefined ? '' : `: ${result.error.slice(0, 200)}`}`
     return setRunStatus(
-      settleStep(input.run, input.step.id, 'failed', { at: input.now, reason }),
+      settleStep(input.run, input.step.id, 'failed', {
+        at: input.now,
+        reason,
+        evidence: {
+          kind: 'subagent',
+          callId: result.childId,
+          detail: 'the child did not complete',
+        },
+      }),
       'failed',
       input.now,
     )
@@ -758,6 +787,11 @@ export async function runSubagentStep(input: SubagentStepInput): Promise<Workflo
         settleStep(input.run, input.step.id, 'failed', {
           at: input.now,
           reason: `the child result does not match the schema: ${mismatch.slice(0, 200)}`,
+          evidence: {
+            kind: 'subagent',
+            callId: result.childId,
+            detail: 'the child result did not match the schema',
+          },
         }),
         'failed',
         input.now,
