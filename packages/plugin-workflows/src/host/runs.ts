@@ -469,9 +469,18 @@ export async function pruneRuns(workspace: string, options: PruneOptions): Promi
     runs.set(entry.id, await readAuthenticatedRun(workspace, entry.id, options.auth))
   }
   const terminal = (id: string): boolean => {
-    const status = runs.get(id)?.status
+    const run = runs.get(id)
+    if (run === undefined) return false
+    // Unresolved required work is a durable blocker, not prunable history.
+    if (
+      run.steps.some(
+        (step) => step.state === 'open' || step.state === 'blocked' || step.state === 'failed',
+      )
+    ) {
+      return false
+    }
     // An interrupted run is resumable state, so it is retained like an open run.
-    return status === 'completed' || status === 'cancelled' || status === 'failed'
+    return run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed'
   }
   const removal = options.unlink ?? unlink
   /** A failed deletion is not a removal; a missing file already satisfies it. */

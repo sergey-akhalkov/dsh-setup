@@ -957,3 +957,47 @@ it('keeps archival blocked while a required review step failed', async () => {
   expect(decision).toMatchObject({ kind: 'deny' })
   if (decision.kind === 'deny') expect(decision.reason).toContain('run-review-failed')
 })
+it('pruning cannot turn a failed review denial into an allowance', async () => {
+  const workspace = await tempWorkspace()
+  let intake = intakeRunFor(workspace, 'auth', 'run-prune-intake')
+  for (const step of ['requirements', 'create-change', 'spec', 'approval']) {
+    intake = settleStep(intake, step, 'done', { at: 1_100 })
+  }
+  intake = setRunStatus(intake, 'completed', 2_000)
+  await writeRun(workspace, intake, gateAuth())
+  let review = createRun({
+    definition: 'task-review',
+    trigger: 'fs.change',
+    session: 'session-1',
+    workspace,
+    context: { name: 'auth' },
+    steps: ['read-review', 'follow-up'],
+    id: 'run-prune-review',
+  })
+  review = settleStep(review, 'read-review', 'failed', { at: 3_000, reason: 'the review failed' })
+  review = setRunStatus(review, 'failed', 3_100)
+  await writeRun(workspace, review, gateAuth())
+  const nowValue = 50 * DAY_MS
+  await utimes(runPath(workspace, review.id), new Date(nowValue), new Date(nowValue))
+  await pruneRuns(workspace, {
+    auth: gateAuth(),
+    now: nowValue,
+    retentionMs: 30 * DAY_MS,
+  })
+  const runs = await listAuthenticatedRuns(workspace, gateAuth())
+  expect(runs.map((run) => run.id)).toContain(review.id)
+  const decision = evaluateArchiveGate({
+    change: 'auth',
+    runs,
+    receipts: [],
+    specRecord: {
+      ok: true,
+      evidence: {
+        kind: 'record',
+        path: '.dsh/delegation/spec-review/auth/spec.json',
+        digest: DIGEST,
+      },
+    },
+  })
+  expect(decision).toMatchObject({ kind: 'deny' })
+})

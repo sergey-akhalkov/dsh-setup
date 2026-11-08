@@ -572,3 +572,18 @@ it('refuses a foreign-session resume or cancel', async () => {
   )
   expect((await readAuthenticatedRun(workspace, second.id, auth()))?.status).toBe('interrupted')
 })
+
+it('retains a failed run whose required step is still unresolved', async () => {
+  const workspace = await tempWorkspace()
+  const run = setRunStatus(intakeRun(workspace, 'auth', 1_000, 'run-unresolved'), 'failed', 1_100)
+  await writeRun(workspace, run, auth())
+  const old = 50 * DAY_MS
+  await utimes(runPath(workspace, run.id), new Date(old), new Date(old))
+  const result = await pruneRuns(workspace, {
+    auth: auth(),
+    now: old + 40 * DAY_MS,
+    retentionMs: 30 * DAY_MS,
+  })
+  expect(result.removed).not.toContain(run.id)
+  expect((await readAuthenticatedRun(workspace, run.id, auth()))?.status).toBe('failed')
+})
