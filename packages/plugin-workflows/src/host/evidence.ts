@@ -235,18 +235,24 @@ async function fileCheck(
     return failure('path-escape', 'the workspace is not readable', path, item)
   }
   if (evidence.glob === true) {
-    const expansion = await expandGlob(root, path)
+    const normalized = path
+      .replaceAll('\\', '/')
+      .split('/')
+      .filter((segment) => segment !== '' && segment !== '.')
+      .join('/')
+    const matchPath = normalized === '' ? path : normalized
+    const expansion = await expandGlob(root, matchPath)
     if (expansion.failure !== undefined) {
       return failure(
         expansion.failure.reason,
         expansion.failure.detail,
-        expansion.failure.path ?? path,
+        expansion.failure.path ?? matchPath,
         item,
       )
     }
     const matches = expansion.matches
     if (matches.length === 0) {
-      return failure('no-match', `no file matches "${path}"`, path, item)
+      return failure('no-match', `no file matches "${matchPath}"`, matchPath, item)
     }
     let total = 0
     for (const match of matches) {
@@ -271,7 +277,12 @@ async function fileCheck(
     }
     return {
       ok: true,
-      evidence: { kind: 'file', path, bytes: total, detail: `${String(matches.length)} file(s)` },
+      evidence: {
+        kind: 'file',
+        path: matchPath,
+        bytes: total,
+        detail: `${String(matches.length)} file(s)`,
+      },
     }
   }
   const target = join(root, path)

@@ -487,3 +487,30 @@ describe('glob traversal edge cases', () => {
     expect(result.failure.reason).toBe('unreadable')
   })
 })
+
+describe('path component normalization', () => {
+  it('accepts leading ./ and repeated separators in a glob', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'a.md', 'x')
+    await writeArtifact(workspace, 'src/host/x.ts', 'y')
+    const dotted = await verifyEvidence(file('./*.md', { glob: true } as Partial<Evidence>), {
+      workspace,
+      values,
+    })
+    expect(dotted.ok).toBe(true)
+    const repeated = await verifyEvidence(
+      file('src//host/*.ts', { glob: true } as Partial<Evidence>),
+      { workspace, values },
+    )
+    expect(repeated.ok).toBe(true)
+  })
+
+  it('accepts a filename beginning with two dots and still refuses an escape', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, '..drafts/valid.md', 'x')
+    const valid = await verifyEvidence(file('..drafts/valid.md'), { workspace, values })
+    expect(valid.ok).toBe(true)
+    const escape = await verifyEvidence(file('../outside.md'), { workspace, values })
+    expect(escape).toMatchObject({ ok: false, failure: { reason: 'path-escape' } })
+  })
+})

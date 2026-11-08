@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 
 /**
  * Workspace file source for `openspec/changes/**`. The filesystem service owns
@@ -80,7 +80,14 @@ function errorOf(error: unknown): Error {
 /** Whether a canonical target stays inside a canonical root. */
 export function isInside(root: string, target: string): boolean {
   const rel = relative(root, target)
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  return (
+    rel === '' ||
+    (!isAbsolute(rel) &&
+      rel !== '..' &&
+      !rel.startsWith(`..${sep}`) &&
+      !rel.startsWith('../') &&
+      !rel.startsWith('..\\'))
+  )
 }
 
 async function canonicalInside(root: string, target: string): Promise<string | undefined> {
