@@ -375,3 +375,22 @@ it('handles named multi-source moves and inline parameter values', () => {
     parseArchiveCommand('mv --target-directory=openspec/changes/archive/ openspec/changes/auth'),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
 })
+it('accepts PowerShell common parameters in moves', () => {
+  expect(
+    parseArchiveCommand('Move-Item openspec/changes/auth openspec/changes/archive/ -Verbose'),
+  ).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'Move-Item',
+  })
+  expect(
+    parseArchiveCommand(
+      'Move-Item openspec/changes/auth openspec/changes/archive/ -ErrorAction Stop',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  expect(
+    parseArchiveCommand(
+      'Move-Item openspec/changes/auth openspec/changes/archive/ -ErrorAction:Stop',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+})

@@ -220,6 +220,7 @@ function parseMoveOperands(
     '--force',
     '-v',
     '--verbose',
+    '-verbose',
     '-n',
     '--no-clobber',
     '-i',
@@ -231,6 +232,16 @@ function parseMoveOperands(
     '-confirm',
     '-passthru',
     '-debug',
+  ])
+  const valueParameters = new Set([
+    '-erroraction',
+    '-warningaction',
+    '-informationaction',
+    '-errorvariable',
+    '-warningvariable',
+    '-outvariable',
+    '-outbuffer',
+    '-pipelinevariable',
   ])
   const destinationNames = new Set(['-t', '--target-directory', '-destination', '-dest'])
   const sourceNames = new Set(['-literalpath', '-path'])
@@ -251,6 +262,13 @@ function parseMoveOperands(
       source = inline ?? tokens[index + 1]
       if (source === undefined) return undefined
       if (inline === undefined) index += 1
+      continue
+    }
+    if (valueParameters.has(name)) {
+      if (inline === undefined) {
+        if (tokens[index + 1] === undefined) return undefined
+        index += 1
+      }
       continue
     }
     if (name.startsWith('-')) {
