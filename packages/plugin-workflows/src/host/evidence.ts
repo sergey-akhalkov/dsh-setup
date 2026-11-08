@@ -13,6 +13,7 @@ import type {
 } from './definitions.js'
 import { globMatches } from './evaluate.js'
 import { isInside } from './fs-change.js'
+import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js'
 import type { RunEvidence } from './runs.js'
 
 /**
@@ -559,16 +560,9 @@ async function recordCheck(
   if (!isRecord(record))
     return mismatch(`the record "${path.text}" is not an object`, path.text, item)
   if (evidence.source === 'checkpoint') {
-    if (
-      typeof record.turn !== 'number' ||
-      (record.outcome !== 'done' && record.outcome !== 'continue') ||
-      !Array.isArray(record.lanes)
-    ) {
-      return mismatch(
-        `the record "${path.text}" is not a checkpoint record (outcome, turn, lanes)`,
-        path.text,
-        item,
-      )
+    const invalid = checkpointRecordError(record)
+    if (invalid !== undefined) {
+      return mismatch(`the record "${path.text}" is invalid: ${invalid}`, path.text, item)
     }
     if (evidence.verdict !== 'recorded' && record.outcome !== evidence.verdict) {
       return mismatch(
@@ -585,6 +579,11 @@ async function recordCheck(
         detail: `checkpoint turn ${String(record.turn)} (${String(record.outcome)})`,
       },
     }
+  }
+  const portable = path.text.replaceAll('\\', '/').includes('/reviews/')
+  const invalidRecord = portable ? portableRecordError(record) : localRecordError(record)
+  if (invalidRecord !== undefined) {
+    return mismatch(`the record is invalid: ${invalidRecord}`, path.text, item)
   }
   const phase =
     evidence.phase === undefined ? undefined : resolveEvidenceText(evidence.phase, context, item)

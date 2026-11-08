@@ -194,40 +194,10 @@ export async function checkpointRuns(workspace: string, sessionId: string): Prom
       continue
     }
     const record = parsed.value
-    if (
-      typeof record.outcome !== 'string' ||
-      (record.outcome !== 'done' && record.outcome !== 'continue') ||
-      typeof record.turn !== 'number' ||
-      !validLanes(record.lanes) ||
-      typeof record.next !== 'string'
-    ) {
+    const invalid = checkpointRecordError(record)
+    if (invalid !== undefined) {
       runs.push(
-        errorRun(
-          `checkpoint:${turn}`,
-          'checkpoint',
-          workspace,
-          file,
-          'local',
-          sessionId,
-          'missing or invalid outcome, turn, lanes, or next',
-        ),
-      )
-      continue
-    }
-    if (
-      (record.outcome === 'continue' && !validBottleneck(record.bottleneck)) ||
-      (record.bottleneck !== undefined && !validBottleneck(record.bottleneck))
-    ) {
-      runs.push(
-        errorRun(
-          `checkpoint:${turn}`,
-          'checkpoint',
-          workspace,
-          file,
-          'local',
-          sessionId,
-          'missing or invalid bottleneck for the checkpoint outcome',
-        ),
+        errorRun(`checkpoint:${turn}`, 'checkpoint', workspace, file, 'local', sessionId, invalid),
       )
       continue
     }
@@ -381,7 +351,27 @@ function validTarget(value: unknown): boolean {
 }
 
 /** The producer contract for a settled local review record. */
-function localRecordError(record: Record<string, unknown>): string | undefined {
+/** The goal-continuity checkpoint record shape every reader accepts. */
+export function checkpointRecordError(record: Record<string, unknown>): string | undefined {
+  if (
+    typeof record.outcome !== 'string' ||
+    (record.outcome !== 'done' && record.outcome !== 'continue') ||
+    typeof record.turn !== 'number' ||
+    !validLanes(record.lanes) ||
+    typeof record.next !== 'string'
+  ) {
+    return 'missing or invalid outcome, turn, lanes, or next'
+  }
+  if (
+    (record.outcome === 'continue' && !validBottleneck(record.bottleneck)) ||
+    (record.bottleneck !== undefined && !validBottleneck(record.bottleneck))
+  ) {
+    return 'missing or invalid bottleneck for the checkpoint outcome'
+  }
+  return undefined
+}
+
+export function localRecordError(record: Record<string, unknown>): string | undefined {
   for (const field of ['rule', 'change', 'phase', 'scope', 'digest', 'verdict', 'time']) {
     if (typeof record[field] !== 'string' || record[field] === '') {
       return `missing or invalid field "${field}"`
@@ -419,7 +409,7 @@ function localRecordError(record: Record<string, unknown>): string | undefined {
 }
 
 /** The producer contract for a portable task approval. */
-function portableRecordError(record: Record<string, unknown>): string | undefined {
+export function portableRecordError(record: Record<string, unknown>): string | undefined {
   for (const field of ['rule', 'change', 'scope', 'taskId', 'digest', 'verdict', 'time']) {
     if (typeof record[field] !== 'string' || record[field] === '') {
       return `missing or invalid field "${field}"`

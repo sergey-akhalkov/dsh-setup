@@ -185,6 +185,8 @@ describe('record and tool evidence', () => {
       verdict: 'PASS',
       digest,
       findings: [],
+      time: '2026-01-01T00:00:00.000Z',
+      target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
     })
     const evidence: Evidence = {
       kind: 'record',
@@ -215,6 +217,9 @@ describe('record and tool evidence', () => {
       scope: 'whole',
       verdict: 'PASS',
       digest: 'b'.repeat(64),
+      findings: [],
+      time: '2026-01-01T00:00:00.000Z',
+      target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
     })
     const record: Evidence = {
       kind: 'record',
@@ -237,6 +242,9 @@ describe('record and tool evidence', () => {
       taskId: '0123456789abcdef',
       verdict: 'PASS',
       digest: 'b'.repeat(64),
+      findings: [],
+      time: '2026-01-01T00:00:00.000Z',
+      target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
     })
     const taskScoped = await verifyEvidence(record, { workspace, values })
     expect(taskScoped).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
@@ -512,5 +520,110 @@ describe('path component normalization', () => {
     expect(valid.ok).toBe(true)
     const escape = await verifyEvidence(file('../outside.md'), { workspace, values })
     expect(escape).toMatchObject({ ok: false, failure: { reason: 'path-escape' } })
+  })
+})
+
+describe('record validation through the shared readers', () => {
+  const target = { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' }
+
+  it('refuses a PASS record that still carries findings', async () => {
+    const workspace = await tempWorkspace()
+    const digest = await writeChangeArtifacts(workspace)
+    await writeJson(workspace, '.dsh/delegation/spec-review/auth/spec.json', {
+      rule: 'spec-review',
+      change: 'auth',
+      phase: 'spec',
+      scope: 'whole',
+      verdict: 'PASS',
+      digest,
+      findings: [{ severity: 'P1', title: 'x', evidence: 'x', fix: 'x' }],
+      time: '2026-01-01T00:00:00.000Z',
+      target,
+    })
+    const result = await verifyEvidence(
+      {
+        kind: 'record',
+        rule: 'spec-review',
+        change: 'auth',
+        phase: 'spec',
+        scope: 'whole',
+        verdict: 'PASS',
+        digest: 'current',
+      },
+      { workspace, values },
+    )
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+  })
+
+  it('refuses a malformed checkpoint record', async () => {
+    const workspace = await tempWorkspace()
+    const checkpointPath = `.dsh/work-checkpoints/${'a'.repeat(16)}/3.json`
+    await writeJson(workspace, checkpointPath, {
+      turn: 3,
+      outcome: 'continue',
+      lanes: [null],
+      next: 'tests',
+    })
+    const result = await verifyEvidence(
+      {
+        kind: 'record',
+        source: 'checkpoint',
+        rule: 'goal-continuity',
+        verdict: 'continue',
+        path: checkpointPath,
+      },
+      { workspace, values },
+    )
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+  })
+
+  it('refuses a local task PASS missing digest, findings, target, or time', async () => {
+    const workspace = await tempWorkspace()
+    const path = `.dsh/delegation/task-review/auth/0123456789abcdef.json`
+    await writeJson(workspace, path, {
+      rule: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: '0123456789abcdef',
+      verdict: 'PASS',
+    })
+    const result = await verifyEvidence(
+      {
+        kind: 'record',
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        task: '0123456789abcdef',
+        verdict: 'PASS',
+        path,
+      },
+      { workspace, values },
+    )
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+  })
+
+  it('refuses a malformed portable task record', async () => {
+    const workspace = await tempWorkspace()
+    const path = 'openspec/changes/auth/reviews/0123456789abcdef.json'
+    await writeJson(workspace, path, {
+      rule: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId: '0123456789abcdef',
+      verdict: 'PASS',
+    })
+    const result = await verifyEvidence(
+      {
+        kind: 'record',
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        task: '0123456789abcdef',
+        verdict: 'PASS',
+        path,
+      },
+      { workspace, values },
+    )
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
   })
 })
