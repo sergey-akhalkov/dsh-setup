@@ -1954,3 +1954,24 @@ it.skipIf(process.platform !== 'win32')(
     expect(nextCalled).toBe(false)
   },
 )
+
+it('denies casing and tab variants of the archive command without evidence', async () => {
+  process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+  const workspace = await tempWorkspace()
+  const host = fakeHost(workspace)
+  apply(host.ctx as never)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  for (const command of ['OpenSpec archive auth --yes', 'openspec\tarchive auth --yes']) {
+    let nextCalled = false
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      { agent: host.agent, callId: 'archive-variant', name: 'pwsh', arguments: { command } },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string } | undefined
+    expect(decision?.kind, command).toBe('deny')
+    expect(nextCalled, command).toBe(false)
+  }
+})

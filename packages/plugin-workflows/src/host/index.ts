@@ -1598,7 +1598,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) && mentionsOpenSpecArchive
           if (
             archive === undefined &&
-            /^\\s*(?:rtk\\s+|pnpm\\s+exec\\s+)?openspec\\s+archive\\b/iu.test(command)
+            /^\s*(?:rtk\s+|pnpm\s+exec\s+)?openspec\s+archive\b/iu.test(command)
           ) {
             return {
               kind: 'deny',
