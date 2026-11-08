@@ -586,6 +586,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workers: number
   }
   const turnMetrics = new Map<string, TurnMetrics>()
+  /** The session's current main-step owner; a second run waits for it to settle. */
+  const mainStepOwners = new Map<string, string>()
   /** The last turn whose user message was classified, one classification per turn. */
   const intentTurns = new Map<string, number>()
   const metricsFor = (session: string, turn: number): TurnMetrics => {
@@ -1610,9 +1612,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           (run) =>
             run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
         )
-        for (const run of runs) {
-          if (run.session !== String(payload.agent.session.id)) continue
-          if (run.status !== 'running' && run.status !== 'blocked') continue
+        const sessionId = String(payload.agent.session.id)
+        const eligible = runs.filter(
+          (run) =>
+            run.session === sessionId && (run.status === 'running' || run.status === 'blocked'),
+        )
+        const ownerId = mainStepOwners.get(sessionId)
+        const owner = ownerId === undefined ? undefined : eligible.find((run) => run.id === ownerId)
+        if (ownerId !== undefined && owner === undefined) mainStepOwners.delete(sessionId)
+        const ordered =
+          owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
+        for (const run of ordered) {
           const definition = definitions.find((entry) => entry.id === run.definition)
           if (definition === undefined) continue
           const outcome = evaluateTurnClose({
@@ -1634,9 +1644,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             onError: (error) => publishListenerError(workspace, error),
           })
           if (outcome.run !== run) await writeRun(workspace, outcome.run, auth)
-          // One main-step owner per session per turn: steering a second run
-          // would interleave two obligations.
-          if (outcome.kind !== 'allow') break
+          // Keep the session's main-step owner until its step settles; a
+          // second run may take over only after that.
+          if (outcome.kind !== 'allow') {
+            mainStepOwners.set(sessionId, run.id)
+            break
+          }
+          if (owner !== undefined && run.id === owner.id) {
+            mainStepOwners.delete(sessionId)
+          }
         }
       } catch (error) {
         publishListenerError(workspaceFor(services, payload.agent.session), error)

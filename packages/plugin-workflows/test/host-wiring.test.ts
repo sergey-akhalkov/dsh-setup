@@ -1672,3 +1672,36 @@ describe('concurrent command starts', () => {
     expect(files).toHaveLength(1)
   })
 })
+
+describe('main-step ownership across turns', () => {
+  it('keeps the current owner when an older run appears', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const base = (id: string, at: number) =>
+      runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        steps: ['requirements', 'spec'],
+        id,
+        now: at,
+      })
+    await runs.writeRun(workspace, base('run-owner-b', 2_000), auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => host.steers.length === 1)
+    await runs.writeRun(workspace, base('run-owner-a', 1_000), auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(async () => host.steers.length === 2)
+    const older = await runs.readAuthenticatedRun(workspace, 'run-owner-a', auth)
+    const owner = await runs.readAuthenticatedRun(workspace, 'run-owner-b', auth)
+    expect(older?.steps.find((step) => step.id === 'requirements')?.requestedAt).toBeUndefined()
+    expect(owner?.steps.find((step) => step.id === 'requirements')?.requestedAt).toBeDefined()
+  })
+})
