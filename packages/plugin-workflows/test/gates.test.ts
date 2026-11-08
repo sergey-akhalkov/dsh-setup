@@ -367,6 +367,66 @@ describe('pre-execute intake gate', () => {
     expect(recorder.starts).toEqual([])
   })
 
+  it('resumes the session intake even when another session is running', async () => {
+    const workspace = await tempWorkspace()
+    const interrupted = setRunStatus(
+      createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: [
+          'requirements',
+          'architecture',
+          'interface',
+          'create-change',
+          'spec',
+          'approval',
+          'complete',
+        ],
+        id: 'run-session-one',
+      }),
+      'interrupted',
+      2_000,
+    )
+    const foreign = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-2',
+      workspace,
+      context: { name: 'auth' },
+      steps: [
+        'requirements',
+        'architecture',
+        'interface',
+        'create-change',
+        'spec',
+        'approval',
+        'complete',
+      ],
+      id: 'run-session-two',
+    })
+    let resumed = 0
+    let started = 0
+    const decision = await evaluateIntakeGate(
+      gateInput(workspace, [interrupted, foreign], [], {
+        session: 'session-1',
+        startRun: async () => {
+          started += 1
+          return { runId: 'run-new' }
+        },
+        resumeRun: async () => {
+          resumed += 1
+          return { stepId: 'requirements' }
+        },
+      }),
+    )
+    expect(decision).toMatchObject({ kind: 'deny', action: 'resumed', runId: 'run-session-one' })
+    expect(resumed).toBe(1)
+    expect(started).toBe(0)
+  })
+
   it('allows an owned create-change call', async () => {
     const workspace = await tempWorkspace()
     const decision = await evaluateIntakeGate(

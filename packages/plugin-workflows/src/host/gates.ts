@@ -215,7 +215,10 @@ export async function evaluateIntakeGate(input: IntakeGateInput): Promise<Intake
   }
   const running = input.runs.find(
     (run) =>
-      run.definition === 'change-intake' && run.status === 'running' && intakeName(run) === name,
+      run.definition === 'change-intake' &&
+      run.status === 'running' &&
+      run.session === input.session &&
+      intakeName(run) === name,
   )
   if (running !== undefined) {
     const pending = running.steps.find((step) => step.state === 'open' || step.state === 'blocked')
