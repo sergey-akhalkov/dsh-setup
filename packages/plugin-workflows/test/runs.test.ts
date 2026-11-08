@@ -552,3 +552,23 @@ it('refuses a second request while a requested step is blocked', () => {
   const second = requestStep(done, 'spec', 1_500)
   expect(activeStep(second)?.id).toBe('spec')
 })
+
+it('refuses a foreign-session resume or cancel', async () => {
+  const workspace = await tempWorkspace()
+  const run = setRunStatus(intakeRun(workspace, 'auth', 1_000), 'interrupted', 1_100)
+  await writeRun(workspace, run, auth())
+  await expect(resumeRun(workspace, run.id, auth(), 2_000, 'session-other')).rejects.toThrow(
+    /belongs to session/u,
+  )
+  const unchanged = await readAuthenticatedRun(workspace, run.id, auth())
+  expect(unchanged?.status).toBe('interrupted')
+  const resumed = await resumeRun(workspace, run.id, auth(), 2_000, unchanged?.session)
+  expect(resumed.run.status).toBe('running')
+
+  const second = setRunStatus(intakeRun(workspace, 'auth-two', 1_000), 'interrupted', 1_100)
+  await writeRun(workspace, second, auth())
+  await expect(cancelRun(workspace, second.id, auth(), 2_000, 'session-other')).rejects.toThrow(
+    /belongs to session/u,
+  )
+  expect((await readAuthenticatedRun(workspace, second.id, auth()))?.status).toBe('interrupted')
+})

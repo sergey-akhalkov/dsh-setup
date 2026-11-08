@@ -62,8 +62,14 @@ export async function resumeRun(
   runId: string,
   auth: HostAuth,
   now = Date.now(),
+  session?: string,
 ): Promise<ResumeResult> {
   const run = await readAuthenticatedRun(workspace, runId, auth)
+  if (run !== undefined && session !== undefined && run.session !== session) {
+    throw new Error(
+      `run "${runId}" belongs to session "${run.session}"; session "${session}" cannot resume it`,
+    )
+  }
   if (run === undefined) {
     throw new Error(`run "${runId}" is unsigned, modified, or unreadable; it cannot be resumed`)
   }
@@ -88,8 +94,14 @@ export async function cancelRun(
   runId: string,
   auth: HostAuth,
   now = Date.now(),
+  session?: string,
 ): Promise<WorkflowRun> {
   const run = await readAuthenticatedRun(workspace, runId, auth)
+  if (run !== undefined && session !== undefined && run.session !== session) {
+    throw new Error(
+      `run "${runId}" belongs to session "${run.session}"; session "${session}" cannot cancel it`,
+    )
+  }
   if (run === undefined) {
     throw new Error(`run "${runId}" is unsigned, modified, or unreadable; it cannot be cancelled`)
   }

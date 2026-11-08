@@ -1434,7 +1434,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       return { runId: run.id }
                     },
                     resumeRun: async (runId) => {
-                      const resumed = await resumeRun(workspace, runId, auth)
+                      const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
                       await writeRun(workspace, resumed.run, auth)
                       return { stepId: resumed.stepId }
                     },
@@ -1688,13 +1688,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     },
     resumeRun: async (runId) => {
       await recoverIfNeeded(workspace)
-      const resumed = await resumeRun(workspace, runId, auth)
+      const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id))
       await writeRun(workspace, resumed.run, auth)
       return { run: resumed.run, stepId: resumed.stepId }
     },
     cancelRun: async (runId) => {
       await recoverIfNeeded(workspace)
-      const cancelled = await cancelRun(workspace, runId, auth)
+      const cancelled = await cancelRun(
+        workspace,
+        runId,
+        auth,
+        Date.now(),
+        String(agent.session.id),
+      )
       await writeRun(workspace, cancelled, auth)
       return cancelled
     },
@@ -1809,7 +1815,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 },
                 resume: async (runId) => {
                   await recoverIfNeeded(workspace)
-                  const resumed = await resumeRun(workspace, runId, auth)
+                  const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
                   await writeRun(workspace, resumed.run, auth)
                   return { stepId: resumed.stepId }
                 },
