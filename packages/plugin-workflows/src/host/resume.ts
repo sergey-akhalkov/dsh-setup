@@ -45,6 +45,14 @@ export async function recoverRuns(
 
 /** The first step still open or blocked; the step resume re-evaluates. */
 export function pendingStep(run: WorkflowRun): string | undefined {
+  if (run.branchPath !== undefined && run.branchPath.length > 0) {
+    for (const id of run.branchPath) {
+      const step = run.steps.find((entry) => entry.id === id)
+      if (step !== undefined && (step.state === 'open' || step.state === 'blocked')) {
+        return step.id
+      }
+    }
+  }
   if (run.nextStep !== undefined) {
     const selected = run.steps.find(
       (step) => step.id === run.nextStep && (step.state === 'open' || step.state === 'blocked'),

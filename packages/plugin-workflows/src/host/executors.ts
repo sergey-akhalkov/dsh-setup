@@ -435,9 +435,9 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     case '%':
       return Number(value(args[0])) % Number(value(args[1]))
     case 'min':
-      return Math.min(...args.map((entry) => numeric(value(entry))))
+      return Math.min(...args.map((entry) => Number(value(entry))))
     case 'max':
-      return Math.max(...args.map((entry) => numeric(value(entry))))
+      return Math.max(...args.map((entry) => Number(value(entry))))
     case 'cat':
       return args.map((entry) => String(value(entry) ?? '')).join('')
     case 'missing': {
@@ -517,6 +517,20 @@ function outgoingTargets(step: Step): string[] {
   return targets
 }
 
+function selectedPath(start: string, definition: Definition): string[] {
+  const path: string[] = []
+  const seen = new Set<string>()
+  let current: string | undefined = start
+  while (current !== undefined && current !== 'end' && !seen.has(current)) {
+    seen.add(current)
+    const found = definition.steps.find((entry) => entry.id === current)
+    if (found === undefined) break
+    path.push(current)
+    current = outgoingTargets(found)[0]
+  }
+  return path
+}
+
 function reachableSteps(start: string, definition: Definition): Set<string> {
   const seen = new Set<string>()
   const queue = [start]
@@ -583,7 +597,11 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
       }
     }
     return {
-      run: { ...run, nextStep: chosen === 'end' ? undefined : chosen },
+      run: {
+        ...run,
+        nextStep: chosen === 'end' ? undefined : chosen,
+        branchPath: chosen === 'end' ? [] : selectedPath(chosen, input.definition),
+      },
       next: chosen,
     }
   } catch (error) {
@@ -603,6 +621,7 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
 
 export interface LoopStepInput {
   readonly run: WorkflowRun
+  readonly definition: Definition
   readonly step: Step
   readonly values: Readonly<Record<string, unknown>>
   readonly now?: number
@@ -649,7 +668,11 @@ export function runLoopStep(input: LoopStepInput): LoopStepResult {
       if (stop) {
         const settled = settleStep(input.run, input.step.id, 'done', { at: input.now })
         return {
-          run: { ...settled, nextStep: spec.next === 'end' ? undefined : spec.next },
+          run: {
+            ...settled,
+            nextStep: spec.next === 'end' ? undefined : spec.next,
+            branchPath: spec.next === 'end' ? [] : selectedPath(spec.next, input.definition),
+          },
           next: spec.next,
         }
       }

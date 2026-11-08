@@ -695,10 +695,16 @@ describe('loop executor', () => {
     const step = loopDefinition.steps[0] as (typeof loopDefinition.steps)[number]
     const loop = step.loop
     if (loop === undefined) throw new Error('the loop step has no loop')
-    const stopped = runLoopStep({ run: loopRun(), step, values: {} })
+    const stopped = runLoopStep({
+      definition: loopDefinition,
+      run: loopRun(),
+      step,
+      values: {},
+    })
     expect(stopped.next).toBe('end')
     expect(stopped.run.steps[0]?.state).toBe('done')
     const capped = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -710,6 +716,7 @@ describe('loop executor', () => {
     expect(capped.run.steps[0]?.state).toBe('blocked')
     expect(capped.run.steps[0]?.reason).toContain('3-iteration cap')
     const nonnumeric = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -720,6 +727,7 @@ describe('loop executor', () => {
     expect(nonnumeric.run.status).toBe('blocked')
     expect(nonnumeric.run.steps[0]?.reason).toContain('3-iteration cap')
     const triggerStop = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -732,6 +740,7 @@ describe('loop executor', () => {
     })
     expect(triggerStop.next).toBe('end')
     const arrayStop = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -744,6 +753,7 @@ describe('loop executor', () => {
     })
     expect(arrayStop.next).toBe('end')
     const allStop = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -758,6 +768,7 @@ describe('loop executor', () => {
     })
     expect(allStop.next).toBe('end')
     const stringStop = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -767,6 +778,7 @@ describe('loop executor', () => {
     })
     expect(stringStop.next).toBe('end')
     const malformedStop = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -778,7 +790,21 @@ describe('loop executor', () => {
       values: { remaining: '1 invalid' },
     })
     expect(malformedStop.run.status).toBe('blocked')
+    const maxStop = runLoopStep({
+      definition: loopDefinition,
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { '==': [{ max: [{ var: 'context.score' }, 0] }, 1] },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { score: '1 invalid' },
+    })
+    expect(maxStop.run.status).toBe('blocked')
     const invalid = runLoopStep({
+      definition: loopDefinition,
       run: loopRun(),
       step: {
         ...step,
@@ -1493,7 +1519,7 @@ it('persists the loop successor and resumes at it', async () => {
       steps: ['iterate', 'last', 'first'],
     })
     const iterate = definition.steps[0] as (typeof definition.steps)[number]
-    const outcome = runLoopStep({ run, step: iterate, values: {} })
+    const outcome = runLoopStep({ definition, run, step: iterate, values: {} })
     expect(outcome.next).toBe('first')
     expect(pendingStep(outcome.run)).toBe('first')
     await writeRun(workspace, outcome.run, auth)
@@ -1501,6 +1527,95 @@ it('persists the loop successor and resumes at it', async () => {
     expect(pendingStep(reloaded as WorkflowRun)).toBe('first')
     const first = settleStep(reloaded as WorkflowRun, 'first', 'done', { at: 2_000 })
     expect(pendingStep(first)).toBe('last')
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+it('advances a multi-step branch arm before the shared successor', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'workflows-branch-arm-'))
+  try {
+    const definition = validateDefinition({
+      v: 1,
+      id: 'branch-arm-demo',
+      name: 'Branch arm demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'choose',
+          title: 'Choose',
+          executor: 'branch',
+          branch: {
+            predicate: { '==': [{ var: 'context.flag' }, true] },
+            // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+            then: 'yes',
+            else: 'no',
+          },
+        },
+        {
+          id: 'join',
+          title: 'Join',
+          executor: 'main',
+          prompt: 'Join.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'end',
+        },
+        {
+          id: 'yes',
+          title: 'Yes',
+          executor: 'main',
+          prompt: 'Yes.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'yes2',
+        },
+        {
+          id: 'yes2',
+          title: 'Yes again',
+          executor: 'main',
+          prompt: 'Yes again.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'join',
+        },
+        {
+          id: 'no',
+          title: 'No',
+          executor: 'main',
+          prompt: 'No.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'join',
+        },
+      ],
+    })
+    const auth = HostAuth.fromKey('workflows-branch-arm-key-012345678')
+    const run = createRun({
+      definition: definition.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['choose', 'join', 'yes', 'yes2', 'no'],
+    })
+    const choose = definition.steps[0] as (typeof definition.steps)[number]
+    const outcome = runBranchStep({ definition, run, step: choose, values: { flag: true } })
+    expect(pendingStep(outcome.run)).toBe('yes')
+    const yes = settleStep(outcome.run, 'yes', 'done', { at: 2_000 })
+    expect(pendingStep(yes)).toBe('yes2')
+    const yes2 = settleStep(yes, 'yes2', 'done', { at: 2_100 })
+    expect(pendingStep(yes2)).toBe('join')
+    await writeRun(workspace, yes2, auth)
+    const reloaded = await readAuthenticatedRun(workspace, yes2.id, auth)
+    expect(pendingStep(reloaded as WorkflowRun)).toBe('join')
   } finally {
     await rm(workspace, { recursive: true, force: true })
   }
