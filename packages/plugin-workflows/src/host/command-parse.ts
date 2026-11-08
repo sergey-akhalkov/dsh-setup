@@ -99,9 +99,9 @@ function changeUnderChanges(path: string): string | undefined {
   return name !== undefined && CHANGE_NAME.test(name) ? name : undefined
 }
 
-function targetsArchive(destination: string, name: string): boolean {
+function targetsArchive(destination: string): boolean {
   if (destination === ARCHIVE_DIR) return true
-  return new RegExp(`^${ARCHIVE_DIR}/(?:\\d{4}-\\d{2}-\\d{2}-)?${name}$`, 'u').test(destination)
+  return new RegExp(`^${ARCHIVE_DIR}/[^/]+$`, 'u').test(destination)
 }
 
 function archiveMove(
@@ -110,7 +110,7 @@ function archiveMove(
   form: ArchiveIntent['form'],
 ): ArchiveIntent | undefined {
   const name = source === undefined ? undefined : changeUnderChanges(source)
-  if (name === undefined || destination === undefined || !targetsArchive(destination, name)) {
+  if (name === undefined || destination === undefined || !targetsArchive(destination)) {
     return undefined
   }
   return { kind: 'archive', change: name, form }

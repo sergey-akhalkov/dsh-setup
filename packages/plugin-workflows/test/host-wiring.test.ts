@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
-import { apply } from '../src/host/index.ts'
+import { apply, definitionEventsOf } from '../src/host/index.ts'
 
 /**
  * Host-level regression for the engine wiring: a `tools/pre-execute` call for
@@ -1756,4 +1756,29 @@ it('denies a dot-relative archive move without evidence', async () => {
   )) as { kind?: string; reason?: string } | undefined
   expect(decision?.kind).toBe('deny')
   expect(nextCalled).toBe(false)
+})
+
+it('carries a filesystem change name into the definition event', () => {
+  const events = definitionEventsOf(
+    {
+      at: 1,
+      session: 'session-1',
+      kind: 'fs.change',
+      subject: 'openspec/changes/auth/tasks.md',
+      summary: 'changed',
+      bytes: 7,
+      truncated: false,
+    } as never,
+    {
+      kind: 'fs.change',
+      subject: 'openspec/changes/auth/tasks.md',
+      change: 'auth',
+    } as never,
+    '/workspace',
+  )
+  expect(events[0]).toMatchObject({
+    kind: 'fs.change',
+    name: 'auth',
+    path: 'openspec/changes/auth/tasks.md',
+  })
 })

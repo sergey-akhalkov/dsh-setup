@@ -144,6 +144,7 @@ export function definitionEventsOf(
           kind: 'fs.change',
           subject: path,
           path,
+          ...(event.change === undefined ? {} : { name: event.change }),
           ...(event.hash === undefined ? {} : { hash: event.hash }),
           ...base,
         },

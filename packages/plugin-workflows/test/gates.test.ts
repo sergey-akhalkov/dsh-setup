@@ -626,7 +626,14 @@ describe('archive gate', () => {
       change: 'auth',
       runs: await listAuthenticatedRuns(workspace, gateAuth()),
       receipts: [],
-      specRecord: archivedOk(),
+      specRecord: {
+        ok: true,
+        evidence: {
+          kind: 'record',
+          path: '.dsh/delegation/spec-review/auth/spec.json',
+          digest: DIGEST,
+        },
+      },
     })
     expect(allowed.kind).toBe('allow')
     await issueAdoptionReceipt(workspace, 'auth', DIGEST, gateAuth(), 3_000)
@@ -824,4 +831,53 @@ it('steers on every stop in one turn and resets attempts after a violation', () 
   })
   expect(nextTurn.kind).toBe('refuse')
   expect(agent.messages).toHaveLength(3)
+})
+
+it('blocks an archive while a filesystem-triggered review run is open', async () => {
+  const workspace = await tempWorkspace()
+  let intake = intakeRunFor(workspace, 'auth', 'run-review-intake')
+  for (const step of ['requirements', 'create-change', 'spec', 'approval']) {
+    intake = settleStep(intake, step, 'done', { at: 1_100 })
+  }
+  intake = setRunStatus(intake, 'completed', 2_000)
+  await writeRun(workspace, intake, gateAuth())
+  const runs = await listAuthenticatedRuns(workspace, gateAuth())
+  const review = createRun({
+    definition: 'task-review',
+    trigger: 'fs.change',
+    session: 'session-1',
+    workspace,
+    context: { name: 'auth' },
+    steps: ['read-review'],
+    id: 'run-review-open',
+  })
+  const specRecord = {
+    ok: true as const,
+    evidence: {
+      kind: 'record' as const,
+      path: '.dsh/delegation/spec-review/auth/spec.json',
+      digest: DIGEST,
+    },
+  }
+  const blocked = evaluateArchiveGate({
+    change: 'auth',
+    runs: [...runs, review],
+    receipts: [],
+    specRecord,
+  })
+  expect(blocked).toMatchObject({ kind: 'deny' })
+  if (blocked.kind === 'deny') {
+    expect(blocked.reason).toContain('run-review-open')
+    expect(blocked.reason).toContain('read-review')
+  }
+  const allowed = evaluateArchiveGate({
+    change: 'auth',
+    runs: [
+      ...runs,
+      setRunStatus(settleStep(review, 'read-review', 'done', { at: 3_500 }), 'completed', 4_000),
+    ],
+    receipts: [],
+    specRecord,
+  })
+  expect(allowed.kind).toBe('allow')
 })

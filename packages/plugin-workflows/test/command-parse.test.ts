@@ -176,12 +176,23 @@ describe('archive command parser', () => {
     expect(
       parseArchiveCommand('Move-Item openspec/changes/auth openspec/changes/archive/ -Force'),
     ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+    for (const command of [
+      'mv openspec/changes/auth openspec/changes/archive/renamed-auth',
+      'git mv openspec/changes/auth openspec/changes/archive/2026-11-08-renamed-auth',
+      'Move-Item openspec/changes/auth openspec/changes/archive/renamed-auth',
+    ]) {
+      expect(parseArchiveCommand(command), command).toEqual({
+        kind: 'archive',
+        change: 'auth',
+        form: command.startsWith('git') ? 'git' : command.startsWith('mv') ? 'mv' : 'Move-Item',
+      })
+    }
   })
 
   it('rejects another destination, a compound move, and an unparseable name', () => {
     for (const command of [
       'mv openspec/changes/auth openspec/changes/other',
-      'mv openspec/changes/auth openspec/changes/archive/other',
+      'mv openspec/changes/auth openspec/changes/archive/../other',
       'mv openspec/changes/auth openspec/changes/archive && echo done',
       'git mv openspec/changes/auth openspec/changes/archive; rm -rf .',
       'Move-Item openspec/changes/auth',
