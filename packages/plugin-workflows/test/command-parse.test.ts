@@ -314,3 +314,13 @@ it('accepts a PowerShell switch with an explicit boolean value', () => {
     ),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
 })
+it('accepts the remaining Move-Item switch parameters', () => {
+  for (const suffix of ['-PassThru', '-Debug']) {
+    expect(
+      parseArchiveCommand(
+        `Move-Item -LiteralPath openspec/changes/auth -Destination openspec/changes/archive/ ${suffix}`,
+      ),
+      suffix,
+    ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  }
+})

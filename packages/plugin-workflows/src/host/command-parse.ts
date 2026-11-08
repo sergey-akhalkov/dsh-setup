@@ -228,7 +228,7 @@ export function parseArchiveCommand(
   if (/^move-item$/iu.test(tokens[0] ?? '')) {
     const positional: string[] = []
     const flags = new Map<string, string>()
-    const switches = new Set(['-force', '-verbose', '-whatif', '-confirm'])
+    const switches = new Set(['-force', '-verbose', '-whatif', '-confirm', '-passthru', '-debug'])
     for (let index = 1; index < tokens.length; index += 1) {
       const token = tokens[index] ?? ''
       if (token === '--') continue
