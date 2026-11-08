@@ -686,3 +686,19 @@ it('uses own properties and structural JSON equality', () => {
   expect(validateResultSchema({ enum: [[1, 2]] }, [1, 2])).toBeUndefined()
   expect(validateResultSchema({ const: { a: 1, b: 2 } }, { b: 2, a: 1 })).toBeUndefined()
 })
+
+it('rejects array/object mismatches and a completed child without a result', async () => {
+  expect(validateResultSchema({ const: [] }, {})).toBeDefined()
+  expect(validateResultSchema({ enum: [{}] }, [])).toBeDefined()
+  const runner = new FakeRunner({ childId: 'child-empty', completed: true })
+  const run = await runSubagentStep({
+    run: subagentRun(),
+    definition: subagentDefinition,
+    step: subagentDefinition.steps[0] as (typeof subagentDefinition.steps)[number],
+    runner,
+    evidenceContext,
+  })
+  expect(run.status).toBe('failed')
+  expect(run.steps[0]?.reason).toContain('without a result')
+  expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-empty' })
+})

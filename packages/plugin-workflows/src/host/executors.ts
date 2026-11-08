@@ -626,7 +626,10 @@ function typeOf(value: unknown): string {
 /** Validate one value against the supported schema subset; returns an error. */
 function jsonEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true
-  if (Array.isArray(left) && Array.isArray(right)) {
+  const leftArray = Array.isArray(left)
+  const rightArray = Array.isArray(right)
+  if (leftArray !== rightArray) return false
+  if (leftArray && rightArray) {
     return (
       left.length === right.length && left.every((entry, index) => jsonEqual(entry, right[index]))
     )
@@ -774,6 +777,21 @@ export async function runSubagentStep(input: SubagentStepInput): Promise<Workflo
           kind: 'subagent',
           callId: result.childId,
           detail: 'the child did not complete',
+        },
+      }),
+      'failed',
+      input.now,
+    )
+  }
+  if (result.result === undefined) {
+    return setRunStatus(
+      settleStep(input.run, input.step.id, 'failed', {
+        at: input.now,
+        reason: 'the child completed without a result',
+        evidence: {
+          kind: 'subagent',
+          callId: result.childId,
+          detail: 'the child completed without a result',
         },
       }),
       'failed',
