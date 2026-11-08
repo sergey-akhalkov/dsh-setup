@@ -236,7 +236,15 @@ function parseMoveOperands(
     '-debug',
   ])
   const valueParameters = new Set([
+    '-ea',
     '-erroraction',
+    '-wa',
+    '-infa',
+    '-ev',
+    '-wv',
+    '-ov',
+    '-ob',
+    '-pv',
     '-warningaction',
     '-informationaction',
     '-errorvariable',

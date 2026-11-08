@@ -1586,9 +1586,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             workspace,
             inside ? resolvedWorkdir : undefined,
           )
-          const normalizedCommand = command.replaceAll('\\\\', '/').toLowerCase()
+          const normalizedCommand = command.replaceAll('\\', '/').toLowerCase()
           const looksLikeMove =
-            /(?:^|\\s)(?:git\\s+mv|mv|move-item)\\s/iu.test(command) &&
+            /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) &&
             normalizedCommand.includes('openspec/changes/archive')
           if (archive === undefined && looksLikeMove) {
             return {
