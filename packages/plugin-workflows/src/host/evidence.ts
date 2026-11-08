@@ -643,6 +643,17 @@ async function recordCheck(
   }
 }
 
+/** The logical `shell` tool maps to the host's registered foreground shell. */
+export function hostToolName(name: string): string {
+  if (name !== 'shell') return name
+  return process.platform === 'win32' ? 'pwsh' : 'bash'
+}
+
+/** Whether an observed tool is the declared tool; `shell` matches the host shell. */
+export function toolNameMatches(declared: string, observed: string): boolean {
+  return declared === observed || (declared === 'shell' && observed === hostToolName('shell'))
+}
+
 function toolCheck(
   evidence: ToolCallEvidence,
   context: EvidenceContext,
@@ -670,7 +681,7 @@ function toolCheck(
   const call = (context.toolCalls ?? []).find(
     (candidate) =>
       candidate.ok &&
-      candidate.name === evidence.name &&
+      toolNameMatches(evidence.name, candidate.name) &&
       (command === undefined || candidate.arguments.command === command) &&
       (args === undefined || deepSubset(args, candidate.arguments)),
   )

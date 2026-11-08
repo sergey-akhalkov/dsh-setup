@@ -352,6 +352,24 @@ describe('record and tool evidence', () => {
       ),
     ).toMatchObject({ ok: true })
   })
+  it('matches the logical shell evidence against the host shell observation', async () => {
+    const workspace = await tempWorkspace()
+    const hostShell = process.platform === 'win32' ? 'pwsh' : 'bash'
+    const toolCalls: ToolCallObservation[] = [
+      {
+        callId: 'host-1',
+        name: hostShell,
+        arguments: { command: 'openspec validate auth --strict' },
+        ok: true,
+      },
+    ]
+    expect(
+      await verifyEvidence(
+        { kind: 'tool', name: 'shell', command: 'openspec validate {name} --strict' } as Evidence,
+        { workspace, values, toolCalls },
+      ),
+    ).toMatchObject({ ok: true, evidence: { callId: 'host-1' } })
+  })
 })
 
 function shell(overrides: Partial<ShellResultObservation> = {}): ShellResultObservation {
@@ -545,8 +563,8 @@ describe('path component normalization', () => {
     await writeArtifact(workspace, '..drafts/valid.md', 'x')
     const valid = await verifyEvidence(file('..drafts/valid.md'), { workspace, values })
     expect(valid.ok).toBe(true)
-    const escape = await verifyEvidence(file('../outside.md'), { workspace, values })
-    expect(escape).toMatchObject({ ok: false, failure: { reason: 'path-escape' } })
+    const escaped = await verifyEvidence(file('../outside.md'), { workspace, values })
+    expect(escaped).toMatchObject({ ok: false, failure: { reason: 'path-escape' } })
   })
 })
 

@@ -6,7 +6,13 @@ import {
   type Step,
   type SubagentSpec,
 } from './definitions.js'
-import { type EvidenceCheck, type EvidenceContext, resolveEvidenceText } from './evidence.js'
+import {
+  type EvidenceCheck,
+  type EvidenceContext,
+  hostToolName,
+  resolveEvidenceText,
+  toolNameMatches,
+} from './evidence.js'
 import { requestStep, setRunStatus, settleStep, type WorkflowRun } from './runs.js'
 import { renderMainSteer, type SteerTarget } from './steer.js'
 
@@ -55,7 +61,8 @@ export function adaptUserQuestions(
   let counter = 0
   return {
     ask: async (request) => {
-      const id = `workflows-${String((counter += 1))}`
+      counter += 1
+      const id = `workflows-${String(counter)}`
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
       const aborted = new Promise<never>((_resolve, reject) => {
@@ -972,7 +979,12 @@ export async function runToolStep(input: ToolStepInput): Promise<WorkflowRun> {
     )
   }
   const allowTools = input.definition.settings.allowTools ?? []
-  if (!allowTools.includes(spec.name)) {
+  const hostName = hostToolName(spec.name)
+  if (
+    !allowTools.some(
+      (entry) => toolNameMatches(entry, spec.name) || toolNameMatches(entry, hostName),
+    )
+  ) {
     return setRunStatus(
       settleStep(input.run, input.step.id, 'failed', {
         at: input.now,
@@ -1016,7 +1028,7 @@ export async function runToolStep(input: ToolStepInput): Promise<WorkflowRun> {
   let outcome: ToolDispatchResult
   try {
     outcome = await input.runner.call(
-      { callId, name: spec.name, arguments: rawArguments },
+      { callId, name: hostName, arguments: rawArguments },
       input.signal,
     )
   } catch (error) {

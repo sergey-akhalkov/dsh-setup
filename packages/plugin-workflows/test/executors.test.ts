@@ -2,7 +2,11 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { type Definition, validateDefinition } from '../src/host/definitions.ts'
+import {
+  type Definition,
+  loadShippedDefinitions,
+  validateDefinition,
+} from '../src/host/definitions.ts'
 import { collectEvidencePaths } from '../src/host/evidence.ts'
 import {
   adaptUserQuestions,
@@ -367,7 +371,7 @@ describe('tool executor', () => {
     })
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
-      name: 'shell',
+      name: process.platform === 'win32' ? 'pwsh' : 'bash',
       arguments: { command: 'openspec validate auth --strict' },
     })
     expect(owned.has(calls[0]?.callId ?? '')).toBe(true)
@@ -375,6 +379,47 @@ describe('tool executor', () => {
       state: 'done',
       evidence: { kind: 'tool', callId: calls[0]?.callId },
     })
+  })
+
+  it('dispatches the shipped create-change step through the host shell and the owned call', async () => {
+    const owned = new OwnedCalls()
+    const calls: Array<{ callId: string; name: string }> = []
+    const runner: ToolRunner = {
+      async call(request) {
+        calls.push({ callId: request.callId, name: request.name })
+        return owned.has(request.callId) ? { ok: true } : { ok: false, error: 'not owned' }
+      },
+    }
+    const shipped = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(shipped).toBeDefined()
+    if (shipped === undefined) return
+    const step = shipped.steps.find((entry) => entry.id === 'create-change')
+    expect(step).toBeDefined()
+    if (step === undefined) return
+    const hostShell = process.platform === 'win32' ? 'pwsh' : 'bash'
+    for (const [index, name] of [step.tool?.name ?? '', hostShell].entries()) {
+      const run = createRun({
+        definition: shipped.id,
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace: '/workspace',
+        context: { name: 'auth' },
+        steps: ['create-change'],
+        id: `run-create-change-${String(index)}`,
+        now: 1_000,
+      })
+      const settled = await runToolStep({
+        run,
+        definition: shipped,
+        step: { ...step, tool: { ...step.tool, name } } as typeof step,
+        runner,
+        owned,
+        evidenceContext: { workspace: '/workspace', values: { name: 'auth' } },
+      })
+      expect(calls.at(-1)?.name).toBe(hostShell)
+      expect(owned.has(calls.at(-1)?.callId ?? '')).toBe(true)
+      expect(settled.steps[0]?.state).toBe('done')
+    }
   })
 
   it('refuses a tool outside the allowlist before dispatch', async () => {
