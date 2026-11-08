@@ -403,3 +403,55 @@ describe('check and human evidence', () => {
     if (nonCritical.ok) expect(nonCritical.evidence).toMatchObject({ kind: 'declaration' })
   })
 })
+
+describe('glob limits and safety', () => {
+  it('enforces minBytes on every glob match', async () => {
+    const workspace = await tempWorkspace()
+    await writeArtifact(workspace, 'small.md', 'tiny')
+    const result = await verifyEvidence(
+      file('*.md', { glob: true, minBytes: 100 } as Partial<Evidence>),
+      { workspace, values },
+    )
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'too-small' } })
+  })
+
+  it('fails instead of approving a glob that hit its traversal limit', async () => {
+    const workspace = await tempWorkspace()
+    for (let index = 0; index < 201; index += 1) {
+      await writeArtifact(workspace, `many/file-${String(index)}.md`, 'x')
+    }
+    const result = await verifyEvidence(file('many/*.md', { glob: true } as Partial<Evidence>), {
+      workspace,
+      values,
+    })
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'limit-exceeded' } })
+  })
+
+  it('refuses a glob that meets an escaping symlink', async () => {
+    const workspace = await tempWorkspace()
+    const outside = await tempWorkspace()
+    await writeArtifact(workspace, 'good.md')
+    await writeArtifact(outside, 'secret.md')
+    try {
+      await symlink(join(outside, 'secret.md'), join(workspace, 'link.md'), 'file')
+    } catch {
+      return
+    }
+    const result = await verifyEvidence(file('*.md', { glob: true } as Partial<Evidence>), {
+      workspace,
+      values,
+    })
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'path-escape' } })
+  })
+
+  it('fails a glob whose match lies beyond the depth limit', async () => {
+    const workspace = await tempWorkspace()
+    const nested = Array.from({ length: 14 }, (_, index) => `d${String(index)}`).join('/')
+    await writeArtifact(workspace, `${nested}/deep.md`, 'x')
+    const result = await verifyEvidence(file('**/deep.md', { glob: true } as Partial<Evidence>), {
+      workspace,
+      values,
+    })
+    expect(result).toMatchObject({ ok: false, failure: { reason: 'limit-exceeded' } })
+  })
+})

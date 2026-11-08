@@ -33,6 +33,7 @@ export type EvidenceFailureReason =
   | 'record-mismatch'
   | 'no-call'
   | 'check-failed'
+  | 'limit-exceeded'
   | 'no-answer'
   | 'rejected-answer'
   | 'unsupported'
@@ -233,7 +234,16 @@ async function fileCheck(
     return failure('path-escape', 'the workspace is not readable', path, item)
   }
   if (evidence.glob === true) {
-    const matches = await expandGlob(root, path)
+    const expansion = await expandGlob(root, path)
+    if (expansion.failure !== undefined) {
+      return failure(
+        expansion.failure.reason,
+        expansion.failure.detail,
+        expansion.failure.path ?? path,
+        item,
+      )
+    }
+    const matches = expansion.matches
     if (matches.length === 0) {
       return failure('no-match', `no file matches "${path}"`, path, item)
     }
@@ -248,6 +258,14 @@ async function fileCheck(
         return failure('missing-file', `"${match}" is not a readable file`, match, item)
       }
       if (info.size === 0) return failure('empty-file', `"${match}" is empty`, match, item)
+      if (evidence.minBytes !== undefined && info.size < evidence.minBytes) {
+        return failure(
+          'too-small',
+          `"${match}" is ${String(info.size)} bytes; at least ${String(evidence.minBytes)} are required`,
+          match,
+          item,
+        )
+      }
       total += info.size
     }
     return {
@@ -274,12 +292,47 @@ async function fileCheck(
   return { ok: true, evidence: { kind: 'file', path, bytes: info.size } }
 }
 
-/** Expand a segment glob under the workspace; bounded depth and entry count. */
-export async function expandGlob(root: string, pattern: string): Promise<string[]> {
+export interface GlobFailure {
+  readonly reason: EvidenceFailureReason
+  readonly detail: string
+  readonly path?: string
+}
+
+export interface GlobExpansion {
+  readonly matches: readonly string[]
+  readonly failure?: GlobFailure
+}
+
+/**
+ * Expand a segment glob under the workspace. A traversal that hits the depth or
+ * entry limit, or meets an escaping symlink, fails instead of approving the
+ * partial result it happened to see.
+ */
+export async function expandGlob(root: string, pattern: string): Promise<GlobExpansion> {
   const segments = pattern.replaceAll('\\', '/').split('/')
   const found: string[] = []
+  let failure: GlobFailure | undefined
+  let limitHit = false
+  const fail = (reason: EvidenceFailureReason, detail: string, path?: string): void => {
+    if (failure === undefined) failure = { reason, detail, ...(path === undefined ? {} : { path }) }
+  }
+  const checkLink = async (candidate: string): Promise<'file' | 'dir' | 'none'> => {
+    const target = join(root, candidate)
+    if (!(await canonicalContained(root, target))) {
+      fail('path-escape', `"${candidate}" resolves outside the workspace`, candidate)
+      return 'none'
+    }
+    const info = await stat(target).catch(() => undefined)
+    if (info?.isFile() === true) return 'file'
+    if (info?.isDirectory() === true) return 'dir'
+    return 'none'
+  }
   const walk = async (directory: string, index: number, depth: number): Promise<void> => {
-    if (found.length >= 200 || depth > 12) return
+    if (failure !== undefined) return
+    if (found.length >= 200 || depth > 12) {
+      limitHit = true
+      return
+    }
     const segment = segments[index]
     if (segment === undefined) return
     if (segment === '**') {
@@ -290,8 +343,13 @@ export async function expandGlob(root: string, pattern: string): Promise<string[
       )
       if (entries === undefined) return
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        await walk(directory === '' ? entry.name : `${directory}/${entry.name}`, index, depth + 1)
+        const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
+        if (entry.isDirectory()) {
+          await walk(candidate, index, depth + 1)
+        } else if (entry.isSymbolicLink() && (await checkLink(candidate)) === 'dir') {
+          await walk(candidate, index, depth + 1)
+        }
+        if (failure !== undefined) return
       }
       return
     }
@@ -301,23 +359,43 @@ export async function expandGlob(root: string, pattern: string): Promise<string[
     )
     if (entries === undefined) return
     for (const entry of entries) {
-      const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
       if (!globMatches(segment, entry.name)) continue
+      const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
       if (last) {
-        if (entry.isFile()) found.push(candidate)
+        if (entry.isFile()) {
+          found.push(candidate)
+        } else if (entry.isSymbolicLink() && (await checkLink(candidate)) === 'file') {
+          found.push(candidate)
+        }
       } else if (entry.isDirectory()) {
         await walk(candidate, index + 1, depth + 1)
+      } else if (entry.isSymbolicLink() && (await checkLink(candidate)) === 'dir') {
+        await walk(candidate, index + 1, depth + 1)
+      }
+      if (failure !== undefined || found.length >= 200) {
+        if (found.length >= 200) limitHit = true
+        return
       }
     }
   }
   const literal = segments.every((segment) => !/[*?]/u.test(segment))
   if (literal) {
     const info = await stat(join(root, pattern)).catch(() => undefined)
-    if (info?.isFile() === true) return [pattern]
-    return []
+    return { matches: info?.isFile() === true ? [pattern] : [] }
   }
   await walk('', 0, 0)
-  return found.sort()
+  if (failure !== undefined) return { matches: [], failure }
+  if (limitHit) {
+    return {
+      matches: found.sort(),
+      failure: {
+        reason: 'limit-exceeded',
+        detail: 'the glob search hit its traversal limit before it could decide',
+        path: pattern,
+      },
+    }
+  }
+  return { matches: found.sort() }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
