@@ -11,7 +11,7 @@ import { evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose } from '../s
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { advanceIntake } from '../src/host/intake.ts'
-import { hashSession } from '../src/host/projection.ts'
+import { engineRuns, hashSession } from '../src/host/projection.ts'
 import { listReceipts } from '../src/host/receipts.ts'
 import { cancelRun, resumeRun } from '../src/host/resume.ts'
 import {
@@ -278,6 +278,11 @@ describe('obligation engine live proxy', () => {
       resumeRun: async () => ({ stepId: 'spec' }),
     })
     expect(started).toMatchObject({ kind: 'deny', action: 'started', stepId: 'requirements' })
+    const viewRuns = await engineRuns(workspace)
+    expect(viewRuns.find((run) => run.id === 'workflow:run-live-intake')).toMatchObject({
+      source: 'workflow',
+      status: 'running',
+    })
 
     // 2. A main step completes only after its draft file exists.
     const owned = new OwnedCalls()

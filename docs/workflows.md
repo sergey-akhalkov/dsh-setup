@@ -45,7 +45,7 @@ Approvals (`.dsh/workflows/approved.json`), completion/adoption receipts (`.dsh/
 
 Trust boundary: the key gives tamper-evidence against model-mediated writes (`write`/`edit`/tool paths there are refused by the pre-execute guard), accidental edits, and on-disk tampering between host restarts. It is **not** a boundary against an arbitrary same-user shell or `run_code` program, which can read files the host can read; that case is outside this threat model. Approvals and receipts are durable across restarts but are not tamper-proof against the OS user.
 
-The engine never loads `.dsh/workflows/drafts/`; a model may propose a draft, and only the user-started `/workflows install <path>` copies, validates, and approves it. The install path refuses a linked ancestor or a destination outside the definitions directory.
+The engine never loads `.dsh/workflows/drafts/`; a model may propose a draft, and only the user-started `/workflows install <path>` copies, validates, and approves it. The editor's save path uses the same exported host `installDefinition` function: the definition bytes and its matching HMAC approval are persisted together, a failure restores both, and a successful editor save is therefore an authorized install, never a model activation. The install path refuses a linked ancestor or a destination outside the definitions directory.
 
 ## Runs
 

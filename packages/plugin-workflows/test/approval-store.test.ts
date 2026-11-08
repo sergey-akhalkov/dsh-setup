@@ -7,6 +7,7 @@ import {
   approvalsPath,
   installDefinition,
   loadApprovedDefinitions,
+  readApprovals,
 } from '../src/host/approval-store.ts'
 import {
   loadShippedDefinitions,
@@ -322,4 +323,53 @@ it('applies ownership filtering on a linked-directory fallback too', async () =>
   })
   expect(empty.definitions).toEqual([])
   expect(empty.errors.join('\n')).toMatch(/retire-legacy-gates/u)
+})
+
+it('restores the installed file when the approval write fails', async () => {
+  const workspace = await tempWorkspace()
+  const baselineDraft = await writeDefinitionFile(
+    workspace,
+    workspaceDraftsDirectory(workspace),
+    'baseline.json',
+    definitionFor('atomic-demo', 'Baseline'),
+  )
+  const baseline = await installDefinition(workspace, baselineDraft, auth())
+  const baselineBytes = await readFile(
+    join(workspaceDefinitionsDirectory(workspace), 'atomic-demo.json'),
+  )
+  const replacementDraft = await writeDefinitionFile(
+    workspace,
+    workspaceDraftsDirectory(workspace),
+    'replacement.json',
+    definitionFor('atomic-demo', 'Replacement'),
+  )
+  await expect(
+    installDefinition(workspace, replacementDraft, auth(), {
+      writeApprovals: async () => {
+        throw new Error('the approval store is unavailable')
+      },
+    }),
+  ).rejects.toThrow(/definition was not installed/u)
+  expect(
+    await readFile(join(workspaceDefinitionsDirectory(workspace), 'atomic-demo.json')),
+  ).toEqual(baselineBytes)
+  const approvals = await readApprovals(workspace)
+  expect(approvals.approvals.get('atomic-demo')?.hash).toBe(baseline.hash)
+
+  const freshDraft = await writeDefinitionFile(
+    workspace,
+    workspaceDraftsDirectory(workspace),
+    'fresh.json',
+    definitionFor('fresh-demo'),
+  )
+  await expect(
+    installDefinition(workspace, freshDraft, auth(), {
+      writeApprovals: async () => {
+        throw new Error('the approval store is unavailable')
+      },
+    }),
+  ).rejects.toThrow(/definition was not installed/u)
+  await expect(
+    readFile(join(workspaceDefinitionsDirectory(workspace), 'fresh-demo.json'), 'utf8'),
+  ).rejects.toMatchObject({ code: 'ENOENT' })
 })

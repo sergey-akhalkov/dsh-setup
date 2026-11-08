@@ -161,15 +161,25 @@ export interface InstallResult {
   readonly hash: string
 }
 
+export interface InstallOptions {
+  /** Test seam: the approval-store writer; production writes the real store. */
+  readonly writeApprovals?: (
+    workspace: string,
+    approvals: ReadonlyMap<string, StoredApproval>,
+  ) => Promise<void>
+}
+
 /**
  * Validate a definition file, copy it atomically into the workspace definitions
  * directory, and record its content hash and host signature. The caller asks
- * the user first; this function is the host-only install path.
+ * the user first; this function is the host-only install path and the one the
+ * editor save uses.
  */
 export async function installDefinition(
   workspace: string,
   sourcePath: string,
   auth: HostAuth,
+  options: InstallOptions = {},
 ): Promise<InstallResult> {
   const root = await realpath(workspace)
   const source = await realpath(isAbsolute(sourcePath) ? sourcePath : join(root, sourcePath)).catch(
@@ -200,7 +210,14 @@ export async function installDefinition(
   if (!isInside(directory, target) || dirname(target) !== directory) {
     throw new Error(`definition "${definition.id}" resolves outside the definitions directory`)
   }
+  // The definition bytes and its approval are one install: on any later
+  // failure the previous file is restored, so neither half is left changed.
+  const previous = await readFile(target).catch(() => undefined)
   await writeAtomic(target, bytes)
+  const rollback = async (): Promise<void> => {
+    if (previous === undefined) await unlink(target).catch(() => undefined)
+    else await writeAtomic(target, previous).catch(() => undefined)
+  }
   // A concurrent swap for a link must not be blessed: the written file itself
   // has to resolve to the exact expected name inside the definitions directory.
   const written = await realpath(target).catch(() => undefined)
@@ -209,7 +226,7 @@ export async function installDefinition(
     dirname(written) !== directory ||
     (await lstat(target)).isSymbolicLink()
   ) {
-    await unlink(target).catch(() => undefined)
+    await rollback()
     throw new Error(
       `definition "${definition.id}" was replaced while installing; the approval was not recorded`,
     )
@@ -223,7 +240,14 @@ export async function installDefinition(
   }
   const approvals = new Map(existing.approvals)
   approvals.set(definition.id, record)
-  await writeApprovals(workspace, approvals)
+  try {
+    await (options.writeApprovals ?? writeApprovals)(workspace, approvals)
+  } catch (error) {
+    await rollback()
+    throw new Error(
+      `the approval store could not be written (${errorMessage(error)}); the definition was not installed`,
+    )
+  }
   return { definition, file: target, hash }
 }
 
