@@ -511,6 +511,20 @@ describe('branch executor', () => {
       values: { flag: true },
     })
     expect(boolean.next).toBe('yes')
+    const nullMissing = runBranchStep({
+      run: branchRun(),
+      step: {
+        ...choose,
+        branch: {
+          predicate: { '!': { missing: ['context.approval'] } },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'yes',
+          else: 'no',
+        },
+      } as (typeof definition.steps)[number],
+      values: { approval: null },
+    })
+    expect(nullMissing.next).toBe('no')
   })
 })
 
@@ -956,6 +970,10 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
     true,
   )
   expect(evaluateJsonLogic({ '+': [1, 2, 3] }, {})).toBe(6)
+  expect(evaluateJsonLogic({ '!!': { '/': [0, 0] } }, {})).toBe(false)
+  expect(
+    evaluateJsonLogic({ missing: ['context.approval'] }, { context: { approval: null } }),
+  ).toEqual(['context.approval'])
   expect(evaluateJsonLogic({ missing: ['context.absent'] }, { context: {} })).toEqual([
     'context.absent',
   ])

@@ -229,7 +229,7 @@ function greaterOrEqual(left: unknown, right: unknown): boolean {
 
 function truthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0
-  return value !== undefined && value !== null && value !== false && value !== 0 && value !== ''
+  return Boolean(value)
 }
 
 function operands(args: unknown): unknown[] {
@@ -427,7 +427,7 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
         .map((entry) => String(value(entry)))
         .filter((name) => {
           const found = lookup(data, name)
-          return found === undefined || found === ''
+          return found === undefined || found === null || found === ''
         })
     case 'in': {
       const needle = value(args[0])
