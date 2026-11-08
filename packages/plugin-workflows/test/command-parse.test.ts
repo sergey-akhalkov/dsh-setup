@@ -255,3 +255,30 @@ it('resolves named and absolute move operands against the workspace', () => {
     ),
   ).toBeUndefined()
 })
+it('tokenizes quoted paths with spaces and resolves a subdirectory workdir', () => {
+  const workspace = '/tmp/My Workspace/repo'
+  expect(
+    parseArchiveCommand(
+      `mv "${workspace}/openspec/changes/auth" "${workspace}/openspec/changes/archive/"`,
+      workspace,
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
+  expect(
+    parseArchiveCommand(
+      `git mv "${workspace}/openspec/changes/auth" "${workspace}/openspec/changes/archive/auth"`,
+      workspace,
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'git' })
+  expect(
+    parseArchiveCommand(
+      `Move-Item -LiteralPath "${workspace}/openspec/changes/auth" -Destination "${workspace}/openspec/changes/archive/"`,
+      workspace,
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  expect(
+    parseArchiveCommand('mv auth archive/', '/workspace', '/workspace/openspec/changes'),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
+  expect(
+    parseArchiveCommand('git mv auth archive/auth', '/workspace', '/workspace/openspec/changes'),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'git' })
+})

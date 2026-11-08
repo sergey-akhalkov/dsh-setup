@@ -1729,7 +1729,7 @@ describe('archive workdir evidence root', () => {
       },
     )) as { kind?: string; reason?: string } | undefined
     expect(decision?.kind).toBe('deny')
-    expect(decision?.reason).toMatch(/not the session workspace/u)
+    expect(decision?.reason).toMatch(/outside the session workspace/u)
     expect(nextCalled).toBe(false)
   })
 })
@@ -1781,4 +1781,28 @@ it('carries a filesystem change name into the definition event', () => {
     name: 'auth',
     path: 'openspec/changes/auth/tasks.md',
   })
+})
+
+it('denies a move from the changes subdirectory without evidence', async () => {
+  process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+  const workspace = await tempWorkspace()
+  const host = fakeHost(workspace)
+  apply(host.ctx as never)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  let nextCalled = false
+  const decision = (await host.emit(
+    'tools/pre-execute',
+    {
+      agent: host.agent,
+      callId: 'move-subdir',
+      name: 'pwsh',
+      arguments: { command: 'mv auth archive/', workdir: 'openspec/changes' },
+    },
+    async () => {
+      nextCalled = true
+      return { kind: 'continue' }
+    },
+  )) as { kind?: string } | undefined
+  expect(decision?.kind).toBe('deny')
+  expect(nextCalled).toBe(false)
 })

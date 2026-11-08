@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { isAbsolute, join, normalize } from 'node:path'
+import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -1566,23 +1566,31 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           releaseAdmission()
         }
         if (command !== undefined) {
-          const archive = parseArchiveCommand(command, workspace)
+          const declaredWorkdir = shellWorkdirOf(exec)
+          const resolvedWorkdir =
+            declaredWorkdir === undefined
+              ? normalize(workspace)
+              : normalize(
+                  isAbsolute(declaredWorkdir) ? declaredWorkdir : join(workspace, declaredWorkdir),
+                )
+          const relativeWorkdir = relative(normalize(workspace), resolvedWorkdir)
+          const inside =
+            relativeWorkdir === '' ||
+            (!isAbsolute(relativeWorkdir) &&
+              relativeWorkdir !== '..' &&
+              !relativeWorkdir.startsWith(`..${sep}`) &&
+              !relativeWorkdir.startsWith('../') &&
+              !relativeWorkdir.startsWith('..\\'))
+          const archive = parseArchiveCommand(
+            command,
+            workspace,
+            inside ? resolvedWorkdir : undefined,
+          )
           if (archive?.kind === 'archive') {
-            const declaredWorkdir = shellWorkdirOf(exec)
-            if (declaredWorkdir !== undefined) {
-              const resolved = normalize(
-                isAbsolute(declaredWorkdir) ? declaredWorkdir : join(workspace, declaredWorkdir),
-              )
-              const expected = normalize(workspace)
-              const same =
-                process.platform === 'win32'
-                  ? resolved.toLowerCase() === expected.toLowerCase()
-                  : resolved === expected
-              if (!same) {
-                return {
-                  kind: 'deny',
-                  reason: `the archive command runs in "${resolved}", not the session workspace "${expected}"; its evidence cannot authorize this archive`,
-                }
+            if (!inside) {
+              return {
+                kind: 'deny',
+                reason: `the archive command runs in "${resolvedWorkdir}", outside the session workspace "${normalize(workspace)}"; its evidence cannot authorize this archive`,
               }
             }
             const specRecord = await verifyEvidence(

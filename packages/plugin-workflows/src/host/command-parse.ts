@@ -105,16 +105,24 @@ function targetsArchive(destination: string): boolean {
   return new RegExp(`^${ARCHIVE_DIR}/[^/]+$`, 'u').test(destination)
 }
 
-function workspaceRelative(path: string, workspace: string | undefined): string | undefined {
+function workspaceRelative(
+  path: string,
+  workspace: string | undefined,
+  base: string | undefined,
+): string | undefined {
   if (workspace === undefined) return path
   const normalized = path.replaceAll('\\', '/')
   const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const baseRoot = (base ?? workspace).replaceAll('\\', '/').replace(/\/+$/u, '')
+  const absolute =
+    /^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('/')
+      ? normalized
+      : `${baseRoot}/${normalized}`
   const fold = (value: string): string =>
     process.platform === 'win32' ? value.toLowerCase() : value
-  if (fold(normalized) === fold(root)) return ''
-  if (fold(normalized).startsWith(`${fold(root)}/`)) return normalized.slice(root.length + 1)
-  if (/^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('/')) return undefined
-  return normalized
+  if (fold(absolute) === fold(root)) return ''
+  if (fold(absolute).startsWith(`${fold(root)}/`)) return absolute.slice(root.length + 1)
+  return undefined
 }
 
 function archiveMove(
@@ -122,10 +130,12 @@ function archiveMove(
   destination: string | undefined,
   form: ArchiveIntent['form'],
   workspace?: string,
+  base?: string,
 ): ArchiveIntent | undefined {
-  const relativeSource = source === undefined ? undefined : workspaceRelative(source, workspace)
+  const relativeSource =
+    source === undefined ? undefined : workspaceRelative(source, workspace, base)
   const relativeDestination =
-    destination === undefined ? undefined : workspaceRelative(destination, workspace)
+    destination === undefined ? undefined : workspaceRelative(destination, workspace, base)
   const name = relativeSource === undefined ? undefined : changeUnderChanges(relativeSource)
   if (
     name === undefined ||
@@ -143,10 +153,40 @@ function archiveMove(
  * `mv`, PowerShell `Move-Item`, or `git mv`. A compound command, another
  * destination, or an unparseable name is not an archive.
  */
+function tokenize(command: string): string[] | undefined {
+  const tokens: string[] = []
+  let current = ''
+  let quote: string | undefined
+  for (const char of command) {
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined
+      else current += char
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (/\s/u.test(char)) {
+      if (current !== '') {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+  if (quote !== undefined) return undefined
+  if (current !== '') tokens.push(current)
+  return tokens
+}
+
 export function parseArchiveCommand(
   command: string,
   workspace?: string,
+  workdir?: string,
 ): ArchiveIntent | undefined {
+  const moveWorkspace = workdir ?? workspace
   const trimmed = command.trim()
   // Moves carry Windows paths, so a backslash is data here; control characters are not.
   if (trimmed === '' || CONTROL.test(trimmed)) return undefined
@@ -154,7 +194,8 @@ export function parseArchiveCommand(
   if (openspec?.kind === 'archive') {
     return { kind: 'archive', change: openspec.change, form: 'openspec' }
   }
-  const tokens = trimmed.split(/\s+/u)
+  const tokens = tokenize(trimmed)
+  if (tokens === undefined) return undefined
   const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
   if (mvIndex > 0) {
     const positional = tokens
@@ -166,6 +207,7 @@ export function parseArchiveCommand(
       unquotedPath(positional[1]),
       mvIndex === 2 ? 'git' : 'mv',
       workspace,
+      moveWorkspace,
     )
   }
   if (/^move-item$/iu.test(tokens[0] ?? '')) {
@@ -191,7 +233,13 @@ export function parseArchiveCommand(
     if (source === undefined) source = positional.shift()
     if (destination === undefined) destination = positional.shift()
     if (positional.length > 0) return undefined
-    return archiveMove(unquotedPath(source), unquotedPath(destination), 'Move-Item', workspace)
+    return archiveMove(
+      unquotedPath(source),
+      unquotedPath(destination),
+      'Move-Item',
+      workspace,
+      moveWorkspace,
+    )
   }
   return undefined
 }
