@@ -44,6 +44,7 @@ import { cancelRun, recoverRuns, resumeRun } from './resume.js'
 import {
   createRun,
   listAuthenticatedRuns,
+  pruneRuns,
   readAuthenticatedRun,
   runFailure,
   storedRuns,
@@ -516,6 +517,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           console.error(
             `workflows: ${String(result.recovered.length)} unfinished run(s) marked interrupted; resume or cancel them instead of auto-completing`,
           )
+        }
+        if (!pluginDisposed) {
+          // Retention runs at boot, before the next session adds history.
+          await pruneRuns(workspace, { auth })
         }
       } catch (error) {
         console.error(

@@ -417,12 +417,8 @@ export async function pruneRuns(workspace: string, options: PruneOptions): Promi
   }
   const terminal = (id: string): boolean => {
     const status = runs.get(id)?.status
-    return (
-      status === 'completed' ||
-      status === 'cancelled' ||
-      status === 'failed' ||
-      status === 'interrupted'
-    )
+    // An interrupted run is resumable state, so it is retained like an open run.
+    return status === 'completed' || status === 'cancelled' || status === 'failed'
   }
   const removed: string[] = []
   const kept: StoredRunEntry[] = []

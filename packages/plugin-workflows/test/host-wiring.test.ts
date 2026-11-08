@@ -1112,3 +1112,40 @@ describe('intent engine opt-in', () => {
     )
   })
 })
+
+describe('retention at boot', () => {
+  it('prunes an expired terminal run and keeps an interrupted run resumable', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const base = (id: string) =>
+      runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        steps: ['requirements'],
+        id,
+      })
+    const done = runs.setRunStatus(base('run-old-donex'), 'completed', 1_000)
+    await runs.writeRun(workspace, done, auth)
+    const interrupted = runs.setRunStatus(base('run-old-intx'), 'interrupted', 1_100)
+    await runs.writeRun(workspace, interrupted, auth)
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000)
+    const { readdir, utimes } = await import('node:fs/promises')
+    await utimes(runs.runPath(workspace, done.id), old, old)
+    await utimes(runs.runPath(workspace, interrupted.id), old, old)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    const directory = join(workspace, '.dsh', 'workflows', 'runs')
+    await waitFor(async () => {
+      const listed = await readdir(directory).catch((): string[] => [])
+      return !listed.includes('run-old-donex.json')
+    })
+    expect(await readdir(directory)).toContain('run-old-intx.json')
+    const kept = await runs.readAuthenticatedRun(workspace, 'run-old-intx', auth)
+    expect(kept?.status).toBe('interrupted')
+  })
+})

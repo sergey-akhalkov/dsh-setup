@@ -157,6 +157,12 @@ describe('run store', () => {
     const oldCompleted = await writeAndComplete(workspace, 'old-done', 1_000)
     const oldRunning = intakeRun(workspace, 'old-open', 1_100, 'run-old-open-x')
     await writeRun(workspace, oldRunning, auth())
+    const oldInterrupted = setRunStatus(
+      intakeRun(workspace, 'old-interrupted', 1_150, 'run-old-int-x'),
+      'interrupted',
+      1_160,
+    )
+    await writeRun(workspace, oldInterrupted, auth())
     const recentCompleted = await writeAndComplete(workspace, 'recent-done', 2_000)
     const receipt = await issueCompletionReceipt(workspace, oldCompleted.id, DIGEST, auth(), 2_100)
     expect(receipt.signature).toMatch(/^[a-f0-9]{64}$/u)
@@ -172,12 +178,18 @@ describe('run store', () => {
       new Date(now - 40 * DAY_MS),
       new Date(now - 40 * DAY_MS),
     )
+    await utimes(
+      runPath(workspace, oldInterrupted.id),
+      new Date(now - 40 * DAY_MS),
+      new Date(now - 40 * DAY_MS),
+    )
     const result = await pruneRuns(workspace, { auth: auth(), now, retentionMs: 30 * DAY_MS })
     expect(result.removed).toContain(oldCompleted.id)
     expect(result.removed).not.toContain(oldRunning.id)
+    expect(result.removed).not.toContain(oldInterrupted.id)
     const remaining = await listAuthenticatedRuns(workspace, auth())
     expect(remaining.map((run) => run.id)).toEqual(
-      expect.arrayContaining([oldRunning.id, recentCompleted.id]),
+      expect.arrayContaining([oldRunning.id, oldInterrupted.id, recentCompleted.id]),
     )
     // The receipt is not a run and survives pruning of the run it names.
     expect(await readReceipt(workspace, 'old-done', auth())).toMatchObject({ change: 'old-done' })
@@ -189,13 +201,20 @@ describe('run store', () => {
     const second = await writeAndComplete(workspace, 'second', 2_000)
     const open = intakeRun(workspace, 'open', 3_000, 'run-open-x')
     await writeRun(workspace, open, auth())
+    const interrupted = setRunStatus(
+      intakeRun(workspace, 'interrupted', 2_500, 'run-int-x'),
+      'interrupted',
+      2_600,
+    )
+    await writeRun(workspace, interrupted, auth())
     const result = await pruneRuns(workspace, {
       auth: auth(),
       now: 4_000,
       retentionMs: 30 * DAY_MS,
-      maxBytes: 1_500,
+      maxBytes: 2_000,
     })
     expect(result.removed).toContain(first.id)
+    expect(result.removed).not.toContain(interrupted.id)
     expect(result.removed).not.toContain(open.id)
     expect(await readAuthenticatedRun(workspace, second.id, auth())).toBeDefined()
     expect(await readAuthenticatedRun(workspace, open.id, auth())).toBeDefined()
