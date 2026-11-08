@@ -96,15 +96,20 @@ function unquotedPath(token: string | undefined): string | undefined {
   return `${absolute ? '/' : ''}${parts.join('/')}`
 }
 
+function pathKey(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
 function changeUnderChanges(path: string): string | undefined {
-  const match = /^openspec\/changes\/([^/]+)$/u.exec(path)
+  const match = /^openspec\/changes\/([^/]+)$/u.exec(pathKey(path))
   const name = match?.[1]
   return name !== undefined && CHANGE_NAME.test(name) ? name : undefined
 }
 
 function targetsArchive(destination: string): boolean {
-  if (destination === ARCHIVE_DIR) return true
-  return new RegExp(`^${ARCHIVE_DIR}/[^/]+$`, 'u').test(destination)
+  const key = pathKey(destination)
+  if (key === ARCHIVE_DIR) return true
+  return new RegExp(`^${ARCHIVE_DIR}/[^/]+$`, 'u').test(key)
 }
 
 function normalizeAbsolute(path: string): string {

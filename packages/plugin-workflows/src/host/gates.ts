@@ -505,7 +505,9 @@ function openRequiredStep(run: WorkflowRun): { step: string } | undefined {
  * input; only the authenticated run, receipt, and record can allow.
  */
 export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecision {
-  const related = input.runs.filter((run) => intakeName(run) === input.change)
+  const related = input.runs.filter(
+    (run) => run.status !== 'cancelled' && intakeName(run) === input.change,
+  )
   const blocked = related
     .map((run) => ({ run, open: openRequiredStep(run) }))
     .find((entry) => entry.open !== undefined)

@@ -1833,3 +1833,30 @@ it('denies parent-relative moves without evidence', async () => {
   expect(decision?.kind).toBe('deny')
   expect(nextCalled).toBe(false)
 })
+
+it.skipIf(process.platform !== 'win32')(
+  'denies a Windows-cased archive move without evidence',
+  async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'move-cased',
+        name: 'pwsh',
+        arguments: { command: 'mv openspec/changes/auth openspec/changes/ARCHIVE/' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string } | undefined
+    expect(decision?.kind).toBe('deny')
+    expect(nextCalled).toBe(false)
+  },
+)

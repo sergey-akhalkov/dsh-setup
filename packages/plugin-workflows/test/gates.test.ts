@@ -881,3 +881,39 @@ it('blocks an archive while a filesystem-triggered review run is open', async ()
   })
   expect(allowed.kind).toBe('allow')
 })
+
+it('ignores cancelled intake leftovers when a valid intake exists', async () => {
+  const workspace = await tempWorkspace()
+  let completed = intakeRunFor(workspace, 'auth', 'run-valid')
+  for (const step of ['requirements', 'create-change', 'spec', 'approval']) {
+    completed = settleStep(completed, step, 'done', { at: 1_100 })
+  }
+  completed = setRunStatus(completed, 'completed', 2_000)
+  const cancelled = setRunStatus(
+    intakeRunFor(workspace, 'auth', 'run-cancelled'),
+    'cancelled',
+    2_100,
+  )
+  const specRecord = {
+    ok: true as const,
+    evidence: {
+      kind: 'record' as const,
+      path: '.dsh/delegation/spec-review/auth/spec.json',
+      digest: DIGEST,
+    },
+  }
+  const allowed = evaluateArchiveGate({
+    change: 'auth',
+    runs: [completed, cancelled],
+    receipts: [],
+    specRecord,
+  })
+  expect(allowed.kind).toBe('allow')
+  const denied = evaluateArchiveGate({
+    change: 'auth',
+    runs: [cancelled],
+    receipts: [],
+    specRecord,
+  })
+  expect(denied).toMatchObject({ kind: 'deny' })
+})

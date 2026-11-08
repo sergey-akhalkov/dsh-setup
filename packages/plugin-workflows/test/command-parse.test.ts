@@ -197,7 +197,7 @@ describe('archive command parser', () => {
       'git mv openspec/changes/auth openspec/changes/archive; rm -rf .',
       'Move-Item openspec/changes/auth',
       'Move-Item -Destination openspec/changes/archive',
-      'mv openspec/changes/Auth openspec/changes/archive',
+      'mv openspec/changes/Bad_Name openspec/changes/archive',
       'mv openspec/changes/auth openspec/changes/archive/ extra',
     ]) {
       expect(parseArchiveCommand(command), command).toBeUndefined()
@@ -294,4 +294,16 @@ it('resolves parent-relative move operands against the workdir', () => {
       form: command.startsWith('git') ? 'git' : command.startsWith('mv') ? 'mv' : 'Move-Item',
     })
   }
+})
+it.skipIf(process.platform !== 'win32')('matches Windows archive paths case-insensitively', () => {
+  expect(
+    parseArchiveCommand('mv openspec/changes/auth openspec/changes/ARCHIVE/', '/workspace'),
+  ).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'mv',
+  })
+  expect(
+    parseArchiveCommand('mv OpenSpec/Changes/auth OpenSpec/Changes/Archive/auth', '/workspace'),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
 })
