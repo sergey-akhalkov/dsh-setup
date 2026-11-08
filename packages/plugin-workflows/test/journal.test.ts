@@ -778,7 +778,10 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => typeof (await readHealth())?.lastEventAt === 'number')
+    await waitFor(async () => {
+      const current = await readHealth()
+      return typeof current?.lastEventAt === 'number' && typeof current?.lastCheckAt === 'number'
+    })
     const health = (await readHealth()) ?? {}
     expect(health.listenerCount).toBeGreaterThanOrEqual(4)
     expect(typeof health.triggerCount).toBe('number')
@@ -1217,7 +1220,10 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => typeof (await readHealth())?.lastEventAt === 'number')
+    await waitFor(async () => {
+      const current = await readHealth()
+      return typeof current?.lastEventAt === 'number' && typeof current?.lastCheckAt === 'number'
+    })
     expect((await readHealth())?.journalWritable).toBe(false)
   })
 })
