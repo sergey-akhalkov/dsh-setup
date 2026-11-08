@@ -453,6 +453,7 @@ export function apply(ctx: Context): void {
       }
     }
     try {
+      const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event)
       const run = createRun({
         definition: definition.id,
         trigger: definition.trigger.kind,
@@ -461,6 +462,7 @@ export function apply(ctx: Context): void {
         ...(event.name === undefined ? {} : { context: { name: event.name } }),
         steps: definition.steps.map((step) => step.id),
         now: journal.time(),
+        ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
       writeRunSync(workspace, run, auth)
       return { ok: true, runId: run.id }
@@ -568,6 +570,7 @@ export function apply(ctx: Context): void {
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
     await loadDefinitions(workspace)
+    await seedTriggerIdentities(workspace, input.session)
     if (
       (definitionsByWorkspace.get(workspace) ?? []).some(
         (definition) => definition.trigger.mode === 'active',
@@ -977,6 +980,7 @@ export function apply(ctx: Context): void {
     auth: HostAuth,
     definition: Definition,
     context: Readonly<Record<string, unknown>> = {},
+    dedupeKey?: string,
   ): Promise<WorkflowRun> => {
     const run = createRun({
       definition: definition.id,
@@ -986,9 +990,31 @@ export function apply(ctx: Context): void {
       context,
       steps: definition.steps.map((step) => step.id),
       now: journal.time(),
+      ...(dedupeKey === undefined ? {} : { dedupeKey }),
     })
     await writeRun(workspace, run, auth)
     return run
+  }
+  const seededSessions = new Set<string>()
+  /** Restore persisted trigger identities after a reload. */
+  const seedTriggerIdentities = async (workspace: string, sessionId: string): Promise<void> => {
+    if (seededSessions.has(sessionId)) return
+    seededSessions.add(sessionId)
+    const auth = storedAuth
+    if (auth === undefined) return
+    try {
+      const runs = await listAuthenticatedRuns(workspace, auth)
+      const map = seen.get(sessionId) ?? new Map<string, number>()
+      seen.set(sessionId, map)
+      for (const run of runs) {
+        if (run.session === sessionId && run.dedupeKey !== undefined) {
+          map.set(run.dedupeKey, run.updatedAt)
+        }
+      }
+    } catch {
+      // Seeding is best-effort; the next authenticated read retries.
+      seededSessions.delete(sessionId)
+    }
   }
 
   // Tools pre-execute: intake, archive, and the authorization write guard.
@@ -1011,6 +1037,7 @@ export function apply(ctx: Context): void {
         const create = command === undefined ? undefined : parseOpenspecCommand(command)
         const sessionId = String(agent.session.id)
         const definitions = await definitionsFor(workspace)
+        await seedTriggerIdentities(workspace, sessionId)
         const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
         seen.set(sessionId, sessionSeen)
         const observed: DefinitionEvent = {
@@ -1119,7 +1146,14 @@ export function apply(ctx: Context): void {
                 ownedCallIds: new Set(ownedCalls.list()),
                 changeExists: await changeDirectoryExists(workspace, create.name),
                 startRun: async (entry, name) => {
-                  const run = await startRunFor(workspace, sessionId, auth, entry, { name })
+                  const run = await startRunFor(
+                    workspace,
+                    sessionId,
+                    auth,
+                    entry,
+                    { name },
+                    dedupeKey,
+                  )
                   return { runId: run.id }
                 },
                 resumeRun: async (runId) => {
@@ -1171,7 +1205,7 @@ export function apply(ctx: Context): void {
               continue
             }
             try {
-              const run = await startRunFor(workspace, sessionId, auth, definition)
+              const run = await startRunFor(workspace, sessionId, auth, definition, {}, dedupeKey)
               if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
               triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
             } catch (error) {

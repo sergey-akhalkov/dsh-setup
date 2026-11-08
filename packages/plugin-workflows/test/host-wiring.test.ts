@@ -838,3 +838,99 @@ describe('pre-execute without a host key', () => {
     expect(decision?.reason).toContain('host key is unavailable')
   })
 })
+
+describe('dedupe after reload', () => {
+  it('does not create a second run for a replayed trigger identity', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'reload-watch',
+      name: 'Reload watch',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'callId',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'reload.json'),
+        `${JSON.stringify(definition, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'reload.json'), auth)
+    const first = fakeHost(workspace)
+    apply(first.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await first.emit(
+      'tools/pre-execute',
+      {
+        agent: first.agent,
+        callId: 'replay-call',
+        name: 'read',
+        arguments: {},
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const runsDirectory = join(workspace, '.dsh', 'workflows', 'runs')
+    await waitFor(async () => {
+      const { readdir } = await import('node:fs/promises')
+      return (await readdir(runsDirectory).catch(() => [])).some((name) => name.endsWith('.json'))
+    })
+    const second = fakeHost(workspace)
+    apply(second.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await second.emit(
+      'tools/pre-execute',
+      {
+        agent: second.agent,
+        callId: 'replay-call',
+        name: 'read',
+        arguments: {},
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as { readonly triggers?: Array<Record<string, unknown>> })
+      return rows.some((entry) =>
+        Array.isArray(entry.triggers)
+          ? entry.triggers.some(
+              (row) => row.id === 'definition:reload-watch' && row.reason === 'dedupe',
+            )
+          : false,
+      )
+    })
+    const { readdir } = await import('node:fs/promises')
+    const runs = (await readdir(runsDirectory)).filter((name) => name.endsWith('.json'))
+    expect(runs).toHaveLength(1)
+  })
+})

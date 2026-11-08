@@ -89,6 +89,8 @@ export interface WorkflowRun {
   readonly context: Readonly<Record<string, unknown>>
   readonly steps: readonly RunStep[]
   readonly violations: readonly RunViolation[]
+  /** The trigger identity that produced this run, for dedupe after reload. */
+  readonly dedupeKey?: string
 }
 
 /** The persisted file shape; the signature covers every other field. */
@@ -120,6 +122,7 @@ export interface CreateRunInput {
   readonly steps: readonly string[]
   readonly now?: number
   readonly id?: string
+  readonly dedupeKey?: string
 }
 
 /** Build a new running run with every step open. */
@@ -138,6 +141,7 @@ export function createRun(input: CreateRunInput): WorkflowRun {
     context: boundContext(input.context ?? {}),
     steps: input.steps.map((id) => ({ id, state: 'open' })),
     violations: [],
+    ...(input.dedupeKey === undefined ? {} : { dedupeKey: input.dedupeKey }),
   }
 }
 
