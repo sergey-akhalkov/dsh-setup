@@ -567,10 +567,14 @@ export function apply(ctx: Context): void {
   ): Promise<void> => {
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
+    await loadDefinitions(workspace)
+    try {
+      await seedTriggerIdentities(workspace, input.session)
+    } catch {
+      // A later event retries the seed; evaluation still proceeds.
+    }
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
-    await loadDefinitions(workspace)
-    await seedTriggerIdentities(workspace, input.session)
     if (
       (definitionsByWorkspace.get(workspace) ?? []).some(
         (definition) => definition.trigger.mode === 'active',
@@ -995,14 +999,21 @@ export function apply(ctx: Context): void {
     await writeRun(workspace, run, auth)
     return run
   }
-  const seededSessions = new Set<string>()
-  /** Restore persisted trigger identities after a reload. */
-  const seedTriggerIdentities = async (workspace: string, sessionId: string): Promise<void> => {
-    if (seededSessions.has(sessionId)) return
-    seededSessions.add(sessionId)
-    const auth = storedAuth
-    if (auth === undefined) return
-    try {
+  const seeding = new Map<string, Promise<void>>()
+  /** Restore persisted trigger identities after a reload; one shared read per session. */
+  const seedTriggerIdentities = (workspace: string, sessionId: string): Promise<void> => {
+    const existing = seeding.get(sessionId)
+    if (existing !== undefined) return existing
+    const promise = (async () => {
+      let auth = storedAuth
+      if (auth === undefined) {
+        try {
+          auth = await ensureAuth()
+        } catch {
+          auth = undefined
+        }
+      }
+      if (auth === undefined) throw new Error('the host key is unavailable')
       const runs = await listAuthenticatedRuns(workspace, auth)
       const map = seen.get(sessionId) ?? new Map<string, number>()
       seen.set(sessionId, map)
@@ -1011,10 +1022,12 @@ export function apply(ctx: Context): void {
           map.set(run.dedupeKey, run.updatedAt)
         }
       }
-    } catch {
-      // Seeding is best-effort; the next authenticated read retries.
-      seededSessions.delete(sessionId)
-    }
+    })()
+    seeding.set(sessionId, promise)
+    void promise.catch(() => {
+      seeding.delete(sessionId)
+    })
+    return promise
   }
 
   // Tools pre-execute: intake, archive, and the authorization write guard.
@@ -1037,7 +1050,7 @@ export function apply(ctx: Context): void {
         const create = command === undefined ? undefined : parseOpenspecCommand(command)
         const sessionId = String(agent.session.id)
         const definitions = await definitionsFor(workspace)
-        await seedTriggerIdentities(workspace, sessionId)
+        await seedTriggerIdentities(workspace, sessionId).catch(() => undefined)
         const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
         seen.set(sessionId, sessionSeen)
         const observed: DefinitionEvent = {

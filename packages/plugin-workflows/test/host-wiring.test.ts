@@ -904,16 +904,18 @@ describe('dedupe after reload', () => {
     const second = fakeHost(workspace)
     apply(second.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
-    await second.emit(
-      'tools/pre-execute',
-      {
-        agent: second.agent,
-        callId: 'replay-call',
-        name: 'read',
-        arguments: {},
-      },
-      async () => ({ kind: 'continue' }),
-    )
+    const replay = async (): Promise<unknown> =>
+      second.emit(
+        'tools/pre-execute',
+        {
+          agent: second.agent,
+          callId: 'replay-call',
+          name: 'read',
+          arguments: {},
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    await Promise.all([replay(), replay()])
     const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
     await waitFor(async () => {
       const rows = (await readFile(file, 'utf8').catch(() => ''))
