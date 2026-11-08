@@ -161,6 +161,11 @@ describe('archive command parser', () => {
         'Move-Item -LiteralPath ./openspec/changes/auth -Destination ./openspec/changes/archive/',
       ),
     ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+    expect(
+      parseArchiveCommand(
+        'Move-Item -LiteralPath openspec/changes/auth -Destination openspec/changes/archive/ -Force',
+      ),
+    ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
   })
 
   it('rejects another destination, a compound move, and an unparseable name', () => {

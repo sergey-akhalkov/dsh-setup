@@ -144,17 +144,22 @@ export function parseArchiveCommand(command: string): ArchiveIntent | undefined 
     if (tokens.length === 3) {
       return archiveMove(unquotedPath(tokens[1]), unquotedPath(tokens[2]), 'Move-Item')
     }
-    if (tokens.length === 5) {
-      const flags = new Map<string, string>()
-      for (let index = 1; index + 1 < tokens.length; index += 2) {
-        flags.set((tokens[index] ?? '').toLowerCase(), tokens[index + 1] ?? '')
-      }
-      return archiveMove(
-        unquotedPath(flags.get('-literalpath') ?? flags.get('-path')),
-        unquotedPath(flags.get('-destination') ?? flags.get('-dest')),
-        'Move-Item',
-      )
+    const flags = new Map<string, string>()
+    const switches = new Set(['-force', '-verbose', '-whatif', '-confirm'])
+    for (let index = 1; index < tokens.length; index += 1) {
+      const token = (tokens[index] ?? '').toLowerCase()
+      if (switches.has(token)) continue
+      if (!token.startsWith('-')) return undefined
+      const value = tokens[index + 1]
+      if (value === undefined) return undefined
+      flags.set(token, value)
+      index += 1
     }
+    return archiveMove(
+      unquotedPath(flags.get('-literalpath') ?? flags.get('-path')),
+      unquotedPath(flags.get('-destination') ?? flags.get('-dest')),
+      'Move-Item',
+    )
   }
   return undefined
 }
