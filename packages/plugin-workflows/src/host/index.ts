@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { isAbsolute, join, normalize, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -1595,6 +1595,33 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               kind: 'deny',
               reason:
                 'the archive move could not be parsed safely; use openspec archive <name> or a plain move of openspec/changes/<name> into openspec/changes/archive/',
+            }
+          }
+          if (archive?.kind === 'archive' && archive.form === 'openspec') {
+            if (/--store(?:=|\s)/iu.test(command)) {
+              return {
+                kind: 'deny',
+                reason:
+                  'the archive command selects a different OpenSpec store; workflow evidence is read only for the session workspace store',
+              }
+            }
+            let cursor = resolvedWorkdir
+            for (;;) {
+              const hasOpenSpec = await stat(join(cursor, 'openspec'))
+                .then((info) => info.isDirectory())
+                .catch(() => false)
+              if (hasOpenSpec) {
+                if (normalize(cursor) !== normalize(workspace)) {
+                  return {
+                    kind: 'deny',
+                    reason: `the archive command targets the nested OpenSpec project "${cursor}"; evidence is read only for the session workspace "${normalize(workspace)}"`,
+                  }
+                }
+                break
+              }
+              const parent = dirname(cursor)
+              if (parent === cursor || relative(workspace, parent).startsWith('..')) break
+              cursor = parent
             }
           }
           if (archive?.kind === 'archive') {

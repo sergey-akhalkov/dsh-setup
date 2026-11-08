@@ -71,10 +71,10 @@ export function parseOpenspecCommand(command: string): OpenspecIntent | undefine
     return name === undefined ? undefined : { kind: 'create-change', name }
   }
   if (tokens[1] === 'archive' && tokens.length >= 3) {
-    const change = nameOf(tokens[2])
-    if (change === undefined) return undefined
-    if (tokens.slice(3).some((token) => !token.startsWith('-'))) return undefined
-    return { kind: 'archive', change }
+    const operands = tokens.slice(2).filter((token) => !token.startsWith('-'))
+    if (operands.length !== 1) return undefined
+    const change = nameOf(operands[0])
+    return change === undefined ? undefined : { kind: 'archive', change }
   }
   return undefined
 }
@@ -318,7 +318,13 @@ export function parseArchiveCommand(
   }
   const tokens = tokenize(trimmed)
   if (tokens === undefined) return undefined
-  const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
+  const commandName = (tokens[0] ?? '').toLowerCase()
+  const mvIndex =
+    commandName === 'git' && (tokens[1] ?? '').toLowerCase() === 'mv'
+      ? 2
+      : commandName === 'mv'
+        ? 1
+        : 0
   if (mvIndex > 0) {
     return parseMoveOperands(
       tokens,

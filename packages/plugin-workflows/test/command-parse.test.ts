@@ -411,3 +411,17 @@ it('accepts PowerShell common parameter abbreviations', () => {
     parseArchiveCommand('Move-Item openspec/changes/auth openspec/changes/archive/ -EA Stop'),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
 })
+it('accepts an option before the archive name and a case-insensitive mv alias', () => {
+  expect(parseArchiveCommand('openspec archive --yes auth')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'openspec',
+  })
+  expect(
+    parseArchiveCommand('MV auth archive/', '/workspace', '/workspace/openspec/changes'),
+  ).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'mv',
+  })
+})

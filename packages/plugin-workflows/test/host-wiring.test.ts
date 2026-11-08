@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -1860,3 +1860,47 @@ it.skipIf(process.platform !== 'win32')(
     expect(nextCalled).toBe(false)
   },
 )
+describe('archive target root', () => {
+  it('denies a nested OpenSpec project and an explicit store', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await mkdir(join(workspace, 'project', 'openspec', 'changes', 'auth'), { recursive: true })
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    const nested = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'archive-nested',
+        name: 'pwsh',
+        arguments: { command: 'openspec archive auth', workdir: 'project' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string; reason?: string } | undefined
+    expect(nested?.kind).toBe('deny')
+    expect(nested?.reason).toMatch(/nested OpenSpec project/u)
+    expect(nextCalled).toBe(false)
+    nextCalled = false
+    const store = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'archive-store',
+        name: 'pwsh',
+        arguments: { command: 'openspec archive auth --store=team' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string; reason?: string } | undefined
+    expect(store?.kind).toBe('deny')
+    expect(store?.reason).toMatch(/store/u)
+    expect(nextCalled).toBe(false)
+  })
+})
