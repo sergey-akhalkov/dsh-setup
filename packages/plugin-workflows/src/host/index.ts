@@ -55,6 +55,7 @@ import {
   checkpointRequired,
   type DefinitionEvent,
   evaluateDefinitions,
+  evaluateDefinitionTrigger,
   loadCatalog,
   obligationDedupeKey,
   type StartRunOutcome,
@@ -986,26 +987,80 @@ export function apply(ctx: Context): void {
         const auth = storedAuth
         if (auth === undefined) return await next()
         const command = shellCommandOf(exec)
-        if (command !== undefined) {
-          const create = parseOpenspecCommand(command)
-          if (create?.kind === 'create-change') {
-            const definitions = await definitionsFor(workspace)
-            const definition = definitions.find((entry) => entry.id === 'change-intake')
-            if (definition === undefined) return await next()
+        const create = command === undefined ? undefined : parseOpenspecCommand(command)
+        const sessionId = String(agent.session.id)
+        const definitions = await definitionsFor(workspace)
+        const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
+        seen.set(sessionId, sessionSeen)
+        const observed: DefinitionEvent = {
+          kind: 'tool.pre-execute',
+          subject: exec.name,
+          tool: exec.name,
+          workspace,
+          session: sessionId,
+          ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+          ...(create?.kind === 'create-change'
+            ? { command: 'openspec new change <name>', name: create.name }
+            : create?.kind === 'archive'
+              ? { command: 'openspec archive <name>', name: create.change }
+              : {}),
+        }
+        const currentMetrics = turnMetrics.get(sessionId)
+        const triggerRows: TriggerEvaluationRecord[] = []
+        let intakeDecision: Awaited<ReturnType<typeof evaluateIntakeGate>> | undefined
+        for (const definition of definitions) {
+          const applicability =
+            definition.trigger.applicability === 'checkpoint-required'
+              ? checkpointRequired({
+                  toolCalls: currentMetrics?.toolCalls ?? 0,
+                  ...(currentMetrics?.lastTool === undefined
+                    ? {}
+                    : { lastTool: currentMetrics.lastTool }),
+                  written: currentMetrics?.written ?? 0,
+                  workers: currentMetrics?.workers ?? 0,
+                })
+              : undefined
+          const evaluation = evaluateDefinitionTrigger(definition, observed, {
+            ...(applicability === undefined ? {} : { applicability }),
+            isDuplicate: (key) => sessionSeen.has(key),
+          })
+          const row: TriggerEvaluationRecord = {
+            id: `definition:${definition.id}`,
+            matched: evaluation.matched,
+            reason: evaluation.reason,
+            ...(evaluation.path === undefined ? {} : { path: evaluation.path }),
+            ...(evaluation.filter === undefined ? {} : { filter: evaluation.filter }),
+            ...(evaluation.detail === undefined ? {} : { detail: evaluation.detail }),
+          }
+          const createsIntake =
+            definition.id === 'change-intake' && create?.kind === 'create-change'
+          if (!evaluation.matched && evaluation.reason !== 'dedupe') {
+            triggerRows.push(row)
+            continue
+          }
+          if (definition.trigger.mode === 'shadow') {
+            const key = obligationDedupeKey(definition.id, definition.trigger, observed)
+            if (key !== undefined) sessionSeen.set(key, journal.time())
+            triggerRows.push({ ...row, reason: 'would-fire' })
+            continue
+          }
+          // An intake call is authorized only after the active trigger matched
+          // (or deduped to an existing intake); a shadow or filtered trigger
+          // never creates a run and must not invoke the intake gate.
+          if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
+            const definitionRef = definition
             const decision = await evaluateIntakeGate({
               name: create.name,
-              session: String(agent.session.id),
+              session: sessionId,
               workspace,
               callId: String(exec.callId),
-              definition,
+              definition: definitionRef,
               runs: await listAuthenticatedRuns(workspace, auth),
               receipts: await listReceipts(workspace, auth),
               ownedCallIds: new Set(ownedCalls.list()),
               changeExists: await changeDirectoryExists(workspace, create.name),
               startRun: async (entry, name) => {
-                const run = await startRunFor(workspace, String(agent.session.id), auth, entry, {
-                  name,
-                })
+                const run = await startRunFor(workspace, sessionId, auth, entry, { name })
                 return { runId: run.id }
               },
               resumeRun: async (runId) => {
@@ -1014,62 +1069,67 @@ export function apply(ctx: Context): void {
                 return { stepId: resumed.stepId }
               },
             })
-            const sessionId = String(agent.session.id)
-            const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
-            seen.set(sessionId, sessionSeen)
-            const observed: DefinitionEvent = {
-              kind: 'tool.pre-execute',
-              subject: exec.name,
-              tool: exec.name,
-              command: 'openspec new change <name>',
-              name: create.name,
-              workspace,
-              session: sessionId,
-              ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
-            }
-            const rows = evaluateDefinitions(definitions, observed, {
-              isDuplicate: (key) => sessionSeen.has(key),
-              startRun: () => ({ ok: false, reason: 'the intake gate owns run creation' }),
-            }).map((row) => ({
-              id: `definition:${row.definition}`,
-              matched: row.matched,
-              reason: row.reason,
-              ...(row.path === undefined ? {} : { path: row.path }),
-              ...(row.filter === undefined ? {} : { filter: row.filter }),
-              ...(row.detail === undefined ? {} : { detail: row.detail }),
-              ...(row.runId === undefined ? {} : { runId: row.runId }),
-            }))
-            const decorated = rows.map((row) =>
-              row.id === 'definition:change-intake'
-                ? {
-                    ...row,
-                    reason:
-                      decision.kind === 'deny' && decision.action === 'started'
-                        ? 'run-created'
-                        : 'run-suppressed',
-                    ...(decision.kind === 'deny' && decision.runId !== undefined
-                      ? { runId: decision.runId }
-                      : {}),
-                    detail: decision.reason,
-                  }
-                : row,
-            )
+            intakeDecision = decision
             if (decision.kind === 'deny' && decision.action === 'started') {
               const key = obligationDedupeKey('change-intake', definition.trigger, observed)
               if (key !== undefined) sessionSeen.set(key, journal.time())
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-created',
+                ...(decision.runId === undefined ? {} : { runId: decision.runId }),
+                detail: decision.reason,
+              })
+            } else if (decision.kind === 'deny') {
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-suppressed',
+                ...(decision.runId === undefined ? {} : { runId: decision.runId }),
+                detail: decision.reason,
+              })
+            } else {
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-suppressed',
+                detail: decision.reason,
+              })
             }
-            recordEngineEvaluation(
-              workspace,
-              sessionId,
-              turns.get(sessionId),
-              'tools/pre-execute',
-              exec.name,
-              `intake ${create.name}: ${decision.kind === 'deny' ? decision.action : 'allowed'}`,
-              decorated,
-            )
-            if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
-            return await next()
+            continue
           }
+          if (!evaluation.matched) {
+            triggerRows.push(row)
+            continue
+          }
+          // A non-intake active definition starts its own observational run.
+          try {
+            const run = await startRunFor(workspace, sessionId, auth, definition)
+            const key = obligationDedupeKey(definition.id, definition.trigger, observed)
+            if (key !== undefined) sessionSeen.set(key, journal.time())
+            triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
+          } catch (error) {
+            triggerRows.push({
+              ...row,
+              matched: true,
+              reason: 'run-suppressed',
+              detail: boundedError(error),
+            })
+          }
+        }
+        recordEngineEvaluation(
+          workspace,
+          sessionId,
+          turns.get(sessionId),
+          'tools/pre-execute',
+          exec.name,
+          `pre-execute ${exec.name}`,
+          triggerRows,
+        )
+        if (intakeDecision?.kind === 'deny') {
+          return { kind: 'deny', reason: intakeDecision.reason }
+        }
+        if (command !== undefined) {
           const archive = parseArchiveCommand(command)
           if (archive?.kind === 'archive') {
             const specRecord = await verifyEvidence(
@@ -1091,7 +1151,6 @@ export function apply(ctx: Context): void {
               specRecord,
             })
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
-            return await next()
           }
         }
         const writeDecision = authorizationWriteDecision({

@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { apply } from '../src/host/index.ts'
 
 /**
@@ -241,5 +242,208 @@ describe('retro applicability through the journal path', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect((await retroRows()).some((row) => row.reason === 'run-created')).toBe(true)
+  })
+})
+
+describe('pre-execute trigger gates', () => {
+  async function journalRows(workspace: string): Promise<Array<Record<string, unknown>>> {
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    return (await readFile(file, 'utf8').catch(() => ''))
+      .trim()
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  function intakeRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    return rows.flatMap((entry) =>
+      Array.isArray(entry.triggers)
+        ? (entry.triggers as Array<Record<string, unknown>>).filter(
+            (row) => row.id === 'definition:change-intake',
+          )
+        : [],
+    )
+  }
+
+  it('does not create an intake run for a shadow or session-filtered trigger', async () => {
+    // A shadow local override of change-intake and a session-filtered local
+    // definition are installed through the host path before the plugin loads.
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const shadow = {
+      v: 1,
+      id: 'change-intake',
+      name: 'Shadow intake override',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'shell', command: 'openspec new change <name>' },
+        mode: 'shadow',
+        dedupe: 'name',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'only',
+          title: 'Only',
+          executor: 'main',
+          prompt: 'Do.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(join(workspace, 'shadow.json'), `${JSON.stringify(shadow, null, 2)}\n`, 'utf8')
+    })
+    await installDefinition(workspace, join(workspace, 'shadow.json'), auth)
+    // A session-filtered active definition for the same command.
+    const filtered = {
+      ...shadow,
+      id: 'filtered-intake',
+      name: 'Filtered intake',
+      trigger: { ...shadow.trigger, mode: 'active', match: { session: 'another-session' } },
+      steps: shadow.steps.map((step) => ({ ...step, id: 'filtered-only' })),
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'filtered.json'),
+        `${JSON.stringify(filtered, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'filtered.json'), auth)
+    const loaded = await loadApprovedDefinitions(workspace, { auth })
+    expect(loaded.definitions.find((entry) => entry.id === 'change-intake')?.trigger.mode).toBe(
+      'shadow',
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'call-shadow',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change shadow-auth' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )
+    await waitFor(async () => (await journalRows(workspace)).length > 0)
+    const rows = await journalRows(workspace)
+    expect(nextCalled).toBe(true)
+    expect(intakeRows(rows).some((row) => row.reason === 'would-fire')).toBe(true)
+    expect(intakeRows(rows).some((row) => row.reason === 'run-created')).toBe(false)
+  })
+
+  it('refuses a second call while the intake run is in progress and starts no second run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const call = async (callId: string): Promise<unknown> =>
+      host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId,
+          name: 'pwsh',
+          arguments: { command: 'openspec new change auth' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    const first = (await call('call-1')) as { kind?: string }
+    const second = (await call('call-2')) as { kind?: string; reason?: string }
+    expect(first.kind).toBe('deny')
+    expect(second.kind).toBe('deny')
+    expect(second.reason).toContain('already in progress')
+    const runs = await import('node:fs/promises').then(async ({ readdir }) =>
+      (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+        name.endsWith('.json'),
+      ),
+    )
+    expect(runs).toHaveLength(1)
+  })
+
+  it('evaluates a non-intake pre-execute trigger and starts its run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const readDefinition = {
+      v: 1,
+      id: 'read-watch',
+      name: 'Read watch',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'callId',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'read.json'),
+        `${JSON.stringify(readDefinition, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'read.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    await host.emit(
+      'tools/pre-execute',
+      { agent: host.agent, callId: 'call-read', name: 'read', arguments: { path: 'a.md' } },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )
+    await waitFor(async () =>
+      (await journalRows(workspace)).some((entry) =>
+        Array.isArray(entry.triggers)
+          ? (entry.triggers as Array<Record<string, unknown>>).some(
+              (row) => row.id === 'definition:read-watch' && row.reason === 'run-created',
+            )
+          : false,
+      ),
+    )
+    expect(nextCalled).toBe(true)
   })
 })

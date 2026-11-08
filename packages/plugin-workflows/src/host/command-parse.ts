@@ -14,7 +14,18 @@ export type OpenspecIntent =
 export const CHANGE_NAME = /^[a-z0-9][a-z0-9-]*$/u
 
 /** Shell control characters that make a compound or redirected command. */
-const CONTROL = /[;&|><`\\\n\r]/u
+// biome-ignore lint/suspicious/noControlCharactersInRegex: a newline or control byte is a compound command
+const CONTROL = /[\u0000-\u001f`;&|><]/u
+
+/** Whether the command carries a shell control, quote escape, or substitution. */
+function isCompound(trimmed: string): boolean {
+  return (
+    trimmed === '' ||
+    CONTROL.test(trimmed) ||
+    trimmed.includes(String.fromCharCode(92)) ||
+    trimmed.includes('$')
+  )
+}
 
 /** Strip one allowed invocation prefix. */
 function stripPrefix(command: string): string | undefined {
@@ -48,7 +59,7 @@ function nameOf(token: string | undefined): string | undefined {
  */
 export function parseOpenspecCommand(command: string): OpenspecIntent | undefined {
   const trimmed = command.trim()
-  if (trimmed === '' || CONTROL.test(trimmed) || trimmed.includes('$')) return undefined
+  if (isCompound(trimmed)) return undefined
   const rest = stripPrefix(trimmed)
   if (rest === undefined) return undefined
   const tokens = rest.split(/\s+/u)
@@ -89,6 +100,18 @@ function targetsArchive(destination: string, name: string): boolean {
   return destination === ARCHIVE_DIR || destination === `${ARCHIVE_DIR}/${name}`
 }
 
+function archiveMove(
+  source: string | undefined,
+  destination: string | undefined,
+  form: ArchiveIntent['form'],
+): ArchiveIntent | undefined {
+  const name = source === undefined ? undefined : changeUnderChanges(source)
+  if (name === undefined || destination === undefined || !targetsArchive(destination, name)) {
+    return undefined
+  }
+  return { kind: 'archive', change: name, form }
+}
+
 /**
  * Parse an archive action: the documented `openspec archive <name>` form, or a
  * move of `openspec/changes/<name>` into `openspec/changes/archive/` through
@@ -97,7 +120,7 @@ function targetsArchive(destination: string, name: string): boolean {
  */
 export function parseArchiveCommand(command: string): ArchiveIntent | undefined {
   const trimmed = command.trim()
-  if (trimmed === '' || CONTROL.test(trimmed) || trimmed.includes('$')) return undefined
+  if (isCompound(trimmed)) return undefined
   const openspec = parseOpenspecCommand(trimmed)
   if (openspec?.kind === 'archive') {
     return { kind: 'archive', change: openspec.change, form: 'openspec' }
@@ -106,33 +129,27 @@ export function parseArchiveCommand(command: string): ArchiveIntent | undefined 
   const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
   if (mvIndex > 0) {
     if (tokens.length !== mvIndex + 2) return undefined
-    const source = unquotedPath(tokens[mvIndex])
-    const destination = unquotedPath(tokens[mvIndex + 1])
-    const name = source === undefined ? undefined : changeUnderChanges(source)
-    if (name === undefined || destination === undefined || !targetsArchive(destination, name)) {
-      return undefined
-    }
-    return { kind: 'archive', change: name, form: mvIndex === 2 ? 'git' : 'mv' }
+    return archiveMove(
+      unquotedPath(tokens[mvIndex]),
+      unquotedPath(tokens[mvIndex + 1]),
+      mvIndex === 2 ? 'git' : 'mv',
+    )
   }
   if (/^move-item$/iu.test(tokens[0] ?? '')) {
-    let source: string | undefined
-    let destination: string | undefined
     if (tokens.length === 3) {
-      source = unquotedPath(tokens[1])
-      destination = unquotedPath(tokens[2])
-    } else if (tokens.length === 5) {
+      return archiveMove(unquotedPath(tokens[1]), unquotedPath(tokens[2]), 'Move-Item')
+    }
+    if (tokens.length === 5) {
       const flags = new Map<string, string>()
       for (let index = 1; index + 1 < tokens.length; index += 2) {
         flags.set((tokens[index] ?? '').toLowerCase(), tokens[index + 1] ?? '')
       }
-      source = unquotedPath(flags.get('-path'))
-      destination = unquotedPath(flags.get('-destination') ?? flags.get('-dest'))
+      return archiveMove(
+        unquotedPath(flags.get('-path')),
+        unquotedPath(flags.get('-destination') ?? flags.get('-dest')),
+        'Move-Item',
+      )
     }
-    const name = source === undefined ? undefined : changeUnderChanges(source)
-    if (name === undefined || destination === undefined || !targetsArchive(destination, name)) {
-      return undefined
-    }
-    return { kind: 'archive', change: name, form: 'Move-Item' }
   }
   return undefined
 }

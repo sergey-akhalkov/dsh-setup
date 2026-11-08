@@ -971,7 +971,10 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => (await readHealth())?.listenerCount === 5)
+    await waitFor(async () => {
+      const current = await readHealth()
+      return current?.listenerCount === 5 && typeof current.lastCheckAt === 'number'
+    })
     const health = (await readHealth()) ?? {}
     expect(health.listenerCount).toBe(5)
     expect(health.triggerCount).toBe(9)
@@ -1034,7 +1037,13 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => Number((await readHealth())?.listenerCount) < 5)
+    await waitFor(async () => {
+      const current = await readHealth()
+      return (
+        Number(current?.listenerCount) < 5 &&
+        String(current?.lastError ?? '').includes('watch failed')
+      )
+    })
     expect(String((await readHealth())?.lastError)).toContain('watch failed')
     host.dispose()
   })

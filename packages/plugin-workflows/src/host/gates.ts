@@ -199,6 +199,21 @@ export async function evaluateIntakeGate(input: IntakeGateInput): Promise<Intake
   if (input.callId !== undefined && input.ownedCallIds.has(input.callId)) {
     return { kind: 'allow', reason: 'the call id is owned by the intake run' }
   }
+  const running = input.runs.find(
+    (run) =>
+      run.definition === 'change-intake' && run.status === 'running' && intakeName(run) === name,
+  )
+  if (running !== undefined) {
+    const pending = running.steps.find((step) => step.state === 'open' || step.state === 'blocked')
+    const stepId = pending?.id ?? 'requirements'
+    return {
+      kind: 'deny',
+      action: 'resumed',
+      runId: running.id,
+      stepId,
+      reason: `the intake run "${running.id}" is already in progress; continue at step "${stepId}" and do not create the change`,
+    }
+  }
   const resumable = input.runs.find((run) => isResumableIntake(run, name, input.session))
   if (resumable !== undefined) {
     const resumed = await input.resumeRun(resumable.id)
