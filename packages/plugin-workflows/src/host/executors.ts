@@ -215,6 +215,18 @@ function lessThan(left: unknown, right: unknown): boolean {
   return (left as number) < (right as number)
 }
 
+function greaterThan(left: unknown, right: unknown): boolean {
+  return (left as number) > (right as number)
+}
+
+function lessOrEqual(left: unknown, right: unknown): boolean {
+  return (left as number) <= (right as number)
+}
+
+function greaterOrEqual(left: unknown, right: unknown): boolean {
+  return (left as number) >= (right as number)
+}
+
 function truthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0
   return value !== undefined && value !== null && value !== false && value !== 0 && value !== ''
@@ -315,18 +327,18 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       const second = value(args[1])
       if (args.length >= 3) {
         const third = value(args[2])
-        return lessThan(second, first) && lessThan(third, second)
+        return greaterThan(first, second) && greaterThan(second, third)
       }
-      return lessThan(second, first)
+      return greaterThan(first, second)
     }
     case '>=': {
       const first = value(args[0])
       const second = value(args[1])
       if (args.length >= 3) {
         const third = value(args[2])
-        return !lessThan(first, second) && !lessThan(second, third)
+        return greaterOrEqual(first, second) && greaterOrEqual(second, third)
       }
-      return !lessThan(first, second)
+      return greaterOrEqual(first, second)
     }
     case '<': {
       const first = value(args[0])
@@ -342,9 +354,9 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       const second = value(args[1])
       if (args.length >= 3) {
         const third = value(args[2])
-        return !lessThan(second, first) && !lessThan(third, second)
+        return lessOrEqual(first, second) && lessOrEqual(second, third)
       }
-      return !lessThan(second, first)
+      return lessOrEqual(first, second)
     }
     case 'and': {
       let last: unknown = true

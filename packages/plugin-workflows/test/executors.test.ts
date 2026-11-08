@@ -558,6 +558,16 @@ describe('loop executor', () => {
     expect(capped.run.status).toBe('blocked')
     expect(capped.run.steps[0]?.state).toBe('blocked')
     expect(capped.run.steps[0]?.reason).toContain('3-iteration cap')
+    const nonnumeric = runLoopStep({
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: { ...loop, stop: { '>=': [{ var: 'context.value' }, 10] } },
+      } as (typeof loopDefinition.steps)[number],
+      values: { value: 'unknown' },
+    })
+    expect(nonnumeric.run.status).toBe('blocked')
+    expect(nonnumeric.run.steps[0]?.reason).toContain('3-iteration cap')
     const invalid = runLoopStep({
       run: loopRun(),
       step: {
@@ -925,6 +935,12 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
   let nested: unknown = { var: 'context.one' }
   for (let index = 0; index < 30; index += 1) nested = { '<': [0, nested, 2] }
   expect(evaluateJsonLogic(nested, { context: { one: 1 } })).toBe(true)
+  expect(
+    evaluateJsonLogic({ '>=': [{ var: 'context.value' }, 10] }, { context: { value: 'unknown' } }),
+  ).toBe(false)
+  expect(
+    evaluateJsonLogic({ '<=': [{ var: 'context.value' }, 10] }, { context: { value: 'unknown' } }),
+  ).toBe(false)
   expect(() => evaluateJsonLogic({ '==': [] }, {})).toThrow(/operand/u)
   expect(() => evaluateJsonLogic({ and: [false, { nope: true }] }, {})).toThrow(/unknown operator/u)
 })
