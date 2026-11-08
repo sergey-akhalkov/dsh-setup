@@ -1199,7 +1199,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   const boundedError = (error: unknown): string =>
     (error instanceof Error ? error.message : String(error)).slice(0, 200)
-  const startRunFor = async (
+  const startRunForUnlocked = async (
     workspace: string,
     sessionId: string,
     auth: HostAuth,
@@ -1229,6 +1229,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return run
     } finally {
       releaseStart(workspace)
+    }
+  }
+  const startRunFor = async (
+    workspace: string,
+    sessionId: string,
+    auth: HostAuth,
+    definition: Definition,
+    context: Readonly<Record<string, unknown>> = {},
+    dedupeKey?: string,
+  ): Promise<WorkflowRun> => {
+    const release = await acquireAdmission(workspace)
+    try {
+      return await startRunForUnlocked(workspace, sessionId, auth, definition, context, dedupeKey)
+    } finally {
+      release()
     }
   }
   const seeding = new Map<string, Promise<void>>()
@@ -1405,7 +1420,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       ) {
                         throw new Error('workflows-run-limit')
                       }
-                      const run = await startRunFor(
+                      const run = await startRunForUnlocked(
                         workspace,
                         sessionId,
                         auth,
@@ -1490,7 +1505,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 continue
               }
               try {
-                const run = await startRunFor(workspace, sessionId, auth, definition, {}, dedupeKey)
+                const run = await startRunForUnlocked(
+                  workspace,
+                  sessionId,
+                  auth,
+                  definition,
+                  {},
+                  dedupeKey,
+                )
                 startedThisEvent += 1
                 if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
                 triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })

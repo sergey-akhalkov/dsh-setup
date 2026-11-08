@@ -1648,3 +1648,27 @@ describe('concurrent session admission', () => {
     expect(files).toHaveLength(1)
   })
 })
+
+describe('concurrent command starts', () => {
+  it('creates only one run for two concurrent command starts at capacity', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<unknown> }
+      | undefined
+    expect(command).toBeDefined()
+    await Promise.all([
+      command?.handler({ agent: host.agent, arguments: 'run change-intake' }),
+      command?.handler({ agent: host.agent, arguments: 'run change-intake' }),
+    ])
+    const { readdir } = await import('node:fs/promises')
+    const runsDirectory = join(workspace, '.dsh', 'workflows', 'runs')
+    await waitFor(async () => (await readdir(runsDirectory).catch(() => [])).length > 0)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const files = (await readdir(runsDirectory)).filter((name) => name.endsWith('.json'))
+    expect(files).toHaveLength(1)
+  })
+})
