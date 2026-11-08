@@ -92,7 +92,11 @@ export function adaptUserQuestions(
             ? String((error as { code: unknown }).code)
             : ''
         if (controller.signal.aborted || code === 'ASK_TIMED_OUT') return { timedOut: true }
-        if (code === 'ASK_ABORTED' || (error instanceof Error && error.name === 'AbortError')) {
+        if (
+          code === 'ASK_ABORTED' ||
+          code === 'ASK_CANCELLED' ||
+          (error instanceof Error && error.name === 'AbortError')
+        ) {
           return { cancelled: true }
         }
         throw error

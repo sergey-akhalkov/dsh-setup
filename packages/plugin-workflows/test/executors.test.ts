@@ -1283,3 +1283,35 @@ it('persists the selected branch edge across a reload', async () => {
     await rm(workspace, { recursive: true, force: true })
   }
 })
+
+it('maps native question cancellation to the declared action', async () => {
+  const native = (code: string) =>
+    adaptUserQuestions({
+      async ask() {
+        const error = new Error('dismissed') as Error & { code: string }
+        error.code = code
+        throw error
+      },
+    })
+  const cancelled = await native('ASK_CANCELLED').ask({
+    question: 'Approve?',
+    accepted: ['yes'],
+    timeoutAction: 'block',
+  })
+  expect(cancelled).toEqual({ cancelled: true })
+  const base = humanDefinition.steps[0] as (typeof humanDefinition.steps)[number]
+  const blocked = await runHumanStep({
+    run: humanRun(),
+    step: { ...base, human: { timeoutAction: 'block' as const } },
+    questions: native('ASK_CANCELLED'),
+    evidenceContext,
+  })
+  expect(blocked.status).toBe('blocked')
+  const cancelledRun = await runHumanStep({
+    run: humanRun(),
+    step: { ...base, human: { timeoutAction: 'cancel' as const } },
+    questions: native('ASK_CANCELLED'),
+    evidenceContext,
+  })
+  expect(cancelledRun.status).toBe('cancelled')
+})
