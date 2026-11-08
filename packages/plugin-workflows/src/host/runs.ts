@@ -150,7 +150,17 @@ function errorMessage(error: unknown): string {
 }
 
 /** Persist one run atomically and sign its authoritative state. */
-export function writeRunSync(workspace: string, run: WorkflowRun, auth: HostAuth): void {
+/** Persist one run atomically and sign its authoritative state. */
+export interface WriteRunOptions {
+  readonly renameSync?: typeof renameSync
+}
+
+export function writeRunSync(
+  workspace: string,
+  run: WorkflowRun,
+  auth: HostAuth,
+  options: WriteRunOptions = {},
+): void {
   const directory = runsDirectory(workspace)
   mkdirSync(directory, { recursive: true })
   const stored: StoredRun = {
@@ -161,7 +171,7 @@ export function writeRunSync(workspace: string, run: WorkflowRun, auth: HostAuth
   const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   writeFileSync(temporary, `${JSON.stringify(stored, null, 2)}\n`, 'utf8')
   try {
-    renameSync(temporary, target)
+    ;(options.renameSync ?? renameSync)(temporary, target)
   } catch (error) {
     try {
       unlinkSync(temporary)
@@ -172,7 +182,16 @@ export function writeRunSync(workspace: string, run: WorkflowRun, auth: HostAuth
   }
 }
 
-export async function writeRun(workspace: string, run: WorkflowRun, auth: HostAuth): Promise<void> {
+export interface WriteRunAsyncOptions {
+  readonly rename?: typeof rename
+}
+
+export async function writeRun(
+  workspace: string,
+  run: WorkflowRun,
+  auth: HostAuth,
+  options: WriteRunAsyncOptions = {},
+): Promise<void> {
   const directory = runsDirectory(workspace)
   await mkdir(directory, { recursive: true })
   const stored: StoredRun = {
@@ -183,7 +202,7 @@ export async function writeRun(workspace: string, run: WorkflowRun, auth: HostAu
   const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, 'utf8')
   try {
-    await rename(temporary, target)
+    await (options.rename ?? rename)(temporary, target)
   } catch (error) {
     await unlink(temporary).catch(() => undefined)
     throw error
@@ -211,6 +230,15 @@ function parseStored(value: unknown): { run: WorkflowRun; signature: unknown } |
  * Read and authenticate one run. An unsigned, modified, or forged file reads as
  * absent: no caller may resume, admit, or issue a receipt from it.
  */
+/** Compare the run's bound workspace with the workspace asking for it. */
+function sameWorkspace(left: string, right: string): boolean {
+  const normalize = (value: string): string =>
+    value.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const a = normalize(left)
+  const b = normalize(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
 export async function readAuthenticatedRun(
   workspace: string,
   id: string,
@@ -218,7 +246,10 @@ export async function readAuthenticatedRun(
 ): Promise<WorkflowRun | undefined> {
   const read = await readStored(workspace, id)
   if (read === undefined) return undefined
-  return auth.verify(RUN_DOMAIN, read.run, read.signature) ? read.run : undefined
+  if (!auth.verify(RUN_DOMAIN, read.run, read.signature)) return undefined
+  // The host key is shared by every workspace, so a signed run copied into
+  // another workspace must not authorize anything there.
+  return sameWorkspace(read.run.workspaceKey, workspace) ? read.run : undefined
 }
 
 /** Read one run for display only; never use this for authority. */
@@ -394,6 +425,8 @@ export interface PruneOptions {
   readonly now?: number
   readonly retentionMs?: number
   readonly maxBytes?: number
+  /** Test seam: a deletion that throws never counts as removed. */
+  readonly unlink?: (path: string) => Promise<void>
 }
 
 export interface PruneResult {
@@ -420,11 +453,20 @@ export async function pruneRuns(workspace: string, options: PruneOptions): Promi
     // An interrupted run is resumable state, so it is retained like an open run.
     return status === 'completed' || status === 'cancelled' || status === 'failed'
   }
+  const removal = options.unlink ?? unlink
+  /** A failed deletion is not a removal; a missing file already satisfies it. */
+  const remove = async (id: string): Promise<boolean> => {
+    try {
+      await removal(runPath(workspace, id))
+      return true
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT'
+    }
+  }
   const removed: string[] = []
   const kept: StoredRunEntry[] = []
   for (const entry of entries) {
-    if (terminal(entry.id) && now - entry.mtimeMs > retentionMs) {
-      await unlink(runPath(workspace, entry.id)).catch(() => undefined)
+    if (terminal(entry.id) && now - entry.mtimeMs > retentionMs && (await remove(entry.id))) {
       removed.push(entry.id)
     } else {
       kept.push(entry)
@@ -434,7 +476,7 @@ export async function pruneRuns(workspace: string, options: PruneOptions): Promi
   for (const entry of kept) {
     if (total <= maxBytes) break
     if (!terminal(entry.id)) continue
-    await unlink(runPath(workspace, entry.id)).catch(() => undefined)
+    if (!(await remove(entry.id))) continue
     total -= entry.size
     removed.push(entry.id)
   }

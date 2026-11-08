@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  unlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -35,6 +45,7 @@ import {
   settleStep,
   type WorkflowRun,
   writeRun,
+  writeRunSync,
 } from '../src/host/runs.ts'
 
 const TEMP_DIRECTORIES: string[] = []
@@ -386,4 +397,67 @@ describe('run limits and scoping', () => {
     })
     expect(created.context.truncated).toBe(true)
   })
+})
+
+it('refuses a signed run copied from another workspace', async () => {
+  const source = await tempWorkspace()
+  const target = await tempWorkspace()
+  const run = await writeAndComplete(source, 'auth', 1_000)
+  const bytes = await readFile(runPath(source, run.id), 'utf8')
+  await mkdir(runsDirectory(target), { recursive: true })
+  await writeFile(runPath(target, run.id), bytes, 'utf8')
+  expect(await readAuthenticatedRun(target, run.id, auth())).toBeUndefined()
+  expect(await listAuthenticatedRuns(target, auth())).toEqual([])
+  await expect(issueCompletionReceipt(target, run.id, DIGEST, auth())).rejects.toThrow()
+  await expect(resumeRun(target, run.id, auth())).rejects.toThrow()
+})
+
+it('does not count a failed deletion as pruned', async () => {
+  const workspace = await tempWorkspace()
+  const first = await writeAndComplete(workspace, 'first', 1_000)
+  const second = await writeAndComplete(workspace, 'second', 2_000)
+  const firstSize = (await stat(runPath(workspace, first.id))).size
+  const result = await pruneRuns(workspace, {
+    auth: auth(),
+    now: 4_000,
+    retentionMs: 30 * DAY_MS,
+    maxBytes: firstSize + 10,
+    unlink: async (path) => {
+      if (path.endsWith(`${first.id}.json`)) {
+        throw Object.assign(new Error('denied'), { code: 'EPERM' })
+      }
+      await unlink(path)
+    },
+  })
+  expect(result.removed).not.toContain(first.id)
+  expect(result.removed).toContain(second.id)
+  expect(await readAuthenticatedRun(workspace, first.id, auth())).toBeDefined()
+})
+
+it('keeps the previous authenticated file when asynchronous replacement fails', async () => {
+  const workspace = await tempWorkspace()
+  const original = await writeAndComplete(workspace, 'auth', 1_000)
+  const updated = setRunStatus(original, 'cancelled', 2_000)
+  await expect(
+    writeRun(workspace, updated, auth(), {
+      rename: async () => {
+        throw new Error('rename failed')
+      },
+    }),
+  ).rejects.toThrow(/rename failed/u)
+  expect((await readAuthenticatedRun(workspace, original.id, auth()))?.status).toBe('completed')
+})
+
+it('keeps the previous authenticated file when synchronous replacement fails', async () => {
+  const workspace = await tempWorkspace()
+  const original = await writeAndComplete(workspace, 'auth', 1_000)
+  const updated = setRunStatus(original, 'cancelled', 2_000)
+  expect(() =>
+    writeRunSync(workspace, updated, auth(), {
+      renameSync: () => {
+        throw new Error('rename failed')
+      },
+    }),
+  ).toThrow(/rename failed/u)
+  expect((await readAuthenticatedRun(workspace, original.id, auth()))?.status).toBe('completed')
 })
