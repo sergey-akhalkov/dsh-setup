@@ -492,6 +492,7 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
 
 export interface BranchStepInput {
   readonly run: WorkflowRun
+  readonly definition: Definition
   readonly step: Step
   readonly values: Readonly<Record<string, unknown>>
   readonly now?: number
@@ -500,6 +501,33 @@ export interface BranchStepInput {
 export interface BranchStepResult {
   readonly run: WorkflowRun
   readonly next?: string
+}
+
+function outgoingTargets(step: Step): string[] {
+  const targets: string[] = []
+  if (step.next !== undefined && step.next !== 'end') targets.push(step.next)
+  if (step.branch !== undefined) {
+    if (step.branch.then !== 'end') targets.push(step.branch.then)
+    if (step.branch.else !== 'end' && step.branch.else !== step.branch.then) {
+      targets.push(step.branch.else)
+    }
+  }
+  if (step.loop !== undefined && step.loop.next !== 'end') targets.push(step.loop.next)
+  return targets
+}
+
+function reachableSteps(start: string, definition: Definition): Set<string> {
+  const seen = new Set<string>()
+  const queue = [start]
+  while (queue.length > 0) {
+    const id = queue.shift()
+    if (id === undefined || id === 'end' || seen.has(id)) continue
+    seen.add(id)
+    const found = definition.steps.find((entry) => entry.id === id)
+    if (found === undefined) continue
+    for (const next of outgoingTargets(found)) queue.push(next)
+  }
+  return seen
 }
 
 /** Evaluate a branch predicate and settle the step with the chosen edge. */
@@ -531,11 +559,27 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
       : spec.else
     let run = settleStep(input.run, input.step.id, 'done', { at: input.now })
     const skipped = chosen === spec.then ? spec.else : spec.then
-    if (skipped !== input.step.id && run.steps.some((step) => step.id === skipped)) {
-      run = settleStep(run, skipped, 'cancelled', {
-        at: input.now,
-        reason: 'not selected by the branch',
-      })
+    if (skipped !== chosen && skipped !== input.step.id) {
+      const selected = reachableSteps(chosen, input.definition)
+      const rejected = new Set<string>()
+      const queue = [skipped]
+      while (queue.length > 0) {
+        const id = queue.shift()
+        if (id === undefined || id === 'end' || id === chosen) continue
+        if (selected.has(id) || rejected.has(id)) continue
+        rejected.add(id)
+        const found = input.definition.steps.find((entry) => entry.id === id)
+        if (found === undefined) continue
+        for (const next of outgoingTargets(found)) queue.push(next)
+      }
+      for (const id of rejected) {
+        if (run.steps.some((entry) => entry.id === id && entry.state === 'open')) {
+          run = settleStep(run, id, 'cancelled', {
+            at: input.now,
+            reason: 'not selected by the branch',
+          })
+        }
+      }
     }
     return { run, next: chosen }
   } catch (error) {

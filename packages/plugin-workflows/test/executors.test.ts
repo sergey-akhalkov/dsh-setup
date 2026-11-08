@@ -451,6 +451,15 @@ function branchDefinition(): Definition {
         prompt: 'Yes.',
         evidence: { kind: 'declaration' },
         nonCritical: true,
+        next: 'yes2',
+      },
+      {
+        id: 'yes2',
+        title: 'Yes again',
+        executor: 'main',
+        prompt: 'Yes again.',
+        evidence: { kind: 'declaration' },
+        nonCritical: true,
         next: 'end',
       },
       {
@@ -473,7 +482,7 @@ function branchRun(): WorkflowRun {
     session: 'session-1',
     workspace: '/workspace',
     context: { flag: true },
-    steps: ['choose', 'yes', 'no'],
+    steps: ['choose', 'yes', 'yes2', 'no'],
     now: 1_000,
   })
 }
@@ -482,14 +491,26 @@ describe('branch executor', () => {
   it('chooses both declared paths and fails the run on invalid JSONLogic', () => {
     const definition = branchDefinition()
     const choose = definition.steps[0] as (typeof definition.steps)[number]
-    const truthy = runBranchStep({ run: branchRun(), step: choose, values: { flag: true } })
+    const truthy = runBranchStep({
+      definition,
+      run: branchRun(),
+      step: choose,
+      values: { flag: true },
+    })
     expect(truthy.next).toBe('yes')
     expect(truthy.run.steps[0]?.state).toBe('done')
     expect(pendingStep(truthy.run)).toBe('yes')
-    const falsy = runBranchStep({ run: branchRun(), step: choose, values: { flag: false } })
+    const falsy = runBranchStep({
+      definition,
+      run: branchRun(),
+      step: choose,
+      values: { flag: false },
+    })
     expect(falsy.next).toBe('no')
     expect(pendingStep(falsy.run)).toBe('no')
+    expect(falsy.run.steps.find((step) => step.id === 'yes2')?.state).toBe('cancelled')
     const invalid = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -505,6 +526,7 @@ describe('branch executor', () => {
     expect(invalid.run.status).toBe('failed')
     expect(invalid.run.steps[0]?.reason).toContain('unknown operator')
     const boolean = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -519,6 +541,7 @@ describe('branch executor', () => {
     })
     expect(boolean.next).toBe('yes')
     const nullMissing = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -533,6 +556,7 @@ describe('branch executor', () => {
     })
     expect(nullMissing.next).toBe('no')
     const triggerMatch = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -547,6 +571,7 @@ describe('branch executor', () => {
     })
     expect(triggerMatch.next).toBe('yes')
     const arrayMissing = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -561,6 +586,7 @@ describe('branch executor', () => {
     })
     expect(arrayMissing.next).toBe('yes')
     const someReview = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -577,6 +603,7 @@ describe('branch executor', () => {
     })
     expect(someReview.next).toBe('yes')
     const numericIndex = runBranchStep({
+      definition,
       run: branchRun(),
       step: {
         ...choose,
@@ -592,6 +619,29 @@ describe('branch executor', () => {
       values: { rows: [['PASS']] },
     })
     expect(numericIndex.next).toBe('yes')
+    const sameTarget = definition.steps[0] as (typeof definition.steps)[number]
+    const shared = runBranchStep({
+      definition,
+      run: createRun({
+        definition: 'branch-demo',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: '/workspace',
+        steps: ['choose', 'no'],
+      }),
+      step: {
+        ...sameTarget,
+        branch: {
+          predicate: { '==': [{ var: 'context.flag' }, true] },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'no',
+          else: 'no',
+        },
+      } as (typeof definition.steps)[number],
+      values: { flag: false },
+    })
+    expect(pendingStep(shared.run)).toBe('no')
+    expect(shared.run.steps.find((step) => step.id === 'no')?.state).toBe('open')
   })
 })
 
@@ -1213,13 +1263,14 @@ it('persists the selected branch edge across a reload', async () => {
     const choose = definition.steps[0] as (typeof definition.steps)[number]
     const auth = HostAuth.fromKey('workflows-branch-test-key-0123456789')
     const outcome = runBranchStep({
+      definition,
       run: createRun({
         definition: 'branch-demo',
         trigger: 'turn.stopping',
         session: 'session-1',
         workspace,
         context: { flag: false },
-        steps: ['choose', 'yes', 'no'],
+        steps: ['choose', 'yes', 'yes2', 'no'],
       }),
       step: choose,
       values: { flag: false },
