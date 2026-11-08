@@ -82,7 +82,10 @@ export function parseOpenspecCommand(command: string): OpenspecIntent | undefine
       operands.push(token)
     }
     if (operands.length !== 1) return undefined
-    const change = nameOf(operands[0])
+    const rawName = operands[0]
+    const change = nameOf(
+      process.platform === 'win32' && rawName !== undefined ? rawName.toLowerCase() : rawName,
+    )
     return change === undefined ? undefined : { kind: 'archive', change }
   }
   return undefined

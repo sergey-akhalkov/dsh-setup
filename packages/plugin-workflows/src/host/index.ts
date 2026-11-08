@@ -1596,6 +1596,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               /(?:^|\s)["']?archive\/?["']?(?:\s|$)/iu.test(normalizedCommand))
           const looksLikeMove =
             /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) && mentionsOpenSpecArchive
+          if (
+            archive === undefined &&
+            /^\\s*(?:rtk\\s+|pnpm\\s+exec\\s+)?openspec\\s+archive\\b/iu.test(command)
+          ) {
+            return {
+              kind: 'deny',
+              reason:
+                'the archive command could not be parsed safely; use openspec archive <name> with a valid change name',
+            }
+          }
           if (archive === undefined && looksLikeMove) {
             return {
               kind: 'deny',
@@ -1617,7 +1627,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 .then((info) => info.isDirectory())
                 .catch(() => false)
               if (hasOpenSpec) {
-                if (normalize(cursor) !== normalize(workspace)) {
+                const foldPath = (value: string): string =>
+                  process.platform === 'win32' ? value.toLowerCase() : value
+                if (foldPath(normalize(cursor)) !== foldPath(normalize(workspace))) {
                   return {
                     kind: 'deny',
                     reason: `the archive command targets the nested OpenSpec project "${cursor}"; evidence is read only for the session workspace "${normalize(workspace)}"`,

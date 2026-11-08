@@ -1928,3 +1928,29 @@ describe('unrelated moves', () => {
     expect(nextCalled).toBe(true)
   })
 })
+it.skipIf(process.platform !== 'win32')(
+  'denies an uppercase archive name without evidence',
+  async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    const decision = (await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'archive-uppercase',
+        name: 'pwsh',
+        arguments: { command: 'openspec archive AUTH --yes --no-validate --skip-specs' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )) as { kind?: string } | undefined
+    expect(decision?.kind).toBe('deny')
+    expect(nextCalled).toBe(false)
+  },
+)

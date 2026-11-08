@@ -439,3 +439,13 @@ it('accepts space-separated store values and relative move parameters', () => {
     ),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
 })
+it.skipIf(process.platform !== 'win32')(
+  'normalizes an uppercase archive change name on Windows',
+  () => {
+    expect(parseArchiveCommand('openspec archive AUTH --yes --no-validate --skip-specs')).toEqual({
+      kind: 'archive',
+      change: 'auth',
+      form: 'openspec',
+    })
+  },
+)
