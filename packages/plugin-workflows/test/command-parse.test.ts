@@ -307,3 +307,10 @@ it.skipIf(process.platform !== 'win32')('matches Windows archive paths case-inse
     parseArchiveCommand('mv OpenSpec/Changes/auth OpenSpec/Changes/Archive/auth', '/workspace'),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
 })
+it('accepts a PowerShell switch with an explicit boolean value', () => {
+  expect(
+    parseArchiveCommand(
+      'Move-Item -LiteralPath openspec/changes/auth -Destination openspec/changes/archive/ -Confirm:$false',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+})

@@ -233,7 +233,7 @@ export function parseArchiveCommand(
       const token = tokens[index] ?? ''
       if (token === '--') continue
       if (token.startsWith('-')) {
-        const name = token.toLowerCase()
+        const name = token.toLowerCase().split(':')[0] ?? ''
         if (switches.has(name)) continue
         const value = tokens[index + 1]
         if (value === undefined || value.startsWith('-')) return undefined
