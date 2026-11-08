@@ -161,7 +161,7 @@ function deepSubset(expected: unknown, actual: unknown): boolean {
   if (Array.isArray(expected)) {
     const actualList = actual as unknown[]
     return (
-      expected.length <= actualList.length &&
+      expected.length === actualList.length &&
       expected.every((entry, index) => deepSubset(entry, actualList[index]))
     )
   }
@@ -611,7 +611,7 @@ async function recordCheck(
       return mismatch(`the record scope is not "${scope.text}"`, path.text, item)
     }
   }
-  if (task !== undefined && record.taskId !== task.text && record.task !== task.text) {
+  if (task !== undefined && record.taskId !== task.text) {
     return mismatch(`the record task is not "${task.text}"`, path.text, item)
   }
   if (record.verdict !== evidence.verdict) {

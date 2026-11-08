@@ -299,6 +299,12 @@ describe('record and tool evidence', () => {
         arguments: { command: 'openspec validate auth --strict' },
         ok: false,
       },
+      {
+        callId: 'call-3',
+        name: 'shell',
+        arguments: { argv: ['openspec', 'validate', 'auth'] },
+        ok: true,
+      },
     ]
     const evidence: Evidence = {
       kind: 'tool',
@@ -324,6 +330,26 @@ describe('record and tool evidence', () => {
         { workspace, values, toolCalls: commands },
       ),
     ).toMatchObject({ ok: false, failure: { reason: 'no-call' } })
+    expect(
+      await verifyEvidence(
+        {
+          kind: 'tool',
+          name: 'shell',
+          args: { argv: ['openspec', 'validate', 'auth', '--help'] },
+        } as Evidence,
+        { workspace, values, toolCalls: commands },
+      ),
+    ).toMatchObject({ ok: false, failure: { reason: 'no-call' } })
+    expect(
+      await verifyEvidence(
+        {
+          kind: 'tool',
+          name: 'shell',
+          args: { argv: ['openspec', 'validate', 'auth'] },
+        } as Evidence,
+        { workspace, values, toolCalls: commands },
+      ),
+    ).toMatchObject({ ok: true })
   })
 })
 
@@ -625,5 +651,39 @@ describe('record validation through the shared readers', () => {
       { workspace, values },
     )
     expect(result).toMatchObject({ ok: false, failure: { reason: 'record-mismatch' } })
+  })
+})
+
+it('matches the canonical taskId only and refuses a conflicting alias', async () => {
+  const workspace = await tempWorkspace()
+  const path = `.dsh/delegation/task-review/auth/0123456789abcdef.json`
+  await writeJson(workspace, path, {
+    rule: 'task-review',
+    change: 'auth',
+    phase: 'task',
+    scope: 'task',
+    taskId: '0123456789abcdef',
+    task: 'fedcba9876543210',
+    digest: 'a'.repeat(64),
+    verdict: 'PASS',
+    findings: [],
+    time: '2026-01-01T00:00:00.000Z',
+    target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
+  })
+  const evidence = (task: string): Evidence => ({
+    kind: 'record',
+    rule: 'task-review',
+    change: 'auth',
+    scope: 'task',
+    task,
+    verdict: 'PASS',
+    path,
+  })
+  expect(await verifyEvidence(evidence('fedcba9876543210'), { workspace, values })).toMatchObject({
+    ok: false,
+    failure: { reason: 'record-mismatch' },
+  })
+  expect(await verifyEvidence(evidence('0123456789abcdef'), { workspace, values })).toMatchObject({
+    ok: true,
   })
 })
