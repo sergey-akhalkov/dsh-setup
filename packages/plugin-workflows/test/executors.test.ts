@@ -841,3 +841,26 @@ it('keeps the call id on both failed dispatch paths', async () => {
   })
   expect(rejected.steps[0]?.evidence?.callId).toMatch(/^owned-/u)
 })
+
+it('refuses placeholders other than {name} before dispatch', async () => {
+  let dispatched = 0
+  const run = await runToolStep({
+    run: toolRun(),
+    definition: toolDefinition,
+    step: {
+      ...toolDefinition.steps[0],
+      tool: { name: 'shell', command: '{command}' },
+    } as (typeof toolDefinition.steps)[number],
+    runner: {
+      async call() {
+        dispatched += 1
+        return { ok: true }
+      },
+    },
+    owned: new OwnedCalls(),
+    evidenceContext: { workspace: '/workspace', values: { name: 'auth', command: 'whoami' } },
+  })
+  expect(dispatched).toBe(0)
+  expect(run.steps[0]?.state).toBe('failed')
+  expect(run.steps[0]?.reason).toContain('unsupported placeholder')
+})

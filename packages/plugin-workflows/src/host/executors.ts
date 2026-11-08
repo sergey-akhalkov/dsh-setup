@@ -481,7 +481,12 @@ function resolveToolValue(
   | { readonly ok: false; readonly detail: string } {
   if (typeof value === 'string') {
     for (const match of value.matchAll(/\{([a-zA-Z][a-zA-Z0-9-]*)\}/gu)) {
-      if (match[1] !== 'name') continue
+      if (match[1] !== 'name') {
+        return {
+          ok: false,
+          detail: `unsupported placeholder "{${match[1] ?? ''}}" in a tool call`,
+        }
+      }
       const entry = context.values.name
       if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
         return { ok: false, detail: `the name value "${String(entry)}" is not a change name` }
