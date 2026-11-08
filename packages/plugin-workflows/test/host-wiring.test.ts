@@ -1847,6 +1847,61 @@ describe('deferred step at runtime', () => {
 })
 
 describe('intake runtime', () => {
+  it('keeps spec open on a canonical shell exit 1 and passes on a later zero exit', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-spec-check',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    run = runs.requestStep(run, 'spec', 1_200)
+    await runs.writeRun(workspace, run, auth)
+    const check = (callId: string, exitCode: number): Promise<unknown> =>
+      host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          name: 'pwsh',
+          callId,
+          arguments: { command: 'openspec validate auth --strict' },
+        },
+        { isError: false, content: [], value: { exitCode } },
+      )
+    await check('check-fail', 1)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    let stored = await runs.readAuthenticatedRun(workspace, 'run-spec-check', auth)
+    expect(stored?.steps.find((step) => step.id === 'spec')?.state).toBe('open')
+    await check('check-pass', 0)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    stored = await runs.readAuthenticatedRun(workspace, 'run-spec-check', auth)
+    expect(stored?.steps.find((step) => step.id === 'spec')?.state).toBe('done')
+  })
+
   it('dispatches create-change through the tool service and completes approval with a receipt', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()

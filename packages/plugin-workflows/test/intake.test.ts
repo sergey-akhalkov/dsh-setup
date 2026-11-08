@@ -12,6 +12,7 @@ import {
 } from '../src/host/drafts.ts'
 import { collectEvidencePaths } from '../src/host/evidence.ts'
 import { OwnedCalls, runHumanStep } from '../src/host/executors.ts'
+import { evaluateTurnClose } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { advanceIntake } from '../src/host/intake.ts'
 import { issueCompletionReceipt, readReceipt } from '../src/host/receipts.ts'
@@ -347,6 +348,51 @@ describe('change-intake engine', () => {
     expect(run.steps.find((step) => step.id === 'create-change')?.state).toBe('done')
     expect(dispatches).toBe(1)
     expect(result.waiting?.stepId).toBe('spec')
+  })
+
+  it('does not complete or revive an intake whose owned creation call failed', async () => {
+    const workspace = await tempWorkspace()
+    const definition = intakeDefinition()
+    let run = newRun(definition, workspace)
+    for (const step of ['requirements', 'architecture', 'interface']) {
+      run = settleStep(run, step, 'done', { at: 1_500 })
+    }
+    const advance = (): ReturnType<typeof advanceIntake> =>
+      advanceIntake({
+        run,
+        definition,
+        values: { name: 'auth' },
+        evidenceContext: { workspace, values: { name: 'auth' } },
+        owned: new OwnedCalls(),
+        installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+        now: 2_000,
+        toolRunner: {
+          async call() {
+            return { ok: false, error: 'the creation command failed' }
+          },
+        },
+      })
+    const failed = await advance()
+    run = failed.run
+    expect(failed.completed).toBe(false)
+    expect(run.steps.find((step) => step.id === 'create-change')?.state).toBe('failed')
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: {
+        steer: () => {
+          throw new Error('a terminal intake run must not be steered')
+        },
+      },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      turn: 2,
+      maxBlocks: 3,
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
+    })
+    expect(outcome.kind).toBe('allow')
+    const again = await advance()
+    expect(again.completed).toBe(false)
+    expect(again.run.steps.find((step) => step.id === 'create-change')?.state).toBe('failed')
   })
 
   it('keeps spec open when strict validation fails and shows the paths the verifier checks', async () => {

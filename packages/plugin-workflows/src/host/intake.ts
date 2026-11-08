@@ -58,10 +58,14 @@ export interface IntakeAdvanceResult {
   readonly receiptError?: string
 }
 
-function pendingStep(run: WorkflowRun, definition: Definition): Step | undefined {
+/** The first step that is not done, with its state; failed steps stop the walk. */
+function firstPending(
+  run: WorkflowRun,
+  definition: Definition,
+): { readonly step: Step; readonly state: string } | undefined {
   for (const step of definition.steps) {
     const state = run.steps.find((entry) => entry.id === step.id)?.state
-    if (state === 'open' || state === 'blocked') return step
+    if (state !== 'done') return { step, state: state ?? 'missing' }
   }
   return undefined
 }
@@ -85,8 +89,10 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
   let run = input.run
   const resolved = resolveOwnership(input.definition, input.installedLegacy)
   for (let guard = 0; guard < input.definition.steps.length + 1; guard += 1) {
-    const step = pendingStep(run, input.definition)
-    if (step === undefined) {
+    const pending = firstPending(run, input.definition)
+    // Only a fully done definition completes; a failed or cancelled step stops
+    // the walk instead of being skipped.
+    if (pending === undefined) {
       const completedRun = run.status === 'completed' ? run : setRunStatus(run, 'completed', at)
       if (input.auth !== undefined && input.definition.id === 'change-intake') {
         const name = run.context.name
@@ -116,6 +122,14 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
       }
       return { run: completedRun, completed: true }
     }
+    if (
+      pending.state === 'failed' ||
+      pending.state === 'cancelled' ||
+      pending.state === 'missing'
+    ) {
+      return { run, completed: false }
+    }
+    const step = pending.step
     const ownership = resolved.steps.find((entry) => entry.id === step.id)?.ownership ?? 'own'
     if (ownership === 'defer') {
       if (input.readRecord === undefined) {

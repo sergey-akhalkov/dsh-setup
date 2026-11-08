@@ -1018,24 +1018,30 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           typeof exec.arguments === 'object' && exec.arguments !== null
             ? (exec.arguments as Record<string, unknown>)
             : {}
+        const shellOutcome = shellOutcomeOf(result)
+        const isShellTool = exec.name === 'pwsh' || exec.name === 'bash'
         const observed = sessionToolCalls.get(sessionId) ?? []
         observed.push({
           callId: String(exec.callId),
           name: exec.name,
           arguments: args,
-          ok: !result.isError,
+          ok: isShellTool ? shellOutcome.ok : !result.isError,
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
-        const command = shellCommandOf(exec)
-        if (command !== undefined) {
+        const command = isShellTool ? shellCommandOf(exec) : undefined
+        // A background or unreadable shell result cannot satisfy a check.
+        if (command !== undefined && shellOutcome.background !== true) {
           const results = sessionShellResults.get(sessionId) ?? []
           results.push({
             callId: String(exec.callId),
             command,
             at: journal.time(),
-            exitCode: result.isError ? 1 : 0,
             foreground: true,
+            exitCode: shellOutcome.exitCode,
+            ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
+            ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
+            ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
           })
           if (results.length > 50) results.shift()
           sessionShellResults.set(sessionId, results)
@@ -1269,6 +1275,33 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return false
     }
   }
+  /** Decode the canonical shell result instead of inferring success from isError. */
+  interface ShellOutcome {
+    readonly exitCode: number
+    readonly ok: boolean
+    readonly timedOut?: boolean
+    readonly signal?: string
+    readonly sandboxDenied?: boolean
+    readonly background?: boolean
+  }
+  const shellOutcomeOf = (result: unknown): ShellOutcome => {
+    const record =
+      typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
+    const value =
+      typeof record.value === 'object' && record.value !== null
+        ? (record.value as Record<string, unknown>)
+        : {}
+    const isError = record.isError === true
+    const exitCode = typeof value.exitCode === 'number' ? value.exitCode : isError ? 1 : 0
+    return {
+      exitCode,
+      ok: !isError && exitCode === 0,
+      ...(value.timedOut === true ? { timedOut: true } : {}),
+      ...(typeof value.signal === 'string' ? { signal: value.signal } : {}),
+      ...(value.sandboxDenied === true ? { sandboxDenied: true } : {}),
+      ...(value.background === true ? { background: true } : {}),
+    }
+  }
   /** A host-owned tool dispatch through the registered tool service, if present. */
   const liveToolRunner = (agent: Agent): ToolRunner | undefined => {
     const tools = ctx.get('tools') as
@@ -1278,7 +1311,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             signal: AbortSignal
             agent: Agent
           }) => Promise<{
-            results: ReadonlyArray<{ callId: string; result: { isError: boolean } }>
+            results: ReadonlyArray<{ callId: string; result: unknown }>
           }>
         }
       | undefined
@@ -1292,7 +1325,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           agent,
         })
         const first = batch.results[0]
-        if (first === undefined || first.result.isError) {
+        const outcome = shellOutcomeOf(first?.result)
+        if (first === undefined || outcome.background === true || !outcome.ok) {
           return { ok: false, error: `the ${request.name} tool call failed` }
         }
         // The host already observed its own dispatch; record it for evidence
@@ -1314,8 +1348,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             callId: request.callId,
             command,
             at: journal.time(),
-            exitCode: 0,
             foreground: true,
+            exitCode: outcome.exitCode,
+            ...(outcome.timedOut === true ? { timedOut: true } : {}),
+            ...(outcome.signal === undefined ? {} : { signal: outcome.signal }),
+            ...(outcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
           })
           if (results.length > 50) results.shift()
           sessionShellResults.set(sessionId, results)

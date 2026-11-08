@@ -80,6 +80,18 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     if (input.origin === 'subagent') {
       return { kind: 'allow', run: input.run, reason: 'a subagent turn is exempt' }
     }
+    // A terminal run is never revived by a later steer.
+    if (
+      input.run.status === 'completed' ||
+      input.run.status === 'failed' ||
+      input.run.status === 'cancelled'
+    ) {
+      return {
+        kind: 'allow',
+        run: input.run,
+        reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
+      }
+    }
     const step = selectBlockingStep(input.run, input.definition, input.installedLegacy)
     if (step === undefined) {
       return {
