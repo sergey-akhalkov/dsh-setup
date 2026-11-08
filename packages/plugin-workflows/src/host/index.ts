@@ -655,14 +655,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const knownRuns =
       storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth)
     const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns)
+    let startedThisEvent = 0
     const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
     const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
     const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) =>
       evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
         isDuplicate: (key) => sessionSeen.has(key),
         markKey: (key) => sessionSeen.set(key, input.at),
-        startRun: (definition, matched) =>
-          startDefinitionRun(workspace, definition, matched, runLimitReached),
+        startRun: (definition, matched) => {
+          const full =
+            storedAuth !== undefined &&
+            (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
+          const outcome = startDefinitionRun(workspace, definition, matched, full)
+          if (outcome.ok) startedThisEvent += 1
+          return outcome
+        },
         resolveApplicability: (definition) => {
           if (definition.trigger.applicability !== 'checkpoint-required') return undefined
           const current =
@@ -826,6 +833,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   ? []
                   : await listAuthenticatedRuns(activeWorkspace, intentAuth)
               const intentFull = intentAuth !== undefined && atRunLimit(activeWorkspace, intentRuns)
+              let intentStarted = 0
               const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
               seen.set(sessionId, sessionSeen)
               const rows = evaluateIntents(intentDefinitions, classification, {
@@ -846,7 +854,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       reason: 'the host key is unavailable; no run was created',
                     }
                   }
-                  if (intentFull) {
+                  if (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns) {
                     return {
                       ok: false,
                       reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
@@ -873,6 +881,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       ...(key === undefined ? {} : { dedupeKey: key }),
                     })
                     writeRunSync(activeWorkspace, run, auth)
+                    intentStarted += 1
                     return { ok: true, runId: run.id }
                   } catch (error) {
                     return { ok: false, reason: runFailure(error) }
@@ -1267,6 +1276,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         const currentMetrics = turnMetrics.get(sessionId)
         const triggerRows: TriggerEvaluationRecord[] = []
+        let startedThisEvent = 0
         let concurrentIntakeReason: string | undefined
         let capacityReason: string | undefined
         let keyUnavailableReason: string | undefined
@@ -1337,7 +1347,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             // matched (or deduped to an existing intake); a shadow or filtered
             // trigger never creates a run and must not invoke the intake gate.
             if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
-              if (atRunLimit(workspace, knownRuns)) {
+              if (
+                atRunLimit(workspace, knownRuns) ||
+                openRunCount(knownRuns) + startedThisEvent >= maxRuns
+              ) {
                 triggerRows.push({
                   ...row,
                   matched: true,
@@ -1386,6 +1399,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               })
               intakeDecision = decision
               if (decision.kind === 'deny' && decision.action === 'started') {
+                startedThisEvent += 1
                 if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
                 triggerRows.push({
                   ...row,
@@ -1426,7 +1440,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               })
               continue
             }
-            if (atRunLimit(workspace, knownRuns)) {
+            if (
+              atRunLimit(workspace, knownRuns) ||
+              openRunCount(knownRuns) + startedThisEvent >= maxRuns
+            ) {
               triggerRows.push({
                 ...row,
                 matched: true,
@@ -1437,6 +1454,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             }
             try {
               const run = await startRunFor(workspace, sessionId, auth, definition, {}, dedupeKey)
+              startedThisEvent += 1
               if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
               triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
             } catch (error) {

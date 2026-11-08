@@ -1449,3 +1449,75 @@ describe('configured maxRuns', () => {
     )
   })
 })
+
+describe('multiple matching definitions at capacity', () => {
+  it('admits only one run when one slot remains', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    for (const id of ['multi-a', 'multi-b']) {
+      const definition = {
+        v: 1,
+        id,
+        name: id,
+        version: 1,
+        trigger: { kind: 'tool.result', match: { tool: 'read' }, mode: 'active', dedupe: 'callId' },
+        settings: {
+          allowModelStart: false,
+          risk: 'low',
+          gateOwnership: 'own',
+          maxBlocks: 3,
+          allowIntent: false,
+        },
+        steps: [
+          {
+            id: 'observe',
+            title: 'Observe',
+            executor: 'main',
+            prompt: 'Observe.',
+            evidence: { kind: 'file', path: 'out.md' },
+            next: 'end',
+          },
+        ],
+      }
+      await import('node:fs/promises').then(async ({ writeFile: write }) => {
+        await write(
+          join(workspace, `${id}.json`),
+          `${JSON.stringify(definition, null, 2)}\n`,
+          'utf8',
+        )
+      })
+      await installDefinition(workspace, join(workspace, `${id}.json`), auth)
+    }
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'multi-call', name: 'read', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      return rows.some(
+        (entry) =>
+          Array.isArray(entry.triggers) &&
+          (entry.triggers as Array<Record<string, unknown>>).some(
+            (row) => row.reason === 'run-suppressed' && String(row.detail).includes('run limit'),
+          ),
+      )
+    })
+    const { readdir } = await import('node:fs/promises')
+    const files = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(files).toHaveLength(1)
+  })
+})
