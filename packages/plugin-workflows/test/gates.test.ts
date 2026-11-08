@@ -917,3 +917,43 @@ it('ignores cancelled intake leftovers when a valid intake exists', async () => 
   })
   expect(denied).toMatchObject({ kind: 'deny' })
 })
+
+it('keeps archival blocked while a required review step failed', async () => {
+  const workspace = await tempWorkspace()
+  let intake = intakeRunFor(workspace, 'auth', 'run-failed-review-intake')
+  for (const step of ['requirements', 'create-change', 'spec', 'approval']) {
+    intake = settleStep(intake, step, 'done', { at: 1_100 })
+  }
+  intake = setRunStatus(intake, 'completed', 2_000)
+  await writeRun(workspace, intake, gateAuth())
+  const review = settleStep(
+    createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['read-review'],
+      id: 'run-review-failed',
+    }),
+    'read-review',
+    'failed',
+    { at: 3_000, reason: 'the review child did not complete' },
+  )
+  const specRecord = {
+    ok: true as const,
+    evidence: {
+      kind: 'record' as const,
+      path: '.dsh/delegation/spec-review/auth/spec.json',
+      digest: DIGEST,
+    },
+  }
+  const decision = evaluateArchiveGate({
+    change: 'auth',
+    runs: [...(await listAuthenticatedRuns(workspace, gateAuth())), review],
+    receipts: [],
+    specRecord,
+  })
+  expect(decision).toMatchObject({ kind: 'deny' })
+  if (decision.kind === 'deny') expect(decision.reason).toContain('run-review-failed')
+})

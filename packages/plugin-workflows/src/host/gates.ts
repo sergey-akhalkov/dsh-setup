@@ -494,7 +494,9 @@ export type ArchiveGateDecision =
   | { readonly kind: 'deny'; readonly reason: string }
 
 function openRequiredStep(run: WorkflowRun): { step: string } | undefined {
-  const step = run.steps.find((entry) => entry.state === 'open' || entry.state === 'blocked')
+  const step = run.steps.find(
+    (entry) => entry.state === 'open' || entry.state === 'blocked' || entry.state === 'failed',
+  )
   return step === undefined ? undefined : { step: step.id }
 }
 
