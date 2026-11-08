@@ -223,3 +223,35 @@ it('accepts ordinary archive and move options', () => {
     form: 'mv',
   })
 })
+it('resolves named and absolute move operands against the workspace', () => {
+  expect(
+    parseArchiveCommand(
+      'Move-Item -LiteralPath openspec/changes/auth openspec/changes/archive/',
+      '/workspace',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  expect(
+    parseArchiveCommand(
+      'Move-Item -LiteralPath /workspace/openspec/changes/auth -Destination /workspace/openspec/changes/archive/',
+      '/workspace',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  expect(
+    parseArchiveCommand(
+      'mv /workspace/openspec/changes/auth /workspace/openspec/changes/archive/',
+      '/workspace',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
+  expect(
+    parseArchiveCommand(
+      'git mv /workspace/openspec/changes/auth /workspace/openspec/changes/archive/auth',
+      '/workspace',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'git' })
+  expect(
+    parseArchiveCommand(
+      'mv /elsewhere/openspec/changes/auth /elsewhere/openspec/changes/archive/',
+      '/workspace',
+    ),
+  ).toBeUndefined()
+})

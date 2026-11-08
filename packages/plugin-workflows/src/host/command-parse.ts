@@ -89,10 +89,9 @@ export const ARCHIVE_DIR = 'openspec/changes/archive'
 function unquotedPath(token: string | undefined): string | undefined {
   if (token === undefined) return undefined
   const withoutQuotes = token.replace(/^['"]|['"]$/gu, '').replaceAll('\\', '/')
-  return withoutQuotes
-    .split('/')
-    .filter((part) => part !== '' && part !== '.')
-    .join('/')
+  const absolute = withoutQuotes.startsWith('/')
+  const parts = withoutQuotes.split('/').filter((part) => part !== '' && part !== '.')
+  return `${absolute ? '/' : ''}${parts.join('/')}`
 }
 
 function changeUnderChanges(path: string): string | undefined {
@@ -106,13 +105,33 @@ function targetsArchive(destination: string): boolean {
   return new RegExp(`^${ARCHIVE_DIR}/[^/]+$`, 'u').test(destination)
 }
 
+function workspaceRelative(path: string, workspace: string | undefined): string | undefined {
+  if (workspace === undefined) return path
+  const normalized = path.replaceAll('\\', '/')
+  const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '')
+  const fold = (value: string): string =>
+    process.platform === 'win32' ? value.toLowerCase() : value
+  if (fold(normalized) === fold(root)) return ''
+  if (fold(normalized).startsWith(`${fold(root)}/`)) return normalized.slice(root.length + 1)
+  if (/^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('/')) return undefined
+  return normalized
+}
+
 function archiveMove(
   source: string | undefined,
   destination: string | undefined,
   form: ArchiveIntent['form'],
+  workspace?: string,
 ): ArchiveIntent | undefined {
-  const name = source === undefined ? undefined : changeUnderChanges(source)
-  if (name === undefined || destination === undefined || !targetsArchive(destination)) {
+  const relativeSource = source === undefined ? undefined : workspaceRelative(source, workspace)
+  const relativeDestination =
+    destination === undefined ? undefined : workspaceRelative(destination, workspace)
+  const name = relativeSource === undefined ? undefined : changeUnderChanges(relativeSource)
+  if (
+    name === undefined ||
+    relativeDestination === undefined ||
+    !targetsArchive(relativeDestination)
+  ) {
     return undefined
   }
   return { kind: 'archive', change: name, form }
@@ -124,7 +143,10 @@ function archiveMove(
  * `mv`, PowerShell `Move-Item`, or `git mv`. A compound command, another
  * destination, or an unparseable name is not an archive.
  */
-export function parseArchiveCommand(command: string): ArchiveIntent | undefined {
+export function parseArchiveCommand(
+  command: string,
+  workspace?: string,
+): ArchiveIntent | undefined {
   const trimmed = command.trim()
   // Moves carry Windows paths, so a backslash is data here; control characters are not.
   if (trimmed === '' || CONTROL.test(trimmed)) return undefined
@@ -143,6 +165,7 @@ export function parseArchiveCommand(command: string): ArchiveIntent | undefined 
       unquotedPath(positional[0]),
       unquotedPath(positional[1]),
       mvIndex === 2 ? 'git' : 'mv',
+      workspace,
     )
   }
   if (/^move-item$/iu.test(tokens[0] ?? '')) {
@@ -163,12 +186,12 @@ export function parseArchiveCommand(command: string): ArchiveIntent | undefined 
         positional.push(token)
       }
     }
-    if (positional.length > 2) return undefined
-    return archiveMove(
-      unquotedPath(flags.get('-literalpath') ?? flags.get('-path') ?? positional[0]),
-      unquotedPath(flags.get('-destination') ?? flags.get('-dest') ?? positional[1]),
-      'Move-Item',
-    )
+    let source = flags.get('-literalpath') ?? flags.get('-path')
+    let destination = flags.get('-destination') ?? flags.get('-dest')
+    if (source === undefined) source = positional.shift()
+    if (destination === undefined) destination = positional.shift()
+    if (positional.length > 0) return undefined
+    return archiveMove(unquotedPath(source), unquotedPath(destination), 'Move-Item', workspace)
   }
   return undefined
 }

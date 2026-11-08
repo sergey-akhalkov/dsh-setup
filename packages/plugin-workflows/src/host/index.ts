@@ -1566,7 +1566,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           releaseAdmission()
         }
         if (command !== undefined) {
-          const archive = parseArchiveCommand(command)
+          const archive = parseArchiveCommand(command, workspace)
           if (archive?.kind === 'archive') {
             const declaredWorkdir = shellWorkdirOf(exec)
             if (declaredWorkdir !== undefined) {
