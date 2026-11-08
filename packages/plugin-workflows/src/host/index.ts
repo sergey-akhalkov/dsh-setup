@@ -1586,10 +1586,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             workspace,
             inside ? resolvedWorkdir : undefined,
           )
-          const normalizedCommand = command.replaceAll('\\', '/').toLowerCase()
+          const normalizedCommand = command.replaceAll('\\', '/')
+          const relativeArchiveWorkdir =
+            relativeWorkdir.replaceAll('\\', '/') === 'openspec/changes'
+          const mentionsOpenSpecArchive =
+            /openspec\/changes\/archive(?:\/|$)/iu.test(normalizedCommand) ||
+            (relativeArchiveWorkdir &&
+              /(?:^|\s)["']?archive\/?["']?(?:\s|$)/iu.test(normalizedCommand))
           const looksLikeMove =
-            /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) &&
-            normalizedCommand.includes('archive')
+            /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) && mentionsOpenSpecArchive
           if (archive === undefined && looksLikeMove) {
             return {
               kind: 'deny',

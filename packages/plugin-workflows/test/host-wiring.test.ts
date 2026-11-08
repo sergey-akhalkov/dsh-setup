@@ -1904,3 +1904,27 @@ describe('archive target root', () => {
     expect(nextCalled).toBe(false)
   })
 })
+describe('unrelated moves', () => {
+  it('does not deny a move whose filename merely contains archive', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'move-notes',
+        name: 'pwsh',
+        arguments: { command: 'git mv docs/archive-notes.md docs/release-notes.md' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )
+    expect(nextCalled).toBe(true)
+  })
+})
