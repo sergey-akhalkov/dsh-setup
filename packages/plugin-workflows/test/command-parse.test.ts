@@ -425,3 +425,17 @@ it('accepts an option before the archive name and a case-insensitive mv alias', 
     form: 'mv',
   })
 })
+it('accepts space-separated store values and relative move parameters', () => {
+  expect(parseArchiveCommand('openspec archive auth --store team')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'openspec',
+  })
+  expect(
+    parseArchiveCommand(
+      "Move-Item -Path auth -Destination archive/ -Include '*'",
+      '/workspace',
+      '/workspace/openspec/changes',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+})

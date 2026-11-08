@@ -1589,7 +1589,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const normalizedCommand = command.replaceAll('\\', '/').toLowerCase()
           const looksLikeMove =
             /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) &&
-            normalizedCommand.includes('openspec/changes/archive')
+            normalizedCommand.includes('archive')
           if (archive === undefined && looksLikeMove) {
             return {
               kind: 'deny',

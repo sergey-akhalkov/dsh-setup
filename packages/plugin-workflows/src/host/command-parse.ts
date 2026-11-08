@@ -71,7 +71,16 @@ export function parseOpenspecCommand(command: string): OpenspecIntent | undefine
     return name === undefined ? undefined : { kind: 'create-change', name }
   }
   if (tokens[1] === 'archive' && tokens.length >= 3) {
-    const operands = tokens.slice(2).filter((token) => !token.startsWith('-'))
+    const operands: string[] = []
+    for (let index = 2; index < tokens.length; index += 1) {
+      const token = tokens[index] ?? ''
+      if (token === '--store' || token === '-s') {
+        index += 1
+        continue
+      }
+      if (token.startsWith('-')) continue
+      operands.push(token)
+    }
     if (operands.length !== 1) return undefined
     const change = nameOf(operands[0])
     return change === undefined ? undefined : { kind: 'archive', change }
@@ -245,6 +254,15 @@ function parseMoveOperands(
     '-ov',
     '-ob',
     '-pv',
+    '-include',
+    '-exclude',
+    '-filter',
+    '-pssession',
+    '-certificate',
+    '-credential',
+    '-throttlelimit',
+    '-fromsession',
+    '-tosession',
     '-warningaction',
     '-informationaction',
     '-errorvariable',
