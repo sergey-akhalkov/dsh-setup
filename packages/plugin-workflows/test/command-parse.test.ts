@@ -355,3 +355,23 @@ it('recognizes switch values through mv and refuses multi-source archive moves',
     ),
   ).toMatchObject({ kind: 'archive', multipleSources: true })
 })
+it('handles named multi-source moves and inline parameter values', () => {
+  expect(
+    parseArchiveCommand(
+      'mv -t openspec/changes/archive/ openspec/changes/auth openspec/changes/beta',
+    ),
+  ).toMatchObject({ kind: 'archive', multipleSources: true })
+  expect(
+    parseArchiveCommand(
+      'Move-Item -Path openspec/changes/auth,openspec/changes/beta -Destination openspec/changes/archive/',
+    ),
+  ).toMatchObject({ kind: 'archive', multipleSources: true })
+  expect(
+    parseArchiveCommand(
+      'Move-Item -Path:openspec/changes/auth -Destination:openspec/changes/archive/',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
+  expect(
+    parseArchiveCommand('mv --target-directory=openspec/changes/archive/ openspec/changes/auth'),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
+})

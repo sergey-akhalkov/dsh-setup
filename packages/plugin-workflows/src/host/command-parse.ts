@@ -198,6 +198,83 @@ function tokenize(command: string): string[] | undefined {
   return tokens
 }
 
+function parameter(token: string): { name: string; inline?: string } {
+  const lower = token.toLowerCase()
+  if (!lower.startsWith('-')) return { name: lower }
+  const colon = lower.indexOf(':')
+  const equals = lower.indexOf('=')
+  const index = colon >= 0 ? colon : equals
+  if (index < 0) return { name: lower }
+  return { name: lower.slice(0, index), inline: token.slice(index + 1) }
+}
+
+function parseMoveOperands(
+  tokens: readonly string[],
+  start: number,
+  workspace: string | undefined,
+  base: string | undefined,
+  form: 'mv' | 'git' | 'Move-Item',
+): ArchiveIntent | undefined {
+  const switches = new Set([
+    '-f',
+    '--force',
+    '-v',
+    '--verbose',
+    '-n',
+    '--no-clobber',
+    '-i',
+    '--interactive',
+    '-u',
+    '--update',
+    '-force',
+    '-whatif',
+    '-confirm',
+    '-passthru',
+    '-debug',
+  ])
+  const destinationNames = new Set(['-t', '--target-directory', '-destination', '-dest'])
+  const sourceNames = new Set(['-literalpath', '-path'])
+  const positional: string[] = []
+  let source: string | undefined
+  let destination: string | undefined
+  for (let index = start; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? ''
+    if (token === '--') continue
+    const { name, inline } = parameter(token)
+    if (destinationNames.has(name)) {
+      destination = inline ?? tokens[index + 1]
+      if (destination === undefined) return undefined
+      if (inline === undefined) index += 1
+      continue
+    }
+    if (sourceNames.has(name)) {
+      source = inline ?? tokens[index + 1]
+      if (source === undefined) return undefined
+      if (inline === undefined) index += 1
+      continue
+    }
+    if (name.startsWith('-')) {
+      if (switches.has(name)) continue
+      return undefined
+    }
+    positional.push(token)
+  }
+  if (destination === undefined) destination = positional.pop()
+  if (source === undefined) source = positional.shift()
+  const sources = [
+    ...(source === undefined ? [] : source.includes(',') ? source.split(',') : [source]),
+    ...positional,
+  ].filter((entry): entry is string => entry !== undefined && entry !== '')
+  if (sources.length === 0 || destination === undefined) return undefined
+  if (sources.length > 1) {
+    const relativeDestination = workspaceRelative(unquotedPath(destination) ?? '', workspace, base)
+    return relativeDestination !== undefined && targetsArchive(relativeDestination)
+      ? { kind: 'archive', change: '', form, multipleSources: true }
+      : undefined
+  }
+  return archiveMove(unquotedPath(sources[0]), unquotedPath(destination), form, workspace, base)
+}
+
 export function parseArchiveCommand(
   command: string,
   workspace?: string,
@@ -215,126 +292,16 @@ export function parseArchiveCommand(
   if (tokens === undefined) return undefined
   const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
   if (mvIndex > 0) {
-    const switches = new Set([
-      '-f',
-      '--force',
-      '-v',
-      '--verbose',
-      '-n',
-      '--no-clobber',
-      '-i',
-      '--interactive',
-      '-u',
-      '--update',
-      '-force',
-      '-whatif',
-      '-confirm',
-      '-passthru',
-      '-debug',
-    ])
-    const positional: string[] = []
-    let source: string | undefined
-    let destination: string | undefined
-    for (let index = mvIndex; index < tokens.length; index += 1) {
-      const token = tokens[index] ?? ''
-      if (token === '--') continue
-      const name = token.toLowerCase().split(':')[0] ?? ''
-      if (
-        name === '-t' ||
-        name === '--target-directory' ||
-        name === '-destination' ||
-        name === '-dest'
-      ) {
-        destination = tokens[index + 1]
-        if (destination === undefined) return undefined
-        index += 1
-        continue
-      }
-      if (name === '-literalpath' || name === '-path') {
-        source = tokens[index + 1]
-        if (source === undefined) return undefined
-        index += 1
-        continue
-      }
-      if (name.startsWith('-')) {
-        if (switches.has(name)) continue
-        return undefined
-      }
-      positional.push(token)
-    }
-    if (source === undefined) source = positional.shift()
-    if (destination === undefined) destination = positional.shift()
-    if (positional.length > 0) {
-      const last = positional[positional.length - 1]
-      const candidatePath = last === undefined ? undefined : unquotedPath(last)
-      const candidate =
-        candidatePath === undefined
-          ? undefined
-          : workspaceRelative(candidatePath, workspace, moveWorkspace)
-      if (candidate !== undefined && targetsArchive(candidate)) {
-        return {
-          kind: 'archive',
-          change: '',
-          form: mvIndex === 2 ? 'git' : 'mv',
-          multipleSources: true,
-        }
-      }
-      return undefined
-    }
-    return archiveMove(
-      unquotedPath(source),
-      unquotedPath(destination),
-      mvIndex === 2 ? 'git' : 'mv',
+    return parseMoveOperands(
+      tokens,
+      mvIndex,
       workspace,
       moveWorkspace,
+      mvIndex === 2 ? 'git' : 'mv',
     )
   }
   if (/^move-item$/iu.test(tokens[0] ?? '')) {
-    const positional: string[] = []
-    const flags = new Map<string, string>()
-    const switches = new Set(['-force', '-verbose', '-whatif', '-confirm', '-passthru', '-debug'])
-    for (let index = 1; index < tokens.length; index += 1) {
-      const token = tokens[index] ?? ''
-      if (token === '--') continue
-      if (token.startsWith('-')) {
-        const name = token.toLowerCase().split(':')[0] ?? ''.split(':')[0] ?? ''
-        if (switches.has(name)) continue
-        const value = tokens[index + 1]
-        if (value === undefined || value.startsWith('-')) return undefined
-        flags.set(name, value)
-        index += 1
-      } else {
-        positional.push(token)
-      }
-    }
-    let source = flags.get('-literalpath') ?? flags.get('-path')
-    let destination = flags.get('-destination') ?? flags.get('-dest')
-    if (source === undefined) source = positional.shift()
-    if (destination === undefined) destination = positional.shift()
-    if (positional.length > 0) {
-      const last = positional[positional.length - 1]
-      const candidatePath = last === undefined ? undefined : unquotedPath(last)
-      const candidate =
-        candidatePath === undefined
-          ? undefined
-          : workspaceRelative(candidatePath, workspace, moveWorkspace)
-      if (candidate !== undefined && targetsArchive(candidate)) {
-        return {
-          kind: 'archive',
-          change: '',
-          form: mvIndex === 2 ? 'git' : 'mv',
-          multipleSources: true,
-        }
-      }
-      return undefined
-    }
-    return archiveMove(
-      unquotedPath(source),
-      unquotedPath(destination),
-      'Move-Item',
-      workspace,
-      moveWorkspace,
-    )
+    return parseMoveOperands(tokens, 1, workspace, moveWorkspace, 'Move-Item')
   }
   return undefined
 }
