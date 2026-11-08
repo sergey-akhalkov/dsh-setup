@@ -1521,3 +1521,130 @@ describe('multiple matching definitions at capacity', () => {
     expect(files).toHaveLength(1)
   })
 })
+
+describe('capacity does not block existing intake state', () => {
+  it('admits a completed intake at full capacity', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const completed = runs.setRunStatus(
+      runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-old',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['requirements'],
+        id: 'run-completed-auth',
+      }),
+      'completed',
+      1_000,
+    )
+    await runs.writeRun(workspace, completed, auth)
+    const open = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'other' },
+      steps: ['requirements'],
+      id: 'run-open-slot',
+    })
+    await runs.writeRun(workspace, open, auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    let nextCalled = false
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'completed-admit',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => {
+        nextCalled = true
+        return { kind: 'continue' }
+      },
+    )
+    expect(nextCalled).toBe(true)
+    const { readdir } = await import('node:fs/promises')
+    const files = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(files).toHaveLength(2)
+  })
+})
+
+describe('concurrent session admission', () => {
+  it('admits only one run when two sessions compete for one slot', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'session-watch',
+      name: 'Session watch',
+      version: 1,
+      trigger: { kind: 'tool.result', match: { tool: 'read' }, mode: 'active', dedupe: 'callId' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'session-watch.json'),
+        `${JSON.stringify(definition, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'session-watch.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const secondAgent = {
+      id: 'session-2',
+      session: { id: 'session-2', header: { origin: 'root' as const } },
+      ctx: { on: () => () => {} },
+      steer: () => {},
+      inject: () => {},
+    }
+    await Promise.all([
+      host.emit(
+        'tools/result',
+        { agent: host.agent, callId: 'call-a', name: 'read', arguments: {} },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      ),
+      host.emit(
+        'tools/result',
+        { agent: secondAgent, callId: 'call-b', name: 'read', arguments: {} },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      ),
+    ])
+    const { readdir } = await import('node:fs/promises')
+    const runsDirectory = join(workspace, '.dsh', 'workflows', 'runs')
+    await waitFor(async () => (await readdir(runsDirectory).catch(() => [])).length > 0)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const files = (await readdir(runsDirectory)).filter((name) => name.endsWith('.json'))
+    expect(files).toHaveLength(1)
+  })
+})

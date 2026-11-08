@@ -652,62 +652,68 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // A run start is suppressed and journaled if the key cannot load.
       }
     }
-    const knownRuns =
-      storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth)
-    const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns)
-    let startedThisEvent = 0
-    const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
-    const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
-    const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) =>
-      evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
-        isDuplicate: (key) => sessionSeen.has(key),
-        markKey: (key) => sessionSeen.set(key, input.at),
-        startRun: (definition, matched) => {
-          const full =
-            storedAuth !== undefined &&
-            (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
-          const outcome = startDefinitionRun(workspace, definition, matched, full)
-          if (outcome.ok) startedThisEvent += 1
-          return outcome
-        },
-        resolveApplicability: (definition) => {
-          if (definition.trigger.applicability !== 'checkpoint-required') return undefined
-          const current =
-            input.turn !== undefined && metrics !== undefined && metrics.turn === input.turn
-              ? metrics
-              : undefined
-          return checkpointRequired({
-            toolCalls: current?.toolCalls ?? 0,
-            ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
-            written: current?.written ?? 0,
-            workers: current?.workers ?? 0,
-          })
-        },
-      }).map((row) => ({
-        id: `definition:${row.definition}`,
-        matched: row.matched,
-        reason: row.reason,
-        ...(row.path === undefined ? {} : { path: row.path }),
-        ...(row.filter === undefined ? {} : { filter: row.filter }),
-        ...(row.detail === undefined ? {} : { detail: row.detail }),
-        ...(row.runId === undefined ? {} : { runId: row.runId }),
-      })),
-    )
-    const evaluations = [...records, ...definitionRows]
-    const { record: bounded } = journal.record({
-      ...input,
-      ...(evaluations.length === 0 ? {} : { triggers: evaluations }),
-    })
-    // The event was observed even if its record cannot be written.
-    health.markEvent(bounded.at)
-    sessionEventAt.set(input.session, bounded.at)
-    void journal.append(workspace, bounded).then((result) => {
-      if (result.ok) return
-      health.setJournalWritable(false)
-      health.recordError(result.error)
-      console.error(`workflows: the session journal could not be written (${result.error})`)
-    })
-    watchChanges(workspace)
+    const releaseAdmission = await acquireAdmission(workspace)
+    try {
+      const knownRuns =
+        storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth)
+      const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns)
+      let startedThisEvent = 0
+      const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
+      const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
+      const definitionRows = definitionEventsOf(input, event, workspace).flatMap(
+        (definitionEvent) =>
+          evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
+            isDuplicate: (key) => sessionSeen.has(key),
+            markKey: (key) => sessionSeen.set(key, input.at),
+            startRun: (definition, matched) => {
+              const full =
+                storedAuth !== undefined &&
+                (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
+              const outcome = startDefinitionRun(workspace, definition, matched, full)
+              if (outcome.ok) startedThisEvent += 1
+              return outcome
+            },
+            resolveApplicability: (definition) => {
+              if (definition.trigger.applicability !== 'checkpoint-required') return undefined
+              const current =
+                input.turn !== undefined && metrics !== undefined && metrics.turn === input.turn
+                  ? metrics
+                  : undefined
+              return checkpointRequired({
+                toolCalls: current?.toolCalls ?? 0,
+                ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
+                written: current?.written ?? 0,
+                workers: current?.workers ?? 0,
+              })
+            },
+          }).map((row) => ({
+            id: `definition:${row.definition}`,
+            matched: row.matched,
+            reason: row.reason,
+            ...(row.path === undefined ? {} : { path: row.path }),
+            ...(row.filter === undefined ? {} : { filter: row.filter }),
+            ...(row.detail === undefined ? {} : { detail: row.detail }),
+            ...(row.runId === undefined ? {} : { runId: row.runId }),
+          })),
+      )
+      const evaluations = [...records, ...definitionRows]
+      const { record: bounded } = journal.record({
+        ...input,
+        ...(evaluations.length === 0 ? {} : { triggers: evaluations }),
+      })
+      // The event was observed even if its record cannot be written.
+      health.markEvent(bounded.at)
+      sessionEventAt.set(input.session, bounded.at)
+      void journal.append(workspace, bounded).then((result) => {
+        if (result.ok) return
+        health.setJournalWritable(false)
+        health.recordError(result.error)
+        console.error(`workflows: the session journal could not be written (${result.error})`)
+      })
+      watchChanges(workspace)
+    } finally {
+      releaseAdmission()
+    }
   }
 
   /** Preserve observation order per session while definitions and keys load. */
@@ -827,86 +833,92 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
             if (classification !== undefined && intentDefinitions.length > 0) {
               await recoverIfNeeded(activeWorkspace)
-              const intentAuth = storedAuth
-              const intentRuns =
-                intentAuth === undefined
-                  ? []
-                  : await listAuthenticatedRuns(activeWorkspace, intentAuth)
-              const intentFull = intentAuth !== undefined && atRunLimit(activeWorkspace, intentRuns)
-              let intentStarted = 0
-              const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
-              seen.set(sessionId, sessionSeen)
-              const rows = evaluateIntents(intentDefinitions, classification, {
-                allowIntent: engineAllowIntent,
-                confirmed: true,
-                enabled: true,
-                ready: true,
-                session: sessionId,
-                workspace: activeWorkspace,
-                turn: payload.turn,
-                isDuplicate: (key) => sessionSeen.has(key),
-                markKey: (key) => sessionSeen.set(key, journal.time()),
-                startRun: (definition) => {
-                  const auth = storedAuth
-                  if (auth === undefined) {
-                    return {
-                      ok: false,
-                      reason: 'the host key is unavailable; no run was created',
+              const releaseIntentAdmission = await acquireAdmission(activeWorkspace)
+              try {
+                const intentAuth = storedAuth
+                const intentRuns =
+                  intentAuth === undefined
+                    ? []
+                    : await listAuthenticatedRuns(activeWorkspace, intentAuth)
+                const intentFull =
+                  intentAuth !== undefined && atRunLimit(activeWorkspace, intentRuns)
+                let intentStarted = 0
+                const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
+                seen.set(sessionId, sessionSeen)
+                const rows = evaluateIntents(intentDefinitions, classification, {
+                  allowIntent: engineAllowIntent,
+                  confirmed: true,
+                  enabled: true,
+                  ready: true,
+                  session: sessionId,
+                  workspace: activeWorkspace,
+                  turn: payload.turn,
+                  isDuplicate: (key) => sessionSeen.has(key),
+                  markKey: (key) => sessionSeen.set(key, journal.time()),
+                  startRun: (definition) => {
+                    const auth = storedAuth
+                    if (auth === undefined) {
+                      return {
+                        ok: false,
+                        reason: 'the host key is unavailable; no run was created',
+                      }
                     }
-                  }
-                  if (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns) {
-                    return {
-                      ok: false,
-                      reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
+                    if (intentFull || openRunCount(intentRuns) + intentStarted >= maxRuns) {
+                      return {
+                        ok: false,
+                        reason: `the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`,
+                      }
                     }
-                  }
-                  reserveStart(activeWorkspace)
-                  try {
-                    const key = intentDedupeKey(definition, classification, {
-                      session: sessionId,
-                      turn: payload.turn,
-                    })
-                    const run = createRun({
-                      definition: definition.id,
-                      trigger: 'intent',
-                      session: sessionId,
-                      workspace: activeWorkspace,
-                      context: {
-                        intent: classification.intent,
-                        confidence: classification.confidence,
-                        classifier: classification.classifier,
-                      },
-                      steps: definition.steps.map((step) => step.id),
-                      now: journal.time(),
-                      ...(key === undefined ? {} : { dedupeKey: key }),
-                    })
-                    writeRunSync(activeWorkspace, run, auth)
-                    intentStarted += 1
-                    return { ok: true, runId: run.id }
-                  } catch (error) {
-                    return { ok: false, reason: runFailure(error) }
-                  } finally {
-                    releaseStart(activeWorkspace)
-                  }
-                },
-              })
-              await recordEngineEvaluation(
-                activeWorkspace,
-                sessionId,
-                payload.turn,
-                'intent',
-                classification.intent,
-                `intent ${classification.intent} (${classification.confidence.toFixed(2)})`,
-                rows.map((row) => ({
-                  id: `definition:${row.definition}`,
-                  matched: row.matched,
-                  reason: row.reason,
-                  ...(row.path === undefined ? {} : { path: row.path }),
-                  ...(row.filter === undefined ? {} : { filter: row.filter }),
-                  ...(row.detail === undefined ? {} : { detail: row.detail }),
-                  ...(row.runId === undefined ? {} : { runId: row.runId }),
-                })),
-              )
+                    reserveStart(activeWorkspace)
+                    try {
+                      const key = intentDedupeKey(definition, classification, {
+                        session: sessionId,
+                        turn: payload.turn,
+                      })
+                      const run = createRun({
+                        definition: definition.id,
+                        trigger: 'intent',
+                        session: sessionId,
+                        workspace: activeWorkspace,
+                        context: {
+                          intent: classification.intent,
+                          confidence: classification.confidence,
+                          classifier: classification.classifier,
+                        },
+                        steps: definition.steps.map((step) => step.id),
+                        now: journal.time(),
+                        ...(key === undefined ? {} : { dedupeKey: key }),
+                      })
+                      writeRunSync(activeWorkspace, run, auth)
+                      intentStarted += 1
+                      return { ok: true, runId: run.id }
+                    } catch (error) {
+                      return { ok: false, reason: runFailure(error) }
+                    } finally {
+                      releaseStart(activeWorkspace)
+                    }
+                  },
+                })
+                await recordEngineEvaluation(
+                  activeWorkspace,
+                  sessionId,
+                  payload.turn,
+                  'intent',
+                  classification.intent,
+                  `intent ${classification.intent} (${classification.confidence.toFixed(2)})`,
+                  rows.map((row) => ({
+                    id: `definition:${row.definition}`,
+                    matched: row.matched,
+                    reason: row.reason,
+                    ...(row.path === undefined ? {} : { path: row.path }),
+                    ...(row.filter === undefined ? {} : { filter: row.filter }),
+                    ...(row.detail === undefined ? {} : { detail: row.detail }),
+                    ...(row.runId === undefined ? {} : { runId: row.runId }),
+                  })),
+                )
+              } finally {
+                releaseIntentAdmission()
+              }
             }
           }
         }
@@ -1138,6 +1150,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   const atRunLimit = (workspace: string, runs: readonly WorkflowRun[]): boolean =>
     openRunCount(runs) + (reservedStarts.get(workspace) ?? 0) >= maxRuns
+  /** Serialize capacity read, admission, and persistence across sessions. */
+  const admissionTails = new Map<string, Promise<void>>()
+  const acquireAdmission = async (workspace: string): Promise<() => void> => {
+    const previous = admissionTails.get(workspace) ?? Promise.resolve()
+    let release!: () => void
+    const hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    admissionTails.set(
+      workspace,
+      previous.then(() => hold),
+    )
+    await previous
+    return release
+  }
   /** Dedupe keys whose triggering call has not finished starting its run yet. */
   const inFlightTriggers = new Set<string>()
   let promptRuns: WorkflowRun[] = []
@@ -1257,96 +1284,199 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const definitions = await definitionsFor(workspace)
         await recoverIfNeeded(workspace)
         await seedTriggerIdentities(workspace, sessionId).catch(() => undefined)
-        const knownRuns = auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth)
-        const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
-        seen.set(sessionId, sessionSeen)
-        const observed: DefinitionEvent = {
-          kind: 'tool.pre-execute',
-          subject: exec.name,
-          tool: exec.name,
-          workspace,
-          session: sessionId,
-          ...(exec.callId === undefined ? {} : { callId: String(exec.callId) }),
-          ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
-          ...(create?.kind === 'create-change'
-            ? { command: 'openspec new change <name>', name: create.name }
-            : create?.kind === 'archive'
-              ? { command: 'openspec archive <name>', name: create.change }
-              : {}),
-        }
-        const currentMetrics = turnMetrics.get(sessionId)
-        const triggerRows: TriggerEvaluationRecord[] = []
-        let startedThisEvent = 0
-        let concurrentIntakeReason: string | undefined
-        let capacityReason: string | undefined
-        let keyUnavailableReason: string | undefined
-        let intakeDecision: Awaited<ReturnType<typeof evaluateIntakeGate>> | undefined
-        for (const definition of definitions) {
-          const applicability =
-            definition.trigger.applicability === 'checkpoint-required'
-              ? checkpointRequired({
-                  toolCalls: currentMetrics?.toolCalls ?? 0,
-                  ...(currentMetrics?.lastTool === undefined
-                    ? {}
-                    : { lastTool: currentMetrics.lastTool }),
-                  written: currentMetrics?.written ?? 0,
-                  workers: currentMetrics?.workers ?? 0,
-                })
-              : undefined
-          const evaluation = evaluateDefinitionTrigger(definition, observed, {
-            ...(applicability === undefined ? {} : { applicability }),
-            isDuplicate: (key) => sessionSeen.has(key),
-          })
-          const row: TriggerEvaluationRecord = {
-            id: `definition:${definition.id}`,
-            matched: evaluation.matched,
-            reason: evaluation.reason,
-            ...(evaluation.path === undefined ? {} : { path: evaluation.path }),
-            ...(evaluation.filter === undefined ? {} : { filter: evaluation.filter }),
-            ...(evaluation.detail === undefined ? {} : { detail: evaluation.detail }),
+        const releaseAdmission = await acquireAdmission(workspace)
+        try {
+          const knownRuns = auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth)
+          const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
+          seen.set(sessionId, sessionSeen)
+          const observed: DefinitionEvent = {
+            kind: 'tool.pre-execute',
+            subject: exec.name,
+            tool: exec.name,
+            workspace,
+            session: sessionId,
+            ...(exec.callId === undefined ? {} : { callId: String(exec.callId) }),
+            ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+            ...(create?.kind === 'create-change'
+              ? { command: 'openspec new change <name>', name: create.name }
+              : create?.kind === 'archive'
+                ? { command: 'openspec archive <name>', name: create.change }
+                : {}),
           }
-          const createsIntake =
-            definition.id === 'change-intake' && create?.kind === 'create-change'
-          if (!evaluation.matched && evaluation.reason !== 'dedupe') {
-            triggerRows.push(row)
-            continue
-          }
-          if (definition.trigger.mode === 'shadow') {
-            if (!evaluation.matched) {
-              // A duplicate shadow event keeps the dedupe reason instead of
-              // being reported as a fresh would-fire.
+          const currentMetrics = turnMetrics.get(sessionId)
+          const triggerRows: TriggerEvaluationRecord[] = []
+          let startedThisEvent = 0
+          let concurrentIntakeReason: string | undefined
+          let capacityReason: string | undefined
+          let keyUnavailableReason: string | undefined
+          let intakeDecision: Awaited<ReturnType<typeof evaluateIntakeGate>> | undefined
+          for (const definition of definitions) {
+            const applicability =
+              definition.trigger.applicability === 'checkpoint-required'
+                ? checkpointRequired({
+                    toolCalls: currentMetrics?.toolCalls ?? 0,
+                    ...(currentMetrics?.lastTool === undefined
+                      ? {}
+                      : { lastTool: currentMetrics.lastTool }),
+                    written: currentMetrics?.written ?? 0,
+                    workers: currentMetrics?.workers ?? 0,
+                  })
+                : undefined
+            const evaluation = evaluateDefinitionTrigger(definition, observed, {
+              ...(applicability === undefined ? {} : { applicability }),
+              isDuplicate: (key) => sessionSeen.has(key),
+            })
+            const row: TriggerEvaluationRecord = {
+              id: `definition:${definition.id}`,
+              matched: evaluation.matched,
+              reason: evaluation.reason,
+              ...(evaluation.path === undefined ? {} : { path: evaluation.path }),
+              ...(evaluation.filter === undefined ? {} : { filter: evaluation.filter }),
+              ...(evaluation.detail === undefined ? {} : { detail: evaluation.detail }),
+            }
+            const createsIntake =
+              definition.id === 'change-intake' && create?.kind === 'create-change'
+            if (!evaluation.matched && evaluation.reason !== 'dedupe') {
               triggerRows.push(row)
               continue
             }
-            const key = obligationDedupeKey(definition.id, definition.trigger, observed)
-            if (key !== undefined) sessionSeen.set(key, journal.time())
-            triggerRows.push({ ...row, reason: 'would-fire' })
-            continue
-          }
-          const repeats = definition.trigger.repeat === true
-          const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, observed)
-          // A concurrent call that already reserved the key must not start a
-          // second run or invoke the intake gate again, unless the trigger
-          // repeats on every matching event.
-          if (!repeats && dedupeKey !== undefined && inFlightTriggers.has(dedupeKey)) {
-            triggerRows.push({
-              ...row,
-              matched: true,
-              reason: 'run-suppressed',
-              detail: 'a matching event is already being evaluated',
-            })
-            if (createsIntake) {
-              concurrentIntakeReason = `an intake evaluation for "${create.name}" is already in progress; no second run was created`
+            if (definition.trigger.mode === 'shadow') {
+              if (!evaluation.matched) {
+                // A duplicate shadow event keeps the dedupe reason instead of
+                // being reported as a fresh would-fire.
+                triggerRows.push(row)
+                continue
+              }
+              const key = obligationDedupeKey(definition.id, definition.trigger, observed)
+              if (key !== undefined) sessionSeen.set(key, journal.time())
+              triggerRows.push({ ...row, reason: 'would-fire' })
+              continue
             }
-            continue
-          }
-          const reserve = !repeats && evaluation.matched && dedupeKey !== undefined
-          if (reserve) inFlightTriggers.add(dedupeKey)
-          try {
-            // An intake call is authorized only after the active trigger
-            // matched (or deduped to an existing intake); a shadow or filtered
-            // trigger never creates a run and must not invoke the intake gate.
-            if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
+            const repeats = definition.trigger.repeat === true
+            const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, observed)
+            // A concurrent call that already reserved the key must not start a
+            // second run or invoke the intake gate again, unless the trigger
+            // repeats on every matching event.
+            if (!repeats && dedupeKey !== undefined && inFlightTriggers.has(dedupeKey)) {
+              triggerRows.push({
+                ...row,
+                matched: true,
+                reason: 'run-suppressed',
+                detail: 'a matching event is already being evaluated',
+              })
+              if (createsIntake) {
+                concurrentIntakeReason = `an intake evaluation for "${create.name}" is already in progress; no second run was created`
+              }
+              continue
+            }
+            const reserve = !repeats && evaluation.matched && dedupeKey !== undefined
+            if (reserve) inFlightTriggers.add(dedupeKey)
+            try {
+              // An intake call is authorized only after the active trigger
+              // matched (or deduped to an existing intake); a shadow or filtered
+              // trigger never creates a run and must not invoke the intake gate.
+              if (createsIntake && (evaluation.matched || evaluation.reason === 'dedupe')) {
+                if (auth === undefined) {
+                  triggerRows.push({
+                    ...row,
+                    matched: true,
+                    reason: 'run-suppressed',
+                    detail: 'the host key is unavailable; no run was created',
+                  })
+                  keyUnavailableReason = `workflows: the host key is unavailable, so the intake run for "${create.name}" was not created; the call was refused`
+                  continue
+                }
+                let decision: Awaited<ReturnType<typeof evaluateIntakeGate>>
+                try {
+                  decision = await evaluateIntakeGate({
+                    name: create.name,
+                    session: sessionId,
+                    workspace,
+                    callId: String(exec.callId),
+                    definition,
+                    runs: knownRuns,
+                    receipts: await listReceipts(workspace, auth),
+                    ownedCallIds: new Set(ownedCalls.list()),
+                    changeExists: await changeDirectoryExists(workspace, create.name),
+                    startRun: async (entry, name) => {
+                      if (
+                        atRunLimit(workspace, knownRuns) ||
+                        openRunCount(knownRuns) + startedThisEvent >= maxRuns
+                      ) {
+                        throw new Error('workflows-run-limit')
+                      }
+                      const run = await startRunFor(
+                        workspace,
+                        sessionId,
+                        auth,
+                        entry,
+                        { name },
+                        dedupeKey,
+                      )
+                      startedThisEvent += 1
+                      return { runId: run.id }
+                    },
+                    resumeRun: async (runId) => {
+                      const resumed = await resumeRun(workspace, runId, auth)
+                      await writeRun(workspace, resumed.run, auth)
+                      return { stepId: resumed.stepId }
+                    },
+                  })
+                } catch (error) {
+                  if (error instanceof Error && error.message === 'workflows-run-limit') {
+                    triggerRows.push({
+                      ...row,
+                      matched: true,
+                      reason: 'run-suppressed',
+                      detail: 'the run limit is reached; no intake run was created',
+                    })
+                    capacityReason = `workflows: the run limit (${String(maxRuns)}) is reached, so the intake run for "${create.name}" was not created; the call was refused`
+                    continue
+                  }
+                  throw error
+                }
+                intakeDecision = decision
+                if (decision.kind === 'deny' && decision.action === 'started') {
+                  if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
+                  triggerRows.push({
+                    ...row,
+                    matched: true,
+                    reason: 'run-created',
+                    ...(decision.runId === undefined ? {} : { runId: decision.runId }),
+                    detail: decision.reason,
+                  })
+                } else if (decision.kind === 'deny') {
+                  triggerRows.push({
+                    ...row,
+                    matched: true,
+                    reason: 'run-suppressed',
+                    ...(decision.runId === undefined ? {} : { runId: decision.runId }),
+                    detail: decision.reason,
+                  })
+                } else {
+                  triggerRows.push({
+                    ...row,
+                    matched: true,
+                    reason: 'run-suppressed',
+                    detail: decision.reason,
+                  })
+                }
+                continue
+              }
+              if (!evaluation.matched) {
+                triggerRows.push(row)
+                continue
+              }
+              // A non-intake active definition starts its own observational run.
+              if (auth === undefined) {
+                triggerRows.push({
+                  ...row,
+                  matched: true,
+                  reason: 'run-suppressed',
+                  detail: 'the host key is unavailable; no run was created',
+                })
+                continue
+              }
               if (
                 atRunLimit(workspace, knownRuns) ||
                 openRunCount(knownRuns) + startedThisEvent >= maxRuns
@@ -1355,141 +1485,51 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   ...row,
                   matched: true,
                   reason: 'run-suppressed',
-                  detail: 'the run limit is reached; no intake run was created',
+                  detail: 'the run limit is reached; no run was created',
                 })
-                capacityReason = `workflows: the run limit (${String(maxRuns)}) is reached, so the intake run for "${create.name}" was not created; the call was refused`
                 continue
               }
-              if (auth === undefined) {
-                triggerRows.push({
-                  ...row,
-                  matched: true,
-                  reason: 'run-suppressed',
-                  detail: 'the host key is unavailable; no run was created',
-                })
-                keyUnavailableReason = `workflows: the host key is unavailable, so the intake run for "${create.name}" was not created; the call was refused`
-                continue
-              }
-              const decision = await evaluateIntakeGate({
-                name: create.name,
-                session: sessionId,
-                workspace,
-                callId: String(exec.callId),
-                definition,
-                runs: knownRuns,
-                receipts: await listReceipts(workspace, auth),
-                ownedCallIds: new Set(ownedCalls.list()),
-                changeExists: await changeDirectoryExists(workspace, create.name),
-                startRun: async (entry, name) => {
-                  const run = await startRunFor(
-                    workspace,
-                    sessionId,
-                    auth,
-                    entry,
-                    { name },
-                    dedupeKey,
-                  )
-                  return { runId: run.id }
-                },
-                resumeRun: async (runId) => {
-                  const resumed = await resumeRun(workspace, runId, auth)
-                  await writeRun(workspace, resumed.run, auth)
-                  return { stepId: resumed.stepId }
-                },
-              })
-              intakeDecision = decision
-              if (decision.kind === 'deny' && decision.action === 'started') {
+              try {
+                const run = await startRunFor(workspace, sessionId, auth, definition, {}, dedupeKey)
                 startedThisEvent += 1
-                if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
-                triggerRows.push({
-                  ...row,
-                  matched: true,
-                  reason: 'run-created',
-                  ...(decision.runId === undefined ? {} : { runId: decision.runId }),
-                  detail: decision.reason,
-                })
-              } else if (decision.kind === 'deny') {
+                if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
+                triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
+              } catch (error) {
+                if (reserve && dedupeKey !== undefined) sessionSeen.delete(dedupeKey)
                 triggerRows.push({
                   ...row,
                   matched: true,
                   reason: 'run-suppressed',
-                  ...(decision.runId === undefined ? {} : { runId: decision.runId }),
-                  detail: decision.reason,
-                })
-              } else {
-                triggerRows.push({
-                  ...row,
-                  matched: true,
-                  reason: 'run-suppressed',
-                  detail: decision.reason,
+                  detail: boundedError(error),
                 })
               }
-              continue
+            } finally {
+              if (reserve && dedupeKey !== undefined) inFlightTriggers.delete(dedupeKey)
             }
-            if (!evaluation.matched) {
-              triggerRows.push(row)
-              continue
-            }
-            // A non-intake active definition starts its own observational run.
-            if (auth === undefined) {
-              triggerRows.push({
-                ...row,
-                matched: true,
-                reason: 'run-suppressed',
-                detail: 'the host key is unavailable; no run was created',
-              })
-              continue
-            }
-            if (
-              atRunLimit(workspace, knownRuns) ||
-              openRunCount(knownRuns) + startedThisEvent >= maxRuns
-            ) {
-              triggerRows.push({
-                ...row,
-                matched: true,
-                reason: 'run-suppressed',
-                detail: 'the run limit is reached; no run was created',
-              })
-              continue
-            }
-            try {
-              const run = await startRunFor(workspace, sessionId, auth, definition, {}, dedupeKey)
-              startedThisEvent += 1
-              if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
-              triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
-            } catch (error) {
-              if (reserve && dedupeKey !== undefined) sessionSeen.delete(dedupeKey)
-              triggerRows.push({
-                ...row,
-                matched: true,
-                reason: 'run-suppressed',
-                detail: boundedError(error),
-              })
-            }
-          } finally {
-            if (reserve && dedupeKey !== undefined) inFlightTriggers.delete(dedupeKey)
           }
-        }
-        await recordEngineEvaluation(
-          workspace,
-          sessionId,
-          turns.get(sessionId),
-          'tools/pre-execute',
-          exec.name,
-          `pre-execute ${exec.name}`,
-          triggerRows,
-        )
-        if (intakeDecision?.kind === 'deny') {
-          return { kind: 'deny', reason: intakeDecision.reason }
-        }
-        if (concurrentIntakeReason !== undefined) {
-          return { kind: 'deny', reason: concurrentIntakeReason }
-        }
-        if (keyUnavailableReason !== undefined) {
-          return { kind: 'deny', reason: keyUnavailableReason }
-        }
-        if (capacityReason !== undefined) {
-          return { kind: 'deny', reason: capacityReason }
+          await recordEngineEvaluation(
+            workspace,
+            sessionId,
+            turns.get(sessionId),
+            'tools/pre-execute',
+            exec.name,
+            `pre-execute ${exec.name}`,
+            triggerRows,
+          )
+          if (intakeDecision?.kind === 'deny') {
+            return { kind: 'deny', reason: intakeDecision.reason }
+          }
+          if (concurrentIntakeReason !== undefined) {
+            return { kind: 'deny', reason: concurrentIntakeReason }
+          }
+          if (keyUnavailableReason !== undefined) {
+            return { kind: 'deny', reason: keyUnavailableReason }
+          }
+          if (capacityReason !== undefined) {
+            return { kind: 'deny', reason: capacityReason }
+          }
+        } finally {
+          releaseAdmission()
         }
         if (command !== undefined) {
           const archive = parseArchiveCommand(command)
