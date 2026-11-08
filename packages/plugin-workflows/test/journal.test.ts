@@ -370,9 +370,13 @@ describe('workflow event recorder', () => {
       stopReason: 'completed',
     })
 
-    await waitFor(
-      async () => (await journal.read(workspace, 'child-b', 0, 50)).records.length === 3,
-    )
+    await waitFor(async () => {
+      const child = await journal.read(workspace, 'child-b', 0, 50)
+      const parent = await journal.read(workspace, 'session-1', 0, 50)
+      return (
+        child.records.length === 3 && parent.records.some((record) => record.subject === 'child-b')
+      )
+    })
     const parent = await journal.read(workspace, 'session-1', 0, 50)
     const nested = await journal.read(workspace, 'child-b', 0, 50)
     // Only the immediate parent records the grandchild, once.

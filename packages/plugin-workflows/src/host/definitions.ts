@@ -41,6 +41,17 @@ export type TriggerMode = (typeof TRIGGER_MODES)[number]
 export const DEDUPE_POLICIES = ['none', 'turn', 'path+content-hash', 'callId', 'name'] as const
 export type DedupePolicy = (typeof DEDUPE_POLICIES)[number]
 
+/** Which dedupe identities each event kind can actually provide. */
+export const DEDUPE_BY_TRIGGER: Record<DefinitionTriggerKind, readonly DedupePolicy[]> = {
+  'turn.stopping': ['none', 'turn'],
+  'tool.pre-execute': ['none', 'turn', 'callId', 'name'],
+  'tool.result': ['none', 'turn', 'callId'],
+  'fs.change': ['none', 'turn', 'path+content-hash'],
+  'subagent.end': ['none', 'turn'],
+  'review.record': ['none', 'turn', 'path+content-hash'],
+  intent: ['none', 'turn'],
+}
+
 /** The one applicability decision a definition may declare for a trigger. */
 export const APPLICABILITY_KINDS = ['checkpoint-required'] as const
 export type ApplicabilityKind = (typeof APPLICABILITY_KINDS)[number]
@@ -382,6 +393,11 @@ function trigger(raw: unknown, definition: string): DefinitionTrigger {
   const kind = isOneOf(raw.kind, DEFINITION_TRIGGER_KINDS, definition, 'trigger.kind')
   const mode = isOneOf(raw.mode, TRIGGER_MODES, definition, 'trigger.mode')
   const dedupe = isOneOf(raw.dedupe, DEDUPE_POLICIES, definition, 'trigger.dedupe')
+  if (!DEDUPE_BY_TRIGGER[kind].includes(dedupe)) {
+    throw new Error(
+      `definition "${definition}": trigger.dedupe "${dedupe}" is not available for trigger kind "${kind}"`,
+    )
+  }
   const repeat = optionalBoolean(raw.repeat, definition, 'trigger.repeat')
   const applicability =
     raw.applicability === undefined

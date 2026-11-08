@@ -473,3 +473,24 @@ it('resolves the shipped intake against the shipped strict spec-review rule', ()
   })
   expect(byId.get('requirements')?.ownership).toBe('own')
 })
+
+it('refuses a dedupe identity the event kind cannot provide', () => {
+  const subagent = valid()
+  firstStep(subagent).evidence = { kind: 'file', path: 'out.md' }
+  const subagentTrigger = subagent.trigger as Record<string, unknown>
+  subagentTrigger.kind = 'subagent.end'
+  subagentTrigger.match = {}
+  subagentTrigger.dedupe = 'callId'
+  expect(() => validateDefinition(subagent)).toThrow(
+    /trigger\.dedupe "callId" is not available for trigger kind "subagent\.end"/u,
+  )
+  const change = valid()
+  firstStep(change).evidence = { kind: 'file', path: 'out.md' }
+  const changeTrigger = change.trigger as Record<string, unknown>
+  changeTrigger.kind = 'fs.change'
+  changeTrigger.match = {}
+  changeTrigger.dedupe = 'name'
+  expect(() => validateDefinition(change)).toThrow(
+    /trigger\.dedupe "name" is not available for trigger kind "fs\.change"/u,
+  )
+})

@@ -282,11 +282,14 @@ export function obligationDedupeKey(
     case 'turn':
       return `${definition}\u0000turn\u0000${session}\u0000${String(event.turn ?? -1)}`
     case 'path+content-hash':
-      return `${definition}\u0000path\u0000${session}\u0000${event.path ?? event.subject}\u0000${event.hash ?? ''}`
+      if (event.path === undefined) return undefined
+      return `${definition}\u0000path\u0000${session}\u0000${event.path}\u0000${event.hash ?? 'deleted'}`
     case 'callId':
-      return `${definition}\u0000call\u0000${session}\u0000${event.callId ?? ''}`
+      if (event.callId === undefined) return undefined
+      return `${definition}\u0000call\u0000${session}\u0000${event.callId}`
     case 'name':
-      return `${definition}\u0000name\u0000${session}\u0000${event.name ?? ''}`
+      if (event.name === undefined) return undefined
+      return `${definition}\u0000name\u0000${session}\u0000${event.name}`
   }
 }
 

@@ -485,3 +485,34 @@ it('matches a Windows workspace path after separator normalization', () => {
   })
   expect(mismatch).toMatchObject({ matched: false, reason: 'filter-mismatch' })
 })
+
+it('does not collapse a missing dedupe identity onto an empty value', () => {
+  const named = obligation('missing-name', {
+    kind: 'tool.pre-execute',
+    match: { tool: 'read' },
+    mode: 'shadow',
+    dedupe: 'name',
+  })
+  expect(
+    obligationDedupeKey(named.id, named.trigger, {
+      kind: 'tool.pre-execute',
+      subject: 'read',
+      tool: 'read',
+      session: 'session-1',
+    }),
+  ).toBeUndefined()
+  const called = obligation('missing-call', {
+    kind: 'tool.pre-execute',
+    match: { tool: 'read' },
+    mode: 'shadow',
+    dedupe: 'callId',
+  })
+  expect(
+    obligationDedupeKey(called.id, called.trigger, {
+      kind: 'tool.pre-execute',
+      subject: 'read',
+      tool: 'read',
+      session: 'session-1',
+    }),
+  ).toBeUndefined()
+})
