@@ -272,9 +272,6 @@ export function validateJsonLogic(rule: unknown, depth = 0): void {
   switch (operator) {
     case 'var':
       expect(1, 2)
-      if (typeof args[0] !== 'string' && typeof args[0] !== 'number') {
-        throw new Error('invalid JSONLogic: var needs a path')
-      }
       break
     case '==':
     case '!=':
