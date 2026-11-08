@@ -49,6 +49,7 @@ import {
   storedRuns,
   type WorkflowRun,
   writeRun,
+  writeRunSync,
 } from './runs.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
@@ -437,7 +438,7 @@ export function apply(ctx: Context): void {
     await loadDefinitions(workspace)
     return [...(definitionsByWorkspace.get(workspace) ?? [])]
   }
-  /** Start one run for an active trigger; the writer settles in the background. */
+  /** Start one run for an active trigger; persistence happens before success. */
   const startDefinitionRun = (
     workspace: string,
     definition: Definition,
@@ -461,9 +462,7 @@ export function apply(ctx: Context): void {
         steps: definition.steps.map((step) => step.id),
         now: journal.time(),
       })
-      void writeRun(workspace, run, auth).catch((error: unknown) => {
-        healthFor(workspace).recordError(error)
-      })
+      writeRunSync(workspace, run, auth)
       return { ok: true, runId: run.id }
     } catch (error) {
       return { ok: false, reason: runFailure(error) }
@@ -530,7 +529,7 @@ export function apply(ctx: Context): void {
     return fresh
   }
   /** Record one engine-only evaluation in the same journal the recorder writes. */
-  const recordEngineEvaluation = (
+  const recordEngineEvaluation = async (
     workspace: string,
     session: string,
     turn: number | undefined,
@@ -538,7 +537,7 @@ export function apply(ctx: Context): void {
     subject: string,
     summary: string,
     rows: readonly TriggerEvaluationRecord[],
-  ): void => {
+  ): Promise<void> => {
     const { record: bounded } = journal.record({
       at: journal.time(),
       session,
@@ -552,11 +551,11 @@ export function apply(ctx: Context): void {
     })
     healthFor(workspace).markEvent(bounded.at)
     sessionEventAt.set(session, bounded.at)
-    void journal.append(workspace, bounded).then((result) => {
-      if (result.ok) return
+    const result = await journal.append(workspace, bounded)
+    if (!result.ok) {
       healthFor(workspace).setJournalWritable(false)
       healthFor(workspace).recordError(result.error)
-    })
+    }
   }
 
   const record = (workspace: string, input: JournalInput, event: ObservedEvent): void => {
@@ -998,6 +997,7 @@ export function apply(ctx: Context): void {
           tool: exec.name,
           workspace,
           session: sessionId,
+          ...(exec.callId === undefined ? {} : { callId: String(exec.callId) }),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(create?.kind === 'create-change'
             ? { command: 'openspec new change <name>', name: create.name }
@@ -1039,6 +1039,12 @@ export function apply(ctx: Context): void {
             continue
           }
           if (definition.trigger.mode === 'shadow') {
+            if (!evaluation.matched) {
+              // A duplicate shadow event keeps the dedupe reason instead of
+              // being reported as a fresh would-fire.
+              triggerRows.push(row)
+              continue
+            }
             const key = obligationDedupeKey(definition.id, definition.trigger, observed)
             if (key !== undefined) sessionSeen.set(key, journal.time())
             triggerRows.push({ ...row, reason: 'would-fire' })
@@ -1117,7 +1123,7 @@ export function apply(ctx: Context): void {
             })
           }
         }
-        recordEngineEvaluation(
+        await recordEngineEvaluation(
           workspace,
           sessionId,
           turns.get(sessionId),

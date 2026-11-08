@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import {
   mkdir,
   readdir,
@@ -145,6 +146,28 @@ function errorMessage(error: unknown): string {
 }
 
 /** Persist one run atomically and sign its authoritative state. */
+export function writeRunSync(workspace: string, run: WorkflowRun, auth: HostAuth): void {
+  const directory = runsDirectory(workspace)
+  mkdirSync(directory, { recursive: true })
+  const stored: StoredRun = {
+    ...run,
+    signature: auth.sign(RUN_DOMAIN, run),
+  }
+  const target = runPath(workspace, run.id)
+  const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
+  writeFileSync(temporary, `${JSON.stringify(stored, null, 2)}\n`, 'utf8')
+  try {
+    renameSync(temporary, target)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // The temporary file is best-effort cleanup.
+    }
+    throw error
+  }
+}
+
 export async function writeRun(workspace: string, run: WorkflowRun, auth: HostAuth): Promise<void> {
   const directory = runsDirectory(workspace)
   await mkdir(directory, { recursive: true })

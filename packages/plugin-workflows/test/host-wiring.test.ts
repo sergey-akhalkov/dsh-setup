@@ -347,6 +347,22 @@ describe('pre-execute trigger gates', () => {
     const rows = await journalRows(workspace)
     expect(nextCalled).toBe(true)
     expect(intakeRows(rows).some((row) => row.reason === 'would-fire')).toBe(true)
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'call-shadow-2',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change shadow-auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await waitFor(async () =>
+      intakeRows(await journalRows(workspace)).some((row) => row.reason === 'dedupe'),
+    )
+    expect(intakeRows(await journalRows(workspace)).some((row) => row.reason === 'dedupe')).toBe(
+      true,
+    )
     expect(intakeRows(rows).some((row) => row.reason === 'run-created')).toBe(false)
   })
 
@@ -427,14 +443,16 @@ describe('pre-execute trigger gates', () => {
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     let nextCalled = false
-    await host.emit(
-      'tools/pre-execute',
-      { agent: host.agent, callId: 'call-read', name: 'read', arguments: { path: 'a.md' } },
-      async () => {
-        nextCalled = true
-        return { kind: 'continue' }
-      },
-    )
+    for (const callId of ['call-read-1', 'call-read-2', 'call-read-2']) {
+      await host.emit(
+        'tools/pre-execute',
+        { agent: host.agent, callId, name: 'read', arguments: { path: 'a.md' } },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )
+    }
     await waitFor(async () =>
       (await journalRows(workspace)).some((entry) =>
         Array.isArray(entry.triggers)
@@ -445,5 +463,92 @@ describe('pre-execute trigger gates', () => {
       ),
     )
     expect(nextCalled).toBe(true)
+    const rows = await journalRows(workspace)
+    const runs = rows.flatMap((entry) =>
+      Array.isArray(entry.triggers)
+        ? (entry.triggers as Array<Record<string, unknown>>).filter(
+            (row) => row.id === 'definition:read-watch',
+          )
+        : [],
+    )
+    expect(runs.filter((row) => row.reason === 'run-created')).toHaveLength(2)
+    expect(runs.some((row) => row.reason === 'dedupe')).toBe(true)
+  })
+
+  it('does not consume the dedupe key when the run write fails', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'read-retry',
+      name: 'Read retry',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'callId',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ mkdir, writeFile: write }) => {
+      await write(join(workspace, 'retry.json'), `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
+      await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
+      await write(join(workspace, '.dsh', 'workflows', 'runs'), 'blocked')
+    })
+    await installDefinition(workspace, join(workspace, 'retry.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const emit = async (): Promise<void> => {
+      await host.emit(
+        'tools/pre-execute',
+        { agent: host.agent, callId: 'call-retry', name: 'read', arguments: {} },
+        async () => ({ kind: 'continue' }),
+      )
+    }
+    await emit()
+    await waitFor(async () => (await journalRows(workspace)).length > 0)
+    const first = (await journalRows(workspace)).flatMap((entry) =>
+      Array.isArray(entry.triggers)
+        ? (entry.triggers as Array<Record<string, unknown>>).filter(
+            (row) => row.id === 'definition:read-retry',
+          )
+        : [],
+    )
+    expect(first.some((row) => row.reason === 'run-suppressed')).toBe(true)
+    await import('node:fs/promises').then(async ({ unlink }) => {
+      await unlink(join(workspace, '.dsh', 'workflows', 'runs'))
+    })
+    await emit()
+    await waitFor(async () => {
+      const rows = (await journalRows(workspace)).flatMap((entry) =>
+        Array.isArray(entry.triggers)
+          ? (entry.triggers as Array<Record<string, unknown>>).filter(
+              (row) => row.id === 'definition:read-retry',
+            )
+          : [],
+      )
+      return rows.some((row) => row.reason === 'run-created')
+    })
   })
 })
