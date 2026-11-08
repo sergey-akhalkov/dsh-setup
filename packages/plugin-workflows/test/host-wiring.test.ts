@@ -70,15 +70,28 @@ afterEach(async () => {
 
 type Listener = (...args: unknown[]) => unknown
 
-function fakeHost(workspace: string): {
+function fakeHost(
+  workspace: string,
+  options: { readonly toolExecute?: boolean; readonly userQuestions?: boolean } = {},
+): {
   readonly ctx: Record<string, unknown>
   readonly agent: Record<string, unknown>
   readonly commands: Array<Record<string, unknown>>
   readonly steers: readonly unknown[]
+  readonly toolExecutions: Array<{
+    readonly id: string
+    readonly name: string
+    readonly arguments: Record<string, unknown>
+  }>
   emit(name: string, ...args: unknown[]): Promise<unknown>
 } {
   const listeners = new Map<string, Listener[]>()
   const steers: unknown[] = []
+  const toolExecutions: Array<{
+    id: string
+    name: string
+    arguments: Record<string, unknown>
+  }> = []
   const agent = {
     id: 'session-1',
     session: { id: 'session-1', header: { origin: 'root' as const } },
@@ -89,12 +102,31 @@ function fakeHost(workspace: string): {
     inject: () => {},
   }
   const commands: Array<Record<string, unknown>> = []
-  const tools = {
+  const tools: Record<string, unknown> = {
     get: (name: string) =>
       ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(name)
         ? { name }
         : undefined,
     register: () => () => {},
+  }
+  if (options.toolExecute === true) {
+    tools.execute = async (input: {
+      calls: ReadonlyArray<{ id: string; name: string; arguments: Record<string, unknown> }>
+    }) => {
+      for (const call of input.calls) {
+        toolExecutions.push({ id: call.id, name: call.name, arguments: call.arguments })
+        const command = typeof call.arguments.command === 'string' ? call.arguments.command : ''
+        if (command.startsWith('openspec new change ')) {
+          const name = command.slice('openspec new change '.length)
+          const change = join(workspace, 'openspec', 'changes', name)
+          await mkdir(change, { recursive: true })
+          await writeFile(join(change, '.openspec.yaml'), 'version: 1\n', 'utf8')
+        }
+      }
+      return {
+        results: input.calls.map((call) => ({ callId: call.id, result: { isError: false } })),
+      }
+    }
   }
   const ctx = {
     get(name: string): unknown {
@@ -108,6 +140,13 @@ function fakeHost(workspace: string): {
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
       if (name === 'tools') return tools
+      if (name === 'userQuestions' && options.userQuestions === true) {
+        return {
+          ask: async (request: { questions: Array<{ id: string }> }) => ({
+            answers: request.questions.map((question) => ({ id: question.id, selected: ['yes'] })),
+          }),
+        }
+      }
       if (name === 'commands') {
         return {
           register: (definition: Record<string, unknown>) => {
@@ -134,6 +173,7 @@ function fakeHost(workspace: string): {
     agent,
     commands,
     steers,
+    toolExecutions,
     async emit(name, ...args): Promise<unknown> {
       let result: unknown
       for (const listener of listeners.get(name) ?? []) result = await listener(...args)
@@ -1803,6 +1843,65 @@ describe('deferred step at runtime', () => {
     const reviewed = await runs.readAuthenticatedRun(workspace, 'run-deferred-review', auth)
     expect(reviewed?.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
     await waitFor(async () => host.steers.length === 1)
+  })
+})
+
+describe('intake runtime', () => {
+  it('dispatches create-change through the tool service and completes approval with a receipt', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { toolExecute: true, userQuestions: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-intake-runtime',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    run = runs.settleStep(run, 'spec-review', 'done', {
+      at: 1_100,
+      evidence: {
+        kind: 'record',
+        path: '.dsh/delegation/spec-review/auth/spec.json',
+        digest: 'a'.repeat(64),
+      },
+    })
+    run = runs.requestStep(run, 'create-change', 1_200)
+    await runs.writeRun(workspace, run, auth)
+
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+
+    const completed = await runs.readAuthenticatedRun(workspace, 'run-intake-runtime', auth)
+    expect(completed?.status).toBe('completed')
+    expect(completed?.steps.every((step) => step.state === 'done')).toBe(true)
+    const hostShell = process.platform === 'win32' ? 'pwsh' : 'bash'
+    expect(host.toolExecutions).toHaveLength(1)
+    expect(host.toolExecutions[0]).toMatchObject({
+      name: hostShell,
+      arguments: { command: 'openspec new change auth' },
+    })
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'intake',
+      change: 'auth',
+    })
+    const all = await runs.listAuthenticatedRuns(workspace, auth)
+    expect(all.filter((entry) => entry.definition === 'change-intake')).toHaveLength(1)
   })
 })
 

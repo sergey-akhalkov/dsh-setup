@@ -20,8 +20,17 @@ import {
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
-import { verifyEvidence } from './evidence.js'
-import { adaptUserQuestions, type DshUserQuestions, OwnedCalls } from './executors.js'
+import {
+  type ShellResultObservation,
+  type ToolCallObservation,
+  verifyEvidence,
+} from './evidence.js'
+import {
+  adaptUserQuestions,
+  type DshUserQuestions,
+  OwnedCalls,
+  type ToolRunner,
+} from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
 import {
   authorizationWriteDecision,
@@ -32,6 +41,7 @@ import {
 } from './gates.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
+import { advanceIntake } from './intake.js'
 import {
   Journal,
   type JournalInput,
@@ -591,6 +601,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workers: number
   }
   const turnMetrics = new Map<string, TurnMetrics>()
+  /** Bounded per-session observations the evidence verifier may consume. */
+  const sessionToolCalls = new Map<string, ToolCallObservation[]>()
+  const sessionShellResults = new Map<string, ShellResultObservation[]>()
   /** The session's current main-step owner; a second run waits for it to settle. */
   const mainStepOwners = new Map<string, string>()
   /** The last turn whose user message was classified, one classification per turn. */
@@ -1000,6 +1013,33 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const text = toolResultText(result)
         const summary = toolSummary(exec.name, result.isError, text)
         const bytes = Buffer.byteLength(text, 'utf8')
+        const sessionId = String(session.id)
+        const args =
+          typeof exec.arguments === 'object' && exec.arguments !== null
+            ? (exec.arguments as Record<string, unknown>)
+            : {}
+        const observed = sessionToolCalls.get(sessionId) ?? []
+        observed.push({
+          callId: String(exec.callId),
+          name: exec.name,
+          arguments: args,
+          ok: !result.isError,
+        })
+        if (observed.length > 100) observed.shift()
+        sessionToolCalls.set(sessionId, observed)
+        const command = shellCommandOf(exec)
+        if (command !== undefined) {
+          const results = sessionShellResults.get(sessionId) ?? []
+          results.push({
+            callId: String(exec.callId),
+            command,
+            at: journal.time(),
+            exitCode: result.isError ? 1 : 0,
+            foreground: true,
+          })
+          if (results.length > 50) results.shift()
+          sessionShellResults.set(sessionId, results)
+        }
         void record(
           workspace,
           {
@@ -1228,6 +1268,105 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     } catch {
       return false
     }
+  }
+  /** A host-owned tool dispatch through the registered tool service, if present. */
+  const liveToolRunner = (agent: Agent): ToolRunner | undefined => {
+    const tools = ctx.get('tools') as
+      | {
+          execute?: (input: {
+            calls: ReadonlyArray<{ id: string; name: string; arguments: unknown }>
+            signal: AbortSignal
+            agent: Agent
+          }) => Promise<{
+            results: ReadonlyArray<{ callId: string; result: { isError: boolean } }>
+          }>
+        }
+      | undefined
+    if (typeof tools?.execute !== 'function') return undefined
+    const execute = tools.execute.bind(tools)
+    return {
+      async call(request) {
+        const batch = await execute({
+          calls: [{ id: request.callId, name: request.name, arguments: request.arguments }],
+          signal: AbortSignal.timeout(60_000),
+          agent,
+        })
+        const first = batch.results[0]
+        if (first === undefined || first.result.isError) {
+          return { ok: false, error: `the ${request.name} tool call failed` }
+        }
+        // The host already observed its own dispatch; record it for evidence
+        // verification even if the result event is delivered later.
+        const sessionId = String(agent.session.id)
+        const observed = sessionToolCalls.get(sessionId) ?? []
+        observed.push({
+          callId: request.callId,
+          name: request.name,
+          arguments: { ...request.arguments },
+          ok: true,
+        })
+        if (observed.length > 100) observed.shift()
+        sessionToolCalls.set(sessionId, observed)
+        const command = request.arguments.command
+        if (typeof command === 'string' && (request.name === 'pwsh' || request.name === 'bash')) {
+          const results = sessionShellResults.get(sessionId) ?? []
+          results.push({
+            callId: request.callId,
+            command,
+            at: journal.time(),
+            exitCode: 0,
+            foreground: true,
+          })
+          if (results.length > 50) results.shift()
+          sessionShellResults.set(sessionId, results)
+        }
+        return { ok: true }
+      },
+    }
+  }
+  /** Advance one run through its verified evidence; a deferred step never steers. */
+  const advanceRun = async (
+    workspace: string,
+    run: WorkflowRun,
+    definition: Definition,
+    agent: Agent,
+    auth: HostAuth,
+    installedLegacy: ReadonlySet<string>,
+  ): Promise<WorkflowRun> => {
+    const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked')
+    const sessionId = String(agent.session.id)
+    // The host dispatch records into these live arrays, and the verifier must
+    // read the same arrays it was handed.
+    const toolCalls = sessionToolCalls.get(sessionId) ?? []
+    const shellResults = sessionShellResults.get(sessionId) ?? []
+    sessionToolCalls.set(sessionId, toolCalls)
+    sessionShellResults.set(sessionId, shellResults)
+    const runner = liveToolRunner(agent)
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: run.context,
+      evidenceContext: {
+        workspace,
+        values: run.context,
+        toolCalls,
+        shellResults,
+        ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
+      },
+      owned: ownedCalls,
+      ...(runner === undefined ? {} : { toolRunner: runner }),
+      ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+      readRecord: (step) =>
+        verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
+          workspace,
+          values: run.context,
+        }),
+      installedLegacy,
+      auth,
+      now: journal.time(),
+    })
+    if (result.run !== run) await writeRun(workspace, result.run, auth)
+    return result.run
   }
   const boundedError = (error: unknown): string =>
     (error instanceof Error ? error.message : String(error)).slice(0, 200)
@@ -1714,40 +1853,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }),
   )
 
-  /**
-   * Read the first pending deferred step from its legacy record and persist it.
-   * The turn-close gate then never steers past an unresolved deferred step: the
-   * legacy gate is the only steer while the record is missing.
-   */
-  const settleDeferredPrerequisite = async (
-    workspace: string,
-    run: WorkflowRun,
-    definition: Definition,
-    auth: HostAuth,
-    installedLegacy: ReadonlySet<string>,
-  ): Promise<WorkflowRun> => {
-    const pending = definition.steps.find((step) => {
-      const state = run.steps.find((entry) => entry.id === step.id)?.state
-      return state === 'open' || state === 'blocked'
-    })
-    if (pending === undefined) return run
-    const resolved = resolveOwnership(definition, installedLegacy)
-    if (resolved.steps.find((step) => step.id === pending.id)?.ownership !== 'defer') return run
-    const deferred = await runDeferredStep({
-      run,
-      definition,
-      stepId: pending.id,
-      installedLegacy,
-      readRecord: (step) =>
-        verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
-          workspace,
-          values: run.context,
-        }),
-    })
-    if (deferred.run !== run) await writeRun(workspace, deferred.run, auth)
-    return deferred.run
-  }
-
   // Turn close: steer the first owned open blockTurnClose step, bounded.
   listenEngine(() =>
     ctx.on('agent/turn-stopping', async (payload) => {
@@ -1778,10 +1883,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         for (const run of ordered) {
           const definition = definitions.find((entry) => entry.id === run.definition)
           if (definition === undefined) continue
-          const current = await settleDeferredPrerequisite(
+          const current = await advanceRun(
             workspace,
             run,
             definition,
+            payload.agent,
             auth,
             installedLegacy,
           )
