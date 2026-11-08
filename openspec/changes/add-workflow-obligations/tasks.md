@@ -28,7 +28,7 @@ The engine spans one Host package plus its Client view; lanes 1-4 own disjoint H
 
 ## 5. Executors (lane 2, owns `src/host/executors.ts`, `src/host/steer.ts`, `test/executors.test.ts`)
 
-- [ ] 5.1 Implement `main`: steer the root agent with the step prompt, evidence contract, the workspace-relative path the verifier checks, and ids; re-request on a later turn stop only, bounded; never mark done from text. Verify the steer text, that the shown path equals the verifier path, the repeat bound, and a text claim staying open.
+- [x] 5.1 Implement `main`: steer the root agent with the step prompt, evidence contract, the workspace-relative path the verifier checks, and ids; re-request on a later turn stop only, bounded; never mark done from text. Verify the steer text, that the shown path equals the verifier path, the repeat bound, and a text claim staying open.
 - [ ] 5.2 Implement `subagent`: start one provider with a prompt and JSON schema, record the child id and validated result, fail on non-completion or schema mismatch, and never fall back to `main`. Verify success, invalid result, and a child failure.
 - [ ] 5.3 Implement `tool`: allowlisted tool call or fixed shell command with validated `{name}` interpolation; register the generated call id as owned before dispatch. Verify an allowed call, a non-allowlisted tool, an invalid name, and the owned-call registration.
 - [ ] 5.4 Implement `branch`, `loop`, and `human`: JSONLogic over the run context, a bounded loop with a stop predicate, and a user question with a declared accepted answer and timeout action. Verify both branch paths, a loop stop, the cap, invalid JSONLogic, an accepted answer, a rejected non-affirmative answer, and a timeout.
