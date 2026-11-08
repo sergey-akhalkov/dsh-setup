@@ -619,7 +619,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
   }
 
-  const record = async (
+  const recordNow = async (
     workspace: string,
     input: JournalInput,
     event: ObservedEvent,
@@ -695,6 +695,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       console.error(`workflows: the session journal could not be written (${result.error})`)
     })
     watchChanges(workspace)
+  }
+
+  /** Preserve observation order per session while definitions and keys load. */
+  const recordQueues = new Map<string, Promise<void>>()
+  const record = (workspace: string, input: JournalInput, event: ObservedEvent): Promise<void> => {
+    const previous = recordQueues.get(input.session) ?? Promise.resolve()
+    const next = previous
+      .then(async () => recordNow(workspace, input, event))
+      .catch((error: unknown) => publishListenerError(workspace, error))
+    recordQueues.set(input.session, next)
+    return next
   }
 
   // One change-tree watcher per workspace; it starts on the workspace's first
