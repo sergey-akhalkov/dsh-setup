@@ -50,6 +50,8 @@ export interface RunEvidence {
   readonly callId?: string
   readonly bytes?: number
   readonly at?: number
+  /** The schema-validated child result a subagent step settled on. */
+  readonly result?: unknown
 }
 
 export interface RunStep {

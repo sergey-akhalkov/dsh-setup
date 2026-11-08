@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import type { Definition, Step, SubagentSpec } from './definitions.js'
+import {
+  type Definition,
+  resultSchemaShapeError,
+  type Step,
+  type SubagentSpec,
+} from './definitions.js'
 import { type EvidenceCheck, type EvidenceContext, resolveEvidenceText } from './evidence.js'
 import { requestStep, setRunStatus, settleStep, type WorkflowRun } from './runs.js'
 import { renderMainSteer, type SteerTarget } from './steer.js'
@@ -630,12 +635,16 @@ export function validateResultSchema(
     const allowed = Array.isArray(expected) ? expected.map(String) : [String(expected)]
     const actual = typeOf(value)
     const match = allowed.some(
-      (entry) => entry === actual || (entry === 'integer' && actual === 'number'),
+      (entry) =>
+        entry === actual || (entry === 'integer' && actual === 'number' && Number.isInteger(value)),
     )
     if (!match) return `expected ${allowed.join(' or ')}, got ${actual}`
   }
   if (Array.isArray(schema.enum) && !schema.enum.some((entry) => entry === value)) {
     return `the value is not one of: ${schema.enum.map(String).join(', ')}`
+  }
+  if (Object.hasOwn(schema, 'const') && schema.const !== value) {
+    return 'the value does not match the declared const'
   }
   if (Array.isArray(schema.required) && typeOf(value) === 'object') {
     const record = value as Record<string, unknown>
@@ -644,12 +653,14 @@ export function validateResultSchema(
         return `missing required field "${String(key)}"`
     }
   }
-  if (schema.properties !== undefined && typeOf(value) === 'object') {
-    if (typeof schema.properties !== 'object' || schema.properties === null) {
-      return 'the schema properties are not an object'
-    }
+  if (typeOf(value) === 'object') {
     const record = value as Record<string, unknown>
-    const properties = schema.properties as Record<string, unknown>
+    const properties =
+      schema.properties !== undefined &&
+      typeof schema.properties === 'object' &&
+      schema.properties !== null
+        ? (schema.properties as Record<string, unknown>)
+        : {}
     for (const [key, child] of Object.entries(properties)) {
       if (!(key in record) || typeof child !== 'object' || child === null) continue
       const error = validateResultSchema(child as ResultSchema, record[key], depth + 1)
@@ -680,11 +691,22 @@ export function validateResultSchema(
  */
 export async function runSubagentStep(input: SubagentStepInput): Promise<WorkflowRun> {
   const spec: SubagentSpec | undefined = input.step.subagent
-  if (spec === undefined) {
+  if (spec === undefined || spec.schema === undefined) {
     return setRunStatus(
       settleStep(input.run, input.step.id, 'failed', {
         at: input.now,
-        reason: 'the subagent step has no provider',
+        reason: 'the subagent step has no provider or result schema',
+      }),
+      'failed',
+      input.now,
+    )
+  }
+  const shapeError = resultSchemaShapeError(spec.schema)
+  if (shapeError !== undefined) {
+    return setRunStatus(
+      settleStep(input.run, input.step.id, 'failed', {
+        at: input.now,
+        reason: `the result schema is unsupported: ${shapeError}`,
       }),
       'failed',
       input.now,
@@ -748,6 +770,7 @@ export async function runSubagentStep(input: SubagentStepInput): Promise<Workflo
       kind: 'subagent',
       callId: result.childId,
       detail: 'schema-validated child result',
+      result: result.result,
     },
   })
   return settled

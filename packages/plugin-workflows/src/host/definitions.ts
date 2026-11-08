@@ -195,7 +195,8 @@ export interface SubagentSpec {
   readonly provider: string
   readonly model?: string
   readonly reasoningEffort?: string
-  readonly schema?: Readonly<Record<string, unknown>>
+  /** Required closed result schema; a child result that does not match fails the step. */
+  readonly schema: Readonly<Record<string, unknown>>
 }
 
 export interface HumanSpec {
@@ -601,12 +602,83 @@ function toolSpec(raw: unknown, definition: string, field: string): ToolSpec {
   }
 }
 
+const RESULT_SCHEMA_KEYS = new Set([
+  'type',
+  'properties',
+  'required',
+  'additionalProperties',
+  'items',
+  'enum',
+  'const',
+])
+const RESULT_SCHEMA_TYPES = new Set([
+  'null',
+  'boolean',
+  'object',
+  'array',
+  'number',
+  'integer',
+  'string',
+])
+
+/** The closed JSON Schema subset a subagent result may use; unsupported keywords fail the load. */
+export function resultSchemaShapeError(
+  schema: Readonly<Record<string, unknown>>,
+  depth = 0,
+): string | undefined {
+  if (depth > 8) return 'the result schema nests too deeply'
+  for (const key of Object.keys(schema)) {
+    if (!RESULT_SCHEMA_KEYS.has(key)) return `unsupported constraint "${key}"`
+  }
+  if (schema.type !== undefined) {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type]
+    if (
+      types.length === 0 ||
+      types.some((entry) => typeof entry !== 'string' || !RESULT_SCHEMA_TYPES.has(entry))
+    ) {
+      return 'field "type" must name a supported JSON type'
+    }
+  }
+  if (schema.enum !== undefined && (!Array.isArray(schema.enum) || schema.enum.length === 0)) {
+    return 'field "enum" must be a non-empty list'
+  }
+  if (
+    schema.required !== undefined &&
+    (!Array.isArray(schema.required) || schema.required.some((entry) => typeof entry !== 'string'))
+  ) {
+    return 'field "required" must be a list of field names'
+  }
+  if (
+    schema.additionalProperties !== undefined &&
+    typeof schema.additionalProperties !== 'boolean'
+  ) {
+    return 'field "additionalProperties" must be a boolean'
+  }
+  if (schema.properties !== undefined) {
+    if (!isRecord(schema.properties)) return 'field "properties" must be an object'
+    for (const [key, child] of Object.entries(schema.properties)) {
+      if (!isRecord(child)) return `properties.${key} must be a schema object`
+      const error = resultSchemaShapeError(child, depth + 1)
+      if (error !== undefined) return `properties.${key}: ${error}`
+    }
+  }
+  if (schema.items !== undefined) {
+    if (!isRecord(schema.items)) return 'field "items" must be a schema object'
+    const error = resultSchemaShapeError(schema.items, depth + 1)
+    if (error !== undefined) return `items: ${error}`
+  }
+  return undefined
+}
+
 function subagentSpec(raw: unknown, definition: string, field: string): SubagentSpec {
   if (!isRecord(raw)) fail(definition, field, 'must be an object')
   assertKnown(raw, SUBAGENT_KEYS, definition, field)
-  if (raw.schema !== undefined && !isRecord(raw.schema)) {
-    fail(definition, `${field}.schema`, 'must be a JSON schema object')
+  const schema = raw.schema
+  if (!isRecord(schema)) {
+    fail(definition, `${field}.schema`, 'is required and must be a JSON schema object')
   }
+  const shapeError = resultSchemaShapeError(schema)
+  if (shapeError !== undefined) fail(definition, `${field}.schema`, shapeError)
   return {
     provider: nonEmptyString(raw.provider, definition, `${field}.provider`),
     ...(raw.model === undefined
@@ -621,7 +693,7 @@ function subagentSpec(raw: unknown, definition: string, field: string): Subagent
             `${field}.reasoningEffort`,
           ),
         }),
-    ...(raw.schema === undefined ? {} : { schema: raw.schema }),
+    schema,
   }
 }
 

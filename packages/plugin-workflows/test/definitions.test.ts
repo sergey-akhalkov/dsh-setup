@@ -508,3 +508,21 @@ it('rejects a main evidence contract too large for the bounded steer', () => {
   }
   expect(() => validateDefinition(raw)).toThrow(/too long to fit the bounded main-step steer/u)
 })
+
+it('requires a closed, supported result schema for a subagent step', () => {
+  const withoutSchema = valid()
+  const steps = withoutSchema.steps as Array<Record<string, unknown>>
+  const step = steps[0] as Record<string, unknown>
+  step.executor = 'subagent'
+  step.subagent = { provider: 'spawn' }
+  delete step.evidence
+  expect(() => validateDefinition(withoutSchema)).toThrow(/schema.*required/u)
+
+  const unsupported = valid()
+  const unsupportedSteps = unsupported.steps as Array<Record<string, unknown>>
+  const unsupportedStep = unsupportedSteps[0] as Record<string, unknown>
+  unsupportedStep.executor = 'subagent'
+  unsupportedStep.subagent = { provider: 'spawn', schema: { type: 'string', pattern: 'x' } }
+  delete unsupportedStep.evidence
+  expect(() => validateDefinition(unsupported)).toThrow(/unsupported constraint/u)
+})

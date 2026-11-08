@@ -14,6 +14,7 @@ import {
   type SubagentRunResult,
   settleMainStep,
   type ToolRunner,
+  validateResultSchema,
 } from '../src/host/executors.ts'
 import { createRun, type WorkflowRun } from '../src/host/runs.ts'
 import type { SteerTarget } from '../src/host/steer.ts'
@@ -246,7 +247,7 @@ describe('subagent executor', () => {
     expect(runner.requests[0]?.schema).toBeDefined()
     expect(run.steps[0]).toMatchObject({
       state: 'done',
-      evidence: { kind: 'subagent', callId: 'child-1' },
+      evidence: { kind: 'subagent', callId: 'child-1', result: { verdict: 'PASS' } },
     })
   })
 
@@ -643,4 +644,30 @@ describe('human executor', () => {
     expect(timedOut.status).toBe('cancelled')
     expect(timedOut.steps[0]?.reason).toContain('timed out')
   })
+})
+
+it('enforces integer, const, and bare additionalProperties schema constraints', () => {
+  expect(validateResultSchema({ type: 'integer' }, 1.5)).toBeDefined()
+  expect(
+    validateResultSchema({ type: 'object', additionalProperties: false }, { extra: true }),
+  ).toBeDefined()
+  expect(validateResultSchema({ type: 'string', const: 'PASS' }, 'FAIL')).toBeDefined()
+})
+
+it('fails before dispatch when a subagent step has no schema', async () => {
+  const runner = new FakeRunner({ childId: 'child-x', completed: true, result: {} })
+  const step = {
+    ...(subagentDefinition.steps[0] as (typeof subagentDefinition.steps)[number]),
+    subagent: { provider: 'spawn' },
+  } as never
+  const run = await runSubagentStep({
+    run: subagentRun(),
+    definition: subagentDefinition,
+    step,
+    runner,
+    evidenceContext,
+  })
+  expect(run.steps[0]?.state).toBe('failed')
+  expect(run.steps[0]?.reason).toContain('no provider or result schema')
+  expect(runner.requests).toHaveLength(0)
 })
