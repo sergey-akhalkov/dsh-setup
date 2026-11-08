@@ -75,6 +75,22 @@ describe('intake drafts', () => {
     }
   })
 
+  it('keeps the existing draft when the atomic replacement fails', async () => {
+    const workspace = await tempWorkspace()
+    await writeDraft(workspace, 'auth', 'requirements.md', 'original\n')
+    await expect(
+      writeDraft(workspace, 'auth', 'requirements.md', 'replacement\n', {
+        rename: async () => {
+          throw new Error('rename failed')
+        },
+      }),
+    ).rejects.toThrow(/rename failed/u)
+    expect(await readDraft(workspace, 'auth', 'requirements.md')).toBe('original\n')
+    expect(
+      (await readdir(join(workspace, DRAFTS_ROOT, 'auth'))).filter((name) => name.endsWith('.tmp')),
+    ).toEqual([])
+  })
+
   it('refuses a draft directory that is a link outside the workspace', async () => {
     const workspace = await tempWorkspace()
     const outside = await tempWorkspace()

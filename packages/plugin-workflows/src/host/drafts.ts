@@ -69,12 +69,18 @@ export interface DraftWrite {
   readonly bytes: number
 }
 
+/** A test seam for the atomic replacement. */
+export interface DraftWriteOptions {
+  readonly rename?: typeof rename
+}
+
 /** Write one draft artifact atomically and never create the change directory. */
 export async function writeDraft(
   workspace: string,
   name: string,
   artifact: string,
   content: string,
+  options: DraftWriteOptions = {},
 ): Promise<DraftWrite> {
   const relative = draftPath(name, artifact)
   const { root, directory } = await draftsRoot(workspace)
@@ -103,7 +109,7 @@ export async function writeDraft(
   const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(temporary, content, 'utf8')
   try {
-    await rename(temporary, target)
+    await (options.rename ?? rename)(temporary, target)
   } catch (error) {
     await unlink(temporary).catch(() => undefined)
     throw error
