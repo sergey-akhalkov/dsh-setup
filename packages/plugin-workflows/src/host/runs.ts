@@ -387,6 +387,15 @@ export function setRunStatus(
 }
 
 /** Append a visible violation; a violation is never a pass. Pure. */
+export function resetStepAttempts(run: WorkflowRun, stepId: string): WorkflowRun {
+  return {
+    ...run,
+    steps: run.steps.map((step) =>
+      step.id === stepId ? { ...step, attempts: 0, lastTurn: undefined } : step,
+    ),
+  }
+}
+
 export function addViolation(
   run: WorkflowRun,
   detail: string,

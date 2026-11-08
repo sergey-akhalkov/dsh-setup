@@ -134,13 +134,6 @@ export function requestMainStep(input: MainStepRequest): MainStepResult {
   if (current.state !== 'open' && current.state !== 'blocked') {
     return { steered: false, run: input.run, reason: `the step is already ${current.state}` }
   }
-  if (current.lastTurn === input.turn) {
-    return {
-      steered: false,
-      run: input.run,
-      reason: `step "${input.step.id}" was already steered in turn ${String(input.turn)}`,
-    }
-  }
   const maxAttempts = input.maxAttempts ?? DEFAULT_MAIN_ATTEMPTS
   if ((current.attempts ?? 0) >= maxAttempts) {
     return {

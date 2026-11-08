@@ -109,7 +109,7 @@ describe('main executor', () => {
     expect(agent.messages).toEqual([result.text])
   })
 
-  it('re-requests only on a later turn stop and respects the attempt bound', () => {
+  it('steers on every stop and respects the attempt bound', () => {
     const agent = new FakeAgent()
     const step = definition.steps[0] as (typeof definition.steps)[number]
     let run = freshRun()
@@ -133,28 +133,27 @@ describe('main executor', () => {
       turn: 1,
       maxAttempts: 3,
     })
-    expect(sameTurn.steered).toBe(false)
-    if (!sameTurn.steered) expect(sameTurn.reason).toContain('already steered in turn 1')
-    for (const turn of [2, 3]) {
-      const next = requestMainStep({
-        run,
-        definition,
-        step,
-        agent,
-        evidenceContext,
-        turn,
-        maxAttempts: 3,
-      })
-      expect(next.steered).toBe(true)
-      run = next.run
-    }
+    expect(sameTurn.steered).toBe(true)
+    run = sameTurn.run
+    expect(sameTurn.run.steps[0]?.attempts).toBe(2)
+    const next = requestMainStep({
+      run,
+      definition,
+      step,
+      agent,
+      evidenceContext,
+      turn: 2,
+      maxAttempts: 3,
+    })
+    expect(next.steered).toBe(true)
+    run = next.run
     const bound = requestMainStep({
       run,
       definition,
       step,
       agent,
       evidenceContext,
-      turn: 4,
+      turn: 3,
       maxAttempts: 3,
     })
     expect(bound.steered).toBe(false)

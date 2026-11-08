@@ -6,6 +6,7 @@ import type { WorkflowReceipt } from './receipts.js'
 import {
   addViolation,
   incrementTurnBlocks,
+  resetStepAttempts,
   resetTurnBlocks,
   setRunStatus,
   settleStep,
@@ -86,7 +87,10 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     const blocks = input.run.turnBlocks ?? 0
     if (blocks >= input.maxBlocks) {
       const detail = `turn close was refused ${String(blocks)} time(s) with step "${step.id}" open; the close is allowed once as a VIOLATION, never as a pass`
-      const run = resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at)
+      const run = resetStepAttempts(
+        resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at),
+        step.id,
+      )
       return { kind: 'violation', run, detail }
     }
     const steered = requestMainStep({
@@ -101,22 +105,35 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     })
     const run = incrementTurnBlocks(steered.run, at)
     if (!steered.steered) {
-      return {
-        kind: 'refuse',
-        run,
-        stepId: step.id,
-        text: `step "${step.id}" is still open: ${steered.reason}`,
+      if (steered.reason.includes('request bound')) {
+        const detail = `step "${step.id}" reached its request bound; the close is allowed once as a VIOLATION, never as a pass`
+        const recorded = addViolation(input.run, detail, { step: step.id, at })
+        return {
+          kind: 'violation',
+          run: resetStepAttempts(resetTurnBlocks(recorded, at), step.id),
+          detail,
+        }
       }
+      if (steered.reason.includes('too long')) {
+        return {
+          kind: 'refuse',
+          run: incrementTurnBlocks(run, at),
+          stepId: step.id,
+          text: `step "${step.id}" cannot be steered: ${steered.reason}`,
+        }
+      }
+      return { kind: 'allow', run: input.run, reason: steered.reason }
     }
     return { kind: 'refuse', run, stepId: step.id, text: steered.text }
   } catch (error) {
     input.onError?.(error)
+    const message = `the turn-close gate failed internally and the close is allowed: ${
+      error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)
+    }`
     return {
       kind: 'allow',
-      run: input.run,
-      reason: `the turn-close gate failed internally and the close is allowed: ${
-        error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)
-      }`,
+      run: addViolation(input.run, message, { at }),
+      reason: message,
     }
   }
 }

@@ -245,6 +245,8 @@ describe('turn-close gate', () => {
     })
     expect(outcome).toMatchObject({ kind: 'allow' })
     expect(errors).toHaveLength(1)
+    expect(outcome.run.violations).toHaveLength(1)
+    expect(outcome.run.steps[0]?.state).toBe('open')
   })
 })
 
@@ -716,4 +718,49 @@ it('refuses a contract too large for the resolved steer', () => {
   if (outcome.kind === 'refuse') expect(outcome.text).toMatch(/too long/u)
   expect(agent.messages).toHaveLength(0)
   expect(outcome.run.steps[0]?.requestedAt).toBeUndefined()
+})
+it('steers on every stop in one turn and resets attempts after a violation', () => {
+  const definition = blockingDefinition()
+  const agent = new FakeAgent()
+  let run = runFor(definition)
+  for (const _ of [1, 2]) {
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 1,
+      maxBlocks: 2,
+      installedLegacy: installed,
+      now: 2_000,
+    })
+    expect(outcome.kind).toBe('refuse')
+    run = outcome.run
+  }
+  expect(agent.messages).toHaveLength(2)
+  expect(run.steps[0]?.attempts).toBe(2)
+  const capped = evaluateTurnClose({
+    run,
+    definition,
+    agent,
+    evidenceContext,
+    turn: 1,
+    maxBlocks: 2,
+    installedLegacy: installed,
+    now: 2_100,
+  })
+  expect(capped.kind).toBe('violation')
+  expect(capped.run.steps[0]?.attempts).toBe(0)
+  const nextTurn = evaluateTurnClose({
+    run: capped.run,
+    definition,
+    agent,
+    evidenceContext,
+    turn: 2,
+    maxBlocks: 2,
+    installedLegacy: installed,
+    now: 3_000,
+  })
+  expect(nextTurn.kind).toBe('refuse')
+  expect(agent.messages).toHaveLength(3)
 })
