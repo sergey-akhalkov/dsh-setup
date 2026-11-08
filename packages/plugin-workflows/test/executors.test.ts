@@ -842,6 +842,19 @@ describe('loop executor', () => {
       values: { field: 'approved', approved: true },
     })
     expect(computedStop.next).toBe('end')
+    const computedCap = runLoopStep({
+      definition: loopDefinition,
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { var: [{ cat: ['context.', { var: 'context.field' }] }] },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { field: 'approved', approved: false },
+    })
+    expect(computedCap.run.status).toBe('blocked')
     const invalid = runLoopStep({
       definition: loopDefinition,
       run: loopRun(),

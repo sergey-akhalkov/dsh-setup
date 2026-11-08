@@ -356,8 +356,14 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
   const value = (entry: unknown): unknown => evaluateJsonLogic(entry, data, depth + 1)
   switch (operator) {
     case 'var': {
+      const rawPath =
+        typeof args[0] === 'string' || typeof args[0] === 'number'
+          ? args[0]
+          : args[0] === undefined
+            ? ''
+            : value(args[0])
       const path =
-        typeof args[0] === 'string' ? args[0] : typeof args[0] === 'number' ? String(args[0]) : ''
+        typeof rawPath === 'string' ? rawPath : typeof rawPath === 'number' ? String(rawPath) : ''
       const found = lookup(data, path)
       if (found !== undefined) return found
       return args.length > 1 ? value(args[1]) : null
