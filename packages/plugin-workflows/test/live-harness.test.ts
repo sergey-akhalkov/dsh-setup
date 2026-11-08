@@ -449,7 +449,7 @@ describe('obligation engine live proxy', () => {
     await mkdir(join(workspace, '.dsh', 'delegation', 'spec-review', 'auth'), { recursive: true })
     await writeFile(
       join(workspace, '.dsh', 'delegation', 'spec-review', 'auth', 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest })}\n`,
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-07T00:00:00.000Z', target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' } })}\n`,
       'utf8',
     )
     const adopted = await adoptChange({

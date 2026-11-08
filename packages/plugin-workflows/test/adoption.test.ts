@@ -61,6 +61,8 @@ async function adoptable(workspace: string, change = 'auth'): Promise<string> {
         verdict: 'PASS',
         digest,
         findings: [],
+        time: '2026-11-07T00:00:00.000Z',
+        target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' },
       },
       null,
       2,
