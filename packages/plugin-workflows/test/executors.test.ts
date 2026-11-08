@@ -910,6 +910,21 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
       { context: {} },
     ),
   ).toBe(false)
+  expect(evaluateJsonLogic({ '===': [{ var: 'context.absent' }, null] }, { context: {} })).toBe(
+    true,
+  )
+  expect(evaluateJsonLogic({ var: '' }, { context: { one: 1 } })).toEqual({
+    context: { one: 1 },
+  })
+  expect(
+    evaluateJsonLogic(
+      { '<': [{ var: 'context.left' }, { var: 'context.right' }] },
+      { context: { left: 'apple', right: 'banana' } },
+    ),
+  ).toBe(true)
+  let nested: unknown = { var: 'context.one' }
+  for (let index = 0; index < 30; index += 1) nested = { '<': [0, nested, 2] }
+  expect(evaluateJsonLogic(nested, { context: { one: 1 } })).toBe(true)
   expect(() => evaluateJsonLogic({ '==': [] }, {})).toThrow(/operand/u)
   expect(() => evaluateJsonLogic({ and: [false, { nope: true }] }, {})).toThrow(/unknown operator/u)
 })

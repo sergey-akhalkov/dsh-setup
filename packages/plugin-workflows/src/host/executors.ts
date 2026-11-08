@@ -202,12 +202,17 @@ export interface JsonLogicData {
 
 /** Resolve a dotted `var` path against the plain JSONLogic data. */
 function lookup(data: unknown, path: string): unknown {
+  if (path === '') return data
   let current = data
   for (const key of path.split('.')) {
     if (current === null || typeof current !== 'object') return undefined
     current = (current as Record<string, unknown>)[key]
   }
   return current
+}
+
+function lessThan(left: unknown, right: unknown): boolean {
+  return (left as number) < (right as number)
 }
 
 function truthy(value: unknown): boolean {
@@ -291,9 +296,9 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
   switch (operator) {
     case 'var': {
       const path = typeof args[0] === 'string' ? args[0] : ''
-      if (path === '') throw new Error('invalid JSONLogic: var needs a path')
       const found = lookup(data, path)
-      return found === undefined && args.length > 1 ? value(args[1]) : found
+      if (found !== undefined) return found
+      return args.length > 1 ? value(args[1]) : null
     }
     case '==':
       // biome-ignore lint/suspicious/noDoubleEquals: JSONLogic equality is loose
@@ -305,26 +310,42 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       return value(args[0]) === value(args[1])
     case '!==':
       return value(args[0]) !== value(args[1])
-    case '>':
-      return args.length >= 3
-        ? Number(value(args[0])) > Number(value(args[1])) &&
-            Number(value(args[1])) > Number(value(args[2]))
-        : Number(value(args[0])) > Number(value(args[1]))
-    case '>=':
-      return args.length >= 3
-        ? Number(value(args[0])) >= Number(value(args[1])) &&
-            Number(value(args[1])) >= Number(value(args[2]))
-        : Number(value(args[0])) >= Number(value(args[1]))
-    case '<':
-      return args.length >= 3
-        ? Number(value(args[0])) < Number(value(args[1])) &&
-            Number(value(args[1])) < Number(value(args[2]))
-        : Number(value(args[0])) < Number(value(args[1]))
-    case '<=':
-      return args.length >= 3
-        ? Number(value(args[0])) <= Number(value(args[1])) &&
-            Number(value(args[1])) <= Number(value(args[2]))
-        : Number(value(args[0])) <= Number(value(args[1]))
+    case '>': {
+      const first = value(args[0])
+      const second = value(args[1])
+      if (args.length >= 3) {
+        const third = value(args[2])
+        return lessThan(second, first) && lessThan(third, second)
+      }
+      return lessThan(second, first)
+    }
+    case '>=': {
+      const first = value(args[0])
+      const second = value(args[1])
+      if (args.length >= 3) {
+        const third = value(args[2])
+        return !lessThan(first, second) && !lessThan(second, third)
+      }
+      return !lessThan(first, second)
+    }
+    case '<': {
+      const first = value(args[0])
+      const second = value(args[1])
+      if (args.length >= 3) {
+        const third = value(args[2])
+        return lessThan(first, second) && lessThan(second, third)
+      }
+      return lessThan(first, second)
+    }
+    case '<=': {
+      const first = value(args[0])
+      const second = value(args[1])
+      if (args.length >= 3) {
+        const third = value(args[2])
+        return !lessThan(second, first) && !lessThan(third, second)
+      }
+      return !lessThan(second, first)
+    }
     case 'and': {
       let last: unknown = true
       for (const entry of args) {
