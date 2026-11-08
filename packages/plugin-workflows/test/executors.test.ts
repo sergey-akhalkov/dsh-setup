@@ -751,6 +751,27 @@ describe('loop executor', () => {
       values: { reviews: [{ verdict: 'PASS' }] },
     })
     expect(allStop.next).toBe('end')
+    const stringStop = runLoopStep({
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: { ...loop, stop: { '==': [{ var: 'context.name.length' }, 4] } },
+      } as (typeof loopDefinition.steps)[number],
+      values: { name: 'auth' },
+    })
+    expect(stringStop.next).toBe('end')
+    const malformedStop = runLoopStep({
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: { '==': [{ '-': [{ var: 'context.remaining' }, 1] }, 0] },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { remaining: '1 invalid' },
+    })
+    expect(malformedStop.run.status).toBe('blocked')
     const invalid = runLoopStep({
       run: loopRun(),
       step: {
@@ -1168,6 +1189,15 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
     evaluateJsonLogic({ '==': [{ '+': [{ var: 'context.failures' }] }, 0] }, { context: {} }),
   ).toBe(false)
   expect(evaluateJsonLogic({ '==': [{ '+': ['2', 3] }, 5] }, {})).toBe(true)
+  expect(
+    evaluateJsonLogic(
+      { '==': [{ '-': [{ var: 'context.remaining' }, 1] }, 0] },
+      { context: { remaining: '1 invalid' } },
+    ),
+  ).toBe(false)
+  expect(
+    evaluateJsonLogic({ '==': [{ var: 'context.name.length' }, 4] }, { context: { name: 'auth' } }),
+  ).toBe(true)
   expect(evaluateJsonLogic({ missing: ['context.absent'] }, { context: {} })).toEqual([
     'context.absent',
   ])

@@ -209,7 +209,7 @@ function lookup(data: unknown, path: string): unknown {
   if (path === '') return data
   let current = data
   for (const key of path.split('.')) {
-    if (current === null || typeof current !== 'object') return undefined
+    if (current === null || current === undefined) return undefined
     current = (current as Record<string, unknown>)[key]
   }
   return current
@@ -422,21 +422,18 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       return args.reduce<number>((total, entry) => total + numeric(value(entry)), 0)
     case '-':
       return args.length === 1
-        ? -numeric(value(args[0]))
+        ? -Number(value(args[0]))
         : args
             .slice(1)
-            .reduce<number>(
-              (total, entry) => total - numeric(value(entry)),
-              numeric(value(args[0])),
-            )
+            .reduce<number>((total, entry) => total - Number(value(entry)), Number(value(args[0])))
     case '*':
       return args.reduce<number>((total, entry) => total * numeric(value(entry)), 1)
     case '/':
       return args
         .slice(1)
-        .reduce<number>((total, entry) => total / numeric(value(entry)), numeric(value(args[0])))
+        .reduce<number>((total, entry) => total / Number(value(entry)), Number(value(args[0])))
     case '%':
-      return numeric(value(args[0])) % numeric(value(args[1]))
+      return Number(value(args[0])) % Number(value(args[1]))
     case 'min':
       return Math.min(...args.map((entry) => numeric(value(entry))))
     case 'max':
