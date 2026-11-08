@@ -1,11 +1,17 @@
-import { readdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SubagentRunEndInfo, SubagentRunInfo } from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import { adoptChange } from './adoption.js'
 import { registerWorkflowRoutes } from './api.js'
-import { loadApprovedDefinitions } from './approval-store.js'
+import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
+import { parseArchiveCommand, parseOpenspecCommand } from './command-parse.js'
+import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
 import {
   type Definition,
   KNOWN_LEGACY_SOURCES,
@@ -13,23 +19,44 @@ import {
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
+import { verifyEvidence } from './evidence.js'
+import { type HumanQuestionService, OwnedCalls } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
+import {
+  authorizationWriteDecision,
+  evaluateArchiveGate,
+  evaluateIntakeGate,
+  evaluateTurnClose,
+} from './gates.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
 import {
   Journal,
   type JournalInput,
   MAX_RECORD_BYTES,
+  type TriggerEvaluationRecord,
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
+import { registerActiveRunsContext } from './prompt.js'
 import { listReceipts } from './receipts.js'
-import { recoverRuns } from './resume.js'
-import { createRun, runFailure, storedRuns, writeRun } from './runs.js'
+import { cancelRun, recoverRuns, resumeRun } from './resume.js'
 import {
+  createRun,
+  listAuthenticatedRuns,
+  readAuthenticatedRun,
+  runFailure,
+  storedRuns,
+  type WorkflowRun,
+  writeRun,
+} from './runs.js'
+import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
+import {
+  checkpointRequired,
   type DefinitionEvent,
   evaluateDefinitions,
   loadCatalog,
+  obligationDedupeKey,
   type StartRunOutcome,
 } from './triggers.js'
 
@@ -62,9 +89,28 @@ async function hasLocalDefinitionFiles(workspace: string): Promise<boolean> {
   }
 }
 
+/** The verdict a review record carries, read for the review trigger filter. */
+function reviewVerdict(workspace: string, path: string): string | undefined {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(workspace, path), 'utf8'))
+    if (typeof raw === 'object' && raw !== null) {
+      const verdict = (raw as { verdict?: unknown }).verdict
+      return typeof verdict === 'string' ? verdict : undefined
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Normalize one observed plugin event into definition trigger events. */
-function definitionEventsOf(input: JournalInput, event: ObservedEvent): DefinitionEvent[] {
+export function definitionEventsOf(
+  input: JournalInput,
+  event: ObservedEvent,
+  workspace: string,
+): DefinitionEvent[] {
   const base = {
+    workspace,
     session: input.session,
     ...(input.turn === undefined ? {} : { turn: input.turn }),
   }
@@ -95,7 +141,15 @@ function definitionEventsOf(input: JournalInput, event: ObservedEvent): Definiti
         },
       ]
       if (/(?:^|\/)reviews\/[^/]+\.json$/u.test(path)) {
-        events.push({ kind: 'review.record', subject: path, path, ...base })
+        const verdict = reviewVerdict(workspace, path)
+        events.push({
+          kind: 'review.record',
+          subject: path,
+          path,
+          ...(verdict === undefined ? {} : { verdict }),
+          ...(event.hash === undefined ? {} : { hash: event.hash }),
+          ...base,
+        })
       }
       return events
     }
@@ -188,6 +242,8 @@ function describe(value: unknown): string {
   }
 }
 
+const WORKER_TOOL_NAMES = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow'])
+
 /** Characters a tool name may keep in a journal summary. */
 const SAFE_NAME = /[^A-Za-z0-9._-]+/gu
 
@@ -279,6 +335,14 @@ export function apply(ctx: Context): void {
       registrationError ??= error
     }
   }
+  /** The engine gates register without changing the observability listener count. */
+  const listenEngine = (register: () => unknown): void => {
+    try {
+      register()
+    } catch (error) {
+      registrationError ??= error
+    }
+  }
   /** A scoped per-agent registration failure is visible and lowers the count. */
   const failScopedListener = (error: unknown): void => {
     scopedFailures += 1
@@ -299,7 +363,6 @@ export function apply(ctx: Context): void {
   }
   /** Approved definitions per workspace, loaded once on first observation. */
   const definitionsByWorkspace = new Map<string, readonly Definition[]>()
-  const definitionsLoading = new Set<string>()
   let storedAuth: HostAuth | undefined
   let authPromise: Promise<HostAuth | undefined> | undefined
   /** Load the host key once; a failure is reported and leaves runs unsigned. */
@@ -332,16 +395,12 @@ export function apply(ctx: Context): void {
     return installed
   }
   /** Load the shipped set plus the approved local overrides for one workspace. */
-  const loadDefinitions = (workspace: string): void => {
-    if (
-      pluginDisposed ||
-      definitionsByWorkspace.has(workspace) ||
-      definitionsLoading.has(workspace)
-    ) {
-      return
-    }
-    definitionsLoading.add(workspace)
-    void (async () => {
+  const definitionLoads = new Map<string, Promise<void>>()
+  const loadDefinitions = (workspace: string): Promise<void> => {
+    const existing = definitionLoads.get(workspace)
+    if (existing !== undefined) return existing
+    if (pluginDisposed) return Promise.resolve()
+    const promise = (async () => {
       try {
         if (await hasLocalDefinitionFiles(workspace)) await ensureAuth()
         const loaded = await loadApprovedDefinitions(workspace, {
@@ -367,10 +426,15 @@ export function apply(ctx: Context): void {
             `workflows: the definitions could not be loaded (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
           )
         }
-      } finally {
-        definitionsLoading.delete(workspace)
       }
     })()
+    definitionLoads.set(workspace, promise)
+    return promise
+  }
+  /** The approved definitions of one workspace, loaded on first use. */
+  const definitionsFor = async (workspace: string): Promise<Definition[]> => {
+    await loadDefinitions(workspace)
+    return [...(definitionsByWorkspace.get(workspace) ?? [])]
   }
   /** Start one run for an active trigger; the writer settles in the background. */
   const startDefinitionRun = (
@@ -399,7 +463,7 @@ export function apply(ctx: Context): void {
       void writeRun(workspace, run, auth).catch((error: unknown) => {
         healthFor(workspace).recordError(error)
       })
-      return { ok: true }
+      return { ok: true, runId: run.id }
     } catch (error) {
       return { ok: false, reason: runFailure(error) }
     }
@@ -432,7 +496,7 @@ export function apply(ctx: Context): void {
         activeSession.set(workspace, String(session.id))
         healthFor(workspace)
         watchChanges(workspace)
-        loadDefinitions(workspace)
+        void loadDefinitions(workspace)
         recoverIfNeeded(workspace)
       }
     } catch {
@@ -449,19 +513,77 @@ export function apply(ctx: Context): void {
   })
 
   const sessionEventAt = new Map<string, number>()
+  interface TurnMetrics {
+    turn: number
+    toolCalls: number
+    lastTool?: string
+    written: number
+    workers: number
+  }
+  const turnMetrics = new Map<string, TurnMetrics>()
+  const metricsFor = (session: string, turn: number): TurnMetrics => {
+    const existing = turnMetrics.get(session)
+    if (existing !== undefined && existing.turn === turn) return existing
+    const fresh: TurnMetrics = { turn, toolCalls: 0, written: 0, workers: 0 }
+    turnMetrics.set(session, fresh)
+    return fresh
+  }
+  /** Record one engine-only evaluation in the same journal the recorder writes. */
+  const recordEngineEvaluation = (
+    workspace: string,
+    session: string,
+    turn: number | undefined,
+    kind: string,
+    subject: string,
+    summary: string,
+    rows: readonly TriggerEvaluationRecord[],
+  ): void => {
+    const { record: bounded } = journal.record({
+      at: journal.time(),
+      session,
+      ...(turn === undefined ? {} : { turn }),
+      kind,
+      subject,
+      summary,
+      bytes: Buffer.byteLength(summary, 'utf8'),
+      truncated: false,
+      ...(rows.length === 0 ? {} : { triggers: rows }),
+    })
+    healthFor(workspace).markEvent(bounded.at)
+    sessionEventAt.set(session, bounded.at)
+    void journal.append(workspace, bounded).then((result) => {
+      if (result.ok) return
+      healthFor(workspace).setJournalWritable(false)
+      healthFor(workspace).recordError(result.error)
+    })
+  }
 
   const record = (workspace: string, input: JournalInput, event: ObservedEvent): void => {
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
-    loadDefinitions(workspace)
+    void loadDefinitions(workspace)
     const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
-    const definitionRows = definitionEventsOf(input, event).flatMap((definitionEvent) =>
+    const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
+    const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) =>
       evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
         isDuplicate: (key) => sessionSeen.has(key),
         markKey: (key) => sessionSeen.set(key, input.at),
         startRun: (definition, matched) => startDefinitionRun(workspace, definition, matched),
+        resolveApplicability: (definition) => {
+          if (definition.trigger.applicability !== 'checkpoint-required') return undefined
+          const current =
+            input.turn !== undefined && metrics !== undefined && metrics.turn === input.turn
+              ? metrics
+              : undefined
+          return checkpointRequired({
+            toolCalls: current?.toolCalls ?? 0,
+            ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
+            written: current?.written ?? 0,
+            workers: current?.workers ?? 0,
+          })
+        },
       }).map((row) => ({
         id: `definition:${row.definition}`,
         matched: row.matched,
@@ -469,6 +591,7 @@ export function apply(ctx: Context): void {
         ...(row.path === undefined ? {} : { path: row.path }),
         ...(row.filter === undefined ? {} : { filter: row.filter }),
         ...(row.detail === undefined ? {} : { detail: row.detail }),
+        ...(row.runId === undefined ? {} : { runId: row.runId }),
       })),
     )
     const evaluations = [...records, ...definitionRows]
@@ -565,6 +688,7 @@ export function apply(ctx: Context): void {
         workspace = workspaceFor(services, session)
         if (workspace !== undefined) {
           turns.set(String(session.id), payload.turn)
+          metricsFor(String(session.id), payload.turn)
           const origin = session.header.origin === 'subagent' ? 'subagent' : 'root'
           const summary = `step ${String(payload.step)}`
           record(
@@ -629,6 +753,11 @@ export function apply(ctx: Context): void {
         const session = agent.session
         workspace = workspaceFor(services, session)
         if (workspace === undefined) return
+        const metrics = metricsFor(String(session.id), turns.get(String(session.id)) ?? 0)
+        metrics.toolCalls += 1
+        metrics.lastTool = exec.name
+        if (exec.name === 'write' || exec.name === 'edit') metrics.written += 1
+        if (WORKER_TOOL_NAMES.has(exec.name)) metrics.workers += 1
         const text = toolResultText(result)
         const summary = toolSummary(exec.name, result.isError, text)
         const bytes = Buffer.byteLength(text, 'utf8')
@@ -787,6 +916,425 @@ export function apply(ctx: Context): void {
   for (const [workspace, health] of healths) {
     health.setListenerCount(publishedListenerCount(workspace))
   }
+
+  /* ------------------------------------------------------------------ */
+  /* obligation engine wiring                                            */
+  /* ------------------------------------------------------------------ */
+
+  const ownedCalls = new OwnedCalls()
+  let promptRuns: WorkflowRun[] = []
+  const optionalService = <T>(name: string): T | undefined => {
+    try {
+      return (ctx as unknown as { get?: (serviceName: string) => unknown }).get?.(name) as
+        | T
+        | undefined
+    } catch {
+      return undefined
+    }
+  }
+  const userQuestions = optionalService<HumanQuestionService>('userQuestions')
+  const shellCommandOf = (exec: Readonly<ToolExecution>): string | undefined => {
+    const args = exec.arguments
+    if (typeof args !== 'object' || args === null) return undefined
+    const record = args as Record<string, unknown>
+    if (exec.name === 'terminal_send') {
+      return typeof record.text === 'string' ? record.text : undefined
+    }
+    if (exec.name === 'pwsh' || exec.name === 'bash') {
+      return typeof record.command === 'string' ? record.command : undefined
+    }
+    return undefined
+  }
+  const changeDirectoryExists = async (workspace: string, name: string): Promise<boolean> => {
+    try {
+      return (await stat(join(workspace, 'openspec', 'changes', name))).isDirectory()
+    } catch {
+      return false
+    }
+  }
+  const boundedError = (error: unknown): string =>
+    (error instanceof Error ? error.message : String(error)).slice(0, 200)
+  const startRunFor = async (
+    workspace: string,
+    sessionId: string,
+    auth: HostAuth,
+    definition: Definition,
+    context: Readonly<Record<string, unknown>> = {},
+  ): Promise<WorkflowRun> => {
+    const run = createRun({
+      definition: definition.id,
+      trigger: definition.trigger.kind,
+      session: sessionId,
+      workspace,
+      context,
+      steps: definition.steps.map((step) => step.id),
+      now: journal.time(),
+    })
+    await writeRun(workspace, run, auth)
+    return run
+  }
+
+  // Tools pre-execute: intake, archive, and the authorization write guard.
+  listenEngine(() =>
+    ctx.on('tools/pre-execute', async (exec, next) => {
+      try {
+        const agent = exec.agent
+        if (agent === undefined) return await next()
+        const workspace = workspaceFor(services, agent.session)
+        if (workspace === undefined) return await next()
+        await ensureAuth()
+        const auth = storedAuth
+        if (auth === undefined) return await next()
+        const command = shellCommandOf(exec)
+        if (command !== undefined) {
+          const create = parseOpenspecCommand(command)
+          if (create?.kind === 'create-change') {
+            const definitions = await definitionsFor(workspace)
+            const definition = definitions.find((entry) => entry.id === 'change-intake')
+            if (definition === undefined) return await next()
+            const decision = await evaluateIntakeGate({
+              name: create.name,
+              session: String(agent.session.id),
+              workspace,
+              callId: String(exec.callId),
+              definition,
+              runs: await listAuthenticatedRuns(workspace, auth),
+              receipts: await listReceipts(workspace, auth),
+              ownedCallIds: new Set(ownedCalls.list()),
+              changeExists: await changeDirectoryExists(workspace, create.name),
+              startRun: async (entry, name) => {
+                const run = await startRunFor(workspace, String(agent.session.id), auth, entry, {
+                  name,
+                })
+                return { runId: run.id }
+              },
+              resumeRun: async (runId) => {
+                const resumed = await resumeRun(workspace, runId, auth)
+                await writeRun(workspace, resumed.run, auth)
+                return { stepId: resumed.stepId }
+              },
+            })
+            const sessionId = String(agent.session.id)
+            const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
+            seen.set(sessionId, sessionSeen)
+            const observed: DefinitionEvent = {
+              kind: 'tool.pre-execute',
+              subject: exec.name,
+              tool: exec.name,
+              command: 'openspec new change <name>',
+              name: create.name,
+              workspace,
+              session: sessionId,
+              ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+            }
+            const rows = evaluateDefinitions(definitions, observed, {
+              isDuplicate: (key) => sessionSeen.has(key),
+              startRun: () => ({ ok: false, reason: 'the intake gate owns run creation' }),
+            }).map((row) => ({
+              id: `definition:${row.definition}`,
+              matched: row.matched,
+              reason: row.reason,
+              ...(row.path === undefined ? {} : { path: row.path }),
+              ...(row.filter === undefined ? {} : { filter: row.filter }),
+              ...(row.detail === undefined ? {} : { detail: row.detail }),
+              ...(row.runId === undefined ? {} : { runId: row.runId }),
+            }))
+            const decorated = rows.map((row) =>
+              row.id === 'definition:change-intake'
+                ? {
+                    ...row,
+                    reason:
+                      decision.kind === 'deny' && decision.action === 'started'
+                        ? 'run-created'
+                        : 'run-suppressed',
+                    ...(decision.kind === 'deny' && decision.runId !== undefined
+                      ? { runId: decision.runId }
+                      : {}),
+                    detail: decision.reason,
+                  }
+                : row,
+            )
+            if (decision.kind === 'deny' && decision.action === 'started') {
+              const key = obligationDedupeKey('change-intake', definition.trigger, observed)
+              if (key !== undefined) sessionSeen.set(key, journal.time())
+            }
+            recordEngineEvaluation(
+              workspace,
+              sessionId,
+              turns.get(sessionId),
+              'tools/pre-execute',
+              exec.name,
+              `intake ${create.name}: ${decision.kind === 'deny' ? decision.action : 'allowed'}`,
+              decorated,
+            )
+            if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
+            return await next()
+          }
+          const archive = parseArchiveCommand(command)
+          if (archive?.kind === 'archive') {
+            const specRecord = await verifyEvidence(
+              {
+                kind: 'record',
+                rule: 'spec-review',
+                change: archive.change,
+                phase: 'spec',
+                scope: 'whole',
+                verdict: 'PASS',
+                digest: 'current',
+              },
+              { workspace, values: { name: archive.change } },
+            )
+            const decision = evaluateArchiveGate({
+              change: archive.change,
+              runs: await listAuthenticatedRuns(workspace, auth),
+              receipts: await listReceipts(workspace, auth),
+              specRecord,
+            })
+            if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
+            return await next()
+          }
+        }
+        const writeDecision = authorizationWriteDecision({
+          workspace,
+          exec: { name: exec.name, arguments: exec.arguments },
+          ownedCallIds: new Set(ownedCalls.list()),
+          callId: String(exec.callId),
+        })
+        if (writeDecision?.kind === 'deny') return { kind: 'deny', reason: writeDecision.reason }
+        return await next()
+      } catch (error) {
+        return {
+          kind: 'deny',
+          reason: `workflows: the pre-execute gate failed internally (${boundedError(error)}); the call was not run`,
+        }
+      }
+    }),
+  )
+
+  // Turn close: steer the first owned open blockTurnClose step, bounded.
+  listenEngine(() =>
+    ctx.on('agent/turn-stopping', async (payload) => {
+      try {
+        if (payload.agent.session.header.origin === 'subagent') return
+        const workspace = workspaceFor(services, payload.agent.session)
+        if (workspace === undefined) return
+        await ensureAuth()
+        const auth = storedAuth
+        if (auth === undefined) return
+        const definitions = await definitionsFor(workspace)
+        const runs = await listAuthenticatedRuns(workspace, auth)
+        promptRuns = runs.filter(
+          (run) =>
+            run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
+        )
+        for (const run of runs) {
+          if (run.session !== String(payload.agent.session.id)) continue
+          if (run.status !== 'running' && run.status !== 'blocked') continue
+          const definition = definitions.find((entry) => entry.id === run.definition)
+          if (definition === undefined) continue
+          const outcome = evaluateTurnClose({
+            run,
+            definition,
+            agent: {
+              steer: (text: string) =>
+                payload.agent.steer({
+                  id: randomUUID(),
+                  role: 'user',
+                  content: [{ type: 'text', text }],
+                  source: { kind: 'workflows-gate' },
+                } as never),
+            },
+            evidenceContext: { workspace, values: run.context },
+            turn: payload.turn,
+            maxBlocks: definition.settings.maxBlocks,
+            installedLegacy: installedLegacySources(),
+            onError: (error) => publishListenerError(workspace, error),
+          })
+          if (outcome.run !== run) await writeRun(workspace, outcome.run, auth)
+        }
+      } catch (error) {
+        publishListenerError(workspaceFor(services, payload.agent.session), error)
+      }
+    }),
+  )
+
+  const toolHostFor = (
+    agent: Agent,
+    workspace: string,
+    auth: HostAuth,
+    definitions: Definition[],
+  ): WorkflowsToolHost => ({
+    workspace,
+    session: String(agent.session.id),
+    definitions,
+    auth,
+    ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+    now: () => journal.time(),
+    listRuns: () => listAuthenticatedRuns(workspace, auth),
+    readRun: (runId) => readAuthenticatedRun(workspace, runId, auth),
+    startRun: async (definition) => {
+      const run = await startRunFor(workspace, String(agent.session.id), auth, definition)
+      return { run, firstStep: definition.steps[0]?.id ?? 'end' }
+    },
+    resumeRun: async (runId) => {
+      const resumed = await resumeRun(workspace, runId, auth)
+      await writeRun(workspace, resumed.run, auth)
+      return { run: resumed.run, stepId: resumed.stepId }
+    },
+    cancelRun: async (runId) => {
+      const cancelled = await cancelRun(workspace, runId, auth)
+      await writeRun(workspace, cancelled, auth)
+      return cancelled
+    },
+  })
+
+  // The model-facing tool is optional; a host without a tool registry keeps the
+  // gates and the recorder.
+  const toolsService = optionalService<{ register(definition: unknown): unknown }>('tools')
+  if (toolsService?.register !== undefined) {
+    ctx.effect(
+      () =>
+        toolsService.register({
+          name: 'workflows',
+          description:
+            'List, start, resume, inspect, evidence-check, or cancel a stored workflow run. It never accepts a script or definition, never installs a definition, never starts an adoption, and never writes an approval or receipt.',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: {
+                type: 'string',
+                enum: ['list', 'start', 'resume', 'status', 'evidence', 'cancel'],
+                description: 'The bounded action to run.',
+              },
+              definitionId: { type: 'string', description: 'A stored definition id.' },
+              runId: { type: 'string', description: 'A workflow run id.' },
+              stepId: { type: 'string', description: 'A step id of the run.' },
+              evidence: {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string' },
+                  ref: { type: 'string' },
+                },
+                required: ['kind', 'ref'],
+                additionalProperties: false,
+                description: 'The evidence the host verifier must check; a text claim is refused.',
+              },
+            },
+            required: ['action'],
+            additionalProperties: false,
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: { text: { type: 'string' } },
+              required: ['text'],
+            },
+            render: (_args: unknown, value: unknown) => [
+              { type: 'text', text: String((value as { text?: unknown }).text ?? '') },
+            ],
+          },
+          execute: async (args: unknown, exec: { agent?: Agent }) => {
+            const agent = exec.agent
+            if (agent === undefined) throw new Error('workflows: the tool needs a live session')
+            const workspace = workspaceFor(services, agent.session)
+            if (workspace === undefined)
+              throw new Error('workflows: the session workspace is unavailable')
+            await ensureAuth()
+            const auth = storedAuth
+            if (auth === undefined) throw new Error('workflows: the host key is unavailable')
+            const definitions = await definitionsFor(workspace)
+            return {
+              text: await executeWorkflowsTool(
+                args,
+                toolHostFor(agent, workspace, auth, definitions),
+              ),
+            }
+          },
+        }) as never,
+    )
+  }
+
+  // The user-started `/workflows` command.
+  const commandsService = optionalService<{ register(definition: unknown): unknown }>('commands')
+  if (commandsService?.register !== undefined) {
+    ctx.effect(
+      () =>
+        commandsService.register({
+          definitionId: '@dsh-setup/plugin-workflows/workflows',
+          name: 'workflows',
+          description:
+            'Open the Workflows view, run/resume a workflow, install a definition after confirmation, adopt an existing change, or print a bounded status.',
+          handler: async (invocation: { agent: Agent; arguments?: unknown; text?: unknown }) => {
+            try {
+              const workspace = workspaceFor(services, invocation.agent.session)
+              if (workspace === undefined) {
+                return { kind: 'error', text: 'the session workspace is unavailable' }
+              }
+              await ensureAuth()
+              const auth = storedAuth
+              if (auth === undefined) {
+                return { kind: 'error', text: 'the workflows host key is unavailable' }
+              }
+              const definitions = await definitionsFor(workspace)
+              const sessionId = String(invocation.agent.session.id)
+              const input =
+                typeof invocation.arguments === 'string'
+                  ? invocation.arguments
+                  : typeof invocation.text === 'string'
+                    ? invocation.text
+                    : ''
+              const host: WorkflowCommandHost = {
+                workspace,
+                session: sessionId,
+                ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+                openView: () => 'The Workflows view is available in the Workflows tab.',
+                run: async (definitionId) => {
+                  const definition = definitions.find((entry) => entry.id === definitionId)
+                  if (definition === undefined) throw new Error(`no definition "${definitionId}"`)
+                  const run = await startRunFor(workspace, sessionId, auth, definition)
+                  return { runId: run.id, firstStep: definition.steps[0]?.id ?? 'end' }
+                },
+                resume: async (runId) => {
+                  const resumed = await resumeRun(workspace, runId, auth)
+                  await writeRun(workspace, resumed.run, auth)
+                  return { stepId: resumed.stepId }
+                },
+                install: async (path) => {
+                  const installed = await installDefinition(workspace, path, auth)
+                  return { id: installed.definition.id }
+                },
+                adopt: async (name) => {
+                  const adopted = await adoptChange({
+                    workspace,
+                    change: name,
+                    auth,
+                    userStarted: true,
+                    ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+                    now: journal.time(),
+                  })
+                  return adopted.ok ? { ok: true } : { ok: false, reason: adopted.reason }
+                },
+                status: async () => {
+                  const runs = await listAuthenticatedRuns(workspace, auth)
+                  const open = runs.filter(
+                    (run) => run.status === 'running' || run.status === 'blocked',
+                  )
+                  return `definitions: ${String(definitions.length)}; open runs: ${String(open.length)}; receipts: ${String((await listReceipts(workspace, auth)).length)}`
+                },
+              }
+              const result = await runWorkflowCommand(input, host)
+              return { kind: result.kind === 'error' ? 'error' : 'success', text: result.text }
+            } catch (error) {
+              return { kind: 'error', text: boundedError(error) }
+            }
+          },
+        }) as never,
+    )
+  }
+
+  // The bounded active-run system-prompt context.
+  registerActiveRunsContext(ctx as never, () => promptRuns)
+
   // The read-only API is optional at runtime but present on the Web host that
   // also carries the Client view; a host without Fetch keeps recording only.
   registerWorkflowRoutes(ctx, {

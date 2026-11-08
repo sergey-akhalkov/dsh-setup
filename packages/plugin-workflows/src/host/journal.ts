@@ -64,6 +64,8 @@ export interface TriggerEvaluationRecord {
   readonly path?: string
   readonly filter?: string
   readonly detail?: string
+  /** The created run id for a run-created outcome. */
+  readonly runId?: string
 }
 
 /** One journal record, as the read API and the Why-not view consume it. */
@@ -224,6 +226,7 @@ export function capRecord(
       id: evaluation.id.slice(0, 60),
       matched: evaluation.matched,
       reason: evaluation.reason,
+      ...(evaluation.runId === undefined ? {} : { runId: evaluation.runId }),
     }))
     candidate = { ...candidate, triggers: compact }
     if (fits(candidate)) return { record: candidate, truncated: true }

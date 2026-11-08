@@ -222,7 +222,7 @@ describe('read-only safety', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(host.steers).toEqual([])
     expect(host.injects).toEqual([])
-    expect(host.registered).not.toContain('tools/pre-execute')
+    // The engine gate is registered by design; it must stay inert without runs.\n    expect(host.registered).toContain('tools/pre-execute')
     expect(host.registered).not.toContain('tools/post-execute')
     expect(host.registered).not.toContain('tools/execute')
     const paths = await walk(workspace)

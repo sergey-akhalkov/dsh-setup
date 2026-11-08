@@ -403,3 +403,68 @@ describe('intent trigger', () => {
     expect(other[0]?.filter).toBe('intent: new-change')
   })
 })
+
+describe('definition trigger wiring regressions', () => {
+  it('matches a workspace filter with the resolved workspace', () => {
+    const definition = obligation('workspace-def', {
+      kind: 'turn.stopping',
+      match: { workspace: '/workspace/**' },
+      mode: 'shadow',
+      dedupe: 'turn',
+    })
+    const matched = evaluateDefinitionTrigger(
+      definition,
+      stopEvent({ workspace: '/workspace/project' }),
+      { isDuplicate: () => false },
+    )
+    expect(matched).toMatchObject({ matched: true, reason: 'would-fire' })
+    const mismatch = evaluateDefinitionTrigger(
+      definition,
+      stopEvent({ workspace: '/other/project' }),
+      { isDuplicate: () => false },
+    )
+    expect(mismatch).toMatchObject({ matched: false, reason: 'filter-mismatch' })
+  })
+
+  it('does not consume the dedupe key for a suppressed active start', () => {
+    const definition = obligation('retry-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'active',
+      dedupe: 'turn',
+    })
+    const seen = new Map<string, number>()
+    let attempts = 0
+    const context = {
+      isDuplicate: (key: string) => seen.has(key),
+      markKey: (key: string) => seen.set(key, 1),
+      startRun: () => {
+        attempts += 1
+        return attempts === 1
+          ? { ok: false, reason: 'the host key is not ready' }
+          : { ok: true, runId: 'run-9' }
+      },
+    }
+    expect(evaluateDefinitions([definition], stopEvent(), context)[0]).toMatchObject({
+      matched: true,
+      reason: 'run-suppressed',
+    })
+    const retried = evaluateDefinitions([definition], stopEvent(), context)[0]
+    expect(retried).toMatchObject({ matched: true, reason: 'run-created', runId: 'run-9' })
+    expect(attempts).toBe(2)
+  })
+
+  it('carries the created run id on the run-created evaluation', () => {
+    const definition = obligation('runid-def', {
+      kind: 'turn.stopping',
+      match: {},
+      mode: 'active',
+      dedupe: 'turn',
+    })
+    const rows = evaluateDefinitions([definition], stopEvent(), {
+      isDuplicate: () => false,
+      startRun: () => ({ ok: true, runId: 'run-created-1' }),
+    })
+    expect(rows[0]).toMatchObject({ reason: 'run-created', runId: 'run-created-1' })
+  })
+})

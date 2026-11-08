@@ -208,6 +208,8 @@ export interface DefinitionEvaluation {
   readonly path?: string
   readonly filter?: string
   readonly detail?: string
+  /** The created run id for a run-created outcome. */
+  readonly runId?: string
 }
 
 export interface DefinitionEvaluationContext {
@@ -327,6 +329,7 @@ export function evaluateDefinitionTrigger(
 export interface StartRunOutcome {
   readonly ok: boolean
   readonly reason?: string
+  readonly runId?: string
 }
 
 export interface DefinitionRouterContext extends DefinitionEvaluationContext {
@@ -362,8 +365,8 @@ export function evaluateDefinitions(
       continue
     }
     const key = obligationDedupeKey(definition.id, definition.trigger, event)
-    if (key !== undefined) context.markKey?.(key)
     if (definition.trigger.mode === 'shadow') {
+      if (key !== undefined) context.markKey?.(key)
       rows.push({ ...row, reason: 'would-fire' })
       continue
     }
@@ -377,7 +380,14 @@ export function evaluateDefinitions(
       continue
     }
     if (outcome.ok) {
-      rows.push({ ...row, reason: 'run-created' })
+      // A suppressed start must not consume the dedupe key, or a later retry
+      // would be reported as a duplicate without ever creating a run.
+      if (key !== undefined) context.markKey?.(key)
+      rows.push({
+        ...row,
+        reason: 'run-created',
+        ...(outcome.runId === undefined ? {} : { runId: outcome.runId }),
+      })
     } else {
       rows.push({
         ...row,

@@ -303,7 +303,7 @@ describe('workflow event recorder', () => {
     expect(records[3]?.turn).toBe(2)
     expect(records[4]?.subject).toBe('child-9')
     expect(records[4]?.turn).toBe(2)
-    expect(host.calls()).toEqual({ steers: 0, injects: 0, preExecute: 0 })
+    expect(host.calls()).toEqual({ steers: 0, injects: 0, preExecute: 1 })
     expect(host.steers).toEqual([])
   })
 
