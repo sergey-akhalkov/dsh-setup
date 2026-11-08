@@ -436,10 +436,17 @@ export function resetTurnBlocks(run: WorkflowRun, now = Date.now()): WorkflowRun
 
 /**
  * Terminally classify a run whose trigger later evaluates as not applicable.
- * It is completed before evidence so retention can prune it; it is never a pass.
+ * The unexecuted required steps are released so retention can prune it; it is
+ * never a pass.
  */
 export function completeNotApplicable(run: WorkflowRun, now = Date.now()): WorkflowRun {
-  return setRunStatus(run, 'completed', now, 'not-applicable')
+  let settled = run
+  for (const step of run.steps) {
+    if (step.state === 'open' || step.state === 'blocked' || step.state === 'failed') {
+      settled = settleStep(settled, step.id, 'cancelled', { at: now, reason: 'not-applicable' })
+    }
+  }
+  return setRunStatus(settled, 'completed', now, 'not-applicable')
 }
 
 /** Retention defaults: 30 days and 20 MB of run files. */

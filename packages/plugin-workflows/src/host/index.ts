@@ -44,6 +44,7 @@ import { registerActiveRunsContext } from './prompt.js'
 import { listReceipts } from './receipts.js'
 import { cancelRun, recoverRuns, resumeRun } from './resume.js'
 import {
+  completeNotApplicable,
   createRun,
   DEFAULT_MAX_RUNS,
   hasTamperedRuns,
@@ -703,6 +704,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           })),
       )
       const evaluations = [...records, ...definitionRows]
+      // A deferred observational run whose trigger later evaluates as not
+      // applicable is completed so retention can prune it, never left blocked.
+      if (storedAuth !== undefined) {
+        for (const row of definitionRows) {
+          if (row.reason !== 'not-applicable') continue
+          const definitionId = row.id.slice('definition:'.length)
+          const existing = knownRuns.find(
+            (run) =>
+              run.definition === definitionId &&
+              run.session === input.session &&
+              (run.status === 'running' || run.status === 'blocked'),
+          )
+          if (existing === undefined) continue
+          await writeRun(workspace, completeNotApplicable(existing, input.at), storedAuth)
+        }
+      }
       const { record: bounded } = journal.record({
         ...input,
         ...(evaluations.length === 0 ? {} : { triggers: evaluations }),
