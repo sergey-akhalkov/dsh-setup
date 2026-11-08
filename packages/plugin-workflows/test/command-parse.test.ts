@@ -343,3 +343,15 @@ it('accepts PowerShell switches through the mv alias', () => {
     form: 'mv',
   })
 })
+it('recognizes switch values through mv and refuses multi-source archive moves', () => {
+  expect(
+    parseArchiveCommand(
+      'mv -LiteralPath openspec/changes/auth -Destination openspec/changes/archive/ -Confirm:$false',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
+  expect(
+    parseArchiveCommand(
+      'git mv openspec/changes/auth openspec/changes/beta openspec/changes/archive/',
+    ),
+  ).toMatchObject({ kind: 'archive', multipleSources: true })
+})

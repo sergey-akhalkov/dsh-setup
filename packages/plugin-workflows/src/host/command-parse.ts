@@ -83,6 +83,8 @@ export interface ArchiveIntent {
   readonly kind: 'archive'
   readonly change: string
   readonly form: 'openspec' | 'mv' | 'Move-Item' | 'git'
+  /** A move of more than one change; the host refuses it rather than authorizing each. */
+  readonly multipleSources?: true
 }
 
 /** The archive directory a move must target. */
@@ -236,7 +238,7 @@ export function parseArchiveCommand(
     for (let index = mvIndex; index < tokens.length; index += 1) {
       const token = tokens[index] ?? ''
       if (token === '--') continue
-      const name = token.toLowerCase()
+      const name = token.toLowerCase().split(':')[0] ?? ''
       if (
         name === '-t' ||
         name === '--target-directory' ||
@@ -262,7 +264,23 @@ export function parseArchiveCommand(
     }
     if (source === undefined) source = positional.shift()
     if (destination === undefined) destination = positional.shift()
-    if (positional.length > 0) return undefined
+    if (positional.length > 0) {
+      const last = positional[positional.length - 1]
+      const candidatePath = last === undefined ? undefined : unquotedPath(last)
+      const candidate =
+        candidatePath === undefined
+          ? undefined
+          : workspaceRelative(candidatePath, workspace, moveWorkspace)
+      if (candidate !== undefined && targetsArchive(candidate)) {
+        return {
+          kind: 'archive',
+          change: '',
+          form: mvIndex === 2 ? 'git' : 'mv',
+          multipleSources: true,
+        }
+      }
+      return undefined
+    }
     return archiveMove(
       unquotedPath(source),
       unquotedPath(destination),
@@ -279,7 +297,7 @@ export function parseArchiveCommand(
       const token = tokens[index] ?? ''
       if (token === '--') continue
       if (token.startsWith('-')) {
-        const name = token.toLowerCase().split(':')[0] ?? ''
+        const name = token.toLowerCase().split(':')[0] ?? ''.split(':')[0] ?? ''
         if (switches.has(name)) continue
         const value = tokens[index + 1]
         if (value === undefined || value.startsWith('-')) return undefined
@@ -293,7 +311,23 @@ export function parseArchiveCommand(
     let destination = flags.get('-destination') ?? flags.get('-dest')
     if (source === undefined) source = positional.shift()
     if (destination === undefined) destination = positional.shift()
-    if (positional.length > 0) return undefined
+    if (positional.length > 0) {
+      const last = positional[positional.length - 1]
+      const candidatePath = last === undefined ? undefined : unquotedPath(last)
+      const candidate =
+        candidatePath === undefined
+          ? undefined
+          : workspaceRelative(candidatePath, workspace, moveWorkspace)
+      if (candidate !== undefined && targetsArchive(candidate)) {
+        return {
+          kind: 'archive',
+          change: '',
+          form: mvIndex === 2 ? 'git' : 'mv',
+          multipleSources: true,
+        }
+      }
+      return undefined
+    }
     return archiveMove(
       unquotedPath(source),
       unquotedPath(destination),

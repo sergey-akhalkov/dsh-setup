@@ -1587,6 +1587,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             inside ? resolvedWorkdir : undefined,
           )
           if (archive?.kind === 'archive') {
+            if (archive.multipleSources === true) {
+              return {
+                kind: 'deny',
+                reason:
+                  'a multi-source archive move cannot be authorized as one obligation; archive each change separately',
+              }
+            }
             if (!inside) {
               return {
                 kind: 'deny',
