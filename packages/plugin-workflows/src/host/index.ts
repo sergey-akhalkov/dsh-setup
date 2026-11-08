@@ -44,6 +44,7 @@ import { cancelRun, recoverRuns, resumeRun } from './resume.js'
 import {
   createRun,
   DEFAULT_MAX_RUNS,
+  hasTamperedRuns,
   listAuthenticatedRuns,
   openRunCount,
   pruneRuns,
@@ -1657,6 +1658,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
             const decision = evaluateArchiveGate({
               change: archive.change,
+              tamperedRuns: auth === undefined ? false : await hasTamperedRuns(workspace, auth),
               runs: auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth),
               receipts: auth === undefined ? [] : await listReceipts(workspace, auth),
               specRecord,

@@ -459,6 +459,13 @@ export interface PruneResult {
  * its byte cap, the oldest terminal run. A running or blocked run is retained.
  * Receipts live outside this directory and are never touched.
  */
+export async function hasTamperedRuns(workspace: string, auth: HostAuth): Promise<boolean> {
+  for (const entry of await storedRuns(workspace)) {
+    if ((await readAuthenticatedRun(workspace, entry.id, auth)) === undefined) return true
+  }
+  return false
+}
+
 export async function pruneRuns(workspace: string, options: PruneOptions): Promise<PruneResult> {
   const now = options.now ?? Date.now()
   const retentionMs = options.retentionMs ?? RUN_RETENTION_DAYS * DAY_MS

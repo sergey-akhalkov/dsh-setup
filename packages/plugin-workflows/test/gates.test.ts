@@ -1001,3 +1001,22 @@ it('pruning cannot turn a failed review denial into an allowance', async () => {
   })
   expect(decision).toMatchObject({ kind: 'deny' })
 })
+
+it('denies archival when a run file failed authentication', () => {
+  const decision = evaluateArchiveGate({
+    change: 'auth',
+    runs: [],
+    receipts: [],
+    tamperedRuns: true,
+    specRecord: {
+      ok: true,
+      evidence: {
+        kind: 'record',
+        path: '.dsh/delegation/spec-review/auth/spec.json',
+        digest: DIGEST,
+      },
+    },
+  })
+  expect(decision).toMatchObject({ kind: 'deny' })
+  if (decision.kind === 'deny') expect(decision.reason).toContain('authentication')
+})

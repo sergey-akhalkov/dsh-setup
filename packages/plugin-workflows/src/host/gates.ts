@@ -481,6 +481,8 @@ export function authorizationWriteDecision(
 
 export interface ArchiveGateInput {
   readonly change: string
+  /** Whether a run file failed authentication; a tampered store fails closed. */
+  readonly tamperedRuns?: boolean
   /** Every authenticated run in the workspace. */
   readonly runs: readonly WorkflowRun[]
   /** Every verified receipt in the workspace. */
@@ -507,6 +509,12 @@ function openRequiredStep(run: WorkflowRun): { step: string } | undefined {
  * input; only the authenticated run, receipt, and record can allow.
  */
 export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecision {
+  if (input.tamperedRuns === true) {
+    return {
+      kind: 'deny',
+      reason: `the archive of "${input.change}" is refused: a workflow run file failed authentication; fix or remove it before archiving`,
+    }
+  }
   const related = input.runs.filter(
     (run) => run.status !== 'cancelled' && intakeName(run) === input.change,
   )

@@ -36,6 +36,7 @@ import {
   boundContext,
   createRun,
   DAY_MS,
+  hasTamperedRuns,
   listAuthenticatedRuns,
   openRunCount,
   pruneRuns,
@@ -586,4 +587,16 @@ it('retains a failed run whose required step is still unresolved', async () => {
   })
   expect(result.removed).not.toContain(run.id)
   expect((await readAuthenticatedRun(workspace, run.id, auth()))?.status).toBe('failed')
+})
+
+it('reports a tampered run file', async () => {
+  const workspace = await tempWorkspace()
+  const run = intakeRun(workspace, 'auth', 1_000, 'run-tamper-check')
+  await writeRun(workspace, run, auth())
+  expect(await hasTamperedRuns(workspace, auth())).toBe(false)
+  const file = runPath(workspace, run.id)
+  const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+  parsed.status = 'completed'
+  await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
+  expect(await hasTamperedRuns(workspace, auth())).toBe(true)
 })
