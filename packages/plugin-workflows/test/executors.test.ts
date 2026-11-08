@@ -23,7 +23,13 @@ import {
 } from '../src/host/executors.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { pendingStep } from '../src/host/resume.ts'
-import { createRun, readAuthenticatedRun, type WorkflowRun, writeRun } from '../src/host/runs.ts'
+import {
+  createRun,
+  readAuthenticatedRun,
+  settleStep,
+  type WorkflowRun,
+  writeRun,
+} from '../src/host/runs.ts'
 import type { SteerTarget } from '../src/host/steer.ts'
 
 const definition: Definition = validateDefinition({
@@ -1344,4 +1350,88 @@ it('maps native question cancellation to the declared action', async () => {
     evidenceContext,
   })
   expect(cancelledRun.status).toBe('cancelled')
+})
+
+it('resumes at the selected successor even when a shared step is listed first', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'workflows-branch-order-'))
+  try {
+    const definition = validateDefinition({
+      v: 1,
+      id: 'branch-order-demo',
+      name: 'Branch order demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'choose',
+          title: 'Choose',
+          executor: 'branch',
+          branch: {
+            predicate: { '==': [{ var: 'context.flag' }, true] },
+            // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+            then: 'yes',
+            else: 'no',
+          },
+        },
+        {
+          id: 'join',
+          title: 'Join',
+          executor: 'main',
+          prompt: 'Join.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'end',
+        },
+        {
+          id: 'yes',
+          title: 'Yes',
+          executor: 'main',
+          prompt: 'Yes.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'join',
+        },
+        {
+          id: 'no',
+          title: 'No',
+          executor: 'main',
+          prompt: 'No.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'join',
+        },
+      ],
+    })
+    const auth = HostAuth.fromKey('workflows-branch-order-key-0123456')
+    const run = createRun({
+      definition: definition.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['choose', 'join', 'yes', 'no'],
+    })
+    const choose = definition.steps[0] as (typeof definition.steps)[number]
+    const outcome = runBranchStep({
+      definition,
+      run,
+      step: choose,
+      values: { flag: true },
+    })
+    expect(pendingStep(outcome.run)).toBe('yes')
+    await writeRun(workspace, outcome.run, auth)
+    const reloaded = await readAuthenticatedRun(workspace, outcome.run.id, auth)
+    expect(reloaded).toBeDefined()
+    expect(pendingStep(reloaded as WorkflowRun)).toBe('yes')
+    const yes = settleStep(reloaded as WorkflowRun, 'yes', 'done', { at: 2_000 })
+    expect(pendingStep(yes)).toBe('join')
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
 })

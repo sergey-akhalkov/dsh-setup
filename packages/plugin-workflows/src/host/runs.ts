@@ -75,6 +75,8 @@ export interface RunViolation {
 }
 
 export interface WorkflowRun {
+  /** The branch or loop successor selected by the last executed edge. */
+  readonly nextStep?: string
   readonly v: typeof RUN_VERSION
   readonly id: string
   readonly definition: string

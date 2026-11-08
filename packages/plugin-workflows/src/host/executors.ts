@@ -582,7 +582,10 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
         }
       }
     }
-    return { run, next: chosen }
+    return {
+      run: { ...run, nextStep: chosen === 'end' ? undefined : chosen },
+      next: chosen,
+    }
   } catch (error) {
     return {
       run: setRunStatus(
