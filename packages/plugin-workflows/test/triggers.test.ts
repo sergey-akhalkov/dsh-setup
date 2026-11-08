@@ -323,12 +323,23 @@ const INTENT: IntentClassification = {
 }
 
 function intentDefinition(mode: 'shadow' | 'active'): Definition {
-  return obligation('intent-def', {
+  const base = obligation('intent-def', {
     kind: 'intent',
     match: { intent: 'new-change', classifier: 'heuristic-v1' },
     mode,
     dedupe: 'none',
   })
+  return { ...base, settings: { ...base.settings, allowIntent: true } }
+}
+
+function optedInIntent(id: string, dedupe: string): Definition {
+  const base = obligation(id, {
+    kind: 'intent',
+    match: { intent: 'new-change', classifier: 'heuristic-v1' },
+    mode: 'active',
+    dedupe,
+  })
+  return { ...base, settings: { ...base.settings, allowIntent: true } }
 }
 
 describe('intent trigger', () => {
@@ -518,12 +529,7 @@ it('does not collapse a missing dedupe identity onto an empty value', () => {
 })
 
 it('respects dedupe none for repeated intent classifications', () => {
-  const definition = obligation('intent-none', {
-    kind: 'intent',
-    match: { intent: 'new-change', classifier: 'heuristic-v1' },
-    mode: 'active',
-    dedupe: 'none',
-  })
+  const definition = optedInIntent('intent-none', 'none')
   let created = 0
   const context = {
     allowIntent: true,
@@ -547,12 +553,7 @@ it('respects dedupe none for repeated intent classifications', () => {
 })
 
 it('dedupes an intent within a turn and allows another turn', () => {
-  const definition = obligation('intent-turn', {
-    kind: 'intent',
-    match: { intent: 'new-change', classifier: 'heuristic-v1' },
-    mode: 'active',
-    dedupe: 'turn',
-  })
+  const definition = optedInIntent('intent-turn', 'turn')
   const seen = new Set<string>()
   const contextFor = (turn: number) => ({
     allowIntent: true,
@@ -569,12 +570,7 @@ it('dedupes an intent within a turn and allows another turn', () => {
 })
 
 it('retries a suppressed intent start and keeps the classification detail', () => {
-  const definition = obligation('intent-retry', {
-    kind: 'intent',
-    match: { intent: 'new-change', classifier: 'heuristic-v1' },
-    mode: 'active',
-    dedupe: 'turn',
-  })
+  const definition = optedInIntent('intent-retry', 'turn')
   const seen = new Set<string>()
   let attempts = 0
   const context = {
@@ -601,12 +597,7 @@ it('retries a suppressed intent start and keeps the classification detail', () =
 })
 
 it('keeps the classification detail when no start is registered', () => {
-  const definition = obligation('intent-no-starter', {
-    kind: 'intent',
-    match: { intent: 'new-change', classifier: 'heuristic-v1' },
-    mode: 'active',
-    dedupe: 'turn',
-  })
+  const definition = optedInIntent('intent-no-starter', 'turn')
   const row = evaluateIntents([definition], INTENT, {
     allowIntent: true,
     confirmed: true,
@@ -617,4 +608,51 @@ it('keeps the classification detail when no start is registered', () => {
   expect(row?.reason).toBe('run-suppressed')
   expect(String(row?.detail)).toContain('classifier=heuristic-v1')
   expect(String(row?.detail)).toContain('no run starter')
+})
+
+it('does not start an opted-out intent because another definition opted in', () => {
+  const optedOut = obligation('intent-out', {
+    kind: 'intent',
+    match: { intent: 'new-change' },
+    mode: 'active',
+    dedupe: 'turn',
+  })
+  const optedIn = optedInIntent('intent-in', 'turn')
+  let created = 0
+  const rows = evaluateIntents([optedOut, optedIn], INTENT, {
+    allowIntent: true,
+    confirmed: true,
+    session: 'session-1',
+    turn: 1,
+    isDuplicate: () => false,
+    markKey: () => undefined,
+    startRun: () => {
+      created += 1
+      return { ok: true, runId: 'run-1' }
+    },
+  })
+  expect(rows.find((row) => row.definition === 'intent-out')?.reason).toBe('would-fire')
+  expect(rows.find((row) => row.definition === 'intent-in')?.reason).toBe('run-created')
+  expect(created).toBe(1)
+})
+
+it('enforces an intent session filter', () => {
+  const definition = obligation('intent-session', {
+    kind: 'intent',
+    match: { intent: 'new-change', session: 'another-session' },
+    mode: 'active',
+    dedupe: 'turn',
+  })
+  const rows = evaluateIntents([definition], INTENT, {
+    allowIntent: true,
+    confirmed: true,
+    session: 'session-1',
+    turn: 1,
+    isDuplicate: () => false,
+    startRun: () => ({ ok: true, runId: 'run-1' }),
+  })
+  expect(rows[0]).toMatchObject({
+    reason: 'filter-mismatch',
+    filter: 'session: another-session',
+  })
 })

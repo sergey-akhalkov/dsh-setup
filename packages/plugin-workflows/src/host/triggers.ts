@@ -422,6 +422,7 @@ export interface IntentEvaluationContext extends DefinitionEvaluationContext {
   /** The definition was installed through the user-confirmed host path. */
   readonly confirmed: boolean
   readonly session?: string
+  readonly workspace?: string
   readonly turn?: number
   readonly markKey?: (key: string) => void
   readonly startRun?: (
@@ -506,6 +507,30 @@ export function evaluateIntentDefinition(
     }
     const match = definition.trigger.match
     const detail = classificationDetail(classification)
+    if (match.session !== undefined && match.session !== context.session) {
+      return {
+        ...base,
+        matched: false,
+        reason: 'filter-mismatch',
+        filter: `session: ${match.session}`,
+        detail,
+      }
+    }
+    if (
+      match.workspace !== undefined &&
+      !globMatches(
+        match.workspace.replaceAll('\\', '/'),
+        (context.workspace ?? '').replaceAll('\\', '/'),
+      )
+    ) {
+      return {
+        ...base,
+        matched: false,
+        reason: 'filter-mismatch',
+        filter: `workspace: ${match.workspace}`,
+        detail,
+      }
+    }
     if (match.classifier !== undefined && match.classifier !== classification.classifier) {
       return {
         ...base,
@@ -572,11 +597,16 @@ export function evaluateIntents(
       rows.push({ ...row, reason: 'would-fire' })
       continue
     }
-    if (!context.allowIntent) {
+    if (!context.allowIntent || !definition.settings.allowIntent) {
       rows.push({
         ...row,
         reason: 'would-fire',
-        detail: detailWith(row.detail, 'active intent stays shadow because allowIntent is false'),
+        detail: detailWith(
+          row.detail,
+          definition.settings.allowIntent
+            ? 'active intent stays shadow because allowIntent is false'
+            : 'active intent refused because this definition did not opt in with allowIntent',
+        ),
       })
       continue
     }

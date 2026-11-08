@@ -775,6 +775,7 @@ export function apply(ctx: Context): void {
                 enabled: true,
                 ready: true,
                 session: sessionId,
+                workspace: activeWorkspace,
                 turn: payload.turn,
                 isDuplicate: (key) => sessionSeen.has(key),
                 markKey: (key) => sessionSeen.set(key, journal.time()),
