@@ -622,3 +622,108 @@ describe('concurrent pre-execute evaluation', () => {
     expect(runs).toHaveLength(1)
   })
 })
+
+describe('startup event capture', () => {
+  it('evaluates an event received while the definitions are still loading', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    // No wait: the definitions are still loading when this event arrives.
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'early-call', name: 'delegate', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () =>
+      (await readFile(file, 'utf8').catch(() => '')).includes('definition:'),
+    )
+    const rows = (await readFile(file, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { readonly triggers?: Array<{ readonly id?: unknown }> })
+    expect(
+      rows.some(
+        (entry) =>
+          Array.isArray(entry.triggers) &&
+          entry.triggers.some((row) => String(row.id).startsWith('definition:')),
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('repeat under concurrency', () => {
+  it('creates a run for every concurrent matching event when repeat is true', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'repeat-watch',
+      name: 'Repeat watch',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'read' },
+        mode: 'active',
+        dedupe: 'turn',
+        repeat: true,
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'repeat.json'),
+        `${JSON.stringify(definition, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'repeat.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 7,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const call = async (callId: string): Promise<unknown> =>
+      host.emit(
+        'tools/pre-execute',
+        { agent: host.agent, callId, name: 'read', arguments: {} },
+        async () => ({ kind: 'continue' }),
+      )
+    await Promise.all([call('repeat-a'), call('repeat-b')])
+    const { readdir } = await import('node:fs/promises')
+    const runs = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(runs).toHaveLength(2)
+  })
+})

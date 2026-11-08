@@ -1207,11 +1207,18 @@ describe('workflow event recorder', () => {
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
     }).not.toThrow()
-    await waitFor(() => errors.mock.calls.length > 0)
-    expect(String(errors.mock.calls[0]?.[0])).toContain(
+    await waitFor(() =>
+      errors.mock.calls.some((call) =>
+        String(call[0]).includes('workflows: the session journal could not be written'),
+      ),
+    )
+    expect(errors.mock.calls.map((call) => String(call[0])).join('\n')).toContain(
       'workflows: the session journal could not be written',
     )
-    expect(String(errors.mock.calls[0]?.[0]).length).toBeLessThan(300)
+    const journalError = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes('the session journal could not be written'))
+    expect((journalError ?? '').length).toBeLessThan(300)
     const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
     const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
       try {

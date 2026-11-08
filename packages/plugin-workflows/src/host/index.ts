@@ -558,12 +558,16 @@ export function apply(ctx: Context): void {
     }
   }
 
-  const record = (workspace: string, input: JournalInput, event: ObservedEvent): void => {
+  const record = async (
+    workspace: string,
+    input: JournalInput,
+    event: ObservedEvent,
+  ): Promise<void> => {
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
     const sessionSeen = seen.get(input.session) ?? new Map<string, number>()
     seen.set(input.session, sessionSeen)
-    void loadDefinitions(workspace)
+    await loadDefinitions(workspace)
     const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
     const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
     const definitionRows = definitionEventsOf(input, event, workspace).flatMap((definitionEvent) =>
@@ -681,7 +685,7 @@ export function apply(ctx: Context): void {
   }
 
   listen(() =>
-    ctx.on('agent/pre-step', (payload, next) => {
+    ctx.on('agent/pre-step', async (payload, next) => {
       let workspace: string | undefined
       try {
         const session = payload.agent.session
@@ -691,7 +695,7 @@ export function apply(ctx: Context): void {
           metricsFor(String(session.id), payload.turn)
           const origin = session.header.origin === 'subagent' ? 'subagent' : 'root'
           const summary = `step ${String(payload.step)}`
-          record(
+          await record(
             workspace,
             {
               at: journal.time(),
@@ -715,7 +719,7 @@ export function apply(ctx: Context): void {
   )
 
   listen(() =>
-    ctx.on('agent/turn-stopping', (payload) => {
+    ctx.on('agent/turn-stopping', async (payload) => {
       let workspace: string | undefined
       try {
         const session = payload.agent.session
@@ -723,7 +727,7 @@ export function apply(ctx: Context): void {
         if (workspace === undefined) return
         turns.set(String(session.id), payload.turn)
         const summary = `turn ${String(payload.turn)} stop attempt`
-        record(
+        void record(
           workspace,
           {
             at: journal.time(),
@@ -761,7 +765,7 @@ export function apply(ctx: Context): void {
         const text = toolResultText(result)
         const summary = toolSummary(exec.name, result.isError, text)
         const bytes = Buffer.byteLength(text, 'utf8')
-        record(
+        void record(
           workspace,
           {
             at: journal.time(),
@@ -778,7 +782,7 @@ export function apply(ctx: Context): void {
             truncated: bytes > MAX_RECORD_BYTES,
           },
           { kind: 'tool.result', subject: exec.name, tool: exec.name },
-        )
+        ).catch((error: unknown) => publishListenerError(workspace, error))
       } catch (error) {
         // Observability never breaks tool dispatch; the failure is published.
         publishListenerError(workspace, error)
@@ -830,7 +834,7 @@ export function apply(ctx: Context): void {
         ? `child ${String(info.id)} started via ${info.provider}`
         : `child ${String(info.id)} ended: ${describe((info as SubagentRunEndInfo).stopReason)}`
     const turn = turns.get(sessionId)
-    record(
+    void record(
       workspace,
       {
         at: journal.time(),
@@ -846,7 +850,7 @@ export function apply(ctx: Context): void {
         kind: kind === 'subagent/start' ? 'subagent.start' : 'subagent.end',
         subject: String(info.id),
       },
-    )
+    ).catch((error: unknown) => publishListenerError(workspace, error))
   }
   const bindings: Array<() => unknown> = []
   const boundAgents = new WeakSet<Agent>()
@@ -1053,10 +1057,12 @@ export function apply(ctx: Context): void {
             triggerRows.push({ ...row, reason: 'would-fire' })
             continue
           }
+          const repeats = definition.trigger.repeat === true
           const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, observed)
           // A concurrent call that already reserved the key must not start a
-          // second run or invoke the intake gate again.
-          if (dedupeKey !== undefined && inFlightTriggers.has(dedupeKey)) {
+          // second run or invoke the intake gate again, unless the trigger
+          // repeats on every matching event.
+          if (!repeats && dedupeKey !== undefined && inFlightTriggers.has(dedupeKey)) {
             triggerRows.push({
               ...row,
               matched: true,
@@ -1068,7 +1074,7 @@ export function apply(ctx: Context): void {
             }
             continue
           }
-          const reserve = evaluation.matched && dedupeKey !== undefined
+          const reserve = !repeats && evaluation.matched && dedupeKey !== undefined
           if (reserve) inFlightTriggers.add(dedupeKey)
           try {
             // An intake call is authorized only after the active trigger
@@ -1130,7 +1136,7 @@ export function apply(ctx: Context): void {
             // A non-intake active definition starts its own observational run.
             try {
               const run = await startRunFor(workspace, sessionId, auth, definition)
-              if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
+              if (!repeats && dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
               triggerRows.push({ ...row, matched: true, reason: 'run-created', runId: run.id })
             } catch (error) {
               if (reserve && dedupeKey !== undefined) sessionSeen.delete(dedupeKey)
