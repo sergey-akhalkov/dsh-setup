@@ -282,3 +282,16 @@ it('tokenizes quoted paths with spaces and resolves a subdirectory workdir', () 
     parseArchiveCommand('git mv auth archive/auth', '/workspace', '/workspace/openspec/changes'),
   ).toEqual({ kind: 'archive', change: 'auth', form: 'git' })
 })
+it('resolves parent-relative move operands against the workdir', () => {
+  for (const command of [
+    'mv ../openspec/changes/auth ../openspec/changes/archive/',
+    'git mv ../openspec/changes/auth ../openspec/changes/archive/auth',
+    'Move-Item -LiteralPath ../openspec/changes/auth -Destination ../openspec/changes/archive/',
+  ]) {
+    expect(parseArchiveCommand(command, '/workspace', '/workspace/docs'), command).toEqual({
+      kind: 'archive',
+      change: 'auth',
+      form: command.startsWith('git') ? 'git' : command.startsWith('mv') ? 'mv' : 'Move-Item',
+    })
+  }
+})

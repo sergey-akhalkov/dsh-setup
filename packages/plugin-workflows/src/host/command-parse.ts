@@ -6,6 +6,8 @@
  * and the file watcher are the backstop for a bypass, not this parser.
  */
 
+import { posix, win32 } from 'node:path'
+
 export type OpenspecIntent =
   | { readonly kind: 'create-change'; readonly name: string }
   | { readonly kind: 'archive'; readonly change: string }
@@ -105,6 +107,13 @@ function targetsArchive(destination: string): boolean {
   return new RegExp(`^${ARCHIVE_DIR}/[^/]+$`, 'u').test(destination)
 }
 
+function normalizeAbsolute(path: string): string {
+  const resolved = /^[A-Za-z]:\//u.test(path)
+    ? win32.normalize(path).replaceAll('\\', '/')
+    : posix.normalize(path)
+  return resolved.startsWith('./') ? resolved.slice(2) : resolved
+}
+
 function workspaceRelative(
   path: string,
   workspace: string | undefined,
@@ -112,12 +121,13 @@ function workspaceRelative(
 ): string | undefined {
   if (workspace === undefined) return path
   const normalized = path.replaceAll('\\', '/')
-  const root = workspace.replaceAll('\\', '/').replace(/\/+$/u, '')
-  const baseRoot = (base ?? workspace).replaceAll('\\', '/').replace(/\/+$/u, '')
-  const absolute =
+  const root = normalizeAbsolute(workspace.replaceAll('\\', '/').replace(/\/+$/u, ''))
+  const baseRoot = normalizeAbsolute((base ?? workspace).replaceAll('\\', '/').replace(/\/+$/u, ''))
+  const absolute = normalizeAbsolute(
     /^[A-Za-z]:\//u.test(normalized) || normalized.startsWith('/')
       ? normalized
-      : `${baseRoot}/${normalized}`
+      : `${baseRoot}/${normalized}`,
+  )
   const fold = (value: string): string =>
     process.platform === 'win32' ? value.toLowerCase() : value
   if (fold(absolute) === fold(root)) return ''
