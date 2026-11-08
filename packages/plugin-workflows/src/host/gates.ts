@@ -423,6 +423,27 @@ function workspaceRelativePath(workspace: string, path: string): string | undefi
   // directory and a UNC or extended-length prefix names another namespace;
   // neither can be compared safely with the workspace prefixes, so refuse them.
   if (/^[A-Za-z]:(?!\/)/u.test(normalized) || normalized.startsWith('//')) return undefined
+  // On Windows a colon also qualifies an NTFS directory stream; `.dsh::$INDEX_ALLOCATION`
+  // names the same directory, so only a leading drive designator may keep one.
+  // A component ending in a dot or space is stripped by Win32 and aliases the
+  // real name, so those forms are refused too.
+  if (process.platform === 'win32') {
+    const rest = normalized.replace(/^[A-Za-z]:\//u, '')
+    if (
+      rest.includes(':') ||
+      rest
+        .split('/')
+        .some(
+          (part) =>
+            part !== '' &&
+            part !== '.' &&
+            part !== '..' &&
+            (part.endsWith('.') || part.endsWith(' ')),
+        )
+    ) {
+      return undefined
+    }
+  }
   const absolute =
     isAbsolute(normalized) || normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized)
   if (absolute) {

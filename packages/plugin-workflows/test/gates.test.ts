@@ -789,6 +789,41 @@ describe('authorization write guard', () => {
     },
   )
 
+  it.skipIf(process.platform !== 'win32')('refuses NTFS stream aliases in protected paths', () => {
+    const aliases = (suffix: string): string[] => [
+      `.dsh::$INDEX_ALLOCATION/workflows/${suffix}`,
+      `.dsh:$I30:$INDEX_ALLOCATION/workflows/${suffix}`,
+    ]
+    for (const path of [
+      ...aliases('definitions/mine.json'),
+      ...aliases('approved.json'),
+      ...aliases('receipts/auth.json'),
+      ...aliases('runs/run-1.json'),
+    ]) {
+      for (const tool of ['write', 'edit']) {
+        expect(
+          authorizationWriteDecision({
+            workspace: '/workspace',
+            exec: { name: tool, arguments: { path } },
+            ownedCallIds: new Set(),
+          }),
+          `${tool} ${path}`,
+        ).toMatchObject({ kind: 'deny' })
+      }
+    }
+  })
+
+  it.skipIf(process.platform !== 'win32')('refuses trailing dot and space aliases', () => {
+    for (const path of [
+      '.dsh./workflows/approved.json',
+      '.dsh/workflows/approved.json.',
+      '.dsh /workflows/approved.json',
+      '.dsh/workflows/receipts/auth.json.',
+    ]) {
+      expect(decision(path), path).toMatchObject({ kind: 'deny' })
+    }
+  })
+
   it('allows the host-owned install/receipt call and leaves another path untouched', () => {
     expect(decision('.dsh/workflows/receipts/auth.json', 'owned-host-call')).toEqual({
       kind: 'allow',
