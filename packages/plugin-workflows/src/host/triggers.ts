@@ -422,6 +422,7 @@ export interface IntentEvaluationContext extends DefinitionEvaluationContext {
   /** The definition was installed through the user-confirmed host path. */
   readonly confirmed: boolean
   readonly session?: string
+  readonly turn?: number
   readonly markKey?: (key: string) => void
   readonly startRun?: (
     definition: Definition,
@@ -439,13 +440,55 @@ export function classificationDetail(classification: IntentClassification): stri
   ].join('; ')
 }
 
-function intentKey(
-  definition: string,
-  event: IntentClassification,
-  context: IntentEvaluationContext,
+/** Bounded deterministic classifications the optional intent trigger accepts. */
+const INTENT_RULES: ReadonlyArray<{
+  readonly intent: string
+  readonly confidence: number
+  readonly reason: string
+  readonly pattern: RegExp
+}> = [
+  {
+    intent: 'new-change',
+    confidence: 0.72,
+    reason: 'the message asks to create or start a change',
+    pattern: /\b(?:new|create|start|add)\b[^.\n]{0,40}\b(?:change|spec|feature)\b/iu,
+  },
+]
+
+/** Classify one bounded user message; a text without a known intent is no signal. */
+export function classifyIntent(text: string): IntentClassification | undefined {
+  const bounded = text.slice(0, 2000)
+  for (const rule of INTENT_RULES) {
+    if (rule.pattern.test(bounded)) {
+      return {
+        intent: rule.intent,
+        confidence: rule.confidence,
+        reason: rule.reason,
+        classifier: 'heuristic-v1',
+      }
+    }
+  }
+  return undefined
+}
+
+/** The dedupe identity an intent trigger declares for one classification. */
+export function intentDedupeKey(
+  definition: Definition,
+  classification: IntentClassification,
+  context: { readonly session?: string; readonly turn?: number },
 ): string | undefined {
-  if (definition === '') return undefined
-  return `${definition}\u0000intent\u0000${context.session ?? ''}\u0000${event.intent}`
+  switch (definition.trigger.dedupe) {
+    case 'none':
+      return undefined
+    case 'turn':
+      return `${definition.id}\u0000intent\u0000${context.session ?? ''}\u0000${String(context.turn ?? -1)}\u0000${classification.intent}`
+    default:
+      return undefined
+  }
+}
+
+function detailWith(detail: string | undefined, extra: string): string {
+  return detail === undefined || detail === '' ? extra : `${detail}; ${extra}`
 }
 
 /** Evaluate one intent definition against one classification. */
@@ -490,7 +533,7 @@ export function evaluateIntentDefinition(
         detail,
       }
     }
-    const key = intentKey(definition.id, classification, context)
+    const key = intentDedupeKey(definition, classification, context)
     if (key !== undefined && definition.trigger.repeat !== true && context.isDuplicate(key)) {
       return { ...base, matched: false, reason: 'dedupe', detail }
     }
@@ -523,9 +566,9 @@ export function evaluateIntents(
       rows.push(row)
       continue
     }
-    const key = intentKey(definition.id, classification, context)
-    if (key !== undefined) context.markKey?.(key)
+    const key = intentDedupeKey(definition, classification, context)
     if (definition.trigger.mode !== 'active') {
+      if (key !== undefined) context.markKey?.(key)
       rows.push({ ...row, reason: 'would-fire' })
       continue
     }
@@ -533,7 +576,7 @@ export function evaluateIntents(
       rows.push({
         ...row,
         reason: 'would-fire',
-        detail: `${row.detail ?? ''}; active intent stays shadow because allowIntent is false`,
+        detail: detailWith(row.detail, 'active intent stays shadow because allowIntent is false'),
       })
       continue
     }
@@ -541,7 +584,10 @@ export function evaluateIntents(
       rows.push({
         ...row,
         reason: 'would-fire',
-        detail: `${row.detail ?? ''}; active intent refused until the definition is installed and user-confirmed`,
+        detail: detailWith(
+          row.detail,
+          'active intent refused until the definition is installed and user-confirmed',
+        ),
       })
       continue
     }
@@ -550,15 +596,22 @@ export function evaluateIntents(
       rows.push({
         ...row,
         reason: 'run-suppressed',
-        detail: 'no run starter is registered for the intent trigger',
+        detail: detailWith(row.detail, 'no run starter is registered for the intent trigger'),
       })
     } else if (outcome.ok) {
-      rows.push({ ...row, reason: 'run-created' })
+      // Consume the identity only after the run exists, so a refused or
+      // temporarily suppressed start can be retried.
+      if (key !== undefined) context.markKey?.(key)
+      rows.push({
+        ...row,
+        reason: 'run-created',
+        ...(outcome.runId === undefined ? {} : { runId: outcome.runId }),
+      })
     } else {
       rows.push({
         ...row,
         reason: 'run-suppressed',
-        detail: outcome.reason ?? 'the run was not started',
+        detail: detailWith(row.detail, outcome.reason ?? 'the run was not started'),
       })
     }
   }

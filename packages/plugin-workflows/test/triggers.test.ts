@@ -516,3 +516,105 @@ it('does not collapse a missing dedupe identity onto an empty value', () => {
     }),
   ).toBeUndefined()
 })
+
+it('respects dedupe none for repeated intent classifications', () => {
+  const definition = obligation('intent-none', {
+    kind: 'intent',
+    match: { intent: 'new-change', classifier: 'heuristic-v1' },
+    mode: 'active',
+    dedupe: 'none',
+  })
+  let created = 0
+  const context = {
+    allowIntent: true,
+    confirmed: true,
+    session: 'session-1',
+    turn: 1,
+    isDuplicate: () => false,
+    markKey: () => undefined,
+    startRun: () => {
+      created += 1
+      return { ok: true, runId: `run-${String(created)}` }
+    },
+  }
+  expect(evaluateIntents([definition], INTENT, context)[0]).toMatchObject({
+    reason: 'run-created',
+  })
+  expect(evaluateIntents([definition], INTENT, context)[0]).toMatchObject({
+    reason: 'run-created',
+  })
+  expect(created).toBe(2)
+})
+
+it('dedupes an intent within a turn and allows another turn', () => {
+  const definition = obligation('intent-turn', {
+    kind: 'intent',
+    match: { intent: 'new-change', classifier: 'heuristic-v1' },
+    mode: 'active',
+    dedupe: 'turn',
+  })
+  const seen = new Set<string>()
+  const contextFor = (turn: number) => ({
+    allowIntent: true,
+    confirmed: true,
+    session: 'session-1',
+    turn,
+    isDuplicate: (key: string) => seen.has(key),
+    markKey: (key: string) => seen.add(key),
+    startRun: () => ({ ok: true, runId: 'run-1' }),
+  })
+  expect(evaluateIntents([definition], INTENT, contextFor(1))[0]?.reason).toBe('run-created')
+  expect(evaluateIntents([definition], INTENT, contextFor(1))[0]?.reason).toBe('dedupe')
+  expect(evaluateIntents([definition], INTENT, contextFor(2))[0]?.reason).toBe('run-created')
+})
+
+it('retries a suppressed intent start and keeps the classification detail', () => {
+  const definition = obligation('intent-retry', {
+    kind: 'intent',
+    match: { intent: 'new-change', classifier: 'heuristic-v1' },
+    mode: 'active',
+    dedupe: 'turn',
+  })
+  const seen = new Set<string>()
+  let attempts = 0
+  const context = {
+    allowIntent: true,
+    confirmed: true,
+    session: 'session-1',
+    turn: 5,
+    isDuplicate: (key: string) => seen.has(key),
+    markKey: (key: string) => seen.add(key),
+    startRun: () => {
+      attempts += 1
+      return attempts === 1
+        ? { ok: false, reason: 'capacity full' }
+        : { ok: true, runId: 'run-retried' }
+    },
+  }
+  const first = evaluateIntents([definition], INTENT, context)[0]
+  expect(first?.reason).toBe('run-suppressed')
+  expect(String(first?.detail)).toContain('classifier=heuristic-v1')
+  expect(String(first?.detail)).toContain('capacity full')
+  const second = evaluateIntents([definition], INTENT, context)[0]
+  expect(second?.reason).toBe('run-created')
+  expect(attempts).toBe(2)
+})
+
+it('keeps the classification detail when no start is registered', () => {
+  const definition = obligation('intent-no-starter', {
+    kind: 'intent',
+    match: { intent: 'new-change', classifier: 'heuristic-v1' },
+    mode: 'active',
+    dedupe: 'turn',
+  })
+  const row = evaluateIntents([definition], INTENT, {
+    allowIntent: true,
+    confirmed: true,
+    session: 'session-1',
+    turn: 1,
+    isDuplicate: () => false,
+  })[0]
+  expect(row?.reason).toBe('run-suppressed')
+  expect(String(row?.detail)).toContain('classifier=heuristic-v1')
+  expect(String(row?.detail)).toContain('no run starter')
+})

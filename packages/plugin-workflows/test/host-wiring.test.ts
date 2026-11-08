@@ -936,3 +936,88 @@ describe('dedupe after reload', () => {
     expect(runs).toHaveLength(1)
   })
 })
+
+describe('intent production path', () => {
+  it('classifies a user message and starts a confirmed active intent run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const definition = {
+      v: 1,
+      id: 'intent-watch',
+      name: 'Intent watch',
+      version: 1,
+      trigger: {
+        kind: 'intent',
+        match: { intent: 'new-change', classifier: 'heuristic-v1' },
+        mode: 'active',
+        dedupe: 'turn',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: true,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Observe.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
+      await write(
+        join(workspace, 'intent.json'),
+        `${JSON.stringify(definition, null, 2)}\n`,
+        'utf8',
+      )
+    })
+    await installDefinition(workspace, join(workspace, 'intent.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 3,
+        step: 2,
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'Please start a new change for auth' }] },
+        ],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const file = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    await waitFor(async () => {
+      const rows = (await readFile(file, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      return rows.some(
+        (entry) =>
+          entry.kind === 'intent' &&
+          Array.isArray(entry.triggers) &&
+          (entry.triggers as Array<Record<string, unknown>>).some(
+            (row) => row.id === 'definition:intent-watch' && row.reason === 'run-created',
+          ),
+      )
+    })
+    const { readdir } = await import('node:fs/promises')
+    const runs = (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((name) =>
+      name.endsWith('.json'),
+    )
+    expect(runs).toHaveLength(1)
+  })
+})

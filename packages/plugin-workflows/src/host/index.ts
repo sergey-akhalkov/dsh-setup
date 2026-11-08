@@ -54,9 +54,12 @@ import {
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
+  classifyIntent,
   type DefinitionEvent,
   evaluateDefinitions,
   evaluateDefinitionTrigger,
+  evaluateIntents,
+  intentDedupeKey,
   loadCatalog,
   obligationDedupeKey,
   type StartRunOutcome,
@@ -160,6 +163,28 @@ export function definitionEventsOf(
     default:
       return []
   }
+}
+
+/** The bounded text of the latest user message in a step payload. */
+function lastUserText(messages: readonly unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (typeof message !== 'object' || message === null) continue
+    const record = message as { readonly role?: unknown; readonly content?: unknown }
+    if (record.role !== 'user') continue
+    if (typeof record.content === 'string') return record.content.slice(0, 2000)
+    if (!Array.isArray(record.content)) return undefined
+    const text = record.content
+      .map((part) => {
+        if (typeof part !== 'object' || part === null) return ''
+        const block = part as { readonly type?: unknown; readonly text?: unknown }
+        return block.type === 'text' && typeof block.text === 'string' ? block.text : ''
+      })
+      .filter((part) => part !== '')
+      .join('\n')
+    return text === '' ? undefined : text.slice(0, 2000)
+  }
+  return undefined
 }
 
 /** The Agent registry as far as the recorder reads it. */
@@ -523,6 +548,8 @@ export function apply(ctx: Context): void {
     workers: number
   }
   const turnMetrics = new Map<string, TurnMetrics>()
+  /** The last turn whose user message was classified, one classification per turn. */
+  const intentTurns = new Map<string, number>()
   const metricsFor = (session: string, turn: number): TurnMetrics => {
     const existing = turnMetrics.get(session)
     if (existing !== undefined && existing.turn === turn) return existing
@@ -709,6 +736,7 @@ export function apply(ctx: Context): void {
         const session = payload.agent.session
         workspace = workspaceFor(services, session)
         if (workspace !== undefined) {
+          const activeWorkspace = workspace
           turns.set(String(session.id), payload.turn)
           metricsFor(String(session.id), payload.turn)
           const origin = session.header.origin === 'subagent' ? 'subagent' : 'root'
@@ -727,6 +755,82 @@ export function apply(ctx: Context): void {
             },
             { kind: 'agent.turn-start', subject: origin },
           )
+          const sessionId = String(session.id)
+          const text = lastUserText(payload.messages as readonly unknown[])
+          if (text !== undefined && intentTurns.get(sessionId) !== payload.turn) {
+            intentTurns.set(sessionId, payload.turn)
+            const classification = classifyIntent(text)
+            const definitions = await definitionsFor(activeWorkspace)
+            const intentDefinitions = definitions.filter(
+              (definition) => definition.trigger.kind === 'intent',
+            )
+            if (classification !== undefined && intentDefinitions.length > 0) {
+              const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
+              seen.set(sessionId, sessionSeen)
+              const rows = evaluateIntents(intentDefinitions, classification, {
+                allowIntent: intentDefinitions.some(
+                  (definition) => definition.settings.allowIntent,
+                ),
+                confirmed: true,
+                enabled: true,
+                ready: true,
+                session: sessionId,
+                turn: payload.turn,
+                isDuplicate: (key) => sessionSeen.has(key),
+                markKey: (key) => sessionSeen.set(key, journal.time()),
+                startRun: (definition) => {
+                  const auth = storedAuth
+                  if (auth === undefined) {
+                    return {
+                      ok: false,
+                      reason: 'the host key is unavailable; no run was created',
+                    }
+                  }
+                  try {
+                    const key = intentDedupeKey(definition, classification, {
+                      session: sessionId,
+                      turn: payload.turn,
+                    })
+                    const run = createRun({
+                      definition: definition.id,
+                      trigger: 'intent',
+                      session: sessionId,
+                      workspace: activeWorkspace,
+                      context: {
+                        intent: classification.intent,
+                        confidence: classification.confidence,
+                        classifier: classification.classifier,
+                      },
+                      steps: definition.steps.map((step) => step.id),
+                      now: journal.time(),
+                      ...(key === undefined ? {} : { dedupeKey: key }),
+                    })
+                    writeRunSync(activeWorkspace, run, auth)
+                    return { ok: true, runId: run.id }
+                  } catch (error) {
+                    return { ok: false, reason: runFailure(error) }
+                  }
+                },
+              })
+              await recordEngineEvaluation(
+                activeWorkspace,
+                sessionId,
+                payload.turn,
+                'intent',
+                classification.intent,
+                `intent ${classification.intent} (${classification.confidence.toFixed(2)})`,
+                rows.map((row) => ({
+                  id: `definition:${row.definition}`,
+                  matched: row.matched,
+                  reason: row.reason,
+                  ...(row.path === undefined ? {} : { path: row.path }),
+                  ...(row.filter === undefined ? {} : { filter: row.filter }),
+                  ...(row.detail === undefined ? {} : { detail: row.detail }),
+                  ...(row.runId === undefined ? {} : { runId: row.runId }),
+                })),
+              )
+            }
+          }
         }
       } catch (error) {
         // An observer never fails a step, but its failure stays visible.
