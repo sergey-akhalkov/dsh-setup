@@ -23,6 +23,15 @@ import {
   WhyNotTable,
 } from './panel.tsx'
 
+import {
+  DefinitionsTable,
+  type DefinitionView,
+  definitionsUrl,
+  ReceiptsList,
+  type ReceiptView,
+  receiptsUrl,
+} from './workflows.tsx'
+
 /** Layout only; every colour and spacing value is a shipped token. */
 export const VIEW_CSS = `
 .dsh-wf { display: flex; flex-direction: column; gap: var(--dsw-space-3, 12px); padding: 12px; overflow: auto; }
@@ -58,6 +67,8 @@ interface Loaded {
   readonly triggers: readonly TriggerView[]
   readonly events: Page<JournalEvent>
   readonly runs: Page<RunView>
+  readonly definitions: readonly DefinitionView[]
+  readonly receipts: readonly ReceiptView[]
 }
 
 interface ViewState {
@@ -125,8 +136,10 @@ export function WorkflowsView(props: {
       requestJson<{ triggers: TriggerView[] }>(triggersUrl(sessionId)),
       requestJson<{ events: JournalEvent[]; next?: string }>(eventsUrl(sessionId)),
       requestJson<{ runs: RunView[]; next?: string }>(runsUrl(sessionId)),
+      requestJson<{ definitions: DefinitionView[] }>(definitionsUrl(sessionId)),
+      requestJson<{ receipts: ReceiptView[] }>(receiptsUrl(sessionId)),
     ]).then(
-      ([health, triggers, events, runs]) => {
+      ([health, triggers, events, runs, definitions, receipts]) => {
         if (isStaleGeneration(generation, loadId.current)) return
         setState({
           phase: 'ready',
@@ -135,6 +148,8 @@ export function WorkflowsView(props: {
             triggers: triggers.triggers,
             events: pageOf(events, events.events),
             runs: pageOf(runs, runs.runs),
+            definitions: definitions.definitions,
+            receipts: receipts.receipts,
           },
         })
       },
@@ -259,7 +274,9 @@ export function WorkflowsView(props: {
     body = (
       <>
         <HealthStrip health={loaded.health} t={t} />
+        <DefinitionsTable definitions={loaded.definitions} t={t} />
         <TriggersTable triggers={loaded.triggers} t={t} />
+        <ReceiptsList receipts={loaded.receipts} t={t} />
         <EventList events={loaded.events.items} t={t} />
         <LoadMore
           next={loaded.events.next}

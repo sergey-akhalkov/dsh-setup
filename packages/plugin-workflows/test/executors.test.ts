@@ -429,6 +429,7 @@ function branchDefinition(): Definition {
         executor: 'branch',
         branch: {
           predicate: { '==': [{ var: 'context.flag' }, true] },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
           then: 'yes',
           else: 'no',
         },
@@ -480,7 +481,12 @@ describe('branch executor', () => {
       run: branchRun(),
       step: {
         ...choose,
-        branch: { predicate: { nope: true }, then: 'yes', else: 'no' },
+        branch: {
+          predicate: { nope: true },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'yes',
+          else: 'no',
+        },
       } as (typeof definition.steps)[number],
       values: { flag: true },
     })
@@ -531,6 +537,8 @@ function loopRun(): WorkflowRun {
 describe('loop executor', () => {
   it('stops on the predicate, honors the cap, and fails invalid JSONLogic', () => {
     const step = loopDefinition.steps[0] as (typeof loopDefinition.steps)[number]
+    const loop = step.loop
+    if (loop === undefined) throw new Error('the loop step has no loop')
     const stopped = runLoopStep({ run: loopRun(), step, values: {} })
     expect(stopped.next).toBe('end')
     expect(stopped.run.steps[0]?.state).toBe('done')
@@ -538,7 +546,7 @@ describe('loop executor', () => {
       run: loopRun(),
       step: {
         ...step,
-        loop: { ...step.loop!, stop: { '==': [{ var: 'iteration' }, 99] } },
+        loop: { ...loop, stop: { '==': [{ var: 'iteration' }, 99] } },
       } as (typeof loopDefinition.steps)[number],
       values: {},
     })
@@ -549,7 +557,7 @@ describe('loop executor', () => {
       run: loopRun(),
       step: {
         ...step,
-        loop: { ...step.loop!, stop: { nope: true } },
+        loop: { ...loop, stop: { nope: true } },
       } as (typeof loopDefinition.steps)[number],
       values: {},
     })

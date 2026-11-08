@@ -23,6 +23,7 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
+import { listReceipts } from './receipts.js'
 import { recoverRuns } from './resume.js'
 import { createRun, runFailure, storedRuns, writeRun } from './runs.js'
 import {
@@ -795,5 +796,10 @@ export function apply(ctx: Context): void {
     healthFor,
     lastEventAtFor: (session) => sessionEventAt.get(session),
     triggers,
+    definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
+    receiptsFor: async (workspace) => {
+      const auth = storedAuth
+      return auth === undefined ? [] : listReceipts(workspace, auth)
+    },
   })
 }

@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import {
   type Definition,
@@ -11,6 +14,7 @@ import {
 } from '../src/host/definitions.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 
+const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const TEMP_DIRECTORIES: string[] = []
 
 async function tempWorkspace(): Promise<string> {
@@ -428,4 +432,44 @@ describe('ownership and the installed legacy profile', () => {
     const resolved = resolveOwnership(validateDefinition(mixed), profile('goal-continuity'))
     expect(resolved.issues.join('\n')).toMatch(/defers every step/u)
   })
+})
+
+it('checks a deferred step override even when the definition-level source is installed', () => {
+  const mixed = valid()
+  const settings = mixed.settings as Record<string, unknown>
+  settings.gateOwnership = 'defer'
+  settings.legacy = { plugin: 'goal-continuity', signal: 'work_checkpoint' }
+  firstStep(mixed).legacy = { plugin: 'delegation-rules', signal: 'spec-review' }
+  const resolved = resolveOwnership(validateDefinition(mixed), profile('goal-continuity'))
+  expect(resolved.issues.join('\n')).toMatch(
+    /step "requirements".*"delegation-rules\/spec-review" is not installed.*retire-legacy-gates/u,
+  )
+})
+
+it('resolves the shipped intake against the shipped strict spec-review rule', () => {
+  const fragmentPath = join(packageDir, '..', 'plugin-delegation-rules', 'cordis.fragment.yml')
+  const fragment = parse(readFileSync(fragmentPath, 'utf8')) as {
+    rows: Array<{ id: string; config: { rules: Array<Record<string, unknown>> } }>
+  }
+  const row = fragment.rows.find((entry) => entry.id === 'dsh-setup-delegation-rules')
+  const rule = row?.config.rules.find((entry) => entry.id === 'spec-review')
+  expect(rule).toMatchObject({
+    when: 'spec-ready',
+    contract: 'review',
+    phase: 'spec',
+    scope: 'whole',
+    gate: 'strict',
+  })
+  const intake = loadShippedDefinitions().find((definition) => definition.id === 'change-intake')
+  const resolved = resolveOwnership(
+    intake as Definition,
+    profile('delegation-rules', 'goal-continuity'),
+  )
+  expect(resolved.issues).toEqual([])
+  const byId = new Map(resolved.steps.map((step) => [step.id, step]))
+  expect(byId.get('spec-review')).toMatchObject({
+    ownership: 'defer',
+    legacy: { plugin: 'delegation-rules', signal: 'spec-review' },
+  })
+  expect(byId.get('requirements')?.ownership).toBe('own')
 })

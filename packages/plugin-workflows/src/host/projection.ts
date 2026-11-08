@@ -761,6 +761,108 @@ export async function delegationObservations(workspace: string): Promise<Map<str
   return sessions
 }
 
+/**
+ * Engine obligation runs from `.dsh/workflows/runs/`. They are display-only
+ * here; authority reads authenticate them separately. A malformed or unsigned
+ * file is shown as an unreadable row, never silently dropped.
+ */
+export async function engineRuns(workspace: string): Promise<RunView[]> {
+  const directory = join(workspace, '.dsh', 'workflows', 'runs')
+  const runs: RunView[] = []
+  for (const name of await listFiles(workspace, directory)) {
+    if (!name.endsWith('.json')) continue
+    const file = join(directory, name)
+    const id = name.slice(0, -'.json'.length)
+    const parsed = await readJson(workspace, file)
+    if ('error' in parsed) {
+      runs.push(
+        errorRun(
+          `workflow:${id}`,
+          'workflow',
+          workspace,
+          file,
+          'unattributed',
+          undefined,
+          parsed.error,
+        ),
+      )
+      continue
+    }
+    if (!isRecord(parsed.value) || parsed.value.v !== 1 || typeof parsed.value.id !== 'string') {
+      runs.push(
+        errorRun(
+          `workflow:${id}`,
+          'workflow',
+          workspace,
+          file,
+          'unattributed',
+          undefined,
+          'the run record is not an object',
+        ),
+      )
+      continue
+    }
+    const record = parsed.value
+    const session = typeof record.session === 'string' ? record.session : undefined
+    const statusValue = record.status
+    const status: RunStatus =
+      statusValue === 'completed'
+        ? 'done'
+        : statusValue === 'failed' || statusValue === 'cancelled'
+          ? 'failed'
+          : statusValue === 'running' || statusValue === 'blocked' || statusValue === 'interrupted'
+            ? 'running'
+            : 'unknown'
+    const steps: RunStep[] = []
+    for (const entry of Array.isArray(record.steps) ? record.steps : []) {
+      if (!isRecord(entry) || typeof entry.id !== 'string') continue
+      const evidence = isRecord(entry.evidence) ? entry.evidence : undefined
+      steps.push({
+        id: entry.id,
+        title: entry.id,
+        state: typeof entry.state === 'string' ? entry.state : 'unknown',
+        ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
+        ...(evidence === undefined
+          ? {}
+          : {
+              evidence:
+                typeof evidence.path === 'string'
+                  ? safeText(evidence.path)
+                  : typeof evidence.kind === 'string'
+                    ? evidence.kind
+                    : 'evidence',
+            }),
+      })
+    }
+    const violations = Array.isArray(record.violations) ? record.violations : []
+    for (const [index, violation] of violations.entries()) {
+      if (!isRecord(violation)) continue
+      steps.push({
+        id: `violation:${String(index)}`,
+        title: 'VIOLATION',
+        state: typeof violation.kind === 'string' ? violation.kind : 'VIOLATION',
+        ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
+        ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
+      })
+    }
+    runs.push({
+      id: `workflow:${typeof record.id === 'string' ? record.id : id}`,
+      source: 'workflow',
+      ...(session === undefined ? {} : { session }),
+      attribution: session === undefined ? 'unattributed' : 'local',
+      title: `${String(record.definition ?? 'workflow')} intake`,
+      startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
+      status,
+      steps,
+      ...(typeof record.reason === 'string' && status === 'failed'
+        ? { error: safeError(record.reason) }
+        : {}),
+      record: displayPath(workspace, file),
+    })
+  }
+  return runs
+}
+
 /** Every projected run in one workspace, unattributed runs included. */
 export async function workspaceRuns(workspace: string): Promise<RunView[]> {
   const [observations, local] = await Promise.all([
@@ -782,7 +884,8 @@ export async function workspaceRuns(workspace: string): Promise<RunView[]> {
       failure.error,
     ),
   )
-  return [...delegation, ...reviews, ...failures].sort(compareRuns)
+  const engine = await engineRuns(workspace)
+  return [...delegation, ...reviews, ...failures, ...engine].sort(compareRuns)
 }
 
 /** The requesting session's timeline: only attributed runs, in time order. */

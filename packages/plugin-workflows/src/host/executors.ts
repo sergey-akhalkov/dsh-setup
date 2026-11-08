@@ -140,9 +140,11 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       return found === undefined && args.length > 1 ? value(args[1]) : found
     }
     case '==':
-      return value(args[0]) == value(args[1]) // biome-ignore lint/suspicious/noDoubleEquals: JSONLogic equality is loose
+      // biome-ignore lint/suspicious/noDoubleEquals: JSONLogic equality is loose
+      return value(args[0]) == value(args[1])
     case '!=':
-      return value(args[0]) != value(args[1]) // biome-ignore lint/suspicious/noDoubleEquals: JSONLogic equality is loose
+      // biome-ignore lint/suspicious/noDoubleEquals: JSONLogic equality is loose
+      return value(args[0]) != value(args[1])
     case '===':
       return value(args[0]) === value(args[1])
     case '!==':

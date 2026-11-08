@@ -259,12 +259,8 @@ async function fileCheck(
   if (!(await canonicalContained(root, target))) {
     return failure('path-escape', `"${path}" resolves outside the workspace`, path, item)
   }
-  let info
-  try {
-    info = await stat(target)
-  } catch {
-    return failure('missing-file', `"${path}" does not exist`, path, item)
-  }
+  const info = await stat(target).catch(() => undefined)
+  if (info === undefined) return failure('missing-file', `"${path}" does not exist`, path, item)
   if (!info.isFile()) return failure('missing-file', `"${path}" is not a file`, path, item)
   if (info.size === 0) return failure('empty-file', `"${path}" is empty`, path, item)
   if (evidence.minBytes !== undefined && info.size < evidence.minBytes) {
@@ -289,12 +285,10 @@ export async function expandGlob(root: string, pattern: string): Promise<string[
     if (segment === '**') {
       // `**` matches zero or more segments; try each deeper directory and the tail.
       await walk(directory, index + 1, depth + 1)
-      let entries
-      try {
-        entries = await readdir(join(root, directory), { withFileTypes: true })
-      } catch {
-        return
-      }
+      const entries = await readdir(join(root, directory), { withFileTypes: true }).catch(
+        () => undefined,
+      )
+      if (entries === undefined) return
       for (const entry of entries) {
         if (!entry.isDirectory()) continue
         await walk(directory === '' ? entry.name : `${directory}/${entry.name}`, index, depth + 1)
@@ -302,12 +296,10 @@ export async function expandGlob(root: string, pattern: string): Promise<string[
       return
     }
     const last = index === segments.length - 1
-    let entries
-    try {
-      entries = await readdir(join(root, directory), { withFileTypes: true })
-    } catch {
-      return
-    }
+    const entries = await readdir(join(root, directory), { withFileTypes: true }).catch(
+      () => undefined,
+    )
+    if (entries === undefined) return
     for (const entry of entries) {
       const candidate = directory === '' ? entry.name : `${directory}/${entry.name}`
       if (!globMatches(segment, entry.name)) continue

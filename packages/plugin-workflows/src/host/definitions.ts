@@ -14,6 +14,10 @@ export const DEFINITION_SCHEMA_VERSION = 1
 /** A definition id is also its install file name, so it must be path-safe. */
 export const DEFINITION_ID = /^[a-z0-9][a-z0-9-]*$/u
 
+/** A credential-shaped value a definition must never carry. */
+const CREDENTIAL_VALUE =
+  /\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)\b/u
+
 /** The deterministic event kinds a definition trigger may observe. */
 export const OBLIGATION_EVENT_KINDS = [
   'turn.stopping',
@@ -859,6 +863,27 @@ function assertAcyclic(definition: string, steps: readonly Step[]): void {
   }
 }
 
+/** The first credential-shaped string in a definition, with its field path. */
+function credentialField(value: unknown, path: string): string | undefined {
+  if (typeof value === 'string') {
+    return CREDENTIAL_VALUE.test(value) ? path : undefined
+  }
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      const found = credentialField(entry, `${path}[${String(index)}]`)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (typeof value === 'object' && value !== null) {
+    for (const [key, entry] of Object.entries(value)) {
+      const found = credentialField(entry, path === '' ? key : `${path}.${key}`)
+      if (found !== undefined) return found
+    }
+  }
+  return undefined
+}
+
 /** Validate one raw definition; every failure names the definition and field. */
 export function validateDefinition(raw: unknown, source = 'definition'): Definition {
   if (!isRecord(raw)) throw new Error(`workflow definition "${source}" must be an object`)
@@ -867,6 +892,10 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
     fail(definition, 'id', 'must match ^[a-z0-9][a-z0-9-]*$')
   }
   assertKnown(raw, DEFINITION_KEYS, definition, '')
+  const credential = credentialField(raw, '')
+  if (credential !== undefined) {
+    fail(definition, credential, 'must not carry a credential-shaped value')
+  }
   if (raw.v !== DEFINITION_SCHEMA_VERSION) {
     fail(definition, 'v', `must be ${String(DEFINITION_SCHEMA_VERSION)}`)
   }
@@ -986,6 +1015,9 @@ export function resolveOwnership(
         issues.push(
           `workflow definition "${definition.id}": step "${step.id}" claims ownership inside a deferred definition; a deferred definition defers every step`,
         )
+      }
+      if (step.legacy !== undefined && !installed.has(step.legacy.plugin)) {
+        issues.push(issue(definition.id, step.id, step.legacy.plugin, step.legacy.signal, false))
       }
     } else if (ownership === 'defer') {
       if (legacy === undefined) {

@@ -274,6 +274,42 @@ export interface ApprovedDefinitions {
 }
 
 /**
+ * Every load path ends here: an active intent needs a user-confirmed definition,
+ * and an installed-legacy profile refuses every illegal ownership combination.
+ * The fallback paths (a linked directory, an unreadable directory) must not
+ * bypass these rules, so they call this too.
+ */
+function applyLoadRules(
+  definitions: readonly Definition[],
+  userConfirmed: ReadonlySet<string>,
+  installedLegacy: ReadonlySet<string> | undefined,
+  errors: string[],
+): ApprovedDefinitions {
+  const confirmed: Definition[] = []
+  for (const definition of definitions) {
+    if (
+      definition.trigger.kind === 'intent' &&
+      definition.trigger.mode === 'active' &&
+      !userConfirmed.has(definition.id)
+    ) {
+      errors.push(
+        `definition "${definition.id}": an active intent trigger requires a user-confirmed definition; run /workflows install <path> and confirm`,
+      )
+      continue
+    }
+    confirmed.push(definition)
+  }
+  if (installedLegacy === undefined) return { definitions: confirmed, errors }
+  const kept: Definition[] = []
+  for (const definition of confirmed) {
+    const resolution = resolveOwnership(definition, installedLegacy)
+    if (resolution.issues.length === 0) kept.push(definition)
+    else errors.push(...resolution.issues)
+  }
+  return { definitions: kept, errors }
+}
+
+/**
  * Load the shipped definitions plus the approved local ones. A local file is
  * considered only when its id has a valid host approval for its exact content
  * hash; an approved local id overrides the shipped definition. The drafts
@@ -297,33 +333,24 @@ export async function loadApprovedDefinitions(
   const directory = workspaceDefinitionsDirectory(workspace)
   const root = await realpath(workspace).catch(() => undefined)
   if (root !== undefined && !(await unlinkedAncestors(root, DEFINITION_SEGMENTS))) {
-    return {
-      definitions: shipped,
-      errors: [
-        ...errors,
-        'a workflow directory ancestor is a link; the workspace definitions are refused',
-      ],
-    }
+    return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+      ...errors,
+      'a workflow directory ancestor is a link; the workspace definitions are refused',
+    ])
   }
   const directoryInfo = await lstat(directory).catch(() => undefined)
   if (directoryInfo?.isSymbolicLink() === true) {
-    return {
-      definitions: shipped,
-      errors: [
-        ...errors,
-        'the workspace definitions directory is a link and is refused; use a real directory',
-      ],
-    }
+    return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+      ...errors,
+      'the workspace definitions directory is a link and is refused; use a real directory',
+    ])
   }
   const realDirectory = await realpath(directory).catch(() => undefined)
   if (realDirectory !== undefined && (root === undefined || !isInside(root, realDirectory))) {
-    return {
-      definitions: shipped,
-      errors: [
-        ...errors,
-        'the workspace definitions directory escapes the workspace and is refused',
-      ],
-    }
+    return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+      ...errors,
+      'the workspace definitions directory escapes the workspace and is refused',
+    ])
   }
   let names: string[]
   try {
@@ -386,31 +413,7 @@ export async function loadApprovedDefinitions(
   for (const [id, definition] of local) {
     if (!shipped.some((entry) => entry.id === id)) definitions.push(definition)
   }
-  // An active intent trigger needs a definition the user installed and
-  // confirmed; a shipped or merely unapproved definition stays refused.
-  const userConfirmed = new Set(local.keys())
-  const confirmed: Definition[] = []
-  for (const definition of definitions) {
-    if (
-      definition.trigger.kind === 'intent' &&
-      definition.trigger.mode === 'active' &&
-      !userConfirmed.has(definition.id)
-    ) {
-      errors.push(
-        `definition "${definition.id}": an active intent trigger requires a user-confirmed definition; run /workflows install <path> and confirm`,
-      )
-      continue
-    }
-    confirmed.push(definition)
-  }
-  if (options.installedLegacy === undefined) return { definitions: confirmed, errors }
-  const kept: Definition[] = []
-  for (const definition of confirmed) {
-    const resolution = resolveOwnership(definition, options.installedLegacy)
-    if (resolution.issues.length === 0) kept.push(definition)
-    else errors.push(...resolution.issues)
-  }
-  return { definitions: kept, errors }
+  return applyLoadRules(definitions, new Set(local.keys()), options.installedLegacy, errors)
 }
 
 /** Read one local installed definition regardless of approval; test/debug seam. */

@@ -308,3 +308,18 @@ it('refuses a linked ancestor before the install can overwrite shipped assets', 
   const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
   expect(loaded.errors.join('\n')).toMatch(/ancestor is a link|definitions directory is a link/u)
 })
+
+it('applies ownership filtering on a linked-directory fallback too', async () => {
+  const workspace = await tempWorkspace()
+  const drafts = workspaceDraftsDirectory(workspace)
+  await mkdir(drafts, { recursive: true })
+  const definitions = workspaceDefinitionsDirectory(workspace)
+  await mkdir(dirname(definitions), { recursive: true })
+  await symlink(drafts, definitions, process.platform === 'win32' ? 'junction' : 'dir')
+  const empty = await loadApprovedDefinitions(workspace, {
+    auth: auth(),
+    installedLegacy: new Set(),
+  })
+  expect(empty.definitions).toEqual([])
+  expect(empty.errors.join('\n')).toMatch(/retire-legacy-gates/u)
+})

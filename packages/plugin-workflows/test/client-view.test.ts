@@ -1,0 +1,144 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createWorkflowRoutes, DEFINITIONS_ROUTE, RECEIPTS_ROUTE } from '../src/host/api.ts'
+import type { Definition } from '../src/host/definitions.ts'
+import { HostAuth } from '../src/host/host-auth.ts'
+import { engineRuns } from '../src/host/projection.ts'
+import { issueAdoptionReceipt, listReceipts } from '../src/host/receipts.ts'
+import {
+  addViolation,
+  createRun,
+  runsDirectory,
+  setRunStatus,
+  settleStep,
+  writeRun,
+} from '../src/host/runs.ts'
+
+const TEMP_DIRECTORIES: string[] = []
+
+async function tempWorkspace(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'workflows-client-'))
+  TEMP_DIRECTORIES.push(directory)
+  return directory
+}
+
+afterEach(async () => {
+  await Promise.all(
+    TEMP_DIRECTORIES.splice(0).map(async (directory) => {
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }),
+  )
+})
+
+function auth(): HostAuth {
+  return HostAuth.fromKey('test-client-host-key-0123456789')
+}
+
+const DEFINITION = {
+  id: 'change-intake',
+  name: 'OpenSpec change intake',
+  version: 1,
+  trigger: { kind: 'tool.pre-execute', match: { tool: 'shell' }, mode: 'active', dedupe: 'name' },
+  settings: { risk: 'low', allowModelStart: false, gateOwnership: 'own' },
+  steps: [
+    {
+      id: 'requirements',
+      title: 'Requirements',
+      executor: 'main',
+      ownership: 'own',
+      blockTurnClose: true,
+    },
+    {
+      id: 'spec-review',
+      title: 'Spec review',
+      executor: 'tool',
+      ownership: 'defer',
+      blockTurnClose: true,
+    },
+  ],
+} as unknown as Definition
+
+describe('workflows view data', () => {
+  it('shows a running run, a blocked run with a violation, and a malformed run file', async () => {
+    const workspace = await tempWorkspace()
+    const running = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      steps: ['requirements'],
+      now: 1_000,
+    })
+    await writeRun(workspace, running, auth())
+    let blocked = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      steps: ['requirements'],
+      now: 2_000,
+      id: 'run-blocked-1',
+    })
+    blocked = settleStep(blocked, 'requirements', 'blocked', {
+      at: 2_100,
+      reason: 'missing evidence',
+    })
+    blocked = addViolation(blocked, 'the turn closed at the cap', {
+      step: 'requirements',
+      at: 2_200,
+    })
+    blocked = setRunStatus(blocked, 'blocked', 2_200)
+    await writeRun(workspace, blocked, auth())
+    await mkdir(runsDirectory(workspace), { recursive: true })
+    await writeFile(join(runsDirectory(workspace), 'malformed.json'), '{not json\n', 'utf8')
+
+    const runs = await engineRuns(workspace)
+    const runningRow = runs.find((run) => run.id === `workflow:${running.id}`)
+    expect(runningRow).toMatchObject({ status: 'running', source: 'workflow' })
+    expect(runningRow?.steps[0]).toMatchObject({ id: 'requirements', state: 'open' })
+    const blockedRow = runs.find((run) => run.id === 'workflow:run-blocked-1')
+    expect(blockedRow).toMatchObject({ status: 'running' })
+    expect(blockedRow?.steps.find((step) => step.title === 'VIOLATION')).toBeDefined()
+    const malformed = runs.find((run) => run.id === 'workflow:malformed')
+    expect(malformed).toMatchObject({ status: 'unknown' })
+    expect(malformed?.error).toBeDefined()
+  })
+
+  it('serves the definitions and the authenticated adoption receipt', async () => {
+    const workspace = await tempWorkspace()
+    await issueAdoptionReceipt(workspace, 'auth', 'a'.repeat(64), auth(), 3_000)
+    const receipts = await listReceipts(workspace, auth())
+    expect(receipts).toHaveLength(1)
+    const routes = createWorkflowRoutes({
+      agents: { get: () => ({ session: {} }) },
+      workingDirectory: { get: () => workspace },
+      journal: { read: async () => ({ records: [] }) } as never,
+      healthFor: () =>
+        ({
+          snapshot: () => ({ listenerCount: 5, journalWritable: true, triggerCount: 9 }),
+          stateFor: () => 'healthy',
+        }) as never,
+      triggers: [],
+      definitionsFor: () => [DEFINITION],
+      receiptsFor: async () => receipts,
+    })
+    const definitionsRoute = routes.find((entry) => entry.path === DEFINITIONS_ROUTE)
+    const receiptsRoute = routes.find((entry) => entry.path === RECEIPTS_ROUTE)
+    expect(definitionsRoute).toBeDefined()
+    const definitionsResponse = await definitionsRoute?.fetch(
+      new Request(`http://localhost${DEFINITIONS_ROUTE}?session=s1`),
+    )
+    expect(definitionsResponse?.status).toBe(200)
+    const definitionsBody = (await definitionsResponse?.json()) as {
+      definitions: Array<{ id: string; steps: Array<{ ownership: string }> }>
+    }
+    expect(definitionsBody.definitions[0]?.id).toBe('change-intake')
+    expect(definitionsBody.definitions[0]?.steps[1]?.ownership).toBe('defer')
+    const receiptsBody = (await (
+      await receiptsRoute?.fetch(new Request(`http://localhost${RECEIPTS_ROUTE}?session=s1`))
+    )?.json()) as { receipts: Array<{ change: string; kind: string }> }
+    expect(receiptsBody.receipts[0]).toMatchObject({ change: 'auth', kind: 'adoption' })
+  })
+})
