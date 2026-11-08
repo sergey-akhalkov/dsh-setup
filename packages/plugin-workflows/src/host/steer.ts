@@ -41,10 +41,9 @@ export function renderMainSteer(input: MainSteerInput): string {
   const rawPrompt = step.prompt ?? ''
   const resolvedPrompt = resolveEvidenceText(rawPrompt, evidenceContext, undefined)
   const promptText = resolvedPrompt.ok ? resolvedPrompt.text : rawPrompt
-  const prompt = promptText.slice(0, budget)
-  // Only the free-text prompt is redacted: the validated structural paths in
-  // the evidence contract must survive unchanged for the verifier to match them.
-  const text = [header, ...(prompt === '' ? [] : [redactText(prompt)]), evidence, footer].join('\n')
+  // Redact first: redaction can expand text, so the bounded slice must come after it.
+  const prompt = redactText(promptText).slice(0, budget)
+  const text = [header, ...(prompt === '' ? [] : [prompt]), evidence, footer].join('\n')
   return text.length <= MAX_STEER_CHARS ? text : text.slice(0, MAX_STEER_CHARS)
 }
 

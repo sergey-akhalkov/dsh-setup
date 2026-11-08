@@ -394,3 +394,29 @@ it('does not redact a validated evidence path', () => {
   })
   expect(text).toContain(path)
 })
+it('keeps the contract when prompt redaction expands the text', () => {
+  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+  if (found === undefined) throw new Error('the change-intake definition is missing')
+  const definition = found
+  const base = definition.steps[0] as (typeof definition.steps)[number]
+  const step = {
+    ...base,
+    prompt: 'Describe Basic UI behavior. '.repeat(150),
+    evidence: { kind: 'file' as const, path: '.dsh/workflows/drafts/{name}/requirements.md' },
+  }
+  const run = createRun({
+    definition: definition.id,
+    trigger: 'tool.pre-execute',
+    session: 'session-1',
+    workspace: '/workspace',
+    steps: [step.id],
+  })
+  const text = renderMainSteer({
+    run,
+    definition,
+    step,
+    evidenceContext: { workspace: '/workspace', values: { name: 'auth' } },
+  })
+  expect(text).toContain('Evidence required:')
+  expect(text).toContain('.dsh/workflows/drafts/auth/requirements.md')
+})
