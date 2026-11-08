@@ -10,7 +10,7 @@ The engine spans one Host package plus its Client view; lanes 1-4 own disjoint H
 
 ## 2. Deterministic triggers (lane 1, owns `src/host/triggers.ts`, `src/host/command-parse.ts`, `assets/triggers/*.json`, `test/triggers.test.ts`, `test/command-parse.test.ts`)
 
-- [ ] 2.1 Implement the six event kinds and their filters, shadow/active modes, dedupe keys, the `repeat` flag, and the `not-applicable` evaluation reason; wire evaluation into the change-1 journal. Verify shadow records without a run, active creates one run, a filter mismatch, a duplicate, an applicability rejection, and `repeat: true` produce the right reason or run.
+- [x] 2.1 Implement the six event kinds and their filters, shadow/active modes, dedupe keys, the `repeat` flag, and the `not-applicable` evaluation reason; wire evaluation into the change-1 journal. Verify shadow records without a run, active creates one run, a filter mismatch, a duplicate, an applicability rejection, and `repeat: true` produce the right reason or run.
 - [ ] 2.2 Implement the shell command parser for `openspec new change <name>` and `openspec archive <name>` in the normal `openspec`, `rtk openspec`, and `pnpm exec openspec` forms; reject a compound command or an unparseable name. Verify each accepted form, a quoted name, a compound command, and a missing name.
 - [ ] 2.3 Implement the optional intent trigger behind `allowIntent`: shadow by default, classifier/confidence/reason recorded, active refused without a user-confirmed definition. Verify a shadow classification, an active refusal, and a confirmed active run.
 
