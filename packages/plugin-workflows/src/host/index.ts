@@ -16,6 +16,7 @@ import {
   type Definition,
   KNOWN_LEGACY_SOURCES,
   loadShippedDefinitions,
+  resolveOwnership,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
@@ -27,6 +28,7 @@ import {
   evaluateArchiveGate,
   evaluateIntakeGate,
   evaluateTurnClose,
+  runDeferredStep,
 } from './gates.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
@@ -1695,6 +1697,40 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }),
   )
 
+  /**
+   * Read the first pending deferred step from its legacy record and persist it.
+   * The turn-close gate then never steers past an unresolved deferred step: the
+   * legacy gate is the only steer while the record is missing.
+   */
+  const settleDeferredPrerequisite = async (
+    workspace: string,
+    run: WorkflowRun,
+    definition: Definition,
+    auth: HostAuth,
+    installedLegacy: ReadonlySet<string>,
+  ): Promise<WorkflowRun> => {
+    const pending = definition.steps.find((step) => {
+      const state = run.steps.find((entry) => entry.id === step.id)?.state
+      return state === 'open' || state === 'blocked'
+    })
+    if (pending === undefined) return run
+    const resolved = resolveOwnership(definition, installedLegacy)
+    if (resolved.steps.find((step) => step.id === pending.id)?.ownership !== 'defer') return run
+    const deferred = await runDeferredStep({
+      run,
+      definition,
+      stepId: pending.id,
+      installedLegacy,
+      readRecord: (step) =>
+        verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
+          workspace,
+          values: run.context,
+        }),
+    })
+    if (deferred.run !== run) await writeRun(workspace, deferred.run, auth)
+    return deferred.run
+  }
+
   // Turn close: steer the first owned open blockTurnClose step, bounded.
   listenEngine(() =>
     ctx.on('agent/turn-stopping', async (payload) => {
@@ -1721,11 +1757,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (ownerId !== undefined && owner === undefined) mainStepOwners.delete(sessionId)
         const ordered =
           owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
+        const installedLegacy = installedLegacySources()
         for (const run of ordered) {
           const definition = definitions.find((entry) => entry.id === run.definition)
           if (definition === undefined) continue
-          const outcome = evaluateTurnClose({
+          const current = await settleDeferredPrerequisite(
+            workspace,
             run,
+            definition,
+            auth,
+            installedLegacy,
+          )
+          const outcome = evaluateTurnClose({
+            run: current,
             definition,
             agent: {
               steer: (text: string) =>
@@ -1736,10 +1780,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   source: { kind: 'workflows-gate' },
                 } as never),
             },
-            evidenceContext: { workspace, values: run.context },
+            evidenceContext: { workspace, values: current.context },
             turn: payload.turn,
             maxBlocks: definition.settings.maxBlocks,
-            installedLegacy: installedLegacySources(),
+            installedLegacy,
             onError: (error) => publishListenerError(workspace, error),
           })
           if (outcome.run !== run) await writeRun(workspace, outcome.run, auth)

@@ -43,7 +43,7 @@ describe('legacy composition', () => {
     expect(byId.get('requirements')).toBe('own')
     expect(byId.get('approval')).toBe('own')
     const run = intakeRun()
-    expect(selectBlockingStep(run, definition, INSTALLED)?.id).toBe('approval')
+    expect(selectBlockingStep(run, definition, INSTALLED)).toBeUndefined()
   })
 
   it('never selects or steers the deferred step from the turn-close gate', () => {
@@ -65,6 +65,30 @@ describe('legacy composition', () => {
       installedLegacy: INSTALLED,
     })
     expect(outcome.kind).toBe('allow')
+  })
+
+  it('does not steer a later owned step while the deferred prerequisite is pending', () => {
+    const definition = intakeDefinition()
+    const run = intakeRun()
+    expect(selectBlockingStep(run, definition, INSTALLED)).toBeUndefined()
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: {
+        steer: () => {
+          throw new Error('a workflow steer must wait for the legacy review')
+        },
+      },
+      evidenceContext: { workspace: '/workspace', values: { name: 'auth' } },
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: INSTALLED,
+    })
+    expect(outcome.kind).toBe('allow')
+    // Once the legacy record lands, the deferred step is done and approval is
+    // the next owned step the engine may steer.
+    const reviewed = settleStep(run, 'spec-review', 'done', { at: 2_000 })
+    expect(selectBlockingStep(reviewed, definition, INSTALLED)?.id).toBe('approval')
   })
 
   it('reads the legacy record, completes the deferred step, and dispatches nothing', async () => {

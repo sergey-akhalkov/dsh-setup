@@ -1747,6 +1747,65 @@ describe('main-step ownership across turns', () => {
   })
 })
 
+describe('deferred step at runtime', () => {
+  it('reads the legacy review record and never steers past a pending deferred step', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-deferred-review',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    await runs.writeRun(workspace, run, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const blocked = await runs.readAuthenticatedRun(workspace, 'run-deferred-review', auth)
+    expect(blocked?.steps.find((step) => step.id === 'spec-review')?.state).toBe('blocked')
+    expect(blocked?.status).toBe('blocked')
+    expect(host.steers).toHaveLength(0)
+
+    // A current whole-spec PASS record lets the deferred step complete; only
+    // then may the next owned step (approval) steer.
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    expect(digest).toBeDefined()
+    const record = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    const reviewed = await runs.readAuthenticatedRun(workspace, 'run-deferred-review', auth)
+    expect(reviewed?.steps.find((step) => step.id === 'spec-review')?.state).toBe('done')
+    await waitFor(async () => host.steers.length === 1)
+  })
+})
+
 describe('archive workdir evidence root', () => {
   it('denies an archive whose shell workdir is outside the session workspace', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
@@ -1920,7 +1979,7 @@ describe('archive gate on an unreadable run store', () => {
     await mkdir(record, { recursive: true })
     await writeFile(
       join(record, 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z' })}\n`,
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
     const runs = await import('../src/host/runs.ts')
