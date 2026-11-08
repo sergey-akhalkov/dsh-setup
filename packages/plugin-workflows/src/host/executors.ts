@@ -18,6 +18,8 @@ import { renderMainSteer, type SteerTarget } from './steer.js'
  */
 
 export const DEFAULT_MAIN_ATTEMPTS = 3
+/** The largest human question the host will ask. */
+export const MAX_HUMAN_PROMPT = 2000
 
 export interface MainStepRequest {
   readonly run: WorkflowRun
@@ -140,8 +142,62 @@ function operands(args: unknown): unknown[] {
  * small operator set is accepted, an unknown operator or malformed rule throws,
  * and the recursion depth is capped.
  */
+/** Validate the whole rule tree, operand counts included, before any evaluation. */
+export function validateJsonLogic(rule: unknown, depth = 0): void {
+  if (depth > 32) throw new Error('invalid JSONLogic: nesting is too deep')
+  if (rule === null || typeof rule !== 'object') return
+  if (Array.isArray(rule)) {
+    for (const entry of rule) validateJsonLogic(entry, depth + 1)
+    return
+  }
+  const keys = Object.keys(rule)
+  if (keys.length !== 1) throw new Error('invalid JSONLogic: an operator object has one key')
+  const operator = keys[0] ?? ''
+  const args = operands((rule as Record<string, unknown>)[operator])
+  const expect = (min: number, max?: number): void => {
+    if (args.length < min || (max !== undefined && args.length > max)) {
+      throw new Error(
+        `invalid JSONLogic: "${operator}" expects ${max === undefined ? `at least ${String(min)}` : `${String(min)} to ${String(max)}`} operand(s)`,
+      )
+    }
+  }
+  switch (operator) {
+    case 'var':
+      expect(1, 2)
+      if (typeof args[0] !== 'string') throw new Error('invalid JSONLogic: var needs a path')
+      break
+    case '==':
+    case '!=':
+    case '===':
+    case '!==':
+    case 'in':
+      expect(2, 2)
+      break
+    case '<':
+    case '<=':
+    case '>':
+    case '>=':
+      expect(2, 3)
+      break
+    case 'and':
+    case 'or':
+      expect(1)
+      break
+    case '!':
+      expect(1, 1)
+      break
+    case 'if':
+      expect(2)
+      break
+    default:
+      throw new Error(`invalid JSONLogic: unknown operator "${operator}"`)
+  }
+  for (const entry of args) validateJsonLogic(entry, depth + 1)
+}
+
 export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unknown {
   if (depth > 32) throw new Error('invalid JSONLogic: nesting is too deep')
+  if (depth === 0) validateJsonLogic(rule)
   if (rule === null || typeof rule !== 'object') return rule
   if (Array.isArray(rule)) return rule.map((entry) => evaluateJsonLogic(entry, data, depth + 1))
   const keys = Object.keys(rule)
@@ -168,13 +224,25 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     case '!==':
       return value(args[0]) !== value(args[1])
     case '>':
-      return Number(value(args[0])) > Number(value(args[1]))
+      return args.length >= 3
+        ? Number(value(args[0])) > Number(value(args[1])) &&
+            Number(value(args[1])) > Number(value(args[2]))
+        : Number(value(args[0])) > Number(value(args[1]))
     case '>=':
-      return Number(value(args[0])) >= Number(value(args[1]))
+      return args.length >= 3
+        ? Number(value(args[0])) >= Number(value(args[1])) &&
+            Number(value(args[1])) >= Number(value(args[2]))
+        : Number(value(args[0])) >= Number(value(args[1]))
     case '<':
-      return Number(value(args[0])) < Number(value(args[1]))
+      return args.length >= 3
+        ? Number(value(args[0])) < Number(value(args[1])) &&
+            Number(value(args[1])) < Number(value(args[2]))
+        : Number(value(args[0])) < Number(value(args[1]))
     case '<=':
-      return Number(value(args[0])) <= Number(value(args[1]))
+      return args.length >= 3
+        ? Number(value(args[0])) <= Number(value(args[1])) &&
+            Number(value(args[1])) <= Number(value(args[2]))
+        : Number(value(args[0])) <= Number(value(args[1]))
     case 'and': {
       let last: unknown = true
       for (const entry of args) {
@@ -196,8 +264,12 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       return Array.isArray(value(args[1]))
         ? (value(args[1]) as unknown[]).includes(value(args[0]))
         : String(value(args[1]) ?? '').includes(String(value(args[0]) ?? ''))
-    case 'if':
-      return truthy(value(args[0])) ? value(args[1]) : value(args[2])
+    case 'if': {
+      for (let index = 0; index + 1 < args.length; index += 2) {
+        if (truthy(value(args[index]))) return value(args[index + 1])
+      }
+      return args.length % 2 === 1 ? value(args[args.length - 1]) : null
+    }
     default:
       throw new Error(`invalid JSONLogic: unknown operator "${operator}"`)
   }
@@ -231,6 +303,7 @@ export function runBranchStep(input: BranchStepInput): BranchStepResult {
     }
   }
   try {
+    validateJsonLogic(spec.predicate)
     const chosen = truthy(
       evaluateJsonLogic(spec.predicate, {
         context: input.values,
@@ -293,6 +366,7 @@ export function runLoopStep(input: LoopStepInput): LoopStepResult {
     Array.isArray(source) ? Math.max(1, source.length) : spec.maxIterations,
   )
   try {
+    validateJsonLogic(spec.stop)
     for (let iteration = 0; iteration < iterations; iteration += 1) {
       const stop = truthy(
         evaluateJsonLogic(spec.stop, {
@@ -385,6 +459,16 @@ export async function runHumanStep(input: HumanStepInput): Promise<WorkflowRun> 
       input.now,
     )
   }
+  if (prompt.text.length > MAX_HUMAN_PROMPT) {
+    return setRunStatus(
+      settleStep(input.run, input.step.id, 'failed', {
+        at: input.now,
+        reason: `the question is longer than ${String(MAX_HUMAN_PROMPT)} characters`,
+      }),
+      'failed',
+      input.now,
+    )
+  }
   const timeoutAction = input.step.human?.timeoutAction ?? 'block'
   let asked: HumanAskResult
   try {
@@ -419,13 +503,12 @@ export async function runHumanStep(input: HumanStepInput): Promise<WorkflowRun> 
       evidence: { kind: 'human', answer },
     })
   }
-  const state = timeoutAction === 'cancel' ? 'cancelled' : 'blocked'
   return setRunStatus(
-    settleStep(input.run, input.step.id, state, {
+    settleStep(input.run, input.step.id, 'blocked', {
       at: input.now,
       reason: `the user answer "${answer.slice(0, 200)}" is not one of: ${accepted.join(', ')}`,
     }),
-    timeoutAction === 'cancel' ? 'cancelled' : 'blocked',
+    'blocked',
     input.now,
   )
 }

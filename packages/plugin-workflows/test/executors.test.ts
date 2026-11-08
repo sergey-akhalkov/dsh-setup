@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { collectEvidencePaths } from '../src/host/evidence.ts'
 import {
+  evaluateJsonLogic,
   type HumanQuestionService,
   OwnedCalls,
   requestMainStep,
@@ -635,7 +636,7 @@ describe('human executor', () => {
       evidenceContext,
     })
     expect(rejected.steps[0]?.state).not.toBe('done')
-    expect(rejected.status).toBe('cancelled')
+    expect(rejected.status).toBe('blocked')
     expect(rejected.steps[0]?.reason).toContain('is not one of: yes')
     const timedOut = await runHumanStep({
       run: humanRun(),
@@ -863,4 +864,44 @@ it('refuses placeholders other than {name} before dispatch', async () => {
   expect(dispatched).toBe(0)
   expect(run.steps[0]?.state).toBe('failed')
   expect(run.steps[0]?.reason).toContain('unsupported placeholder')
+})
+
+it('bounds the human question before asking', async () => {
+  const step = {
+    ...(humanDefinition.steps[0] as (typeof humanDefinition.steps)[number]),
+    prompt: 'x'.repeat(2_001),
+  }
+  let asked = 0
+  const run = await runHumanStep({
+    run: humanRun(),
+    step,
+    questions: {
+      async ask() {
+        asked += 1
+        return { answer: 'yes' }
+      },
+    },
+    evidenceContext,
+  })
+  expect(asked).toBe(0)
+  expect(run.steps[0]?.state).toBe('failed')
+  expect(run.steps[0]?.reason).toContain('longer than')
+})
+
+it('implements multi-operand ranges, multi-clause if, and validates malformed rules', () => {
+  const data = { context: { value: 100 } }
+  expect(evaluateJsonLogic({ '<': [0, { var: 'context.value' }, 10] }, data)).toBe(false)
+  expect(evaluateJsonLogic({ '<=': [0, { var: 'context.value' }, 100] }, data)).toBe(true)
+  const multi = {
+    if: [
+      { '>': [{ var: 'context.value' }, 200] },
+      'large',
+      { '>': [{ var: 'context.value' }, 10] },
+      'medium',
+      'small',
+    ],
+  }
+  expect(evaluateJsonLogic(multi, data)).toBe('medium')
+  expect(() => evaluateJsonLogic({ '==': [] }, {})).toThrow(/operand/u)
+  expect(() => evaluateJsonLogic({ and: [false, { nope: true }] }, {})).toThrow(/unknown operator/u)
 })
