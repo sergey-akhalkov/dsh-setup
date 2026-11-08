@@ -1149,3 +1149,29 @@ describe('retention at boot', () => {
     expect(kept?.status).toBe('interrupted')
   })
 })
+
+describe('startup recovery guard', () => {
+  it('does not interrupt a live run when another agent is created', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const live = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      steps: ['requirements'],
+      id: 'run-live-x',
+    })
+    await runs.writeRun(workspace, live, auth)
+    await host.emit('agent/created', { agent: host.agent, source: 'fresh' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const reloaded = await runs.readAuthenticatedRun(workspace, 'run-live-x', auth)
+    expect(reloaded?.status).toBe('running')
+  })
+})

@@ -506,8 +506,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
   }
   /** Mark unfinished runs from a previous process interrupted, never completed. */
-  const recoverIfNeeded = (workspace: string): void => {
-    void (async () => {
+  const recoveries = new Map<string, Promise<void>>()
+  /** One startup recovery per workspace; later agents must not re-interrupt live runs. */
+  const recoverIfNeeded = (workspace: string): Promise<void> => {
+    const existing = recoveries.get(workspace)
+    if (existing !== undefined) return existing
+    const promise = (async () => {
       try {
         if ((await storedRuns(workspace)).length === 0 || pluginDisposed) return
         const auth = await ensureAuth()
@@ -528,6 +532,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         )
       }
     })()
+    recoveries.set(workspace, promise)
+    return promise
   }
   /** Begin health for a session workspace as soon as the session is known. */
   const observeSession = (session: Session): void => {
