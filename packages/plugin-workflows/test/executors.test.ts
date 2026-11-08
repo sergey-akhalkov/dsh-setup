@@ -553,6 +553,22 @@ describe('branch executor', () => {
       values: { required: ['context.a', 'context.b'], a: 1, b: 2 },
     })
     expect(arrayMissing.next).toBe('yes')
+    const someReview = runBranchStep({
+      run: branchRun(),
+      step: {
+        ...choose,
+        branch: {
+          predicate: {
+            some: [{ var: 'context.reviews' }, { '==': [{ var: 'verdict' }, 'PASS'] }],
+          },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'yes',
+          else: 'no',
+        },
+      } as (typeof definition.steps)[number],
+      values: { reviews: [{ verdict: 'PASS' }] },
+    })
+    expect(someReview.next).toBe('yes')
   })
 })
 
@@ -648,6 +664,20 @@ describe('loop executor', () => {
       values: { required: ['context.a', 'context.b'], a: 1, b: 2 },
     })
     expect(arrayStop.next).toBe('end')
+    const allStop = runLoopStep({
+      run: loopRun(),
+      step: {
+        ...step,
+        loop: {
+          ...loop,
+          stop: {
+            all: [{ var: 'context.reviews' }, { '==': [{ var: 'verdict' }, 'PASS'] }],
+          },
+        },
+      } as (typeof loopDefinition.steps)[number],
+      values: { reviews: [{ verdict: 'PASS' }] },
+    })
+    expect(allStop.next).toBe('end')
     const invalid = runLoopStep({
       run: loopRun(),
       step: {
@@ -1032,6 +1062,18 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
       { context: { required: ['context.a', 'context.b'], a: 1, b: 2 } },
     ),
   ).toBe(true)
+  expect(
+    evaluateJsonLogic(
+      { some: [{ var: 'context.reviews' }, { '==': [{ var: 'verdict' }, 'PASS'] }] },
+      { context: { reviews: [{ verdict: 'PASS' }] } },
+    ),
+  ).toBe(true)
+  expect(
+    evaluateJsonLogic(
+      { in: [{ var: 'context.role' }, { var: 'context.allowedRoles' }] },
+      { context: { role: 'admin', allowedRoles: { admin: false } } },
+    ),
+  ).toBe(false)
   expect(evaluateJsonLogic({ missing: ['context.absent'] }, { context: {} })).toEqual([
     'context.absent',
   ])

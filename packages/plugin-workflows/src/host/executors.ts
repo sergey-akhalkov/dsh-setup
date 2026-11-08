@@ -307,6 +307,12 @@ export function validateJsonLogic(rule: unknown, depth = 0): void {
     case 'missing':
       expect(1)
       break
+    case 'some':
+    case 'all':
+    case 'none':
+    case 'missing_some':
+      expect(2, 2)
+      break
     case 'if':
       expect(2)
       break
@@ -439,10 +445,28 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
       if (typeof haystack === 'string') {
         return typeof needle === 'string' ? haystack.includes(needle) : false
       }
-      if (haystack !== null && typeof haystack === 'object') {
-        return typeof needle === 'string' && Object.hasOwn(haystack, needle)
-      }
       return false
+    }
+    case 'some':
+    case 'all':
+    case 'none': {
+      const collection = value(args[0])
+      const items = Array.isArray(collection) ? collection.slice(0, 1_000) : []
+      const predicate = args[1]
+      const results = items.map((entry) => Boolean(evaluateJsonLogic(predicate, entry, depth + 1)))
+      if (operator === 'some') return results.some(Boolean)
+      if (operator === 'all') return results.every(Boolean)
+      return !results.some(Boolean)
+    }
+    case 'missing_some': {
+      const minimum = Number(value(args[0]))
+      const collection = value(args[1])
+      const names = (Array.isArray(collection) ? collection : []).map(String)
+      const missing = names.filter((name) => {
+        const found = lookup(data, name)
+        return found === undefined || found === null || found === ''
+      })
+      return names.length - missing.length >= minimum ? [] : missing
     }
     case 'if': {
       for (let index = 0; index + 1 < args.length; index += 2) {
