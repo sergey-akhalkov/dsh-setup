@@ -851,6 +851,23 @@ describe('authorization write guard', () => {
     }
   })
 
+  it.skipIf(process.platform !== 'win32')('refuses 8.3 short-name aliases', () => {
+    for (const path of [
+      'DSH~1/workflows/approved.json',
+      '.dsh/WORKFL~1/approved.json',
+      '.dsh/workflows/approved.json',
+    ]) {
+      expect(
+        authorizationWriteDecision({
+          workspace: '/workspace',
+          exec: { name: 'write', arguments: { file_path: path } },
+          ownedCallIds: new Set(),
+        }),
+        path,
+      ).toMatchObject({ kind: 'deny' })
+    }
+  })
+
   it('allows the host-owned install/receipt call and leaves another path untouched', () => {
     expect(decision('.dsh/workflows/receipts/auth.json', 'owned-host-call')).toEqual({
       kind: 'allow',

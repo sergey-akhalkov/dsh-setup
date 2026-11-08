@@ -426,7 +426,7 @@ function workspaceRelativePath(workspace: string, path: string): string | undefi
   // On Windows a colon also qualifies an NTFS directory stream; `.dsh::$INDEX_ALLOCATION`
   // names the same directory, so only a leading drive designator may keep one.
   // A component ending in a dot or space is stripped by Win32 and aliases the
-  // real name, so those forms are refused too.
+  // real name; an 8.3 short name (DSH~1) aliases it too, so both are refused.
   if (process.platform === 'win32') {
     const rest = normalized.replace(/^[A-Za-z]:\//u, '')
     if (
@@ -438,7 +438,7 @@ function workspaceRelativePath(workspace: string, path: string): string | undefi
             part !== '' &&
             part !== '.' &&
             part !== '..' &&
-            (part.endsWith('.') || part.endsWith(' ')),
+            (part.endsWith('.') || part.endsWith(' ') || /~\d/u.test(part)),
         )
     ) {
       return undefined
@@ -514,7 +514,7 @@ export function authorizationWriteDecision(
   if (relative === undefined) {
     return {
       kind: 'deny',
-      reason: `the write target "${intent.path}" escapes the workspace; nothing was written`,
+      reason: `the write target "${intent.paths[0] ?? ''}" escapes the workspace; nothing was written`,
     }
   }
   if (!isProtectedWritePath(relative)) return undefined
