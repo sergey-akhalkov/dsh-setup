@@ -365,4 +365,32 @@ it('keeps the evidence contract when the prompt exceeds the steer budget', () =>
   expect(text.length).toBeLessThanOrEqual(2000)
   expect(text).toContain('Evidence required:')
   expect(text).toContain('.dsh/workflows/drafts/auth/requirements.md')
+  expect(text).not.toContain('{name}')
+})
+
+it('does not redact a validated evidence path', () => {
+  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+  if (found === undefined) throw new Error('the change-intake definition is missing')
+  const definition = found
+  const base = definition.steps[0] as (typeof definition.steps)[number]
+  const path = '.dsh/workflows/drafts/auth/basic requirements.md'
+  const step = {
+    ...base,
+    prompt: 'Write the file.',
+    evidence: { kind: 'file' as const, path },
+  }
+  const run = createRun({
+    definition: definition.id,
+    trigger: 'tool.pre-execute',
+    session: 'session-1',
+    workspace: '/workspace',
+    steps: [step.id],
+  })
+  const text = renderMainSteer({
+    run,
+    definition,
+    step,
+    evidenceContext: { workspace: '/workspace', values: { name: 'auth' } },
+  })
+  expect(text).toContain(path)
 })

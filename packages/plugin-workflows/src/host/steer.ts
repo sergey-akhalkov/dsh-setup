@@ -1,5 +1,5 @@
 import type { Definition, Step } from './definitions.js'
-import { describeEvidence, type EvidenceContext } from './evidence.js'
+import { describeEvidence, type EvidenceContext, resolveEvidenceText } from './evidence.js'
 import { redactText } from './redact.js'
 import type { WorkflowRun } from './runs.js'
 
@@ -38,8 +38,13 @@ export function renderMainSteer(input: MainSteerInput): string {
       `the step "${step.id}" evidence contract is too long for a ${String(MAX_STEER_CHARS)}-character steer`,
     )
   }
-  const prompt = step.prompt === undefined ? '' : step.prompt.slice(0, budget)
-  const text = redactText([header, ...(prompt === '' ? [] : [prompt]), evidence, footer].join('\n'))
+  const rawPrompt = step.prompt ?? ''
+  const resolvedPrompt = resolveEvidenceText(rawPrompt, evidenceContext, undefined)
+  const promptText = resolvedPrompt.ok ? resolvedPrompt.text : rawPrompt
+  const prompt = promptText.slice(0, budget)
+  // Only the free-text prompt is redacted: the validated structural paths in
+  // the evidence contract must survive unchanged for the verifier to match them.
+  const text = [header, ...(prompt === '' ? [] : [redactText(prompt)]), evidence, footer].join('\n')
   return text.length <= MAX_STEER_CHARS ? text : text.slice(0, MAX_STEER_CHARS)
 }
 
