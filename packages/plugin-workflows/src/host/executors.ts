@@ -451,11 +451,11 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     case 'all':
     case 'none': {
       const collection = value(args[0])
-      const items = Array.isArray(collection) ? collection.slice(0, 1_000) : []
+      const items = Array.isArray(collection) ? collection : []
       const predicate = args[1]
-      const results = items.map((entry) => Boolean(evaluateJsonLogic(predicate, entry, depth + 1)))
+      const results = items.map((entry) => truthy(evaluateJsonLogic(predicate, entry, depth + 1)))
       if (operator === 'some') return results.some(Boolean)
-      if (operator === 'all') return results.every(Boolean)
+      if (operator === 'all') return results.length > 0 && results.every(Boolean)
       return !results.some(Boolean)
     }
     case 'missing_some': {

@@ -1074,6 +1074,22 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
       { context: { role: 'admin', allowedRoles: { admin: false } } },
     ),
   ).toBe(false)
+  expect(
+    evaluateJsonLogic({ all: [{ var: 'context.empty' }, true] }, { context: { empty: [] } }),
+  ).toBe(false)
+  expect(
+    evaluateJsonLogic(
+      { some: [{ var: 'context.items' }, { missing: ['x'] }] },
+      { context: { items: [{ x: 1 }] } },
+    ),
+  ).toBe(false)
+  const results = [...Array.from({ length: 1_000 }, () => 1), 0]
+  expect(
+    evaluateJsonLogic(
+      { all: [{ var: 'context.results' }, { '==': [{ var: '' }, 1] }] },
+      { context: { results } },
+    ),
+  ).toBe(false)
   expect(evaluateJsonLogic({ missing: ['context.absent'] }, { context: {} })).toEqual([
     'context.absent',
   ])
