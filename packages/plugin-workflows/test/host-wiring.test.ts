@@ -34,6 +34,7 @@ type Listener = (...args: unknown[]) => unknown
 function fakeHost(workspace: string): {
   readonly ctx: Record<string, unknown>
   readonly agent: Record<string, unknown>
+  readonly commands: Array<Record<string, unknown>>
   emit(name: string, ...args: unknown[]): Promise<unknown>
 } {
   const listeners = new Map<string, Listener[]>()
@@ -44,6 +45,7 @@ function fakeHost(workspace: string): {
     steer: () => {},
     inject: () => {},
   }
+  const commands: Array<Record<string, unknown>> = []
   const tools = {
     get: (name: string) =>
       ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(name)
@@ -63,6 +65,14 @@ function fakeHost(workspace: string): {
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
       if (name === 'tools') return tools
+      if (name === 'commands') {
+        return {
+          register: (definition: Record<string, unknown>) => {
+            commands.push(definition)
+            return () => {}
+          },
+        }
+      }
       return undefined
     },
     on(name: string, listener: Listener): () => void {
@@ -79,6 +89,7 @@ function fakeHost(workspace: string): {
   return {
     ctx,
     agent,
+    commands,
     async emit(name, ...args): Promise<unknown> {
       let result: unknown
       for (const listener of listeners.get(name) ?? []) result = await listener(...args)
@@ -1173,5 +1184,42 @@ describe('startup recovery guard', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     const reloaded = await runs.readAuthenticatedRun(workspace, 'run-live-x', auth)
     expect(reloaded?.status).toBe('running')
+  })
+})
+
+describe('recovery and resume ordering', () => {
+  it('does not let startup recovery overwrite a resumed run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    for (let index = 0; index < 40; index += 1) {
+      const blocked = runs.setRunStatus(
+        runs.createRun({
+          definition: 'change-intake',
+          trigger: 'tool.pre-execute',
+          session: 'session-1',
+          workspace,
+          steps: ['requirements', 'spec'],
+          id: `run-blocked-${String(index)}`,
+        }),
+        'blocked',
+        1_000,
+      )
+      await runs.writeRun(workspace, blocked, auth)
+    }
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<unknown> }
+      | undefined
+    expect(command).toBeDefined()
+    await command?.handler({
+      agent: host.agent,
+      arguments: 'resume run-blocked-0',
+    })
+    const resumed = await runs.readAuthenticatedRun(workspace, 'run-blocked-0', auth)
+    expect(resumed?.status).toBe('running')
   })
 })

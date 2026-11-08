@@ -615,6 +615,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const health = healthFor(workspace)
     activeSession.set(workspace, input.session)
     await loadDefinitions(workspace)
+    await recoverIfNeeded(workspace)
     try {
       await seedTriggerIdentities(workspace, input.session)
     } catch {
@@ -785,6 +786,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               (definition) => definition.trigger.kind === 'intent',
             )
             if (classification !== undefined && intentDefinitions.length > 0) {
+              await recoverIfNeeded(activeWorkspace)
               const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
               seen.set(sessionId, sessionSeen)
               const rows = evaluateIntents(intentDefinitions, classification, {
@@ -1173,6 +1175,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const create = command === undefined ? undefined : parseOpenspecCommand(command)
         const sessionId = String(agent.session.id)
         const definitions = await definitionsFor(workspace)
+        await recoverIfNeeded(workspace)
         await seedTriggerIdentities(workspace, sessionId).catch(() => undefined)
         const sessionSeen = seen.get(sessionId) ?? new Map<string, number>()
         seen.set(sessionId, sessionSeen)
@@ -1475,18 +1478,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     auth,
     ...(userQuestions === undefined ? {} : { questions: userQuestions }),
     now: () => journal.time(),
-    listRuns: () => listAuthenticatedRuns(workspace, auth),
-    readRun: (runId) => readAuthenticatedRun(workspace, runId, auth),
+    listRuns: async () => {
+      await recoverIfNeeded(workspace)
+      return listAuthenticatedRuns(workspace, auth)
+    },
+    readRun: async (runId) => {
+      await recoverIfNeeded(workspace)
+      return readAuthenticatedRun(workspace, runId, auth)
+    },
     startRun: async (definition) => {
+      await recoverIfNeeded(workspace)
       const run = await startRunFor(workspace, String(agent.session.id), auth, definition)
       return { run, firstStep: definition.steps[0]?.id ?? 'end' }
     },
     resumeRun: async (runId) => {
+      await recoverIfNeeded(workspace)
       const resumed = await resumeRun(workspace, runId, auth)
       await writeRun(workspace, resumed.run, auth)
       return { run: resumed.run, stepId: resumed.stepId }
     },
     cancelRun: async (runId) => {
+      await recoverIfNeeded(workspace)
       const cancelled = await cancelRun(workspace, runId, auth)
       await writeRun(workspace, cancelled, auth)
       return cancelled
@@ -1594,12 +1606,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 ...(userQuestions === undefined ? {} : { questions: userQuestions }),
                 openView: () => 'The Workflows view is available in the Workflows tab.',
                 run: async (definitionId) => {
+                  await recoverIfNeeded(workspace)
                   const definition = definitions.find((entry) => entry.id === definitionId)
                   if (definition === undefined) throw new Error(`no definition "${definitionId}"`)
                   const run = await startRunFor(workspace, sessionId, auth, definition)
                   return { runId: run.id, firstStep: definition.steps[0]?.id ?? 'end' }
                 },
                 resume: async (runId) => {
+                  await recoverIfNeeded(workspace)
                   const resumed = await resumeRun(workspace, runId, auth)
                   await writeRun(workspace, resumed.run, auth)
                   return { stepId: resumed.stepId }
@@ -1620,6 +1634,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   return adopted.ok ? { ok: true } : { ok: false, reason: adopted.reason }
                 },
                 status: async () => {
+                  await recoverIfNeeded(workspace)
                   const runs = await listAuthenticatedRuns(workspace, auth)
                   const open = runs.filter(
                     (run) => run.status === 'running' || run.status === 'blocked',
