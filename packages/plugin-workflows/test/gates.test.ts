@@ -760,6 +760,35 @@ describe('authorization write guard', () => {
     expect(decision('.DSH/WORKFLOWS/APPROVED.json', 'owned-host-call')).toEqual({ kind: 'allow' })
   })
 
+  it.skipIf(process.platform !== 'win32')(
+    'refuses Windows drive-relative and namespace aliases',
+    () => {
+      const aliases = (suffix: string): string[] => [
+        `D:.dsh/workflows/${suffix}`,
+        `\\\\?\\D:\\workspace\\.dsh\\workflows\\${suffix}`,
+        `//?/D:/workspace/.dsh/workflows/${suffix}`,
+        `\\\\server\\share\\.dsh/workflows/${suffix}`,
+      ]
+      for (const path of [
+        ...aliases('definitions/mine.json'),
+        ...aliases('approved.json'),
+        ...aliases('receipts/auth.json'),
+        ...aliases('runs/run-1.json'),
+      ]) {
+        for (const tool of ['write', 'edit']) {
+          expect(
+            authorizationWriteDecision({
+              workspace: '/workspace',
+              exec: { name: tool, arguments: { path } },
+              ownedCallIds: new Set(),
+            }),
+            `${tool} ${path}`,
+          ).toMatchObject({ kind: 'deny' })
+        }
+      }
+    },
+  )
+
   it('allows the host-owned install/receipt call and leaves another path untouched', () => {
     expect(decision('.dsh/workflows/receipts/auth.json', 'owned-host-call')).toEqual({
       kind: 'allow',
