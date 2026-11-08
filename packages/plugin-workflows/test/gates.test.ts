@@ -674,3 +674,46 @@ describe('authorization write guard', () => {
     ).toBeUndefined()
   })
 })
+
+it('refuses a contract too large for the resolved steer', () => {
+  const definition = validateDefinition({
+    v: 1,
+    id: 'oversized-demo',
+    name: 'Oversized',
+    version: 1,
+    trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+    settings: ORIGINAL_SETTINGS,
+    steps: [
+      {
+        id: 'requirements',
+        title: 'Requirements',
+        executor: 'main',
+        prompt: 'Write the requirements.',
+        evidence: {
+          kind: 'all',
+          items: Array.from({ length: 18 }, (_, index) => ({
+            kind: 'file',
+            path: `.dsh/workflows/drafts/{name}/part-${String(index)}.md`,
+          })),
+        },
+        next: 'end',
+        blockTurnClose: true,
+      },
+    ],
+  })
+  const run = runFor(definition)
+  const agent = new FakeAgent()
+  const outcome = evaluateTurnClose({
+    run,
+    definition,
+    agent,
+    evidenceContext: { workspace: '/workspace', values: { name: 'a'.repeat(64) } },
+    turn: 1,
+    installedLegacy: new Set<string>(),
+    maxBlocks: 3,
+  })
+  expect(outcome.kind).toBe('refuse')
+  if (outcome.kind === 'refuse') expect(outcome.text).toMatch(/too long/u)
+  expect(agent.messages).toHaveLength(0)
+  expect(outcome.run.steps[0]?.requestedAt).toBeUndefined()
+})

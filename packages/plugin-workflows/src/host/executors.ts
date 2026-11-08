@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Definition, Step, SubagentSpec } from './definitions.js'
 import { type EvidenceCheck, type EvidenceContext, resolveEvidenceText } from './evidence.js'
 import { requestStep, setRunStatus, settleStep, type WorkflowRun } from './runs.js'
-import { type SteerTarget, steerMain } from './steer.js'
+import { renderMainSteer, type SteerTarget } from './steer.js'
 
 /**
  * The `main` executor. It steers the root agent and never completes a step
@@ -55,6 +55,23 @@ export function requestMainStep(input: MainStepRequest): MainStepResult {
       reason: `step "${input.step.id}" reached its ${String(maxAttempts)}-request bound`,
     }
   }
+  // A contract that cannot fit the bounded steer is refused before the step is
+  // requested, so the run never holds an open step no steer can describe.
+  let text: string
+  try {
+    text = renderMainSteer({
+      run: input.run,
+      definition: input.definition,
+      step: input.step,
+      evidenceContext: input.evidenceContext,
+    })
+  } catch (error) {
+    return {
+      steered: false,
+      run: input.run,
+      reason: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+    }
+  }
   const requested = requestStep(input.run, input.step.id, input.now)
   const run: WorkflowRun = {
     ...requested,
@@ -62,12 +79,7 @@ export function requestMainStep(input: MainStepRequest): MainStepResult {
       step.id === input.step.id ? { ...step, lastTurn: input.turn } : step,
     ),
   }
-  const text = steerMain(input.agent, {
-    run,
-    definition: input.definition,
-    step: input.step,
-    evidenceContext: input.evidenceContext,
-  })
+  input.agent.steer(text)
   return { steered: true, run, text }
 }
 
