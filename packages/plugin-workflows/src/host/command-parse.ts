@@ -213,13 +213,54 @@ export function parseArchiveCommand(
   if (tokens === undefined) return undefined
   const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
   if (mvIndex > 0) {
-    const positional = tokens
-      .slice(mvIndex)
-      .filter((token) => token !== '--' && !token.startsWith('-'))
-    if (positional.length !== 2) return undefined
+    const switches = new Set([
+      '-f',
+      '--force',
+      '-v',
+      '--verbose',
+      '-n',
+      '--no-clobber',
+      '-i',
+      '--interactive',
+      '-u',
+      '--update',
+    ])
+    const positional: string[] = []
+    let source: string | undefined
+    let destination: string | undefined
+    for (let index = mvIndex; index < tokens.length; index += 1) {
+      const token = tokens[index] ?? ''
+      if (token === '--') continue
+      const name = token.toLowerCase()
+      if (
+        name === '-t' ||
+        name === '--target-directory' ||
+        name === '-destination' ||
+        name === '-dest'
+      ) {
+        destination = tokens[index + 1]
+        if (destination === undefined) return undefined
+        index += 1
+        continue
+      }
+      if (name === '-literalpath' || name === '-path') {
+        source = tokens[index + 1]
+        if (source === undefined) return undefined
+        index += 1
+        continue
+      }
+      if (name.startsWith('-')) {
+        if (switches.has(name)) continue
+        return undefined
+      }
+      positional.push(token)
+    }
+    if (source === undefined) source = positional.shift()
+    if (destination === undefined) destination = positional.shift()
+    if (positional.length > 0) return undefined
     return archiveMove(
-      unquotedPath(positional[0]),
-      unquotedPath(positional[1]),
+      unquotedPath(source),
+      unquotedPath(destination),
       mvIndex === 2 ? 'git' : 'mv',
       workspace,
       moveWorkspace,

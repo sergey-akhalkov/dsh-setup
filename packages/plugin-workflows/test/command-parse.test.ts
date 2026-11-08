@@ -324,3 +324,15 @@ it('accepts the remaining Move-Item switch parameters', () => {
     ).toEqual({ kind: 'archive', change: 'auth', form: 'Move-Item' })
   }
 })
+it('parses destination options and named source parameters for moves', () => {
+  expect(parseArchiveCommand('mv -t openspec/changes/archive/ openspec/changes/auth')).toEqual({
+    kind: 'archive',
+    change: 'auth',
+    form: 'mv',
+  })
+  expect(
+    parseArchiveCommand(
+      'mv -Destination openspec/changes/archive/ -LiteralPath openspec/changes/auth',
+    ),
+  ).toEqual({ kind: 'archive', change: 'auth', form: 'mv' })
+})
