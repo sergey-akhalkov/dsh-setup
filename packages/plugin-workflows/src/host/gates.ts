@@ -395,7 +395,10 @@ export const PROTECTED_WRITE_PREFIXES = [
 
 export interface FileWriteIntent {
   readonly tool: string
-  readonly path: string
+  /** Every non-empty path-like argument the tool may consume. */
+  readonly paths: readonly string[]
+  /** Two different targets are named; the guard must not guess which is written. */
+  readonly conflict: boolean
 }
 
 /** The file-write intent of one tool execution, when it is a recognized write. */
@@ -406,14 +409,11 @@ export function recognizeFileWrite(exec: {
   if (!WRITE_TOOLS.has(exec.name)) return undefined
   if (typeof exec.arguments !== 'object' || exec.arguments === null) return undefined
   const args = exec.arguments as Record<string, unknown>
-  const path =
-    typeof args.path === 'string'
-      ? args.path
-      : typeof args.file_path === 'string'
-        ? args.file_path
-        : undefined
-  if (path === undefined || path.trim() === '') return undefined
-  return { tool: exec.name, path }
+  const paths = [args.path, args.file_path].filter(
+    (value): value is string => typeof value === 'string' && value.trim() !== '',
+  )
+  if (paths.length === 0) return undefined
+  return { tool: exec.name, paths, conflict: paths.some((path) => path !== paths[0]) }
 }
 
 /** Normalize a model path into a workspace-relative slash path, or refuse it. */
@@ -503,7 +503,14 @@ export function authorizationWriteDecision(
   if (input.callId !== undefined && input.ownedCallIds.has(input.callId)) {
     return { kind: 'allow' }
   }
-  const relative = workspaceRelativePath(input.workspace, intent.path)
+  if (intent.conflict) {
+    return {
+      kind: 'deny',
+      reason:
+        'the write call names conflicting "path" and "file_path" targets; nothing was written',
+    }
+  }
+  const relative = workspaceRelativePath(input.workspace, intent.paths[0] ?? '')
   if (relative === undefined) {
     return {
       kind: 'deny',

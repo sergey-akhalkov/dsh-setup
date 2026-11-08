@@ -824,6 +824,33 @@ describe('authorization write guard', () => {
     }
   })
 
+  it('refuses conflicting path and file_path arguments that hide a protected target', () => {
+    for (const tool of ['write', 'edit']) {
+      for (const protectedPath of [
+        '.dsh/workflows/definitions/mine.json',
+        '.dsh/workflows/approved.json',
+        '.dsh/workflows/receipts/auth.json',
+      ]) {
+        expect(
+          authorizationWriteDecision({
+            workspace: '/workspace',
+            exec: { name: tool, arguments: { path: 'src/app.ts', file_path: protectedPath } },
+            ownedCallIds: new Set(),
+          }),
+          `${tool} ${protectedPath}`,
+        ).toMatchObject({ kind: 'deny' })
+        expect(
+          authorizationWriteDecision({
+            workspace: '/workspace',
+            exec: { name: tool, arguments: { path: '', file_path: protectedPath } },
+            ownedCallIds: new Set(),
+          }),
+          `${tool} empty path ${protectedPath}`,
+        ).toMatchObject({ kind: 'deny' })
+      }
+    }
+  })
+
   it('allows the host-owned install/receipt call and leaves another path untouched', () => {
     expect(decision('.dsh/workflows/receipts/auth.json', 'owned-host-call')).toEqual({
       kind: 'allow',
