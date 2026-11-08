@@ -73,6 +73,8 @@ export interface ShellResultObservation {
   readonly sandboxDenied?: boolean
   /** The run's resolved working directory; when present it must be the workspace. */
   readonly cwd?: string
+  /** The host-decoded foreground status; false marks a failed attempt. */
+  readonly ok?: boolean
 }
 
 /** One recorded user answer, from the user-questions service. */
@@ -745,6 +747,14 @@ function checkResult(
   const latest = afterStart.reduce((last, candidate) =>
     candidate.at >= last.at ? candidate : last,
   )
+  if (latest.ok === false) {
+    return failure(
+      'check-failed',
+      `"${command.text}" did not complete successfully (aborted, sandbox-denied, or failed)`,
+      undefined,
+      item,
+    )
+  }
   if (latest.timedOut === true) {
     return failure('check-failed', `"${command.text}" timed out`, undefined, item)
   }

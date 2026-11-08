@@ -1039,6 +1039,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             at: journal.time(),
             foreground: true,
             exitCode: shellOutcome.exitCode,
+            ok: shellOutcome.ok,
             ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
             ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
             ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),

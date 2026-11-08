@@ -1898,7 +1898,11 @@ describe('intake runtime', () => {
     run = runs.requestStep(run, 'spec', 1_200)
     await runs.writeRun(workspace, run, auth)
     const outside = await tempWorkspace()
-    const canonical = (callId: string, overrides: Record<string, unknown>): Promise<unknown> =>
+    const canonical = (
+      callId: string,
+      overrides: Record<string, unknown>,
+      isError = false,
+    ): Promise<unknown> =>
       host.emit(
         'tools/result',
         {
@@ -1908,7 +1912,7 @@ describe('intake runtime', () => {
           arguments: { command: 'openspec validate auth --strict' },
         },
         {
-          isError: false,
+          isError,
           content: [],
           value: {
             kind: 'foreground',
@@ -1937,8 +1941,17 @@ describe('intake runtime', () => {
     await canonical('check-background', { kind: 'background' })
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
     expect(await specState()).toBe('open')
-    await canonical('check-pass', {})
+    await canonical('check-aborted', { aborted: true })
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 4 })
+    expect(await specState()).toBe('open')
+    await canonical('check-runner-failed', { sandbox: { denied: false, runnerFailed: true } })
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 5 })
+    expect(await specState()).toBe('open')
+    await canonical('check-error', {}, true)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 6 })
+    expect(await specState()).toBe('open')
+    await canonical('check-pass', {})
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 7 })
     expect(await specState()).toBe('done')
   })
 
