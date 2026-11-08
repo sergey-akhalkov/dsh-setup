@@ -569,6 +569,22 @@ describe('branch executor', () => {
       values: { reviews: [{ verdict: 'PASS' }] },
     })
     expect(someReview.next).toBe('yes')
+    const numericIndex = runBranchStep({
+      run: branchRun(),
+      step: {
+        ...choose,
+        branch: {
+          predicate: {
+            some: [{ var: 'context.rows' }, { '==': [{ var: 0 }, 'PASS'] }],
+          },
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          then: 'yes',
+          else: 'no',
+        },
+      } as (typeof definition.steps)[number],
+      values: { rows: [['PASS']] },
+    })
+    expect(numericIndex.next).toBe('yes')
   })
 })
 
@@ -1090,6 +1106,11 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
       { context: { results } },
     ),
   ).toBe(false)
+  expect(evaluateJsonLogic({ '==': [{ var: 0 }, 'PASS'] }, ['PASS'])).toBe(true)
+  expect(
+    evaluateJsonLogic({ '==': [{ '+': [{ var: 'context.failures' }] }, 0] }, { context: {} }),
+  ).toBe(false)
+  expect(evaluateJsonLogic({ '==': [{ '+': ['2', 3] }, 5] }, {})).toBe(true)
   expect(evaluateJsonLogic({ missing: ['context.absent'] }, { context: {} })).toEqual([
     'context.absent',
   ])

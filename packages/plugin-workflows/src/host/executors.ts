@@ -211,6 +211,11 @@ function lookup(data: unknown, path: string): unknown {
   return current
 }
 
+function numeric(entry: unknown): number {
+  if (typeof entry === 'number') return entry
+  return typeof entry === 'string' ? Number.parseFloat(entry) : Number.NaN
+}
+
 function lessThan(left: unknown, right: unknown): boolean {
   return (left as number) < (right as number)
 }
@@ -263,7 +268,9 @@ export function validateJsonLogic(rule: unknown, depth = 0): void {
   switch (operator) {
     case 'var':
       expect(1, 2)
-      if (typeof args[0] !== 'string') throw new Error('invalid JSONLogic: var needs a path')
+      if (typeof args[0] !== 'string' && typeof args[0] !== 'number') {
+        throw new Error('invalid JSONLogic: var needs a path')
+      }
       break
     case '==':
     case '!=':
@@ -335,7 +342,8 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
   const value = (entry: unknown): unknown => evaluateJsonLogic(entry, data, depth + 1)
   switch (operator) {
     case 'var': {
-      const path = typeof args[0] === 'string' ? args[0] : ''
+      const path =
+        typeof args[0] === 'string' ? args[0] : typeof args[0] === 'number' ? String(args[0]) : ''
       const found = lookup(data, path)
       if (found !== undefined) return found
       return args.length > 1 ? value(args[1]) : null
@@ -407,25 +415,28 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     case '!!':
       return truthy(value(args[0]))
     case '+':
-      return args.reduce<number>((total, entry) => total + Number(value(entry)), 0)
+      return args.reduce<number>((total, entry) => total + numeric(value(entry)), 0)
     case '-':
       return args.length === 1
-        ? -Number(value(args[0]))
+        ? -numeric(value(args[0]))
         : args
             .slice(1)
-            .reduce<number>((total, entry) => total - Number(value(entry)), Number(value(args[0])))
+            .reduce<number>(
+              (total, entry) => total - numeric(value(entry)),
+              numeric(value(args[0])),
+            )
     case '*':
-      return args.reduce<number>((total, entry) => total * Number(value(entry)), 1)
+      return args.reduce<number>((total, entry) => total * numeric(value(entry)), 1)
     case '/':
       return args
         .slice(1)
-        .reduce<number>((total, entry) => total / Number(value(entry)), Number(value(args[0])))
+        .reduce<number>((total, entry) => total / numeric(value(entry)), numeric(value(args[0])))
     case '%':
-      return Number(value(args[0])) % Number(value(args[1]))
+      return numeric(value(args[0])) % numeric(value(args[1]))
     case 'min':
-      return Math.min(...args.map((entry) => Number(value(entry))))
+      return Math.min(...args.map((entry) => numeric(value(entry))))
     case 'max':
-      return Math.max(...args.map((entry) => Number(value(entry))))
+      return Math.max(...args.map((entry) => numeric(value(entry))))
     case 'cat':
       return args.map((entry) => String(value(entry) ?? '')).join('')
     case 'missing': {
