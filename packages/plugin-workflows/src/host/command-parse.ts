@@ -133,31 +133,36 @@ export function parseArchiveCommand(command: string): ArchiveIntent | undefined 
   const tokens = trimmed.split(/\s+/u)
   const mvIndex = tokens[0] === 'git' && tokens[1] === 'mv' ? 2 : tokens[0] === 'mv' ? 1 : 0
   if (mvIndex > 0) {
-    if (tokens.length !== mvIndex + 2) return undefined
+    const operands = tokens.slice(mvIndex).filter((token) => token !== '--')
+    if (operands.length !== 2) return undefined
     return archiveMove(
-      unquotedPath(tokens[mvIndex]),
-      unquotedPath(tokens[mvIndex + 1]),
+      unquotedPath(operands[0]),
+      unquotedPath(operands[1]),
       mvIndex === 2 ? 'git' : 'mv',
     )
   }
   if (/^move-item$/iu.test(tokens[0] ?? '')) {
-    if (tokens.length === 3) {
-      return archiveMove(unquotedPath(tokens[1]), unquotedPath(tokens[2]), 'Move-Item')
-    }
+    const positional: string[] = []
     const flags = new Map<string, string>()
     const switches = new Set(['-force', '-verbose', '-whatif', '-confirm'])
     for (let index = 1; index < tokens.length; index += 1) {
-      const token = (tokens[index] ?? '').toLowerCase()
-      if (switches.has(token)) continue
-      if (!token.startsWith('-')) return undefined
-      const value = tokens[index + 1]
-      if (value === undefined) return undefined
-      flags.set(token, value)
-      index += 1
+      const token = tokens[index] ?? ''
+      if (token === '--') continue
+      if (token.startsWith('-')) {
+        const name = token.toLowerCase()
+        if (switches.has(name)) continue
+        const value = tokens[index + 1]
+        if (value === undefined || value.startsWith('-')) return undefined
+        flags.set(name, value)
+        index += 1
+      } else {
+        positional.push(token)
+      }
     }
+    if (positional.length > 2) return undefined
     return archiveMove(
-      unquotedPath(flags.get('-literalpath') ?? flags.get('-path')),
-      unquotedPath(flags.get('-destination') ?? flags.get('-dest')),
+      unquotedPath(flags.get('-literalpath') ?? flags.get('-path') ?? positional[0]),
+      unquotedPath(flags.get('-destination') ?? flags.get('-dest') ?? positional[1]),
       'Move-Item',
     )
   }
