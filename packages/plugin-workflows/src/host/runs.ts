@@ -539,7 +539,9 @@ export function assertRunSession(run: WorkflowRun, session: string): void {
 
 /** The step currently requested and still open, if any. */
 export function activeStep(run: WorkflowRun): RunStep | undefined {
-  return run.steps.find((step) => step.state === 'open' && step.requestedAt !== undefined)
+  return run.steps.find(
+    (step) => (step.state === 'open' || step.state === 'blocked') && step.requestedAt !== undefined,
+  )
 }
 
 /**

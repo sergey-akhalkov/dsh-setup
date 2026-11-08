@@ -30,6 +30,7 @@ import {
   resumeRun,
 } from '../src/host/resume.ts'
 import {
+  activeStep,
   addViolation,
   assertRunSession,
   boundContext,
@@ -532,4 +533,22 @@ it('keeps a truncated context under the byte cap even for oversized keys', () =>
   expect(Buffer.byteLength(JSON.stringify(bounded), 'utf8')).toBeLessThanOrEqual(200)
   const multibyte = boundContext({ ['é'.repeat(500)]: 'ü'.repeat(500) }, 200)
   expect(Buffer.byteLength(JSON.stringify(multibyte), 'utf8')).toBeLessThanOrEqual(200)
+})
+
+it('refuses a second request while a requested step is blocked', () => {
+  const workspace = '/workspace'
+  const run = createRun({
+    definition: 'change-intake',
+    trigger: 'tool.pre-execute',
+    session: 'session-1',
+    workspace,
+    steps: ['requirements', 'spec'],
+    id: 'run-blocked-step',
+  })
+  const first = requestStep(run, 'requirements', 1_100)
+  const blocked = settleStep(first, 'requirements', 'blocked', { at: 1_200, reason: 'waiting' })
+  expect(() => requestStep(blocked, 'spec', 1_300)).toThrow(/one main step runs at a time/u)
+  const done = settleStep(blocked, 'requirements', 'done', { at: 1_400 })
+  const second = requestStep(done, 'spec', 1_500)
+  expect(activeStep(second)?.id).toBe('spec')
 })
