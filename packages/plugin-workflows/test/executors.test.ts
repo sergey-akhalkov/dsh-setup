@@ -904,6 +904,12 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
   }
   expect(evaluateJsonLogic(multi, data)).toBe('medium')
   expect(evaluateJsonLogic({ '===': [{ or: [false, 0] }, 0] }, {})).toBe(true)
+  expect(
+    evaluateJsonLogic(
+      { in: [{ var: 'context.role' }, { var: 'context.allowedRoles' }] },
+      { context: {} },
+    ),
+  ).toBe(false)
   expect(() => evaluateJsonLogic({ '==': [] }, {})).toThrow(/operand/u)
   expect(() => evaluateJsonLogic({ and: [false, { nope: true }] }, {})).toThrow(/unknown operator/u)
 })
@@ -945,4 +951,44 @@ it('adapts the DSH questions contract and maps timeout', async () => {
   expect(
     await timedOut.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
   ).toEqual({ timedOut: true })
+})
+
+it('applies the declared action to a cancelled question', async () => {
+  const blockStep = {
+    ...(humanDefinition.steps[0] as (typeof humanDefinition.steps)[number]),
+    human: { timeoutAction: 'block' as const },
+  }
+  const blocked = await runHumanStep({
+    run: humanRun(),
+    step: blockStep,
+    questions: { ask: async () => ({ cancelled: true }) },
+    evidenceContext,
+  })
+  expect(blocked.status).toBe('blocked')
+  expect(blocked.steps[0]?.state).toBe('blocked')
+  const cancelStep = {
+    ...blockStep,
+    human: { timeoutAction: 'cancel' as const },
+  }
+  const cancelled = await runHumanStep({
+    run: humanRun(),
+    step: cancelStep,
+    questions: { ask: async () => ({ cancelled: true }) },
+    evidenceContext,
+  })
+  expect(cancelled.status).toBe('cancelled')
+  expect(cancelled.steps[0]?.state).toBe('cancelled')
+})
+
+it('maps an abort from the question service to cancellation in the adapter', async () => {
+  const aborted = adaptUserQuestions({
+    async ask() {
+      const error = new Error('the question was aborted')
+      error.name = 'AbortError'
+      throw error
+    },
+  })
+  expect(
+    await aborted.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
+  ).toEqual({ cancelled: true })
 })

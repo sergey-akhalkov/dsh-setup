@@ -87,7 +87,14 @@ export function adaptUserQuestions(
         const selected = item.selected?.[0]?.trim() ?? ''
         return selected === '' ? {} : { answer: selected }
       } catch (error) {
-        if (controller.signal.aborted) return { timedOut: true }
+        const code =
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code: unknown }).code)
+            : ''
+        if (controller.signal.aborted || code === 'ASK_TIMED_OUT') return { timedOut: true }
+        if (code === 'ASK_ABORTED' || (error instanceof Error && error.name === 'AbortError')) {
+          return { cancelled: true }
+        }
         throw error
       } finally {
         clearTimeout(timer)
@@ -336,10 +343,18 @@ export function evaluateJsonLogic(rule: unknown, data: unknown, depth = 0): unkn
     }
     case '!':
       return !truthy(value(args[0]))
-    case 'in':
-      return Array.isArray(value(args[1]))
-        ? (value(args[1]) as unknown[]).includes(value(args[0]))
-        : String(value(args[1]) ?? '').includes(String(value(args[0]) ?? ''))
+    case 'in': {
+      const needle = value(args[0])
+      const haystack = value(args[1])
+      if (Array.isArray(haystack)) return haystack.includes(needle)
+      if (typeof haystack === 'string') {
+        return typeof needle === 'string' ? haystack.includes(needle) : false
+      }
+      if (haystack !== null && typeof haystack === 'object') {
+        return typeof needle === 'string' && Object.hasOwn(haystack, needle)
+      }
+      return false
+    }
     case 'if': {
       for (let index = 0; index + 1 < args.length; index += 2) {
         if (truthy(value(args[index]))) return value(args[index + 1])
@@ -490,6 +505,7 @@ export function runLoopStep(input: LoopStepInput): LoopStepResult {
 export interface HumanAskResult {
   readonly answer?: string
   readonly timedOut?: boolean
+  readonly cancelled?: boolean
 }
 
 export interface HumanQuestionService {
@@ -561,14 +577,13 @@ export async function runHumanStep(input: HumanStepInput): Promise<WorkflowRun> 
       input.now,
     )
   }
-  if (asked.timedOut === true) {
+  if (asked.timedOut === true || asked.cancelled === true) {
     const state = timeoutAction === 'cancel' ? 'cancelled' : 'blocked'
+    const reason =
+      asked.timedOut === true ? 'the user question timed out' : 'the user question was cancelled'
     return setRunStatus(
-      settleStep(input.run, input.step.id, state, {
-        at: input.now,
-        reason: 'the user question timed out',
-      }),
-      timeoutAction === 'cancel' ? 'cancelled' : 'blocked',
+      settleStep(input.run, input.step.id, state, { at: input.now, reason }),
+      state,
       input.now,
     )
   }
