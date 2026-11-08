@@ -293,13 +293,18 @@ export interface StoredRunEntry {
   readonly mtimeMs: number
 }
 
-/** Every run file on disk, oldest first, as retention sees it. */
+/**
+ * Every run file on disk, oldest first, as retention sees it. Only `ENOENT`
+ * means absent history; any other listing or stat failure propagates so a gate
+ * cannot read an unreadable store as an empty one.
+ */
 export async function storedRuns(workspace: string): Promise<StoredRunEntry[]> {
   let names: string[]
   try {
     names = await readdir(runsDirectory(workspace))
-  } catch {
-    return []
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
   }
   const entries: StoredRunEntry[] = []
   for (const name of names) {
@@ -307,8 +312,10 @@ export async function storedRuns(workspace: string): Promise<StoredRunEntry[]> {
     try {
       const info = await stat(join(runsDirectory(workspace), name))
       entries.push({ id: name.slice(0, -'.json'.length), size: info.size, mtimeMs: info.mtimeMs })
-    } catch {
-      // A file another pass removed is simply gone.
+    } catch (error) {
+      // A file another pass removed is simply gone; anything else is a fault.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
     }
   }
   return entries.sort(

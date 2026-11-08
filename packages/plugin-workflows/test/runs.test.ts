@@ -38,6 +38,7 @@ import {
   DAY_MS,
   hasTamperedRuns,
   listAuthenticatedRuns,
+  listRuns,
   openRunCount,
   pruneRuns,
   readAuthenticatedRun,
@@ -48,6 +49,7 @@ import {
   sessionRunsFor,
   setRunStatus,
   settleStep,
+  storedRuns,
   type WorkflowRun,
   writeRun,
   writeRunSync,
@@ -426,6 +428,14 @@ it('refuses a signed run copied from another workspace', async () => {
   expect(await listAuthenticatedRuns(target, auth())).toEqual([])
   await expect(issueCompletionReceipt(target, run.id, DIGEST, auth())).rejects.toThrow()
   await expect(resumeRun(target, run.id, auth())).rejects.toThrow()
+})
+
+it('treats a missing run directory as an empty store', async () => {
+  const workspace = await tempWorkspace()
+  expect(await storedRuns(workspace)).toEqual([])
+  expect(await listRuns(workspace)).toEqual([])
+  expect(await listAuthenticatedRuns(workspace, auth())).toEqual([])
+  expect(await hasTamperedRuns(workspace, auth())).toBe(false)
 })
 
 it('does not count a failed deletion as pruned', async () => {

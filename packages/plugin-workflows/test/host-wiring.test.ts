@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { apply, definitionEventsOf } from '../src/host/index.ts'
 
@@ -14,6 +14,42 @@ import { apply, definitionEventsOf } from '../src/host/index.ts'
 const TEMP_DIRECTORIES: string[] = []
 const KEY = 'a'.repeat(64)
 
+/** A test-only fault for the run-store reads; `undefined` passes through. */
+const runStoreFaults = vi.hoisted(() => ({
+  readdir: undefined as string | undefined,
+  stat: undefined as string | undefined,
+  writeFile: undefined as string | undefined,
+}))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const reject = (code: string): Promise<never> =>
+    Promise.reject(Object.assign(new Error('simulated run-store failure'), { code }))
+  const inRunStore = (value: unknown): boolean =>
+    String(value).replaceAll('\\', '/').includes('/workflows/runs')
+  const fault = <T extends (...args: never[]) => unknown>(
+    fn: T,
+    code: () => string | undefined,
+  ): T =>
+    ((...args: never[]) => {
+      const failure = code()
+      return failure !== undefined && inRunStore(args[0]) ? reject(failure) : fn(...args)
+    }) as T
+  return {
+    ...actual,
+    readdir: fault(actual.readdir, () => runStoreFaults.readdir),
+    stat: fault(actual.stat, () => runStoreFaults.stat),
+    writeFile: ((...args: Parameters<typeof actual.writeFile>) => {
+      const target = String(args[0]).replaceAll('\\', '/')
+      return runStoreFaults.writeFile !== undefined &&
+        target.includes('/workflows/runs/') &&
+        target.endsWith('.tmp')
+        ? reject(runStoreFaults.writeFile)
+        : actual.writeFile(...args)
+    }) as typeof actual.writeFile,
+  }
+})
+
 async function tempWorkspace(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'workflows-wiring-'))
   TEMP_DIRECTORIES.push(directory)
@@ -22,6 +58,9 @@ async function tempWorkspace(): Promise<string> {
 
 afterEach(async () => {
   delete process.env.DSH_WORKFLOWS_HOST_KEY
+  runStoreFaults.readdir = undefined
+  runStoreFaults.stat = undefined
+  runStoreFaults.writeFile = undefined
   await Promise.all(
     TEMP_DIRECTORIES.splice(0).map(async (directory) => {
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
@@ -526,10 +565,8 @@ describe('pre-execute trigger gates', () => {
         },
       ],
     }
-    await import('node:fs/promises').then(async ({ mkdir, writeFile: write }) => {
+    await import('node:fs/promises').then(async ({ writeFile: write }) => {
       await write(join(workspace, 'retry.json'), `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
-      await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
-      await write(join(workspace, '.dsh', 'workflows', 'runs'), 'blocked')
     })
     await installDefinition(workspace, join(workspace, 'retry.json'), auth)
     const host = fakeHost(workspace)
@@ -542,6 +579,8 @@ describe('pre-execute trigger gates', () => {
         async () => ({ kind: 'continue' }),
       )
     }
+    // A failed run write leaves the dedupe key unconsumed.
+    runStoreFaults.writeFile = 'EACCES'
     await emit()
     await waitFor(async () => (await journalRows(workspace)).length > 0)
     const first = (await journalRows(workspace)).flatMap((entry) =>
@@ -552,9 +591,7 @@ describe('pre-execute trigger gates', () => {
         : [],
     )
     expect(first.some((row) => row.reason === 'run-suppressed')).toBe(true)
-    await import('node:fs/promises').then(async ({ unlink }) => {
-      await unlink(join(workspace, '.dsh', 'workflows', 'runs'))
-    })
+    runStoreFaults.writeFile = undefined
     await emit()
     await waitFor(async () => {
       const rows = (await journalRows(workspace)).flatMap((entry) =>
@@ -1145,7 +1182,11 @@ describe('retention at boot', () => {
         steps: ['requirements'],
         id,
       })
-    const done = runs.setRunStatus(base('run-old-donex'), 'completed', 1_000)
+    const done = runs.setRunStatus(
+      runs.settleStep(base('run-old-donex'), 'requirements', 'done', { at: 1_000 }),
+      'completed',
+      1_000,
+    )
     await runs.writeRun(workspace, done, auth)
     const interrupted = runs.setRunStatus(base('run-old-intx'), 'interrupted', 1_100)
     await runs.writeRun(workspace, interrupted, auth)
@@ -1860,6 +1901,94 @@ it.skipIf(process.platform !== 'win32')(
     expect(nextCalled).toBe(false)
   },
 )
+describe('archive gate on an unreadable run store', () => {
+  it('refuses the archive when the run listing or stat fails and issues no authorization', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    // A pre-existing change with a current whole-spec PASS, an adoption
+    // receipt, and an open run: an empty run store would otherwise allow it.
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    expect(digest).toBeDefined()
+    const record = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z' })}\n`,
+      'utf8',
+    )
+    const runs = await import('../src/host/runs.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await receipts.issueAdoptionReceipt(workspace, 'auth', digest as string, auth, 3_000)
+    await runs.writeRun(
+      workspace,
+      runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth' },
+        steps: ['requirements', 'approval'],
+        id: 'run-store-fault',
+        now: 2_000,
+      }),
+      auth,
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    const archive = async (
+      callId: string,
+    ): Promise<{ kind?: string; reason?: string } | undefined> => {
+      return (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId,
+          name: 'pwsh',
+          arguments: { command: 'openspec archive auth' },
+        },
+        async () => ({ kind: 'continue' }),
+      )) as { kind?: string; reason?: string } | undefined
+    }
+
+    // The open run is the only blocker, so the normal archive is refused on it.
+    const baseline = await archive('archive-baseline')
+    expect(baseline?.kind).toBe('deny')
+    expect(baseline?.reason).toContain('run-store-fault')
+    const runBytes = await readFile(runs.runPath(workspace, 'run-store-fault'), 'utf8')
+
+    runStoreFaults.readdir = 'EACCES'
+    await expect(runs.storedRuns(workspace)).rejects.toThrow(/simulated run-store failure/u)
+    const listing = await archive('archive-listing-fault')
+    expect(listing?.kind).toBe('deny')
+    expect(listing?.reason).toMatch(/pre-execute gate failed internally/u)
+    runStoreFaults.readdir = undefined
+
+    runStoreFaults.stat = 'EPERM'
+    await expect(runs.storedRuns(workspace)).rejects.toThrow(/simulated run-store failure/u)
+    const stat = await archive('archive-stat-fault')
+    expect(stat?.kind).toBe('deny')
+    expect(stat?.reason).toMatch(/pre-execute gate failed internally/u)
+    runStoreFaults.stat = undefined
+
+    // Neither refusal issued an authorization or changed the run store.
+    expect(await receipts.listReceipts(workspace, auth)).toHaveLength(1)
+    expect(await readFile(runs.runPath(workspace, 'run-store-fault'), 'utf8')).toBe(runBytes)
+    const recovered = await runs.readAuthenticatedRun(workspace, 'run-store-fault', auth)
+    expect(recovered?.status).not.toBe('completed')
+  })
+})
+
 describe('archive target root', () => {
   it('denies a nested OpenSpec project and an explicit store', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
