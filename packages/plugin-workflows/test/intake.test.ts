@@ -141,7 +141,13 @@ describe('change-intake engine', () => {
       exitCode: number
       foreground: boolean
     }> = []
-    const context = { workspace, values: { name: 'auth' }, toolCalls, shellResults }
+    const context = {
+      workspace,
+      values: { name: 'auth' },
+      toolCalls,
+      shellResults,
+      stepStartedAt: 2_500,
+    }
     let delegateCalls = 0
     let run = newRun(definition, workspace)
 
@@ -240,6 +246,7 @@ describe('change-intake engine', () => {
     const context = {
       workspace,
       values: { name: 'auth' },
+      stepStartedAt: 1_500,
       shellResults: [
         {
           callId: 'check-2',

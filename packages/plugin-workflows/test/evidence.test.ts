@@ -687,3 +687,33 @@ it('matches the canonical taskId only and refuses a conflicting alias', async ()
     ok: true,
   })
 })
+
+it('accepts a qualifying retry after an earlier failure or stale result and requires a step start', async () => {
+  const workspace = await tempWorkspace()
+  const evidence: Evidence = { kind: 'check', command: 'openspec validate {name} --strict' }
+  const base = { workspace, values, stepStartedAt: 100 }
+  const retried = await verifyEvidence(evidence, {
+    ...base,
+    shellResults: [
+      shell({ callId: 'failed-attempt', at: 150, exitCode: 1 }),
+      shell({ callId: 'successful-retry', at: 200 }),
+    ],
+  })
+  expect(retried.ok).toBe(true)
+  if (retried.ok) expect(retried.evidence.callId).toBe('successful-retry')
+  const afterStale = await verifyEvidence(evidence, {
+    ...base,
+    shellResults: [
+      shell({ callId: 'stale-attempt', at: 50 }),
+      shell({ callId: 'fresh-attempt', at: 200 }),
+    ],
+  })
+  expect(afterStale.ok).toBe(true)
+  if (afterStale.ok) expect(afterStale.evidence.callId).toBe('fresh-attempt')
+  const missingStart = await verifyEvidence(evidence, {
+    workspace,
+    values,
+    shellResults: [shell({ callId: 'historical', at: 1 })],
+  })
+  expect(missingStart).toMatchObject({ ok: false, failure: { reason: 'check-failed' } })
+})
