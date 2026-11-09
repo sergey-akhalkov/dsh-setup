@@ -511,6 +511,45 @@ describe('section review gate', () => {
     expect(status).toContain('missing 1.2 "Second task"')
     expect(status).not.toContain('1.1 First task')
   })
+  it('does not ask for a duplicate per-task review while a section run is pending', async () => {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', [])
+    const allChecked = `# Tasks
+
+## 1. Engine (lane 1, owns \`packages/engine/**\`)
+
+- [x] 1.1 First task
+- [x] 1.2 Second task
+`
+    await writeFile(join(dir, 'tasks.md'), allChecked, 'utf8')
+    const subagents = registered()
+    const harness = harnessFor(root, workAndReview(), subagents)
+    await harness.preStep(1)
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    subagents.respond = async (run) => {
+      await gate
+      return passResponder(run)
+    }
+    const run = runIdFrom(
+      await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: '1',
+      }),
+    )
+    harness.git.status = ' M packages/engine.ts\0'
+    harness.git.diff = 'M engine'
+    await harness.turnStopping(1)
+    const steer = combinedSteers(harness.agent)
+    expect(steer).toContain('wait for review run')
+    expect(steer).not.toMatch(/task: "[0-9a-f]{16}"/)
+    release()
+    await harness.waitForRun(run)
+  })
+
   it('refuses turn close when a live section review loses its inputs', async () => {
     const { dir, subagents, harness } = await sectionFixture()
     harness.git.failSnapshot = true

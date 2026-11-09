@@ -255,6 +255,8 @@ export interface HarnessOptions {
   recoverDelay?: () => Promise<void>
   /** Holds a publication inside the lock before any record is written. */
   publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
+  /** Holds a target startup after admission. */
+  startHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
   /** Fake direct-user-answer service for lesson decisions. */
   userQuestions?: UserQuestionsService
 }
@@ -358,6 +360,7 @@ export class Harness {
       ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
       ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
       ...(options.publishHold === undefined ? {} : { publishHold: options.publishHold }),
+      ...(options.startHold === undefined ? {} : { startHold: options.startHold }),
     })
   }
 

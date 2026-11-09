@@ -63,6 +63,7 @@ async function fixture(
   config: BundleConfigLike = taskConfig(),
   extra: {
     publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
+    startHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
   } = {},
 ): Promise<{ root: string; dir: string; agents: FakeSubagents; harness: Harness }> {
   const workspace = await makeWorkspace()
@@ -711,6 +712,79 @@ describe('section approval publication', () => {
     expect(await harness.waitForRun(newer)).toContain('state=completed')
     expect(await exists(portablePath(dir, LATER))).toBe(true)
     expect(await exists(sectionRecordPath(root))).toBe(true)
+  })
+
+  it('keeps the newer identity when an older section startup is still pending', async () => {
+    let entered = (): void => undefined
+    let release = (): void => undefined
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let holds = 0
+    const { agents, harness } = await fixture(plan, taskConfig(), {
+      startHold: async (info) => {
+        if (info.section === undefined) return
+        holds += 1
+        if (holds > 1) return
+        entered()
+        await gate
+      },
+    })
+    const olderPromise = harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      section: '1',
+    })
+    await enteredPromise
+    await writeFile(
+      join(harness.cwd, 'openspec', 'changes', 'change-a', 'tasks.md'),
+      plan.replace('- [ ] 1.3 Later task', '- [x] 1.3 Later task'),
+      'utf8',
+    )
+    const newer = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    release()
+    const older = runIdFrom(await olderPromise)
+    expect(await harness.waitForRun(newer)).toContain('state=completed')
+    expect(await harness.waitForRun(older)).toContain('state=discarded')
+    const inScope = (prompt: string): string =>
+      prompt.slice(prompt.indexOf('Checked tasks in scope'), prompt.indexOf('Out of scope'))
+    expect(inScope(agents.runs[0]?.prompt ?? '')).not.toContain('1.3 Later task')
+    expect(inScope(agents.runs[1]?.prompt ?? '')).toContain('1.3 Later task')
+  })
+
+  it('discards a queued per-task run when the section PASS lands first', async () => {
+    const config = taskConfig()
+    config.reviewQueue = { concurrency: 1 }
+    const { agents, harness } = await fixture(plan, config)
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    agents.respond = async (run) => {
+      if (run.prompt.includes('Section:')) await gate
+      return passResponder(run)
+    }
+    const sectionRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    const perTaskHandle = await harness.toolText('delegate', {
+      rule: 'task-review',
+      change: 'change-a',
+      task: FIRST,
+    })
+    expect(perTaskHandle).toContain('queued')
+    release()
+    expect(await harness.waitForRun(sectionRun)).toContain('state=completed')
+    const perTaskRun = runIdFrom(perTaskHandle)
+    expect(await harness.waitForRun(perTaskRun)).toContain('state=discarded')
+    expect(agents.startCalls).toBe(1)
+    const sectionLocal = await readJson(localTaskPath(harness.cwd, FIRST))
+    expect(sectionLocal.verdict).toBe('PASS')
   })
 
   it('serializes a held section publication with a per-task publication', async () => {

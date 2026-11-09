@@ -3054,8 +3054,9 @@ class DelegationEngine {
     runs = new Map();
     recoveryPromises = new Map();
     queue;
-    /** Latest admitted identity per rule/change/section; a frozen older run discards. */
+    /** Latest submitted identity per rule/change/section; a frozen older run discards. */
     sectionIdentities = new Map();
+    sectionSequence = 0;
     constructor(config, services) {
         this.config = config;
         this.services = services;
@@ -3103,11 +3104,18 @@ class DelegationEngine {
             return undefined;
         return `${run.workspaceRoot}\u0000${run.context.rule.id}\u0000${run.context.change.name}\u0000${section.key}`;
     }
-    /** Record the newest admitted section identity; an older frozen run must not publish. */
+    /** Record the newest submitted section identity; an older frozen run must not publish. */
     rememberSectionIdentity(run) {
         const key = this.sectionIdentityKey(run);
-        if (key !== undefined)
-            this.sectionIdentities.set(key, run.file.identity);
+        if (key === undefined)
+            return;
+        if (run.identitySeq === undefined)
+            run.identitySeq = this.sectionSequence += 1;
+        const seq = run.identitySeq;
+        const existing = this.sectionIdentities.get(key);
+        if (existing !== undefined && existing.seq > seq)
+            return;
+        this.sectionIdentities.set(key, { identity: run.file.identity, seq });
     }
     async runDelegate(args, context) {
         const rule = this.rule(args.rule);
@@ -3251,6 +3259,9 @@ class DelegationEngine {
             // Identity is computed only after preparation: a changed digest or
             // reviewer is a distinct run, never a join of the earlier handle.
             run.file.identity = `${workspaceRoot}\u0000${reviewIdentity(rule, change.name, task, prepared.digest, reviewerLabel(this.target(rule)), section?.key)}`;
+            // Submission order decides supersession: a newer section call wins even
+            // when an older submit is still waiting for its target startup.
+            this.rememberSectionIdentity(run);
         }
         catch (error) {
             await this.failRun(run, error, run.prepared);
@@ -3275,7 +3286,6 @@ class DelegationEngine {
             return this.fallbackAfterQueueError(run, error);
         }
         if (admission.kind === 'duplicate') {
-            this.rememberSectionIdentity(admission.run);
             await this.discardSnapshot(run);
             this.runs.delete(run.file.id);
             // A duplicate can join an in-flight start; wait it out so the handle
@@ -3283,10 +3293,8 @@ class DelegationEngine {
             await this.queue.whenAdmitted(admission.run.file.id);
             return this.runHandleText(admission.run, 'duplicate');
         }
-        if (admission.kind === 'accepted') {
-            this.rememberSectionIdentity(run);
-            if (admission.phase !== 'running')
-                run.waitedInQueue = true;
+        if (admission.kind === 'accepted' && admission.phase !== 'running') {
+            run.waitedInQueue = true;
         }
         if (admission.kind === 'full') {
             const error = new DelegationError(`review queue full: ${admission.depth} waiting run(s) at maxQueued=${admission.maxQueued}; let the current reviews settle, then start this review again`);
@@ -3345,6 +3353,8 @@ class DelegationEngine {
         // This inspection decides cached reuse, not the publication baseline: a
         // queued run re-inspects when it becomes start-eligible.
         const existing = await inspectRecord(prepared.path);
+        run.admissionFingerprint =
+            existing.kind === 'record' ? JSON.stringify(existing.record) : undefined;
         const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)));
         if (existing.kind === 'record') {
             const record = existing.record;
@@ -3403,8 +3413,27 @@ class DelegationEngine {
             // Start-eligible means the record's predecessor has settled: snapshot the
             // authoritative record now, but never again before a retry.
             const current = await inspectRecord(run.recordPath);
-            run.existingFingerprint =
-                current.kind === 'record' ? JSON.stringify(current.record) : undefined;
+            const fingerprint = current.kind === 'record' ? JSON.stringify(current.record) : undefined;
+            // A single-task run queued behind an overlapping section must not treat
+            // the section's PASS as its own predecessor and overwrite it. A per-task
+            // predecessor publishing while this run waits keeps the successor rule.
+            if (run.context.section === undefined &&
+                run.context.task !== undefined &&
+                fingerprint !== run.admissionFingerprint &&
+                current.kind === 'record' &&
+                current.record.verdict === 'PASS' &&
+                current.record.section !== undefined &&
+                current.record.taskId === run.context.task.id) {
+                const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)));
+                if (reviewer.error === undefined &&
+                    reviewerMatches(current.record.target, reviewer.reviewer)) {
+                    await this.markRun(run, 'discarded', 'an authoritative section PASS was published while this run waited; its completion is discarded');
+                    await this.discardSnapshot(run);
+                    await this.settleReviewRun(run, 'discarded');
+                    return;
+                }
+            }
+            run.existingFingerprint = fingerprint;
             run.baselineCaptured = true;
         }
         // Never retry into a run whose authoritative record changed while it
@@ -3439,6 +3468,11 @@ class DelegationEngine {
             }
         }
         const lessons = await this.reviewLessons(run);
+        await this.services.startHold?.({
+            rule: run.context.rule.id,
+            change: run.context.change.name,
+            ...(run.context.section === undefined ? {} : { section: run.context.section.key }),
+        });
         const started = await startTarget(this.services, {
             rule: run.context.rule,
             target: this.target(run.context.rule),
@@ -3493,7 +3527,6 @@ class DelegationEngine {
             throw conflict;
         }
         run.fallback = true;
-        this.rememberSectionIdentity(run);
         await this.startDirectFallback(run, error);
         return this.runHandleText(run, 'running');
     }
@@ -3540,6 +3573,7 @@ class DelegationEngine {
             return;
         }
         run.reprepared = true;
+        run.identitySeq = undefined;
         this.rememberSectionIdentity(run);
         await this.markRun(run, 'starting', this.withFallbackDetail(next, 're-prepared while queued'));
     }
@@ -3798,8 +3832,8 @@ class DelegationEngine {
             const sectionKey = this.sectionIdentityKey(run);
             if (sectionKey !== undefined) {
                 const latest = this.sectionIdentities.get(sectionKey);
-                if (latest !== undefined && latest !== run.file.identity) {
-                    throw new DiscardedRun('a newer review identity for this section was admitted; its completion was discarded');
+                if (latest !== undefined && latest.identity !== run.file.identity) {
+                    throw new DiscardedRun('a newer review identity for this section was submitted; its completion was discarded');
                 }
             }
             await this.services.publishHold?.({
@@ -5035,22 +5069,33 @@ async function evaluateGate(deps, agent, turn, signal) {
                     const nextTask = tasks.find((task) => !task.checked);
                     const taskReviewRule = strictTaskRule ?? softTaskRule;
                     const ownReviewTarget = ownChecked.find((task) => !reviewedOwn.has(task.id));
-                    const what = nextTask === undefined
-                        ? ownReviewTarget === undefined
-                            ? 'the task list is fully checked and this session has no unreviewed task; add a task for follow-up work or archive the change'
-                            : `review task "${ownReviewTarget.number} ${ownReviewTarget.text}"`
-                        : taskReviewRule === undefined
-                            ? `tick the completed task, or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
-                            : `tick the completed task and run delegate(rule: "${taskReviewRule.id}"), or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`;
+                    // A pending section run already covers the unreviewed task; point at
+                    // it instead of asking for a duplicate per-task run.
+                    const pendingOwn = ownReviewTarget !== undefined && taskReviewRule !== undefined
+                        ? pendingFor(taskReviewRule.id, change.name, ownReviewTarget.id)
+                        : undefined;
+                    const what = pendingOwn !== undefined && ownReviewTarget !== undefined
+                        ? `wait for review run ${pendingOwn.id}; it covers task "${ownReviewTarget.number} ${ownReviewTarget.text}" (record ${pendingOwn.record})`
+                        : nextTask === undefined
+                            ? ownReviewTarget === undefined
+                                ? 'the task list is fully checked and this session has no unreviewed task; add a task for follow-up work or archive the change'
+                                : `review task "${ownReviewTarget.number} ${ownReviewTarget.text}"`
+                            : taskReviewRule === undefined
+                                ? `tick the completed task, or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
+                                : `tick the completed task and run delegate(rule: "${taskReviewRule.id}"), or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`;
                     const ruleId = workRules.find((rule) => rule.gate === 'strict')?.id ??
                         workRules[0]?.id ??
                         'task-progress';
                     const text = `rule "${ruleId}": this turn changed implementation files in change "${change.name}" without a newly checked-and-reviewed task and without a matching progress note for worktree digest ${digestShort(current.digest)}; ${what}.`;
-                    const call = nextTask === undefined && taskReviewRule !== undefined && ownReviewTarget !== undefined
-                        ? `delegate(rule: "${taskReviewRule.id}", change: "${change.name}", task: "${ownReviewTarget.id}")`
-                        : nextTask === undefined
-                            ? 'delegation_status: no unchecked or unreviewed session task remains; add a task for follow-up work or archive the change'
-                            : `task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`;
+                    const call = pendingOwn !== undefined
+                        ? `delegation_status (run ${pendingOwn.id})`
+                        : nextTask === undefined &&
+                            taskReviewRule !== undefined &&
+                            ownReviewTarget !== undefined
+                            ? `delegate(rule: "${taskReviewRule.id}", change: "${change.name}", task: "${ownReviewTarget.id}")`
+                            : nextTask === undefined
+                                ? 'delegation_status: no unchecked or unreviewed session task remains; add a task for follow-up work or archive the change'
+                                : `task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`;
                     if (workRules.some((rule) => rule.gate === 'strict'))
                         pushStrict(ruleId, text, call);
                     else
@@ -5822,6 +5867,7 @@ export function apply(ctx, config = {}, options = {}) {
         ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
         ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
         ...(options.publishHold === undefined ? {} : { publishHold: options.publishHold }),
+        ...(options.startHold === undefined ? {} : { startHold: options.startHold }),
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);

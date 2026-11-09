@@ -123,6 +123,12 @@ export interface ApplyOptions {
         change: string;
         section?: string;
     }) => Promise<void> | void;
+    /** Test seam: runs after admission and before a target starts. */
+    startHold?: (info: {
+        rule: string;
+        change: string;
+        section?: string;
+    }) => Promise<void> | void;
 }
 /** Terminal review-run states reported to the settlement observer. */
 export type SettledRunState = 'completed' | 'failed' | 'discarded';
