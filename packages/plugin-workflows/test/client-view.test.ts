@@ -132,6 +132,33 @@ describe('workflows view data', () => {
     expect(
       missingSessionRows.find((run) => run.id === 'workflow:missing-session')?.error,
     ).toBeDefined()
+    // Credential-shaped record fields never reach the projection.
+    await writeFile(
+      join(runsDirectory(workspace), 'sentinel.json'),
+      JSON.stringify({
+        v: 1,
+        id: 'sentinel-run',
+        session: 'session-1',
+        definition: 'token=definition-sentinel',
+        status: 'running',
+        steps: [
+          {
+            id: 'token=step-id-sentinel',
+            state: 'token=state-sentinel',
+            evidence: { kind: 'token=review-sentinel' },
+          },
+        ],
+        violations: [{ kind: 'token=violation-sentinel', at: 1_000 }],
+        createdAt: 1_000,
+      }),
+      'utf8',
+    )
+    const sentinelRows = JSON.stringify(await sessionRuns(workspace, 'session-1'))
+    expect(sentinelRows).not.toContain('definition-sentinel')
+    expect(sentinelRows).not.toContain('state-sentinel')
+    expect(sentinelRows).not.toContain('review-sentinel')
+    expect(sentinelRows).not.toContain('violation-sentinel')
+    expect(sentinelRows).not.toContain('step-id-sentinel')
     // Another session's valid failed run stays in its own session.
     const otherBase = createRun({
       definition: 'change-intake',

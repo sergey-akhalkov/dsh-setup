@@ -39,7 +39,9 @@ export interface RunView {
   readonly record?: string
 }
 
-export const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints')
+export const KNOWN_STEP_STATES = new Set(['open', 'done', 'blocked', 'failed', 'cancelled'])
+
+const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints')
 export const DELEGATION_DIR = join('.dsh', 'delegation')
 export const WORKFLOW_EVENTS_DIR = join('.dsh', 'workflows', 'events')
 
@@ -818,9 +820,12 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       if (!isRecord(entry) || typeof entry.id !== 'string') continue
       const evidence = isRecord(entry.evidence) ? entry.evidence : undefined
       steps.push({
-        id: entry.id,
-        title: entry.id,
-        state: typeof entry.state === 'string' ? entry.state : 'unknown',
+        id: redactText(entry.id),
+        title: redactText(entry.id),
+        state:
+          typeof entry.state === 'string' && KNOWN_STEP_STATES.has(entry.state)
+            ? entry.state
+            : 'unknown',
         ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
         ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
         ...(evidence === undefined
@@ -830,7 +835,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
                 typeof evidence.path === 'string'
                   ? safeText(evidence.path)
                   : typeof evidence.kind === 'string'
-                    ? evidence.kind
+                    ? (safeText(evidence.kind) ?? 'evidence')
                     : 'evidence',
             }),
       })
@@ -841,17 +846,17 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       steps.push({
         id: `violation:${String(index)}`,
         title: 'VIOLATION',
-        state: typeof violation.kind === 'string' ? violation.kind : 'VIOLATION',
+        state: typeof violation.kind === 'string' ? redactText(violation.kind) : 'VIOLATION',
         ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
         ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
       })
     }
     runs.push({
-      id: `workflow:${typeof record.id === 'string' ? record.id : id}`,
+      id: `workflow:${redactText(typeof record.id === 'string' ? record.id : id)}`,
       source: 'workflow',
       ...(session === undefined ? {} : { session }),
       attribution: session === undefined ? 'unattributed' : 'local',
-      title: `${String(record.definition ?? 'workflow')} intake`,
+      title: `${redactText(String(record.definition ?? 'workflow'))} intake`,
       startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       status,
       steps,
