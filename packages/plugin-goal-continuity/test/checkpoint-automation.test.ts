@@ -105,7 +105,9 @@ describe('checkpoint.automation: true', () => {
     await disabled.turnStopping()
     expect(disabled.steers).toHaveLength(0)
     expect(await readFile(recordPath, 'utf8')).toBe(bytes)
-    expect((await disabled.readRecord(1)).checkpoint).toBe((JSON.parse(bytes) as { checkpoint: string }).checkpoint)
+    expect((await disabled.readRecord(1)).checkpoint).toBe(
+      (JSON.parse(bytes) as { checkpoint: string }).checkpoint,
+    )
 
     // Rollback: the same record still satisfies the revived close gate.
     const rolledBack = await create(shared)

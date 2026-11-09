@@ -52,6 +52,60 @@ describe('retirement parity report', () => {
     }
   })
 
+  it('carries every required case with its decision and side', () => {
+    const required = [
+      'checkpoint-missing',
+      'checkpoint-lead-bottleneck-unexecuted',
+      'checkpoint-lead-bottleneck-executed',
+      'checkpoint-worker-bottleneck-unexecuted',
+      'checkpoint-worker-bottleneck-executed',
+      'checkpoint-aged-bottleneck',
+      'task-review-missing',
+      'task-review-pass',
+      'task-review-error-intermediate',
+      'task-review-findings',
+      'completion-unapproved-foreign',
+      'completion-error-foreign',
+      'completion-pass-coverage',
+      'archive-missing-approval',
+      'archive-pass-approval',
+      'archive-form-openspec',
+      'archive-form-mv',
+      'archive-form-move-item',
+      'archive-form-git-mv',
+      'verify-code-write-missing-check',
+      'verify-code-write-success',
+      'verify-code-write-failed-check',
+      'verify-non-code-turn',
+      'verify-inert-no-commands',
+      'verify-background-check',
+      'verify-settings-profile-a',
+      'verify-settings-profile-b',
+      'verify-cap-129-refuses-below',
+      'verify-cap-129-allows-at-cap',
+      'retained-spec-review-missing',
+      'retained-spec-review-stale',
+      'retained-progress-current-note',
+      'retained-progress-stale-note',
+      'retained-progress-unchecked-missing-note',
+      'retained-progress-reviewed-tick',
+      'retained-lane-first-implementation-turn',
+      'retained-lane-single-remaining',
+      'retained-lane-below-threshold',
+      'retained-lane-assigned-worker',
+    ]
+    expect(PARITY_CASES.map((entry) => entry.id)).toEqual(expect.arrayContaining(required))
+    for (const entry of PARITY_CASES) {
+      if (entry.gate === 'retained') {
+        expect(entry.retained).toBeDefined()
+        expect(entry.workflow).toBeUndefined()
+      } else {
+        expect(entry.workflow).toBeDefined()
+        expect(entry.legacy.decision).toMatch(/allow|refuse/u)
+      }
+    }
+  })
+
   it('compares allow/refuse decisions and names a deliberate mismatch', async () => {
     const mismatch = {
       id: 'deliberate-mismatch',

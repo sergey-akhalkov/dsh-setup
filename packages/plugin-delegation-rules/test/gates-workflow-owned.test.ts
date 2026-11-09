@@ -95,7 +95,6 @@ async function snapshotFiles(directory: string): Promise<Map<string, Buffer>> {
   return files
 }
 
-
 describe('delegation.gates.workflowOwned: false', () => {
   it('stops the task-review and archive gates but keeps the spec-review rule', async () => {
     const { root, dir, harness } = await fixture(false)

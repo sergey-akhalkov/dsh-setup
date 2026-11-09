@@ -111,7 +111,7 @@ export async function buildParityReport(now = new Date()): Promise<BuiltReport> 
     gate.status = 'fail'
     const workflow = result.workflow
     mismatches.push(
-      `${parityCase.id}: legacy ${parityCase.legacy.decision} (${parityCase.legacy.reason}); workflow ${workflow?.decision ?? 'missing'} (${workflow?.reason ?? 'no workflow decision'})`,
+      `${parityCase.id}: legacy ${parityCase.legacy.decision} (${parityCase.legacy.reason}); replayed ${result.legacyReplay?.decision ?? 'n/a'} (${result.legacyReplay?.reason ?? 'no replay'}); workflow ${workflow?.decision ?? 'missing'} (${workflow?.reason ?? 'no workflow decision'})`,
     )
   }
   return {
