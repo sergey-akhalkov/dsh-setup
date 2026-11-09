@@ -5,7 +5,11 @@ import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { SubagentRunEndInfo, SubagentRunInfo } from '@deepseek-ai/dsh-subagent'
+import type {
+  SubagentRunEndInfo,
+  SubagentRunInfo,
+  SubagentRuntime,
+} from '@deepseek-ai/dsh-subagent'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { adoptChange } from './adoption.js'
 import { registerWorkflowRoutes } from './api.js'
@@ -30,6 +34,7 @@ import {
   type DshUserQuestions,
   OwnedCalls,
   requestMainStep,
+  type SubagentRunner,
   type ToolRunner,
 } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
@@ -38,7 +43,6 @@ import {
   evaluateArchiveGate,
   evaluateIntakeGate,
   evaluateTurnClose,
-  runDeferredStep,
 } from './gates.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
@@ -1495,6 +1499,34 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return undefined
     }
   }
+  const subagentRuntime = optionalService<SubagentRuntime>('subagents')
+  /** The host subagent runner for the subagent executor; absent without the seam. */
+  const hostSubagentRunner = (agent: Agent): SubagentRunner | undefined => {
+    if (subagentRuntime === undefined) return undefined
+    return {
+      run: async (request, signal) => {
+        const controller = signal ?? new AbortController().signal
+        const activation = await subagentRuntime.startActivation({
+          provider: request.provider,
+          label: `workflows ${request.provider}`.slice(0, 120),
+          request: {
+            parent: agent,
+            prompt: [{ type: 'text', text: request.prompt }],
+            ...(request.schema === undefined ? {} : { outputSchema: request.schema as never }),
+          },
+          signal: controller,
+          delivery: 'caller',
+        })
+        const result = await activation.result
+        return {
+          childId: String(activation.childId),
+          completed: result.stopReason === 'completed',
+          ...(result.structured === undefined ? {} : { result: result.structured }),
+          ...(result.diagnostic === undefined ? {} : { error: result.diagnostic }),
+        }
+      },
+    }
+  }
   const rawUserQuestions = optionalService<DshUserQuestions>('userQuestions')
   const userQuestions =
     rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions)
@@ -1689,6 +1721,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     sessionToolCalls.set(sessionId, toolCalls)
     sessionShellResults.set(sessionId, shellResults)
     const runner = liveToolRunner(agent)
+    const subagentRunner = hostSubagentRunner(agent)
     const result = await advanceIntake({
       run,
       definition,
@@ -1702,6 +1735,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       },
       owned: ownedCalls,
       ...(runner === undefined ? {} : { toolRunner: runner }),
+      ...(subagentRunner === undefined ? {} : { subagentRunner }),
       ...(userQuestions === undefined ? {} : { questions: userQuestions }),
       readRecord: (step) =>
         verifyEvidence(step.evidence ?? { kind: 'declaration' }, {

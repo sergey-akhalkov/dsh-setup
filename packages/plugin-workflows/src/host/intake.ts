@@ -11,6 +11,8 @@ import {
   type HumanQuestionService,
   type OwnedCalls,
   runHumanStep,
+  runSubagentStep,
+  type SubagentRunner,
   runToolStep,
   type ToolRunner,
 } from './executors.js'
@@ -33,6 +35,7 @@ export interface IntakeAdvanceInput {
   readonly evidenceContext: EvidenceContext
   readonly owned: OwnedCalls
   readonly toolRunner?: ToolRunner
+  readonly subagentRunner?: SubagentRunner
   readonly questions?: HumanQuestionService
   /** The deferred-step record reader; it must not call delegate. */
   readonly readRecord?: (step: Step) => Promise<EvidenceCheck>
@@ -211,6 +214,28 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         }
       }
       run = settleStep(run, step.id, 'done', { at, evidence: check.evidence })
+      continue
+    }
+    if (step.executor === 'subagent') {
+      if (input.subagentRunner === undefined) {
+        return {
+          run: setRunStatus(run, 'blocked', at),
+          completed: false,
+          waiting: waitingFor(step, input.evidenceContext),
+        }
+      }
+      run = await runSubagentStep({
+        run,
+        definition: input.definition,
+        step,
+        runner: input.subagentRunner,
+        evidenceContext: input.evidenceContext,
+        now: at,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      })
+      if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
+        return { run, completed: false, waiting: waitingFor(step, input.evidenceContext) }
+      }
       continue
     }
     if (step.executor === 'human') {

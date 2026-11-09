@@ -1,11 +1,6 @@
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
-import {
-  collectEvidencePaths,
-  type Evidence,
-  type EvidenceContext,
-  verifyEvidence,
-} from './evidence.js'
+import { collectEvidencePaths, type EvidenceContext, verifyEvidence } from './evidence.js'
 import type { HumanQuestionService } from './executors.js'
 import type { HostAuth } from './host-auth.js'
 import { openRunCount, type WorkflowRun } from './runs.js'
@@ -125,9 +120,14 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
 }
 
 /** Collect the host-verified references of one contract, including all children. */
-async function verifiedReferences(evidence: Evidence, context: EvidenceContext): Promise<string[]> {
+type EvidenceContract = Parameters<typeof verifyEvidence>[0]
+
+async function verifiedReferences(
+  evidence: EvidenceContract,
+  context: EvidenceContext,
+): Promise<string[]> {
   const refs: string[] = []
-  const visit = async (entry: Evidence): Promise<void> => {
+  const visit = async (entry: EvidenceContract): Promise<void> => {
     if (entry.kind === 'all') {
       for (const child of entry.items) await visit(child)
       return

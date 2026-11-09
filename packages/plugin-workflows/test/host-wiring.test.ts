@@ -3759,7 +3759,7 @@ describe('unapproved active definitions', () => {
       return changeDir
     }
     const fireChange = async (
-      workspace: string,
+      _workspace: string,
       host: ReturnType<typeof fakeHost>,
       changeDir: string,
     ): Promise<void> => {

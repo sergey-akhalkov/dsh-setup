@@ -6,7 +6,6 @@ import { loadShippedDefinitions, validateDefinition } from '../src/host/definiti
 import { writeDraft } from '../src/host/drafts.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
 import { runSubagentStep } from '../src/host/executors.ts'
-import { evaluateTurnClose } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
 import { hashSession } from '../src/host/projection.ts'
@@ -308,6 +307,19 @@ describe('obligation engine live proxy', () => {
             }),
           }
         }
+        if (name === 'subagents') {
+          return {
+            startActivation: async (spec: { provider: string }) => ({
+              childId: `child-${spec.provider}`,
+              result: Promise.resolve({
+                stopReason: 'completed',
+                output: [{ type: 'text', text: 'the child completed' }],
+                structured: { verdict: 'PASS' },
+              }),
+              dispose: async () => {},
+            }),
+          }
+        }
         if (name === 'tools') {
           return {
             get: (tool: string) =>
@@ -348,6 +360,7 @@ describe('obligation engine live proxy', () => {
     const runViews = async (): Promise<
       Array<{
         id: string
+        title: string
         source: string
         session?: string
         steps: Array<{ id: string; title: string; state: string }>
@@ -356,6 +369,7 @@ describe('obligation engine live proxy', () => {
       const body = (await read('/api/workflows/runs')) as {
         runs: Array<{
           id: string
+          title: string
           source: string
           session?: string
           steps: Array<{ id: string; title: string; state: string }>
@@ -381,10 +395,56 @@ describe('obligation engine live proxy', () => {
       await emit('agent/turn-stopping', { agent, turn })
     }
 
+    const subagentDemo = {
+      v: 1,
+      id: 'subagent-demo',
+      name: 'Subagent demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'review',
+          title: 'Child review',
+          executor: 'subagent',
+          prompt: 'Review the change.',
+          subagent: { provider: 'spawn', schema: { type: 'object', required: ['verdict'] } },
+          evidence: { kind: 'file', path: '.dsh/review.json' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    const subagentSource = join(workspace, 'subagent-demo.json')
+    await writeFile(subagentSource, JSON.stringify(subagentDemo), 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    await installDefinition(workspace, subagentSource, auth)
     apply(ctx as never)
     await preStep(1)
 
-    // 1. The registered pre-execute hook starts the intake and refuses the call.
+    // 1. A host-driven subagent run dispatches through the subagents service.
+    const subagentCommand = commands.find((entry) => entry.name === 'workflows')
+    expect(subagentCommand).toBeDefined()
+    const subagentStarted = await subagentCommand?.handler({
+      agent,
+      commandId: 'cmd-subagent',
+      rawInput: ' run subagent-demo',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(subagentStarted?.kind).toBe('success')
+    await turnStop(2)
+    const subagentView = (await runViews()).find((entry) => entry.title.startsWith('subagent-demo'))
+    expect(subagentView?.steps.find((step) => step.id === 'review')).toMatchObject({
+      state: 'done',
+    })
+    // 2. The registered pre-execute hook starts the intake and refuses the call.
     const started = (await emit(
       'tools/pre-execute',
       {
@@ -408,38 +468,33 @@ describe('obligation engine live proxy', () => {
       runs: Array<{ id: string; source: string; session?: string }>
     }
     expect(debugBody.runs.map((entry) => entry.source)).toContain('workflow')
-    await waitFor(async () => (await runViews()).some((entry) => entry.source === 'workflow'))
-    const intake = (await runViews()).find(
-      (entry) => entry.source === 'workflow' && entry.session === 'session-live',
+    await waitFor(async () =>
+      (await runViews()).some((entry) => entry.title.startsWith('change-intake')),
     )
+    const intake = (await runViews()).find((entry) => entry.title.startsWith('change-intake'))
     expect(intake).toBeDefined()
     const runId = String(intake?.id).replace(/^workflow:/u, '')
     expect(intake?.steps.find((step) => step.id === 'requirements')?.state).toBe('open')
 
-    // 2. The open requirements step refuses the close three times through the
-    // real Host event, then the bounded cap records one visible violation.
-    for (const turn of [2, 3, 4]) await turnStop(turn)
+    // 2. The open requirements step refuses the close until the bounded cap,
+    // then the close is recorded as one visible violation in the run view.
+    for (const turn of [3, 4, 5, 6]) await turnStop(turn)
     expect(steers.length).toBeGreaterThan(0)
-    const cappedRun = await readAuthenticatedRun(workspace, runId, auth)
-    expect(cappedRun).toBeDefined()
-    if (cappedRun === undefined) return
-    expect(cappedRun.turnBlocks).toBe(3)
-    const capped = evaluateTurnClose({
-      run: cappedRun,
-      definition,
-      agent: { steer: () => {} },
-      evidenceContext: { workspace, values: { name: 'auth' } },
-      turn: 99,
-      maxBlocks: definition.settings.maxBlocks,
-      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
-    })
-    expect(capped.kind).toBe('violation')
+    await waitFor(async () =>
+      (await runViews()).some(
+        (entry) =>
+          entry.id === `workflow:${runId}` &&
+          entry.steps.some((step) => step.title === 'VIOLATION'),
+      ),
+    )
+    const blockedView = (await runViews()).find((entry) => entry.id === `workflow:${runId}`)
+    expect(blockedView?.steps.some((step) => step.title === 'VIOLATION')).toBe(true)
 
     // 3. Main steps complete with files through the real turn close.
     for (const [turn, file] of [
-      [5, 'requirements.md'],
-      [6, 'architecture.md'],
-      [7, 'interface.md'],
+      [7, 'requirements.md'],
+      [8, 'architecture.md'],
+      [9, 'interface.md'],
     ] as const) {
       await writeDraft(workspace, 'auth', file, 'x'.repeat(200))
       await turnStop(turn)

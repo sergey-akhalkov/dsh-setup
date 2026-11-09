@@ -398,7 +398,9 @@ export function resetStepAttempts(run: WorkflowRun, stepId: string): WorkflowRun
   return {
     ...run,
     steps: run.steps.map((step) =>
-      step.id === stepId ? { ...step, attempts: 0, lastTurn: undefined } : step,
+      step.id === stepId
+        ? (({ lastTurn: _lastTurn, ...rest }) => ({ ...rest, attempts: 0 }))(step)
+        : step,
     ),
   }
 }

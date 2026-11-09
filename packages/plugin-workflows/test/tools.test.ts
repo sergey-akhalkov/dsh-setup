@@ -559,7 +559,10 @@ describe('workflows command and prompt context', () => {
   })
 
   it('registers the dynamic context only when the system-prompt service exists', () => {
-    const registered: Array<{ name: string; text: (context?: unknown) => string }> = []
+    const registered: Array<{
+      name: string
+      text: (context?: { scope?: unknown }) => string
+    }> = []
     const ok = registerActiveRunsContext(
       {
         systemPrompt: {
