@@ -8,6 +8,7 @@ import {
   fallbackNotice,
   isAddKey,
   isConnectKey,
+  isConnectShortcut,
   NARROW_WIDTH,
   paletteLabel,
   resolveSurface,
@@ -145,6 +146,22 @@ describe('summary and keyboard', () => {
     expect(isConnectKey('c')).toBe(true)
     expect(isConnectKey('C')).toBe(true)
     expect(isConnectKey('Enter')).toBe(false)
+    // The window-level shortcut never steals text entry, copying, composition,
+    // or a key another handler already consumed.
+    expect(isConnectShortcut({ key: 'c', target: { tagName: 'INPUT' } })).toBe(false)
+    expect(isConnectShortcut({ key: 'C', target: { tagName: 'TEXTAREA' } })).toBe(false)
+    expect(isConnectShortcut({ key: 'c', ctrlKey: true, target: { tagName: 'TEXTAREA' } })).toBe(
+      false,
+    )
+    expect(
+      isConnectShortcut({
+        key: 'c',
+        target: { tagName: 'DIV', isContentEditable: true },
+      }),
+    ).toBe(false)
+    expect(isConnectShortcut({ key: 'c', isComposing: true })).toBe(false)
+    expect(isConnectShortcut({ key: 'c', defaultPrevented: true })).toBe(false)
+    expect(isConnectShortcut({ key: 'c', target: { tagName: 'CANVAS' } })).toBe(true)
     expect(paletteLabel('step')).toBe('Add step')
     expect(paletteLabel('branch')).toBe('Add branch')
     expect(TAB_ORDER).toEqual(['palette', 'canvas', 'properties'])

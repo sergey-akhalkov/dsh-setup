@@ -557,6 +557,16 @@ window.__ModuleLoader__.load({
     function isAddKey(key) {
       return key === "Enter" || key === " ";
     }
+    function isConnectShortcut(event) {
+      if (event.key !== "c" && event.key !== "C") return false;
+      if (event.defaultPrevented === true) return false;
+      if (event.ctrlKey === true || event.metaKey === true || event.altKey === true) return false;
+      if (event.isComposing === true) return false;
+      const target = event.target;
+      if (target?.isContentEditable === true) return false;
+      const tag = (target?.tagName ?? "").toLowerCase();
+      return tag !== "input" && tag !== "textarea" && tag !== "select";
+    }
     function paletteLabel(kind) {
       return kind === "step" ? "Add step" : `Add ${kind}`;
     }
@@ -9844,11 +9854,14 @@ window.__ModuleLoader__.load({
         return this.state.failed ? this.props.fallback : this.props.children;
       }
     };
-    function toFlowNodes(nodes) {
+    function toFlowNodes(nodes, selected2) {
       return nodes.map((node) => ({
         id: node.id,
         type: node.kind,
         position: node.position,
+        // React Flow takes its accessible name from ariaLabel, not data.
+        ariaLabel: node.title,
+        ...selected2 === void 0 ? {} : { selected: selected2 === node.id },
         data: {
           title: node.title,
           kind: node.kind,
@@ -9860,22 +9873,29 @@ window.__ModuleLoader__.load({
         }
       }));
     }
-    function toFlowEdges(edges) {
-      return edges.map((edge2) => ({
-        id: edge2.id,
-        source: edge2.source,
-        target: edge2.target,
-        // The node views expose one handle id per edge kind, so the edge must name
-        // it; otherwise React Flow attaches every edge to the first source handle.
-        sourceHandle: edge2.kind,
-        ...edge2.label === void 0 ? {} : { label: edge2.label },
-        data: { kind: edge2.kind }
-      }));
+    function toFlowEdges(edges, nodes = []) {
+      const titles = new Map(nodes.map((node) => [node.id, node.title]));
+      return edges.map((edge2) => {
+        const source = titles.get(edge2.source) ?? edge2.source;
+        const target = titles.get(edge2.target) ?? edge2.target;
+        return {
+          id: edge2.id,
+          source: edge2.source,
+          target: edge2.target,
+          // The node views expose one handle id per edge kind, so the edge must name
+          // it; otherwise React Flow attaches every edge to the first source handle.
+          sourceHandle: edge2.kind,
+          // Distinct outputs between the same nodes must not share an accessible name.
+          ariaLabel: `${source} ${edge2.label ?? edge2.kind} ${target}`,
+          ...edge2.label === void 0 ? {} : { label: edge2.label },
+          data: { kind: edge2.kind }
+        };
+      });
     }
     var KNOWN_KINDS = /* @__PURE__ */ new Set(["start", "next", "true", "false", "body", "exit"]);
     function DesignCanvas(props) {
-      const flowNodes = toFlowNodes(props.nodes);
-      const flowEdges = toFlowEdges(props.edges);
+      const flowNodes = toFlowNodes(props.nodes, props.selected);
+      const flowEdges = toFlowEdges(props.edges, props.nodes);
       return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
         index,
         {
@@ -9888,6 +9908,10 @@ window.__ModuleLoader__.load({
           edgesFocusable: true,
           onNodeClick: (_event, node) => props.onSelect(node.id),
           onPaneClick: () => props.onSelect(void 0),
+          onSelectionChange: (selection2) => {
+            const first = selection2.nodes?.[0];
+            props.onSelect(first?.id);
+          },
           onNodeDragStop: (_event, node) => props.onMove(node.id, node.position),
           onConnect: (connection) => {
             if (connection.source === null || connection.target === null) return;
@@ -12145,7 +12169,17 @@ window.__ModuleLoader__.load({
       (0, import_react6.useEffect)(() => {
         if (typeof window === "undefined" || selected2 === void 0) return;
         const onKeyDown = (event) => {
-          if (event.key !== "c" && event.key !== "C") return;
+          if (!isConnectShortcut({
+            key: event.key,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            altKey: event.altKey,
+            defaultPrevented: event.defaultPrevented,
+            isComposing: event.isComposing,
+            target: event.target
+          })) {
+            return;
+          }
           event.preventDefault();
           setConnectValue("");
         };

@@ -60,6 +60,29 @@ export function isAddKey(key: string): boolean {
   return key === 'Enter' || key === ' '
 }
 
+/**
+ * The `C` connect shortcut, scoped to the canvas: it never fires while typing,
+ * copying, composing, or when another handler already consumed the key.
+ */
+export function isConnectShortcut(event: {
+  readonly key: string
+  readonly ctrlKey?: boolean
+  readonly metaKey?: boolean
+  readonly altKey?: boolean
+  readonly defaultPrevented?: boolean
+  readonly isComposing?: boolean
+  readonly target?: { readonly tagName?: string; readonly isContentEditable?: boolean } | null
+}): boolean {
+  if (event.key !== 'c' && event.key !== 'C') return false
+  if (event.defaultPrevented === true) return false
+  if (event.ctrlKey === true || event.metaKey === true || event.altKey === true) return false
+  if (event.isComposing === true) return false
+  const target = event.target
+  if (target?.isContentEditable === true) return false
+  const tag = (target?.tagName ?? '').toLowerCase()
+  return tag !== 'input' && tag !== 'textarea' && tag !== 'select'
+}
+
 /** `C` opens the labelled connect list for the selected node. */
 export function isConnectKey(key: string): boolean {
   return key === 'c' || key === 'C'

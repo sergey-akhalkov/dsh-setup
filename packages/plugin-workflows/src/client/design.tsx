@@ -1,6 +1,12 @@
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { defaultMode, fallbackNotice, resolveSurface, summaryText } from './a11y.ts'
+import {
+  defaultMode,
+  fallbackNotice,
+  isConnectShortcut,
+  resolveSurface,
+  summaryText,
+} from './a11y.ts'
 import { CanvasBoundary, DesignCanvas } from './canvas.tsx'
 import { connectChoices, EDGE_LABELS } from './edges.ts'
 import {
@@ -127,7 +133,19 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   useEffect(() => {
     if (typeof window === 'undefined' || selected === undefined) return
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'c' && event.key !== 'C') return
+      if (
+        !isConnectShortcut({
+          key: event.key,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          altKey: event.altKey,
+          defaultPrevented: event.defaultPrevented,
+          isComposing: event.isComposing,
+          target: event.target as HTMLElement | null,
+        })
+      ) {
+        return
+      }
       event.preventDefault()
       setConnectValue('')
     }

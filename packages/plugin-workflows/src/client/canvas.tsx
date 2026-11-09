@@ -183,12 +183,22 @@ export interface FlowNode {
   readonly data: CanvasNodeData
 }
 
+export interface FlowNode {
+  readonly id: string
+  readonly type: string
+  readonly position: { readonly x: number; readonly y: number }
+  readonly data: CanvasNodeData
+  readonly ariaLabel?: string
+  readonly selected?: boolean
+}
+
 export interface FlowEdge {
   readonly id: string
   readonly source: string
   readonly target: string
   readonly sourceHandle?: string
   readonly label?: string
+  readonly ariaLabel?: string
   readonly data: { readonly kind: EdgeKind }
 }
 
@@ -204,11 +214,15 @@ export function toFlowNodes(
     readonly evidence?: { readonly kind: string; readonly ref?: string }
     readonly violations?: readonly string[]
   }[],
+  selected?: string,
 ): FlowNode[] {
   return nodes.map((node) => ({
     id: node.id,
     type: node.kind,
     position: node.position,
+    // React Flow takes its accessible name from ariaLabel, not data.
+    ariaLabel: node.title,
+    ...(selected === undefined ? {} : { selected: selected === node.id }),
     data: {
       title: node.title,
       kind: node.kind,
@@ -229,17 +243,25 @@ export function toFlowEdges(
     readonly kind: EdgeKind
     readonly label?: string
   }[],
+  nodes: readonly { readonly id: string; readonly title: string }[] = [],
 ): FlowEdge[] {
-  return edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    // The node views expose one handle id per edge kind, so the edge must name
-    // it; otherwise React Flow attaches every edge to the first source handle.
-    sourceHandle: edge.kind,
-    ...(edge.label === undefined ? {} : { label: edge.label }),
-    data: { kind: edge.kind },
-  }))
+  const titles = new Map(nodes.map((node) => [node.id, node.title]))
+  return edges.map((edge) => {
+    const source = titles.get(edge.source) ?? edge.source
+    const target = titles.get(edge.target) ?? edge.target
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      // The node views expose one handle id per edge kind, so the edge must name
+      // it; otherwise React Flow attaches every edge to the first source handle.
+      sourceHandle: edge.kind,
+      // Distinct outputs between the same nodes must not share an accessible name.
+      ariaLabel: `${source} ${edge.label ?? edge.kind} ${target}`,
+      ...(edge.label === undefined ? {} : { label: edge.label }),
+      data: { kind: edge.kind },
+    }
+  })
 }
 
 export interface DesignCanvasProps {
@@ -256,8 +278,8 @@ const KNOWN_KINDS = new Set<string>(['start', 'next', 'true', 'false', 'body', '
 
 /** The canvas; the container remounts it when the definition or overlay changes. */
 export function DesignCanvas(props: DesignCanvasProps): ReactNode {
-  const flowNodes = toFlowNodes(props.nodes) as unknown as Node[]
-  const flowEdges = toFlowEdges(props.edges) as unknown as Edge[]
+  const flowNodes = toFlowNodes(props.nodes, props.selected) as unknown as Node[]
+  const flowEdges = toFlowEdges(props.edges, props.nodes) as unknown as Edge[]
   return (
     <ReactFlow
       key={props.focusKey}
@@ -270,6 +292,12 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
       edgesFocusable
       onNodeClick={(_event, node) => props.onSelect(node.id)}
       onPaneClick={() => props.onSelect(undefined)}
+      // Keyboard selection inside React Flow changes its selection without a
+      // node click; report it so the property panel and C follow the focus.
+      onSelectionChange={(selection: { nodes?: readonly { id: string }[] }) => {
+        const first = selection.nodes?.[0]
+        props.onSelect(first?.id)
+      }}
       onNodeDragStop={(_event, node) => props.onMove(node.id, node.position)}
       onConnect={(connection: Connection) => {
         if (connection.source === null || connection.target === null) return

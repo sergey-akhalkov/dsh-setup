@@ -169,22 +169,59 @@ describe('canvas node rendering', () => {
     ])
   })
 
-  it('exposes focusable nodes and edges on the canvas', () => {
+  it('exposes focusable nodes and edges with accessible names and selection', () => {
     const graph = definitionToGraph(DEFINITION)
+    let selectedId: string | undefined
     const tree = call(ui, 'DesignCanvas', {
       nodes: graph.nodes,
       edges: graph.edges,
+      selected: nodeIdOf('requirements'),
       focusKey: 'test',
-      onSelect: () => {},
+      onSelect: (id: string | undefined) => {
+        selectedId = id
+      },
       onMove: () => {},
       onConnectNode: () => {},
     })
     const flow = elements(tree).find((element) => element.type === 'reactflow')
     expect(flow?.props.nodesFocusable).toBe(true)
     expect(flow?.props.edgesFocusable).toBe(true)
-    expect(Array.isArray(flow?.props.nodes)).toBe(true)
-    const nodes = flow?.props.nodes as { id: string; type: string }[]
+    const nodes = flow?.props.nodes as {
+      id: string
+      type: string
+      ariaLabel: string
+      selected?: boolean
+    }[]
     expect(nodes.some((node) => node.type === 'step')).toBe(true)
+    const node = nodes.find((node) => node.id === nodeIdOf('requirements'))
+    expect(node?.ariaLabel).toBe(DEFINITION.steps.find((step) => step.id === 'requirements')?.title)
+    expect(node?.selected).toBe(true)
+    // Keyboard selection inside React Flow arrives through this callback, not
+    // through a node click, and must still update the editor's selection.
+    const selection = flow?.props.onSelectionChange as (value: { nodes: { id: string }[] }) => void
+    selection({ nodes: [{ id: nodeIdOf('approval') }] })
+    expect(selectedId).toBe(nodeIdOf('approval'))
+    const flowEdges = flow?.props.edges as { ariaLabel: string }[]
+    expect(flowEdges.every((edge) => edge.ariaLabel.length > 0)).toBe(true)
+    const distinct = (
+      ui.toFlowEdges as (
+        edges: unknown,
+        nodes: { id: string; title: string }[],
+      ) => { ariaLabel: string }[]
+    )(
+      ['true', 'false', 'exit'].map((kind) => ({
+        id: `e:${kind}`,
+        source: 'a',
+        target: 'b',
+        kind,
+      })),
+      [
+        { id: 'a', title: 'Check' },
+        { id: 'b', title: 'Done' },
+      ],
+    )
+    expect(new Set(distinct.map((edge) => edge.ariaLabel)).size).toBe(3)
+    expect(distinct[0]?.ariaLabel).toContain('Check')
   })
 
   it('shows the overlay state, failure class, evidence, and violation on a node', () => {
