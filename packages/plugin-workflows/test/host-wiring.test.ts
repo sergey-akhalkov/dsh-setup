@@ -81,6 +81,7 @@ function fakeHost(
   readonly ctx: Record<string, unknown>
   readonly agent: Record<string, unknown>
   readonly commands: Array<Record<string, unknown>>
+  readonly toolDefinitions: Array<Record<string, unknown>>
   readonly steers: readonly unknown[]
   readonly toolExecutions: Array<{
     readonly id: string
@@ -108,12 +109,16 @@ function fakeHost(
     inject: () => {},
   }
   const commands: Array<Record<string, unknown>> = []
+  const toolDefinitions: Array<Record<string, unknown>> = []
   const tools: Record<string, unknown> = {
     get: (name: string) =>
       ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(name)
         ? { name }
         : undefined,
-    register: () => () => {},
+    register: (definition: unknown) => {
+      toolDefinitions.push(definition as Record<string, unknown>)
+      return () => {}
+    },
   }
   if (options.toolExecute === true) {
     tools.execute = async (input: {
@@ -220,6 +225,7 @@ function fakeHost(
     ctx,
     agent,
     commands,
+    toolDefinitions,
     steers,
     toolExecutions,
     fireFs(error) {
@@ -2980,6 +2986,103 @@ describe('/workflows adopt from the real command invocation', () => {
       change: 'auth',
     })
     expect(await readdir(changeDir)).toContain('proposal.md')
+  })
+})
+
+describe('workflows tool live wiring', () => {
+  it('registers the six actions and verifies observed evidence through the real tool', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          parameters?: { properties?: { action?: { enum?: string[] } } }
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    expect(tool?.parameters?.properties?.action?.enum).toEqual([
+      'list',
+      'start',
+      'resume',
+      'status',
+      'evidence',
+      'cancel',
+    ])
+    const runs = await import('../src/host/runs.ts')
+    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(intake).toBeDefined()
+    if (intake === undefined || tool === undefined) return
+    const base = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-tool-evidence',
+      now: 1_000,
+    })
+    const run = {
+      ...base,
+      steps: base.steps.map((step) => {
+        if (step.id === 'spec') return { ...step, requestedAt: 1_000 }
+        if (step.id === 'approval') {
+          return { ...step, state: 'done' as const, evidence: { kind: 'human', answer: 'yes' } }
+        }
+        return step
+      }),
+    }
+    await runs.writeRun(workspace, run, auth)
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    for (const [file, text] of [
+      ['.openspec.yaml', 'version: 1\n'],
+      ['proposal.md', '# proposal\n'],
+      ['design.md', '# design\n'],
+      ['tasks.md', '- [ ] 1.1 Task\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await mkdir(dirname(join(changeDir, file)), { recursive: true })
+      await writeFile(join(changeDir, file), text, 'utf8')
+    }
+    const shell = async (callId: string, command: string): Promise<unknown> =>
+      host.emit(
+        'tools/result',
+        { agent: host.agent, callId, name: 'pwsh', arguments: { command } },
+        {
+          isError: false,
+          content: [],
+          value: {
+            kind: 'foreground',
+            cwd: workspace,
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            aborted: false,
+            timeoutMs: 120_000,
+            stdout: { text: '', truncated: false },
+            stderr: { text: '', truncated: false },
+          },
+        },
+      )
+    await shell('call-create', 'openspec new change auth')
+    await shell('call-validate', 'openspec validate auth --strict')
+    const evidence = (stepId: string, kind: string, ref: string): Promise<{ text: string }> =>
+      tool.execute(
+        { action: 'evidence', runId: 'run-tool-evidence', stepId, evidence: { kind, ref } },
+        { agent: host.agent },
+      )
+    expect((await evidence('create-change', 'all', 'call-create')).text).toContain('verified')
+    expect((await evidence('spec', 'all', 'call-validate')).text).toContain('verified')
+    expect((await evidence('approval', 'human', 'yes')).text).toContain('verified')
+    await expect(evidence('create-change', 'all', 'other-call')).rejects.toThrow(
+      /not the host-verified evidence/u,
+    )
   })
 })
 

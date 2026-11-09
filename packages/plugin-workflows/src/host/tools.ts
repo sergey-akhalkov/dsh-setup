@@ -1,6 +1,11 @@
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
-import { collectEvidencePaths, type EvidenceContext, verifyEvidence } from './evidence.js'
+import {
+  collectEvidencePaths,
+  type Evidence,
+  type EvidenceContext,
+  verifyEvidence,
+} from './evidence.js'
 import type { HumanQuestionService } from './executors.js'
 import type { HostAuth } from './host-auth.js'
 import { openRunCount, type WorkflowRun } from './runs.js'
@@ -117,6 +122,26 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
     ...(stepId === undefined ? {} : { stepId }),
     ...(evidence === undefined ? {} : { evidence }),
   }
+}
+
+/** Collect the host-verified references of one contract, including all children. */
+async function verifiedReferences(evidence: Evidence, context: EvidenceContext): Promise<string[]> {
+  const refs: string[] = []
+  const visit = async (entry: Evidence): Promise<void> => {
+    if (entry.kind === 'all') {
+      for (const child of entry.items) await visit(child)
+      return
+    }
+    const checked = await verifyEvidence(entry, context)
+    if (!checked.ok) return
+    if (checked.evidence.path !== undefined) {
+      refs.push(checked.evidence.path.replaceAll('\\', '/'))
+    }
+    if (checked.evidence.callId !== undefined) refs.push(checked.evidence.callId)
+    if (typeof checked.evidence.answer === 'string') refs.push(checked.evidence.answer)
+  }
+  await visit(evidence)
+  return refs
 }
 
 function bounded(text: string, max = 1200): string {
@@ -245,6 +270,9 @@ export async function executeWorkflowsTool(
       const accepted = new Set<string>()
       for (const path of collectEvidencePaths(step.evidence, context)) {
         accepted.add(path.replaceAll('\\', '/').replace(/^\.\//u, ''))
+      }
+      for (const childRef of await verifiedReferences(step.evidence, context)) {
+        accepted.add(childRef)
       }
       if (checked.evidence.path !== undefined) {
         accepted.add(checked.evidence.path.replaceAll('\\', '/'))
