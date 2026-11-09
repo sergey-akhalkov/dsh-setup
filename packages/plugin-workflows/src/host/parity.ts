@@ -212,15 +212,17 @@ export function parityLoadIssues(
   if (report === undefined) {
     for (const definition of bound) {
       refused.add(definition.id)
+      const rollback = legacySwitchFor(
+        definition.settings.legacy?.plugin ?? '',
+        definition.settings.legacy?.signal ?? '',
+      )
       issues.push(
-        `workflow definition "${definition.id}": ${reportError ?? 'the parity report is missing'}; restore the shipped report at "${reportPath}" or set ${legacySwitchFor(
-          definition.settings.legacy?.plugin ?? '',
-          definition.settings.legacy?.signal ?? '',
-        )}`,
+        `workflow definition "${definition.id}": set ${rollback} to fall back to the legacy gate; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`,
       )
     }
     return { issues, refused }
   }
+  const verifyIsBound = bound.some((definition) => definition.id === 'verify')
   for (const definition of bound) {
     const legacy = definition.settings.legacy
     const rollback = legacySwitchFor(legacy?.plugin ?? '', legacy?.signal ?? '')
@@ -229,14 +231,14 @@ export function parityLoadIssues(
     if (expected === undefined) {
       refused.add(definition.id)
       issues.push(
-        `workflow definition "${definition.id}": the parity report does not cover its template hash (actual ${actual}); run pnpm workflows:parity or set ${rollback}`,
+        `workflow definition "${definition.id}": the parity report does not cover its template hash (actual ${actual}); set ${rollback} or run pnpm workflows:parity`,
       )
       continue
     }
     if (expected !== actual) {
       refused.add(definition.id)
       issues.push(
-        `workflow definition "${definition.id}": template hash ${actual} does not match the report's ${expected}; run pnpm workflows:parity or set ${rollback}`,
+        `workflow definition "${definition.id}": template hash ${actual} does not match the report's ${expected}; set ${rollback} or run pnpm workflows:parity`,
       )
       continue
     }
@@ -244,24 +246,42 @@ export function parityLoadIssues(
     if (gate === undefined || gate.status !== 'pass' || gate.mismatches !== 0) {
       refused.add(definition.id)
       issues.push(
-        `workflow definition "${definition.id}": the parity gate is not pass (${gate?.status ?? 'missing'}); fix the parity cases or set ${rollback}`,
+        `workflow definition "${definition.id}": the parity gate is not pass (${gate?.status ?? 'missing'}); set ${rollback} or fix the parity cases`,
       )
     }
   }
-  const commands = report.settings['verify.commands']
-  const caps = report.settings['verify.maxBlocks']
-  if (
-    commands === undefined ||
-    commands.cases.length < 2 ||
-    caps === undefined ||
-    !caps.cases.some((entry) => typeof entry === 'number' && entry > 128)
-  ) {
+  // A deferred verify is not report-bound: the settings matrix gates only the
+  // own definition, so the documented rollback (defer + enabled row) loads.
+  if (verifyIsBound && !verifySettingsMatrixValid(report.settings)) {
     refused.add('verify')
     issues.push(
-      `workflow definition "verify": the parity report settings matrix must cover at least two command lists and a maxBlocks case above 128; run pnpm workflows:parity or set ${legacySwitchFor('verification-gate', 'verification-gate')}`,
+      `workflow definition "verify": set ${legacySwitchFor('verification-gate', 'verification-gate')} or run pnpm workflows:parity; the report settings matrix must list at least two non-empty command lists and a positive safe maxBlocks above 128`,
     )
   }
   return { issues, refused }
+}
+
+/** The tracked settings matrix must mirror the validated verify settings. */
+function verifySettingsMatrixValid(settings: ParityReport['settings']): boolean {
+  const commands = settings['verify.commands']
+  const caps = settings['verify.maxBlocks']
+  const validCommands =
+    commands?.type === 'non-empty string list' &&
+    commands.cases.length >= 2 &&
+    commands.cases.every(
+      (entry) =>
+        Array.isArray(entry) &&
+        entry.length > 0 &&
+        entry.every((command) => typeof command === 'string' && command.trim() !== ''),
+    )
+  const validCaps =
+    caps?.type === 'positive safe integer' &&
+    caps.cases.length >= 2 &&
+    caps.cases.every(
+      (entry) => typeof entry === 'number' && Number.isSafeInteger(entry) && entry > 0,
+    ) &&
+    caps.cases.some((entry) => typeof entry === 'number' && entry > 128)
+  return validCommands && validCaps
 }
 
 /** The profile's verify settings: validated values outside the template hash. */

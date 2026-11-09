@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  assertArchiveRecognition,
   PARITY_CASES,
   runParityCase,
 } from '../../packages/plugin-workflows/test/parity-fixtures.ts'
 import {
   buildParityReport,
   checkParityReport,
+  parityExitCode,
   writeParityReport,
 } from '../../scripts/workflows-parity.ts'
 
@@ -104,6 +106,30 @@ describe('retirement parity report', () => {
         expect(entry.legacy.decision).toMatch(/allow|refuse/u)
       }
     }
+  })
+
+  it('fails the report and the exit code on a deliberate mismatch', async () => {
+    const mismatch = {
+      id: 'deliberate-mismatch',
+      gate: 'checkpoint' as const,
+      legacy: { decision: 'allow' as const, reason: 'legacy allows' },
+      workflow: async () => ({ decision: 'refuse' as const, reason: 'workflow refuses' }),
+    }
+    const report = await buildParityReport(new Date(), [...PARITY_CASES, mismatch])
+    const text = report.mismatches.join('\n')
+    expect(text).toContain('deliberate-mismatch')
+    expect(text).toContain('legacy allows')
+    expect(text).toContain('workflow refuses')
+    expect(report.gates.checkpoint?.status).toBe('fail')
+    expect(parityExitCode(report)).toBe(1)
+    expect(parityExitCode({ mismatches: [] })).toBe(0)
+  })
+
+  it('fails when a required archive form loses recognition', async () => {
+    const directory = await tempDirectory()
+    expect(() => assertArchiveRecognition('mv docs/a.md docs/b.md', directory)).toThrow(
+      /not recognized/u,
+    )
   })
 
   it('compares allow/refuse decisions and names a deliberate mismatch', async () => {

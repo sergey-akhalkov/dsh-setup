@@ -10,6 +10,7 @@ import {
   parseTasksText,
   portableTaskRecordPath,
   type ReviewApprovalMarker,
+  recognizeArchiveCommands,
   reviewerBindingOf,
 } from '../../plugin-delegation-rules/src/shared/approval.ts'
 import { parseArchiveCommand } from '../lib/command-parse.js'
@@ -291,6 +292,24 @@ function moveParityCase(id: string, command: string): ParityCase {
   }
 }
 
+/**
+ * Both guards must recognize a required archive form; a lost form fails the
+ * parity run instead of passing as a vacuous refusal.
+ */
+export function assertArchiveRecognition(command: string, root: string): { change: string } {
+  const legacy = recognizeArchiveCommands(command, root)
+  const workflow = parseArchiveCommand(command, root)
+  if (
+    legacy.length !== 1 ||
+    workflow === undefined ||
+    workflow.kind !== 'archive' ||
+    legacy[0]?.change !== workflow.change
+  ) {
+    throw new Error(`the archive form is not recognized by both guards: ${command}`)
+  }
+  return { change: workflow.change }
+}
+
 /** One archive move form: parse the real form, then judge the owned coverage. */
 async function moveFormWorkflow(command: string): Promise<ParityDecision> {
   const root = await mkdtemp(join(tmpdir(), 'workflows-parity-'))
@@ -303,17 +322,13 @@ async function moveFormWorkflow(command: string): Promise<ParityDecision> {
       JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
       'utf8',
     )
-    const intent = parseArchiveCommand(command, root)
-    if (intent === undefined || intent.kind !== 'archive') {
-      // A form the workflow cannot parse fails the case instead of passing.
-      return { decision: 'refuse', reason: `UNPARSED archive form: ${command}` }
-    }
-    const coverage = taskReviewCoverage(root, 'change-a')
+    const { change } = assertArchiveRecognition(command, root)
+    const coverage = taskReviewCoverage(root, change)
     return coverage.ok
-      ? { decision: 'allow', reason: `the ${intent.form} archive has portable coverage` }
+      ? { decision: 'allow', reason: `the ${change} archive has portable coverage` }
       : {
           decision: 'refuse',
-          reason: `the ${intent.form} archive of "${intent.change}" has no portable task-review PASS`,
+          reason: `the ${change} archive has no portable task-review PASS`,
         }
   } finally {
     await rm(root, { recursive: true, force: true })
@@ -332,14 +347,11 @@ async function legacyMoveFormDecision(command: string): Promise<ParityDecision> 
       JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
       'utf8',
     )
-    const intent = parseArchiveCommand(command, root)
-    if (intent === undefined || intent.kind !== 'archive') {
-      return { decision: 'refuse', reason: `UNPARSED archive form: ${command}` }
-    }
+    const { change } = assertArchiveRecognition(command, root)
     const coverage = await legacyCoverageDecision(root)
     return coverage.decision === 'allow'
-      ? { decision: 'allow', reason: `the legacy ${intent.form} guard allows` }
-      : { decision: 'refuse', reason: `the legacy ${intent.form} guard refuses` }
+      ? { decision: 'allow', reason: `the legacy ${change} guard allows` }
+      : { decision: 'refuse', reason: `the legacy ${change} guard refuses` }
   } finally {
     await rm(root, { recursive: true, force: true })
   }

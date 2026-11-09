@@ -12,6 +12,7 @@ import { evaluateArchiveGate, evaluateTurnClose } from '../src/host/gates.ts'
 import {
   checkpointCloseIssue,
   parityLoadIssues,
+  readParityReport,
   resolveVerifySettings,
   taskReviewCompletion,
   taskReviewCoverage,
@@ -105,6 +106,49 @@ describe('parity load gate and verify settings', () => {
     const disabled = resolveOwnership(intake, new Set(['delegation-rules']), new Set())
     expect(disabled.issues.join('\n')).toMatch(/spec-review/u)
     expect(disabled.issues.join('\n')).toMatch(/gate-only switch is off|no enforcing legacy gate/u)
+  })
+
+  it('keeps the rollback switch inside the bounded 300-character diagnostic', () => {
+    const missing = parityLoadIssues(
+      loadShippedDefinitions(),
+      undefined,
+      'C:\\Users\\someone\\AppData\\Local\\Programs\\DeepSeek Harness\\resources\\app.asar\\dsh\\packages\\plugin-workflows\\assets\\parity\\retire-legacy-gates.json',
+      'the report file does not exist',
+    )
+    for (const issue of missing.issues) {
+      expect(issue.slice(0, 300)).toMatch(
+        /checkpoint\.automation: true|delegation\.gates\.workflowOwned: true|verification-gate/u,
+      )
+    }
+  })
+
+  it('refuses verify only when the settings matrix is invalid or verify is bound', () => {
+    const definitions = loadShippedDefinitions()
+    const report = readParityReport().report
+    if (report === undefined) throw new Error('the tracked parity report is missing')
+    const invalid = {
+      ...report,
+      settings: {
+        'verify.commands': { type: 'number', cases: [1, 2] },
+        'verify.maxBlocks': { type: 'string', cases: [129.5] },
+      },
+    }
+    expect([
+      ...parityLoadIssues(definitions, invalid, '/plugins/parity.json', undefined).refused,
+    ]).toContain('verify')
+
+    const deferred = definitions.map((entry) =>
+      entry.id === 'verify'
+        ? { ...entry, settings: { ...entry.settings, gateOwnership: 'defer' as const } }
+        : entry,
+    )
+    const deferredResult = parityLoadIssues(
+      deferred,
+      { ...report, settings: {} as never },
+      '/plugins/parity.json',
+      undefined,
+    )
+    expect([...deferredResult.refused]).not.toContain('verify')
   })
 
   it('never embeds a shell command in the verify template', () => {

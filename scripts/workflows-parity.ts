@@ -22,7 +22,11 @@ import {
   shippedParityReportPath,
   templateHash,
 } from '../packages/plugin-workflows/lib/parity.js'
-import { PARITY_CASES, runParityCase } from '../packages/plugin-workflows/test/parity-fixtures.ts'
+import {
+  PARITY_CASES,
+  type ParityCase,
+  runParityCase,
+} from '../packages/plugin-workflows/test/parity-fixtures.ts'
 
 export interface GateSummary {
   cases: number
@@ -78,7 +82,10 @@ function settingsMatrix(): BuiltReport['settings'] {
 }
 
 /** Recompute the whole parity table. */
-export async function buildParityReport(now = new Date()): Promise<BuiltReport> {
+export async function buildParityReport(
+  now = new Date(),
+  cases: readonly ParityCase[] = PARITY_CASES,
+): Promise<BuiltReport> {
   const templates: Record<string, string> = {}
   for (const definition of templateDefinitions()) {
     templates[definition.id] = templateHash(definition)
@@ -94,7 +101,7 @@ export async function buildParityReport(now = new Date()): Promise<BuiltReport> 
     'lane-assignment': { cases: 0, status: 'legacy' },
   }
   const mismatches: string[] = []
-  for (const parityCase of PARITY_CASES) {
+  for (const parityCase of cases) {
     if (parityCase.gate === 'retained') {
       const group = parityCase.retained?.group
       if (group === undefined) continue
@@ -190,6 +197,11 @@ function isEntrypoint(): boolean {
   return entry !== undefined && fileURLToPath(import.meta.url) === entry
 }
 
+/** Any recorded mismatch blocks the migration and the release gate. */
+export function parityExitCode(report: Pick<BuiltReport, 'mismatches'>): number {
+  return report.mismatches.length > 0 ? 1 : 0
+}
+
 async function main(): Promise<void> {
   const check = process.argv.includes('--check')
   if (check) {
@@ -203,7 +215,7 @@ async function main(): Promise<void> {
     return
   }
   const report = await writeParityReport()
-  if (report.mismatches.length > 0) {
+  if (parityExitCode(report) !== 0) {
     for (const mismatch of report.mismatches) console.error(`workflows-parity: ${mismatch}`)
     console.error(
       `workflows-parity: ${String(report.mismatches.length)} mismatch(es); the migration must not flip ownership`,
