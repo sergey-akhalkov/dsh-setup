@@ -159,20 +159,20 @@ describe('turn-close gate', () => {
     expect(selectBlockingStep(run, definition, installed)?.id).toBe('requirements')
   })
 
-  it('caps the refusals with a visible violation and allows one close', () => {
+  it('caps the refusals with a visible violation and restores the budget on a new turn', () => {
     const definition = blockingDefinition()
     const agent = new FakeAgent()
     let run = runFor(definition)
-    for (const turn of [1, 2]) {
+    for (const attempt of [1, 2]) {
       const outcome = evaluateTurnClose({
         run,
         definition,
         agent,
         evidenceContext,
-        turn,
+        turn: 1,
         maxBlocks: 2,
         installedLegacy: installed,
-        now: 2_000 + turn,
+        now: 2_000 + attempt,
       })
       expect(outcome.kind).toBe('refuse')
       run = outcome.run
@@ -182,7 +182,7 @@ describe('turn-close gate', () => {
       definition,
       agent,
       evidenceContext,
-      turn: 3,
+      turn: 1,
       maxBlocks: 2,
       installedLegacy: installed,
       now: 3_000,
@@ -197,6 +197,20 @@ describe('turn-close gate', () => {
     expect(capped.run.turnBlocks).toBe(2)
     expect(agent.messages).toHaveLength(2)
     expect(capped.run.steps[0]?.state).toBe('open')
+    // The next turn starts a fresh maxBlocks budget and the obligation steers
+    // again instead of being suppressed by the capped turn.
+    const nextTurn = evaluateTurnClose({
+      run: capped.run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 2,
+      maxBlocks: 2,
+      installedLegacy: installed,
+      now: 4_000,
+    })
+    expect(nextTurn.kind).toBe('refuse')
+    expect(agent.messages).toHaveLength(3)
   })
 
   it('never steers a deferred step and skips a subagent turn', () => {
@@ -989,8 +1003,8 @@ it('steers on every stop in one turn and resets attempts after a violation', () 
     installedLegacy: installed,
     now: 3_000,
   })
-  expect(nextTurn.kind).toBe('violation')
-  expect(agent.messages).toHaveLength(2)
+  expect(nextTurn.kind).toBe('refuse')
+  expect(agent.messages).toHaveLength(3)
 })
 
 it('blocks an archive while a filesystem-triggered review run is open', async () => {

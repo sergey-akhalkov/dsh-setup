@@ -2738,13 +2738,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               checkpointApplicability.bottleneckAge,
               checkpointOptions(payload.turn),
             )
-            const blocks = currentRetro.turnBlocks ?? 0
+            const blocks =
+              currentRetro.turnBlocksTurn === payload.turn ? (currentRetro.turnBlocks ?? 0) : 0
             const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3
-            const alreadyUnchecked = (currentRetro.violations ?? []).some(
-              (violation) => violation.detail?.includes('checkpoint freshness refused') === true,
-            )
-            if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
-              await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth)
+            if (issue !== undefined && blocks < limit) {
+              await writeRun(
+                workspace,
+                {
+                  ...incrementTurnBlocks(currentRetro, journal.time()),
+                  turnBlocksTurn: payload.turn,
+                },
+                auth,
+              )
               payload.agent.steer({
                 id: randomUUID(),
                 role: 'user',
@@ -2752,13 +2757,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 source: { kind: 'workflows-gate' },
               } as never)
               refusedThisClose = true
-            } else if (issue !== undefined && !alreadyUnchecked && blocks >= limit) {
+            } else if (issue !== undefined && blocks === limit) {
               const violated = addViolation(
                 currentRetro,
                 `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`,
                 { at: journal.time() },
               )
-              await writeRun(workspace, violated, auth)
+              await writeRun(
+                workspace,
+                { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 },
+                auth,
+              )
               payload.agent.steer({
                 id: randomUUID(),
                 role: 'user',

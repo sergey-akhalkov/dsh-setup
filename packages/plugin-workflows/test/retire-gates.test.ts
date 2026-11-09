@@ -926,6 +926,7 @@ describe('owned verification evidence', () => {
         now: 1_000,
       })
       run = settleStep(run, 'check', 'open', { at: 1_001 })
+      run = { ...run, turnBlocksTurn: 1 }
       for (let index = 0; index < blocks; index += 1) run = incrementTurnBlocks(run, 1_001)
       return run
     }
@@ -988,6 +989,19 @@ describe('owned verification evidence', () => {
       run = outcome.run
     }
     expect(kinds).toEqual(['refuse', 'refuse', 'refuse', 'violation', 'violation'])
+    // A later turn starts a fresh budget: the capped turn does not suppress it.
+    const nextTurn = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 2,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+      checkpointIssue: { text: 'execute the bottleneck remedy' },
+    })
+    expect(nextTurn.kind).toBe('refuse')
   })
 
   it('bounds a very long written path in the refusal', () => {
