@@ -44,6 +44,20 @@ export type EdgeKind = 'start' | 'next' | 'true' | 'false' | 'body' | 'exit'
 
 export const TRIGGER_NODE = '__trigger'
 export const END_NODE = '__end'
+/**
+ * Step nodes live in their own id namespace. A definition step id is any
+ * non-empty string (the host only reserves "end"), so a bare copy could name a
+ * step "__end" and collide with the synthetic terminal node.
+ */
+export const STEP_NODE_PREFIX = 'step:'
+
+export function nodeIdOf(stepId: string): string {
+  return `${STEP_NODE_PREFIX}${stepId}`
+}
+
+export function stepIdOfNode(nodeId: string): string | undefined {
+  return nodeId.startsWith(STEP_NODE_PREFIX) ? nodeId.slice(STEP_NODE_PREFIX.length) : undefined
+}
 
 export interface GraphEvidence {
   readonly kind: string
@@ -111,7 +125,7 @@ function edge(
   label?: string,
 ): DiagramEdge | undefined {
   if (target === undefined || target === '') return undefined
-  const resolved = target === 'end' ? END_NODE : target
+  const resolved = target === 'end' ? END_NODE : nodeIdOf(target)
   return {
     id: `${source}:${kind}`,
     source,
@@ -144,8 +158,9 @@ export function definitionToGraph(
   if (start !== undefined) edges.push(start)
   let usesEnd = false
   definition.steps.forEach((step, index) => {
+    const id = nodeIdOf(step.id)
     nodes.push({
-      id: step.id,
+      id,
       kind: nodeKindOf(step.executor),
       title: step.title,
       step,
@@ -153,24 +168,24 @@ export function definitionToGraph(
       position: place(step.id, index + 1),
     })
     if (step.branch !== undefined) {
-      const yes = edge(step.id, step.branch.then, 'true', 'true')
-      const no = edge(step.id, step.branch.else, 'false', 'false')
+      const yes = edge(id, step.branch.then, 'true', 'true')
+      const no = edge(id, step.branch.else, 'false', 'false')
       if (yes !== undefined) edges.push(yes)
       if (no !== undefined) edges.push(no)
       usesEnd ||= step.branch.then === 'end' || step.branch.else === 'end'
     } else if (step.loop !== undefined) {
       edges.push({
-        id: `${step.id}:body`,
-        source: step.id,
-        target: step.id,
+        id: `${id}:body`,
+        source: id,
+        target: id,
         kind: 'body',
         label: 'body',
       })
-      const exit = edge(step.id, step.loop.next, 'exit', 'exit')
+      const exit = edge(id, step.loop.next, 'exit', 'exit')
       if (exit !== undefined) edges.push(exit)
       usesEnd ||= step.loop.next === 'end'
     } else {
-      const next = edge(step.id, step.next, 'next', 'next')
+      const next = edge(id, step.next, 'next', 'next')
       if (next !== undefined) edges.push(next)
       usesEnd ||= step.next === 'end'
     }
@@ -218,6 +233,21 @@ export function graphToDefinition(
       )
     }
   }
+  // Synthetic nodes are validated before they are filtered out: a step-bearing
+  // node mislabeled trigger/end would otherwise silently drop that step.
+  for (const node of nodes) {
+    if (node.kind === 'trigger') {
+      if (node.id !== TRIGGER_NODE || node.step !== undefined) {
+        throw new GraphError(node.id, 'only the synthetic trigger node may have the trigger kind')
+      }
+    } else if (node.kind === 'end') {
+      if (node.id !== END_NODE || node.step !== undefined) {
+        throw new GraphError(node.id, 'only the synthetic end node may have the end kind')
+      }
+    } else if (node.step === undefined) {
+      throw new GraphError(node.id, 'the node carries no definition step')
+    }
+  }
   const stepNodes = nodes
     .filter((node) => node.kind !== 'trigger' && node.kind !== 'end')
     .sort((left, right) => left.index - right.index)
@@ -225,18 +255,29 @@ export function graphToDefinition(
   const target = (nodeId: string, kind: EdgeKind): string | undefined => {
     const value = targetOf(edges, nodeId, kind)
     if (value === undefined) return undefined
-    return value === END_NODE ? 'end' : value
+    if (value === END_NODE) return 'end'
+    const stepId = stepIdOfNode(value)
+    if (stepId === undefined) {
+      throw new GraphError(nodeId, `the ${kind} edge points outside the definition steps`)
+    }
+    return stepId
   }
   const steps: GraphStep[] = []
   for (const node of stepNodes) {
-    if (node.step === undefined || node.step.id !== node.id) {
+    const stepId = stepIdOfNode(node.id)
+    if (
+      node.step === undefined ||
+      stepId === undefined ||
+      node.step.id !== stepId ||
+      node.id !== nodeIdOf(node.step.id)
+    ) {
       throw new GraphError(node.id, 'the node carries no matching definition step')
     }
     if (node.kind !== nodeKindOf(node.step.executor)) {
       throw new GraphError(node.id, 'the node kind does not match the step executor')
     }
-    if (ids.has(node.id)) throw new GraphError(node.id, 'the step id is duplicated')
-    ids.add(node.id)
+    if (ids.has(node.step.id)) throw new GraphError(node.id, 'the step id is duplicated')
+    ids.add(node.step.id)
     const original = node.step
     let patched: GraphStep
     if (original.branch !== undefined) {
@@ -253,8 +294,15 @@ export function graphToDefinition(
     steps.push(patched)
   }
   const startTarget = targetOf(edges, TRIGGER_NODE, 'start')
-  if (startTarget !== undefined && startTarget !== END_NODE) {
-    const index = steps.findIndex((step) => step.id === startTarget)
+  if (startTarget !== undefined) {
+    if (startTarget === END_NODE) {
+      throw new GraphError(TRIGGER_NODE, 'the trigger must point at a definition step, not the end')
+    }
+    const stepId = stepIdOfNode(startTarget)
+    if (stepId === undefined) {
+      throw new GraphError(TRIGGER_NODE, 'the trigger points outside the definition steps')
+    }
+    const index = steps.findIndex((step) => step.id === stepId)
     if (index > 0) steps.unshift(...steps.splice(index, 1))
   }
   return { ...definition, steps }
@@ -268,15 +316,32 @@ export function precheckGraph(
   const issues: GraphIssue[] = []
   const stepIds = new Set<string>()
   for (const node of nodes) {
-    if (node.kind === 'trigger' || node.kind === 'end') continue
-    if (stepIds.has(node.id)) {
+    if (node.kind === 'trigger' || node.kind === 'end') {
+      const validNode =
+        node.step === undefined &&
+        (node.kind === 'trigger' ? node.id === TRIGGER_NODE : node.id === END_NODE)
+      if (!validNode) {
+        issues.push({
+          nodeId: node.id,
+          path: `nodes.${node.id}`,
+          message: 'a synthetic node must not carry a definition step',
+        })
+      }
+      continue
+    }
+    const stepId = node.step?.id
+    if (stepId === undefined || stepIdOfNode(node.id) === undefined) {
+      issues.push({ nodeId: node.id, path: `nodes.${node.id}`, message: 'the node has no step id' })
+      continue
+    }
+    if (stepIds.has(stepId)) {
       issues.push({
         nodeId: node.id,
-        path: `steps.${node.id}`,
+        path: `steps.${stepId}`,
         message: 'the step id is duplicated',
       })
     }
-    stepIds.add(node.id)
+    stepIds.add(stepId)
   }
   const nodeIds = new Set(nodes.map((node) => node.id))
   const knownKinds = new Set<EdgeKind>(['start', 'next', 'true', 'false', 'body', 'exit'])

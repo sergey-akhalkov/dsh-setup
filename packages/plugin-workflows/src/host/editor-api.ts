@@ -302,7 +302,9 @@ export function validateLayout(raw: unknown, id: string): LayoutSidecar {
   if (!isRecord(raw.positions)) throw new Error('the layout positions must be an object')
   const positions: Record<string, LayoutPosition> = {}
   for (const [stepId, value] of Object.entries(raw.positions)) {
-    if (!DEFINITION_ID.test(stepId)) {
+    // A step id is any non-empty string the definition validator accepts; the
+    // layout key only names a position, so it never reaches a filesystem path.
+    if (stepId.trim() === '' || /[\\/]/u.test(stepId)) {
       throw new Error(`the layout position "${stepId}" has an unsafe step id`)
     }
     if (

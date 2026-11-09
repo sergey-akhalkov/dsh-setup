@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { editorLayoutUrl } from '../src/client/editor-client.ts'
-import { definitionToGraph, type GraphDefinition } from '../src/client/graph.ts'
+import { definitionToGraph, type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
 import { layoutOf, moveNode, parseLayout, withLayout } from '../src/client/layout.ts'
 import { installDefinition, loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
@@ -64,12 +64,18 @@ const DEFINITION = {
 describe('layout sidecar', () => {
   it('keeps saved positions across a reload and drops unknown steps', () => {
     const graph = definitionToGraph(DEFINITION)
-    const moved = moveNode(graph, 'one', { x: 40, y: 80 })
+    const moved = moveNode(graph, nodeIdOf('one'), { x: 40, y: 80 })
     const saved = layoutOf(moved)
     expect(saved).toMatchObject({ v: 1, id: 'layout-demo', positions: { one: { x: 40, y: 80 } } })
     const reopened = withLayout(definitionToGraph(DEFINITION), parseLayout(saved, 'layout-demo'))
-    expect(reopened.nodes.find((node) => node.id === 'one')?.position).toEqual({ x: 40, y: 80 })
-    expect(reopened.nodes.find((node) => node.id === 'two')?.position).not.toEqual({ x: 40, y: 80 })
+    expect(reopened.nodes.find((node) => node.step?.id === 'one')?.position).toEqual({
+      x: 40,
+      y: 80,
+    })
+    expect(reopened.nodes.find((node) => node.step?.id === 'two')?.position).not.toEqual({
+      x: 40,
+      y: 80,
+    })
   })
 
   it('is stable across two renders when no layout exists', () => {
@@ -97,7 +103,10 @@ describe('layout sidecar', () => {
       },
     }
     const parsed = parseLayout(raw, 'layout-demo')
-    expect(parsed?.positions).toEqual({ one: { x: 1, y: 2 } })
+    expect(parsed?.positions).toEqual({
+      one: { x: 1, y: 2 },
+      __trigger: { x: 9, y: 9 },
+    })
     const layoutUrl = editorLayoutUrl('session-1', 'layout-demo')
     expect(layoutUrl).toContain('session=session-1')
   })

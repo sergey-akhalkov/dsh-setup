@@ -124,8 +124,8 @@ export function overlayFor(run: RunView | undefined, definition: GraphDefinition
 /** Merge the overlay into node display data without touching the definition. */
 export function withOverlay(nodes: readonly DiagramNode[], overlay: Overlay): DiagramNode[] {
   return nodes.map((node) => {
-    if (node.kind === 'trigger' || node.kind === 'end') return node
-    const step = overlay.steps[node.id]
+    if (node.kind === 'trigger' || node.kind === 'end' || node.step === undefined) return node
+    const step = overlay.steps[node.step.id]
     if (step === undefined) return node
     return {
       ...node,

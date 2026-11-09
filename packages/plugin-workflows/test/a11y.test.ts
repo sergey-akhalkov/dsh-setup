@@ -16,7 +16,7 @@ import {
 } from '../src/client/a11y.ts'
 import { connectChoices, EDGE_LABELS } from '../src/client/edges.ts'
 import { addStep, blankDefinition, connectSteps, openNew, save } from '../src/client/editor.ts'
-import { END_NODE, type GraphDefinition } from '../src/client/graph.ts'
+import { END_NODE, type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
 import { overlayFor } from '../src/client/overlay.ts'
 import {
   call,
@@ -74,7 +74,7 @@ describe('mode and fallback', () => {
     )
     expect(title).toBeDefined()
     fire(title, 'onChange', 'Edited in the fallback')
-    expect(patches).toEqual(['step-1'])
+    expect(patches).toEqual([nodeIdOf('step-1')])
     expect(onError).toHaveBeenCalledTimes(1)
     expect((ui.canvasFailedState as (state: unknown) => { mode: string })(state).mode).toBe('list')
     errors.mockRestore()
@@ -162,16 +162,16 @@ describe('summary and keyboard', () => {
     expect(kinds).toEqual(['step'])
     let state = openNew(blankDefinition(new Set(['new-workflow'])))
     state = addStep(state, 'step')
-    const choices = connectChoices(state.diagram.nodes, 'step-1').find(
+    const choices = connectChoices(state.diagram.nodes, nodeIdOf('step-1')).find(
       (choice) => choice.kind === 'next',
     )
     expect(choices?.targets.map((target) => target.id)).toEqual(
-      expect.arrayContaining(['step-2', END_NODE]),
+      expect.arrayContaining([nodeIdOf('step-2'), END_NODE]),
     )
     expect(EDGE_LABELS.next).toBe('next')
     // Keyboard connect: choose the labelled target, then connect.
-    state = connectSteps(state, 'step-1', 'step-2', 'next')
-    state = connectSteps(state, 'step-2', END_NODE, 'next')
+    state = connectSteps(state, nodeIdOf('step-1'), nodeIdOf('step-2'), 'next')
+    state = connectSteps(state, nodeIdOf('step-2'), END_NODE, 'next')
     expect(state.issues).toEqual([])
     const saved = await save(
       { ...state, document: { ...state.document, revision: 'rev-1' } },

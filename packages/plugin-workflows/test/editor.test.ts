@@ -21,7 +21,7 @@ import {
   save,
   saveAsCopy,
 } from '../src/client/editor.ts'
-import type { GraphDefinition } from '../src/client/graph.ts'
+import { type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
 
 const definition = {
@@ -235,7 +235,7 @@ describe('draft, dirty tracking, and save', () => {
     const { api, calls } = fakeApi()
     const state = opened()
     expect(state.dirty).toBe(false)
-    const moved = moveStep(state, 'one', { x: 10, y: 20 })
+    const moved = moveStep(state, nodeIdOf('one'), { x: 10, y: 20 })
     expect(moved.dirty).toBe(true)
     const saved = await save(moved, { api, taken: TAKEN })
     expect(saved.status).toBe('saved')
@@ -249,7 +249,7 @@ describe('draft, dirty tracking, and save', () => {
 
   it('leaves the file unchanged when the editor is reloaded instead of saved', async () => {
     const { api, store, calls } = fakeApi()
-    const dirty = patchStep(opened(), 'one', { title: 'Changed' })
+    const dirty = patchStep(opened(), nodeIdOf('one'), { title: 'Changed' })
     expect(dirty.document.definition.steps[0]?.title).toBe('Changed')
     const reloaded = openDocument(await api.read('demo'))
     expect(reloaded.document.definition).toEqual(definition)
@@ -286,7 +286,7 @@ describe('revision contract', () => {
     })
     expect(calls.saveDefinition[0]?.expected).toBeNull()
     expect(created.document.revision).toBe('rev-new-2')
-    const updated = await save(patchStep(created, 'one', { title: 'Again' }), {
+    const updated = await save(patchStep(created, nodeIdOf('one'), { title: 'Again' }), {
       api,
       taken: new Set(['demo', 'fresh']),
     })
@@ -297,7 +297,10 @@ describe('revision contract', () => {
   it('writes nothing on a conflicting update', async () => {
     const { api, store, calls } = fakeApi()
     const state = openDocument({ definition, revision: 'stale', source: 'local' })
-    const result = await save(patchStep(state, 'one', { title: 'Mine' }), { api, taken: TAKEN })
+    const result = await save(patchStep(state, nodeIdOf('one'), { title: 'Mine' }), {
+      api,
+      taken: TAKEN,
+    })
     expect(calls.saveDefinition).toHaveLength(1)
     expect(result.conflict).toMatchObject({ kind: 'update', currentRevision: 'rev-1' })
     expect(store.definitions.get('demo')?.definition).toEqual(definition)
@@ -318,7 +321,7 @@ describe('revision contract', () => {
 describe('pre-check and host error mapping', () => {
   it('blocks a save the client pre-check rejects without calling the host', async () => {
     const { api, calls } = fakeApi()
-    const broken = deleteStep(opened(), 'one')
+    const broken = deleteStep(opened(), nodeIdOf('one'))
     expect(savable(broken)).toBe(false)
     const result = await save(broken, { api, taken: TAKEN })
     expect(result.status).toBe('error')
@@ -335,7 +338,10 @@ describe('pre-check and host error mapping', () => {
         errors: [{ path: 'steps[1].title', message: 'must be a non-empty string' }],
       }),
     })
-    const result = await save(patchStep(opened(), 'two', { title: '' }), { api, taken: TAKEN })
+    const result = await save(patchStep(opened(), nodeIdOf('two'), { title: '' }), {
+      api,
+      taken: TAKEN,
+    })
     expect(result.status).toBe('error')
     expect(result.issues[0]).toMatchObject({ nodeId: 'two', path: 'steps[1].title' })
     expect(result.issues[0]?.message).toContain('non-empty string')

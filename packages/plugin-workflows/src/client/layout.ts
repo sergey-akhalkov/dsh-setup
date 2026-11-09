@@ -1,4 +1,4 @@
-import { autoPositions, type Diagram, type DiagramNode, END_NODE, TRIGGER_NODE } from './graph.ts'
+import { autoPositions, type Diagram, type DiagramNode } from './graph.ts'
 
 /**
  * The layout sidecar. Positions live under `.dsh/workflows/layout/<id>.json`
@@ -23,17 +23,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isSynthetic(nodeId: string): boolean {
-  return nodeId === TRIGGER_NODE || nodeId === END_NODE
-}
-
 /** Read an untrusted sidecar; an unusable file reads as no layout at all. */
 export function parseLayout(raw: unknown, id: string): Layout | undefined {
   if (!isRecord(raw) || raw.v !== LAYOUT_VERSION || raw.id !== id) return undefined
   if (!isRecord(raw.positions)) return undefined
   const positions: Record<string, LayoutPosition> = {}
   for (const [stepId, value] of Object.entries(raw.positions)) {
-    if (isSynthetic(stepId)) continue
     if (
       !isRecord(value) ||
       typeof value.x !== 'number' ||
@@ -52,11 +47,11 @@ export function parseLayout(raw: unknown, id: string): Layout | undefined {
 export function layoutOf(diagram: Diagram, previous?: Layout): Layout {
   const positions: Record<string, LayoutPosition> = { ...(previous?.positions ?? {}) }
   for (const node of diagram.nodes) {
-    if (node.kind === 'trigger' || node.kind === 'end') continue
-    positions[node.id] = { x: node.position.x, y: node.position.y }
+    if (node.kind === 'trigger' || node.kind === 'end' || node.step === undefined) continue
+    positions[node.step.id] = { x: node.position.x, y: node.position.y }
   }
   for (const id of Object.keys(positions)) {
-    if (!diagram.nodes.some((node) => node.id === id)) delete positions[id]
+    if (!diagram.nodes.some((node) => node.step?.id === id)) delete positions[id]
   }
   return { v: LAYOUT_VERSION, id: diagram.definition.id, positions }
 }
@@ -68,7 +63,8 @@ export function layoutOf(diagram: Diagram, previous?: Layout): Layout {
 export function withLayout(diagram: Diagram, layout?: Layout): Diagram {
   const automatic = autoPositions(diagram.nodes, diagram.edges)
   const nodes: DiagramNode[] = diagram.nodes.map((node) => {
-    const saved = layout?.positions[node.id]
+    const stepId = node.step?.id
+    const saved = stepId === undefined ? undefined : layout?.positions[stepId]
     const fallback = automatic[node.id]
     const position = saved ?? fallback ?? node.position
     return { ...node, position }

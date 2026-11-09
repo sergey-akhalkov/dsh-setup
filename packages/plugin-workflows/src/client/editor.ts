@@ -9,6 +9,7 @@ import {
   type GraphStep,
   graphToDefinition,
   type NodeKind,
+  nodeIdOf,
   nodeKindOf,
   precheckGraph,
 } from './graph.ts'
@@ -338,7 +339,7 @@ export function addStep(state: EditorState, kind: NodeKind): EditorState {
   const nodes: DiagramNode[] = [
     ...state.diagram.nodes,
     {
-      id,
+      id: nodeIdOf(id),
       kind,
       title: step.title,
       step,

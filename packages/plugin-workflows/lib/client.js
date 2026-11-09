@@ -9933,6 +9933,13 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/graph.ts
     var TRIGGER_NODE = "__trigger";
     var END_NODE = "__end";
+    var STEP_NODE_PREFIX = "step:";
+    function nodeIdOf(stepId) {
+      return `${STEP_NODE_PREFIX}${stepId}`;
+    }
+    function stepIdOfNode(nodeId) {
+      return nodeId.startsWith(STEP_NODE_PREFIX) ? nodeId.slice(STEP_NODE_PREFIX.length) : void 0;
+    }
     var GraphError = class extends Error {
       path;
       constructor(path, message) {
@@ -9949,7 +9956,7 @@ window.__ModuleLoader__.load({
     }
     function edge(source, target, kind, label) {
       if (target === void 0 || target === "") return void 0;
-      const resolved = target === "end" ? END_NODE : target;
+      const resolved = target === "end" ? END_NODE : nodeIdOf(target);
       return {
         id: `${source}:${kind}`,
         source,
@@ -9977,8 +9984,9 @@ window.__ModuleLoader__.load({
       if (start2 !== void 0) edges.push(start2);
       let usesEnd = false;
       definition.steps.forEach((step, index2) => {
+        const id2 = nodeIdOf(step.id);
         nodes.push({
-          id: step.id,
+          id: id2,
           kind: nodeKindOf(step.executor),
           title: step.title,
           step,
@@ -9986,24 +9994,24 @@ window.__ModuleLoader__.load({
           position: place(step.id, index2 + 1)
         });
         if (step.branch !== void 0) {
-          const yes = edge(step.id, step.branch.then, "true", "true");
-          const no = edge(step.id, step.branch.else, "false", "false");
+          const yes = edge(id2, step.branch.then, "true", "true");
+          const no = edge(id2, step.branch.else, "false", "false");
           if (yes !== void 0) edges.push(yes);
           if (no !== void 0) edges.push(no);
           usesEnd ||= step.branch.then === "end" || step.branch.else === "end";
         } else if (step.loop !== void 0) {
           edges.push({
-            id: `${step.id}:body`,
-            source: step.id,
-            target: step.id,
+            id: `${id2}:body`,
+            source: id2,
+            target: id2,
             kind: "body",
             label: "body"
           });
-          const exit = edge(step.id, step.loop.next, "exit", "exit");
+          const exit = edge(id2, step.loop.next, "exit", "exit");
           if (exit !== void 0) edges.push(exit);
           usesEnd ||= step.loop.next === "end";
         } else {
-          const next = edge(step.id, step.next, "next", "next");
+          const next = edge(id2, step.next, "next", "next");
           if (next !== void 0) edges.push(next);
           usesEnd ||= step.next === "end";
         }
@@ -10038,23 +10046,42 @@ window.__ModuleLoader__.load({
           );
         }
       }
+      for (const node of nodes) {
+        if (node.kind === "trigger") {
+          if (node.id !== TRIGGER_NODE || node.step !== void 0) {
+            throw new GraphError(node.id, "only the synthetic trigger node may have the trigger kind");
+          }
+        } else if (node.kind === "end") {
+          if (node.id !== END_NODE || node.step !== void 0) {
+            throw new GraphError(node.id, "only the synthetic end node may have the end kind");
+          }
+        } else if (node.step === void 0) {
+          throw new GraphError(node.id, "the node carries no definition step");
+        }
+      }
       const stepNodes = nodes.filter((node) => node.kind !== "trigger" && node.kind !== "end").sort((left, right) => left.index - right.index);
       const ids = /* @__PURE__ */ new Set();
       const target = (nodeId, kind) => {
         const value2 = targetOf(edges, nodeId, kind);
         if (value2 === void 0) return void 0;
-        return value2 === END_NODE ? "end" : value2;
+        if (value2 === END_NODE) return "end";
+        const stepId = stepIdOfNode(value2);
+        if (stepId === void 0) {
+          throw new GraphError(nodeId, `the ${kind} edge points outside the definition steps`);
+        }
+        return stepId;
       };
       const steps = [];
       for (const node of stepNodes) {
-        if (node.step === void 0 || node.step.id !== node.id) {
+        const stepId = stepIdOfNode(node.id);
+        if (node.step === void 0 || stepId === void 0 || node.step.id !== stepId || node.id !== nodeIdOf(node.step.id)) {
           throw new GraphError(node.id, "the node carries no matching definition step");
         }
         if (node.kind !== nodeKindOf(node.step.executor)) {
           throw new GraphError(node.id, "the node kind does not match the step executor");
         }
-        if (ids.has(node.id)) throw new GraphError(node.id, "the step id is duplicated");
-        ids.add(node.id);
+        if (ids.has(node.step.id)) throw new GraphError(node.id, "the step id is duplicated");
+        ids.add(node.step.id);
         const original = node.step;
         let patched;
         if (original.branch !== void 0) {
@@ -10071,8 +10098,15 @@ window.__ModuleLoader__.load({
         steps.push(patched);
       }
       const startTarget = targetOf(edges, TRIGGER_NODE, "start");
-      if (startTarget !== void 0 && startTarget !== END_NODE) {
-        const index2 = steps.findIndex((step) => step.id === startTarget);
+      if (startTarget !== void 0) {
+        if (startTarget === END_NODE) {
+          throw new GraphError(TRIGGER_NODE, "the trigger must point at a definition step, not the end");
+        }
+        const stepId = stepIdOfNode(startTarget);
+        if (stepId === void 0) {
+          throw new GraphError(TRIGGER_NODE, "the trigger points outside the definition steps");
+        }
+        const index2 = steps.findIndex((step) => step.id === stepId);
         if (index2 > 0) steps.unshift(...steps.splice(index2, 1));
       }
       return { ...definition, steps };
@@ -10081,15 +10115,30 @@ window.__ModuleLoader__.load({
       const issues = [];
       const stepIds2 = /* @__PURE__ */ new Set();
       for (const node of nodes) {
-        if (node.kind === "trigger" || node.kind === "end") continue;
-        if (stepIds2.has(node.id)) {
+        if (node.kind === "trigger" || node.kind === "end") {
+          const validNode = node.step === void 0 && (node.kind === "trigger" ? node.id === TRIGGER_NODE : node.id === END_NODE);
+          if (!validNode) {
+            issues.push({
+              nodeId: node.id,
+              path: `nodes.${node.id}`,
+              message: "a synthetic node must not carry a definition step"
+            });
+          }
+          continue;
+        }
+        const stepId = node.step?.id;
+        if (stepId === void 0 || stepIdOfNode(node.id) === void 0) {
+          issues.push({ nodeId: node.id, path: `nodes.${node.id}`, message: "the node has no step id" });
+          continue;
+        }
+        if (stepIds2.has(stepId)) {
           issues.push({
             nodeId: node.id,
-            path: `steps.${node.id}`,
+            path: `steps.${stepId}`,
             message: "the step id is duplicated"
           });
         }
-        stepIds2.add(node.id);
+        stepIds2.add(stepId);
       }
       const nodeIds = new Set(nodes.map((node) => node.id));
       const knownKinds = /* @__PURE__ */ new Set(["start", "next", "true", "false", "body", "exit"]);
@@ -10185,18 +10234,19 @@ window.__ModuleLoader__.load({
     function layoutOf(diagram, previous) {
       const positions = { ...previous?.positions ?? {} };
       for (const node of diagram.nodes) {
-        if (node.kind === "trigger" || node.kind === "end") continue;
-        positions[node.id] = { x: node.position.x, y: node.position.y };
+        if (node.kind === "trigger" || node.kind === "end" || node.step === void 0) continue;
+        positions[node.step.id] = { x: node.position.x, y: node.position.y };
       }
       for (const id2 of Object.keys(positions)) {
-        if (!diagram.nodes.some((node) => node.id === id2)) delete positions[id2];
+        if (!diagram.nodes.some((node) => node.step?.id === id2)) delete positions[id2];
       }
       return { v: LAYOUT_VERSION, id: diagram.definition.id, positions };
     }
     function withLayout(diagram, layout) {
       const automatic = autoPositions(diagram.nodes, diagram.edges);
       const nodes = diagram.nodes.map((node) => {
-        const saved = layout?.positions[node.id];
+        const stepId = node.step?.id;
+        const saved = stepId === void 0 ? void 0 : layout?.positions[stepId];
         const fallback = automatic[node.id];
         const position = saved ?? fallback ?? node.position;
         return { ...node, position };
@@ -10354,7 +10404,7 @@ window.__ModuleLoader__.load({
       const nodes = [
         ...state.diagram.nodes,
         {
-          id: id2,
+          id: nodeIdOf(id2),
           kind,
           title: step.title,
           step,
@@ -10750,12 +10800,17 @@ window.__ModuleLoader__.load({
       const evidence = step.evidence;
       return typeof evidence?.kind === "string" ? evidence.kind : "";
     }
+    function graphIdOfStep(state, stepId) {
+      return state.diagram.nodes.find((node) => node.step?.id === stepId)?.id ?? "";
+    }
     function listConnectionChoices(state, step) {
+      const graphId = graphIdOfStep(state, step.id);
       return outputsFor(step).flatMap(
-        (kind) => connectChoices(state.diagram.nodes, step.id).filter((choice) => choice.kind === kind).map((choice) => ({ kind, targets: choice.targets }))
+        (kind) => connectChoices(state.diagram.nodes, graphId).filter((choice) => choice.kind === kind).map((choice) => ({ kind, targets: choice.targets }))
       );
     }
     function listRowModel(state, step) {
+      const graphId = graphIdOfStep(state, step.id);
       const values = {
         id: step.id,
         title: step.title,
@@ -10764,23 +10819,23 @@ window.__ModuleLoader__.load({
         evidenceKind: evidenceKind(step)
       };
       for (const kind of outputsFor(step)) {
-        values[`connection:${kind}`] = currentTarget(state.diagram.edges, step.id, kind) ?? "";
+        values[`connection:${kind}`] = currentTarget(state.diagram.edges, graphId, kind) ?? "";
       }
       return values;
     }
-    function patchListField(step, field, value2, onPatch) {
+    function patchListField(graphId, step, field, value2, onPatch) {
       if (field === "title" || field === "prompt" || field === "executor") {
-        onPatch(step.id, { [field]: value2 });
+        onPatch(graphId, { [field]: value2 });
         return;
       }
       if (field === "evidenceKind") {
-        onPatch(step.id, { evidence: value2 === "" ? void 0 : { kind: value2 } });
+        onPatch(graphId, { evidence: value2 === "" ? void 0 : { kind: value2 } });
         return;
       }
       if (field === "branchPredicate") {
         if (step.branch === void 0) return;
         try {
-          onPatch(step.id, { branch: { ...step.branch, predicate: JSON.parse(value2) } });
+          onPatch(graphId, { branch: { ...step.branch, predicate: JSON.parse(value2) } });
         } catch {
         }
         return;
@@ -10788,7 +10843,7 @@ window.__ModuleLoader__.load({
       if (field === "loopStop") {
         if (step.loop === void 0) return;
         try {
-          onPatch(step.id, { loop: { ...step.loop, stop: JSON.parse(value2) } });
+          onPatch(graphId, { loop: { ...step.loop, stop: JSON.parse(value2) } });
         } catch {
         }
         return;
@@ -10797,7 +10852,7 @@ window.__ModuleLoader__.load({
         if (step.loop === void 0) return;
         const iterations = Number(value2);
         if (Number.isSafeInteger(iterations) && iterations > 0) {
-          onPatch(step.id, { loop: { ...step.loop, maxIterations: iterations } });
+          onPatch(graphId, { loop: { ...step.loop, maxIterations: iterations } });
         }
       }
     }
@@ -10814,13 +10869,14 @@ window.__ModuleLoader__.load({
         ] }) }),
         /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("tbody", { children: steps.map((step) => {
           const values = listRowModel(props.state, step);
-          const selected2 = props.selected === step.id;
+          const graphId = graphIdOfStep(props.state, step.id);
+          const selected2 = props.selected === graphId;
           return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
             "tr",
             {
               "data-step": step.id,
               "data-selected": selected2 ? "true" : void 0,
-              onClick: () => props.onSelect(step.id),
+              onClick: () => props.onSelect(graphId),
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("code", { children: step.id }) }),
                 /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("td", { children: [
@@ -10829,7 +10885,13 @@ window.__ModuleLoader__.load({
                     {
                       value: values.title ?? "",
                       "aria-label": `Title of ${step.id}`,
-                      onChange: (event) => patchListField(step, "title", event.currentTarget.value, props.onPatch)
+                      onChange: (event) => patchListField(
+                        graphId,
+                        step,
+                        "title",
+                        event.currentTarget.value,
+                        props.onPatch
+                      )
                     }
                   ),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
@@ -10838,7 +10900,13 @@ window.__ModuleLoader__.load({
                       value: values.prompt ?? "",
                       "aria-label": `Prompt of ${step.id}`,
                       placeholder: "Prompt",
-                      onChange: (event) => patchListField(step, "prompt", event.currentTarget.value, props.onPatch)
+                      onChange: (event) => patchListField(
+                        graphId,
+                        step,
+                        "prompt",
+                        event.currentTarget.value,
+                        props.onPatch
+                      )
                     }
                   )
                 ] }),
@@ -10847,7 +10915,13 @@ window.__ModuleLoader__.load({
                   {
                     value: values.executor ?? "main",
                     "aria-label": `Executor of ${step.id}`,
-                    onChange: (event) => patchListField(step, "executor", event.currentTarget.value, props.onPatch),
+                    onChange: (event) => patchListField(
+                      graphId,
+                      step,
+                      "executor",
+                      event.currentTarget.value,
+                      props.onPatch
+                    ),
                     children: EXECUTORS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: executor, children: executor }, executor))
                   }
                 ) }),
@@ -10856,7 +10930,13 @@ window.__ModuleLoader__.load({
                   {
                     value: values.evidenceKind ?? "",
                     "aria-label": `Evidence kind of ${step.id}`,
-                    onChange: (event) => patchListField(step, "evidenceKind", event.currentTarget.value, props.onPatch),
+                    onChange: (event) => patchListField(
+                      graphId,
+                      step,
+                      "evidenceKind",
+                      event.currentTarget.value,
+                      props.onPatch
+                    ),
                     children: [
                       /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(none)" }),
                       EVIDENCE_KINDS.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: kind, children: kind }, kind))
@@ -10872,7 +10952,7 @@ window.__ModuleLoader__.load({
                       "aria-label": `${EDGE_LABELS[choice.kind]} target of ${step.id}`,
                       onChange: (event) => {
                         const target = event.currentTarget.value;
-                        if (target !== "") props.onConnect(step.id, target, choice.kind);
+                        if (target !== "") props.onConnect(graphId, target, choice.kind);
                       },
                       children: [
                         /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(unconnected)" }),
@@ -10886,7 +10966,7 @@ window.__ModuleLoader__.load({
                     }
                   )
                 ] }, choice.kind)) }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", onClick: () => props.onDelete(step.id), children: "Delete" }) })
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", onClick: () => props.onDelete(graphId), children: "Delete" }) })
               ]
             },
             step.id
@@ -10969,8 +11049,8 @@ window.__ModuleLoader__.load({
     }
     function withOverlay(nodes, overlay) {
       return nodes.map((node) => {
-        if (node.kind === "trigger" || node.kind === "end") return node;
-        const step = overlay.steps[node.id];
+        if (node.kind === "trigger" || node.kind === "end" || node.step === void 0) return node;
+        const step = overlay.steps[node.step.id];
         if (step === void 0) return node;
         return {
           ...node,

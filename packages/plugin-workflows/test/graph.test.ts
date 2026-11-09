@@ -10,6 +10,7 @@ import {
   type GraphDefinition,
   GraphError,
   graphToDefinition,
+  nodeIdOf,
   precheckGraph,
   TRIGGER_NODE,
 } from '../src/client/graph.ts'
@@ -60,17 +61,34 @@ describe('definition to graph', () => {
     const graph = definitionToGraph(definition)
     expect(graph.nodes[0]?.id).toBe(TRIGGER_NODE)
     expect(graph.nodes[0]?.kind).toBe('trigger')
-    expect(graph.nodes.map((node) => node.id)).toEqual([TRIGGER_NODE, 'one', 'two', END_NODE])
+    expect(graph.nodes.map((node) => node.id)).toEqual([
+      TRIGGER_NODE,
+      nodeIdOf('one'),
+      nodeIdOf('two'),
+      END_NODE,
+    ])
     expect(graph.edges).toEqual([
       {
         id: `${TRIGGER_NODE}:start`,
         source: TRIGGER_NODE,
-        target: 'one',
+        target: nodeIdOf('one'),
         kind: 'start',
         label: 'start',
       },
-      { id: 'one:next', source: 'one', target: 'two', kind: 'next', label: 'next' },
-      { id: 'two:next', source: 'two', target: END_NODE, kind: 'next', label: 'next' },
+      {
+        id: `${nodeIdOf('one')}:next`,
+        source: nodeIdOf('one'),
+        target: nodeIdOf('two'),
+        kind: 'next',
+        label: 'next',
+      },
+      {
+        id: `${nodeIdOf('two')}:next`,
+        source: nodeIdOf('two'),
+        target: END_NODE,
+        kind: 'next',
+        label: 'next',
+      },
     ])
   })
 
@@ -93,8 +111,8 @@ describe('definition to graph', () => {
     expect(labels).toContain('body')
     expect(labels).toContain('exit')
     const body = graph.edges.find((edge) => edge.kind === 'body')
-    expect(body?.source).toBe('repeat')
-    expect(body?.target).toBe('repeat')
+    expect(body?.source).toBe(nodeIdOf('repeat'))
+    expect(body?.target).toBe(nodeIdOf('repeat'))
   })
 
   it('round-trips every shipped template byte-identically', () => {
@@ -116,7 +134,7 @@ describe('definition to graph', () => {
       JSON.stringify(definition),
     )
     const reordered: DiagramEdge[] = graph.edges.map((edge) =>
-      edge.kind === 'start' ? { ...edge, target: 'two' } : edge,
+      edge.kind === 'start' ? { ...edge, target: nodeIdOf('two') } : edge,
     )
     const converted = graphToDefinition(definition, graph.nodes, reordered)
     expect(converted.steps.map((entry) => entry.id)).toEqual(['two', 'one'])
@@ -131,7 +149,7 @@ describe('definition to graph', () => {
     const graph = definitionToGraph(definition)
     const broken: DiagramEdge[] = [
       ...graph.edges,
-      { id: 'ghost', source: 'one', target: 'ghost', kind: 'next' },
+      { id: 'ghost', source: nodeIdOf('one'), target: 'ghost', kind: 'next' },
     ]
     expect(() => graphToDefinition(definition, graph.nodes, broken)).toThrow(GraphError)
   })
@@ -142,9 +160,55 @@ describe('definition to graph', () => {
     }) as GraphDefinition
     const graph = definitionToGraph(definition)
     const nodes: DiagramNode[] = graph.nodes.map((node) =>
-      node.id === 'one' ? { ...node, kind: 'mystery' as never } : node,
+      node.id === nodeIdOf('one') ? { ...node, kind: 'mystery' as never } : node,
     )
     expect(() => graphToDefinition(definition, nodes, graph.edges)).toThrow(/kind does not match/)
+  })
+
+  it('keeps valid steps named __trigger and __end distinct from the synthetic nodes', () => {
+    const definition = baseDefinition({
+      steps: [
+        step('__trigger', 'main', {
+          prompt: 'One.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: '__end',
+        }),
+        step('__end', 'main', {
+          prompt: 'Two.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'end',
+        }),
+      ],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const ids = graph.nodes.map((node) => node.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).toContain(nodeIdOf('__trigger'))
+    expect(ids).toContain(nodeIdOf('__end'))
+    expect(JSON.stringify(graphToDefinition(definition, graph.nodes, graph.edges))).toBe(
+      JSON.stringify(definition),
+    )
+  })
+
+  it('refuses a trigger that bypasses the steps and a step mislabeled as end', () => {
+    const definition = baseDefinition({
+      steps: [step('one', 'main', { next: 'end' })],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const bypass: DiagramEdge[] = graph.edges.map((edge) =>
+      edge.kind === 'start' ? { ...edge, target: END_NODE } : edge,
+    )
+    expect(() => graphToDefinition(definition, graph.nodes, bypass)).toThrow(
+      /trigger must point at a definition step/u,
+    )
+    const mislabeled: DiagramNode[] = graph.nodes.map((node) =>
+      node.id === nodeIdOf('one') ? { ...node, kind: 'end' as never } : node,
+    )
+    expect(() => graphToDefinition(definition, mislabeled, graph.edges)).toThrow(
+      /only the synthetic end node/u,
+    )
   })
 })
 
@@ -154,11 +218,11 @@ describe('structural pre-check', () => {
       steps: [step('one', 'main', { next: 'end' }), step('two', 'main', { next: 'end' })],
     }) as GraphDefinition
     const graph = definitionToGraph(definition)
-    const first = graph.nodes.find((node) => node.id === 'one') as DiagramNode
+    const first = graph.nodes.find((node) => node.id === nodeIdOf('one')) as DiagramNode
     const nodes: DiagramNode[] = [...graph.nodes, { ...first }]
     const edges: DiagramEdge[] = [
-      ...graph.edges.filter((entry) => entry.source !== 'two'),
-      { id: 'dangling', source: 'one', target: 'ghost', kind: 'next' },
+      ...graph.edges.filter((entry) => entry.source !== nodeIdOf('two')),
+      { id: 'dangling', source: nodeIdOf('one'), target: 'ghost', kind: 'next' },
     ]
     const issues = precheckGraph(nodes, edges)
     const messages = issues.map((issue) => issue.message)

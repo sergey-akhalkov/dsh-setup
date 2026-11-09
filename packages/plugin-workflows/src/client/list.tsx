@@ -32,6 +32,11 @@ function evidenceKind(step: GraphStep): string {
   return typeof evidence?.kind === 'string' ? evidence.kind : ''
 }
 
+/** The canvas node id of one definition step; the list uses the same graph ids. */
+export function graphIdOfStep(state: EditorState, stepId: string): string {
+  return state.diagram.nodes.find((node) => node.step?.id === stepId)?.id ?? ''
+}
+
 /** A row's selectable connection values, shared with the keyboard connect list. */
 export function listConnectionChoices(
   state: EditorState,
@@ -40,8 +45,9 @@ export function listConnectionChoices(
   readonly kind: EdgeKind
   readonly targets: readonly { id: string; title: string }[]
 }[] {
+  const graphId = graphIdOfStep(state, step.id)
   return outputsFor(step).flatMap((kind) =>
-    connectChoices(state.diagram.nodes, step.id)
+    connectChoices(state.diagram.nodes, graphId)
       .filter((choice) => choice.kind === kind)
       .map((choice) => ({ kind, targets: choice.targets })),
   )
@@ -52,6 +58,7 @@ export function listRowModel(
   state: EditorState,
   step: GraphStep,
 ): Readonly<Record<string, string>> {
+  const graphId = graphIdOfStep(state, step.id)
   const values: Record<string, string> = {
     id: step.id,
     title: step.title,
@@ -60,30 +67,31 @@ export function listRowModel(
     evidenceKind: evidenceKind(step),
   }
   for (const kind of outputsFor(step)) {
-    values[`connection:${kind}`] = currentTarget(state.diagram.edges, step.id, kind) ?? ''
+    values[`connection:${kind}`] = currentTarget(state.diagram.edges, graphId, kind) ?? ''
   }
   return values
 }
 
 /** Apply one list field edit through the same editor callbacks as the canvas. */
 export function patchListField(
+  graphId: string,
   step: GraphStep,
   field: string,
   value: string,
-  onPatch: (stepId: string, patch: Readonly<Record<string, unknown>>) => void,
+  onPatch: (nodeId: string, patch: Readonly<Record<string, unknown>>) => void,
 ): void {
   if (field === 'title' || field === 'prompt' || field === 'executor') {
-    onPatch(step.id, { [field]: value })
+    onPatch(graphId, { [field]: value })
     return
   }
   if (field === 'evidenceKind') {
-    onPatch(step.id, { evidence: value === '' ? undefined : { kind: value } })
+    onPatch(graphId, { evidence: value === '' ? undefined : { kind: value } })
     return
   }
   if (field === 'branchPredicate') {
     if (step.branch === undefined) return
     try {
-      onPatch(step.id, { branch: { ...step.branch, predicate: JSON.parse(value) } })
+      onPatch(graphId, { branch: { ...step.branch, predicate: JSON.parse(value) } })
     } catch {
       // The JSON textarea keeps the raw text; an invalid value is not stored.
     }
@@ -92,7 +100,7 @@ export function patchListField(
   if (field === 'loopStop') {
     if (step.loop === undefined) return
     try {
-      onPatch(step.id, { loop: { ...step.loop, stop: JSON.parse(value) } })
+      onPatch(graphId, { loop: { ...step.loop, stop: JSON.parse(value) } })
     } catch {
       // Same as the branch predicate: never store an unparsable value.
     }
@@ -102,7 +110,7 @@ export function patchListField(
     if (step.loop === undefined) return
     const iterations = Number(value)
     if (Number.isSafeInteger(iterations) && iterations > 0) {
-      onPatch(step.id, { loop: { ...step.loop, maxIterations: iterations } })
+      onPatch(graphId, { loop: { ...step.loop, maxIterations: iterations } })
     }
   }
 }
@@ -125,13 +133,14 @@ export function ListEditor(props: ListEditorProps): ReactNode {
         <tbody>
           {steps.map((step) => {
             const values = listRowModel(props.state, step)
-            const selected = props.selected === step.id
+            const graphId = graphIdOfStep(props.state, step.id)
+            const selected = props.selected === graphId
             return (
               <tr
                 key={step.id}
                 data-step={step.id}
                 data-selected={selected ? 'true' : undefined}
-                onClick={() => props.onSelect(step.id)}
+                onClick={() => props.onSelect(graphId)}
               >
                 <td>
                   <code>{step.id}</code>
@@ -141,7 +150,13 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                     value={values.title ?? ''}
                     aria-label={`Title of ${step.id}`}
                     onChange={(event) =>
-                      patchListField(step, 'title', event.currentTarget.value, props.onPatch)
+                      patchListField(
+                        graphId,
+                        step,
+                        'title',
+                        event.currentTarget.value,
+                        props.onPatch,
+                      )
                     }
                   />
                   <input
@@ -149,7 +164,13 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                     aria-label={`Prompt of ${step.id}`}
                     placeholder="Prompt"
                     onChange={(event) =>
-                      patchListField(step, 'prompt', event.currentTarget.value, props.onPatch)
+                      patchListField(
+                        graphId,
+                        step,
+                        'prompt',
+                        event.currentTarget.value,
+                        props.onPatch,
+                      )
                     }
                   />
                 </td>
@@ -158,7 +179,13 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                     value={values.executor ?? 'main'}
                     aria-label={`Executor of ${step.id}`}
                     onChange={(event) =>
-                      patchListField(step, 'executor', event.currentTarget.value, props.onPatch)
+                      patchListField(
+                        graphId,
+                        step,
+                        'executor',
+                        event.currentTarget.value,
+                        props.onPatch,
+                      )
                     }
                   >
                     {EXECUTORS.map((executor) => (
@@ -173,7 +200,13 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                     value={values.evidenceKind ?? ''}
                     aria-label={`Evidence kind of ${step.id}`}
                     onChange={(event) =>
-                      patchListField(step, 'evidenceKind', event.currentTarget.value, props.onPatch)
+                      patchListField(
+                        graphId,
+                        step,
+                        'evidenceKind',
+                        event.currentTarget.value,
+                        props.onPatch,
+                      )
                     }
                   >
                     <option value="">(none)</option>
@@ -193,7 +226,7 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                         aria-label={`${EDGE_LABELS[choice.kind]} target of ${step.id}`}
                         onChange={(event) => {
                           const target = event.currentTarget.value
-                          if (target !== '') props.onConnect(step.id, target, choice.kind)
+                          if (target !== '') props.onConnect(graphId, target, choice.kind)
                         }}
                       >
                         <option value="">(unconnected)</option>
@@ -207,7 +240,7 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                   ))}
                 </td>
                 <td>
-                  <button type="button" onClick={() => props.onDelete(step.id)}>
+                  <button type="button" onClick={() => props.onDelete(graphId)}>
                     Delete
                   </button>
                 </td>

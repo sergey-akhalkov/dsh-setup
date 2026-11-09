@@ -19,6 +19,7 @@ import {
   END_NODE,
   type GraphDefinition,
   type GraphStep,
+  nodeIdOf,
 } from '../src/client/graph.ts'
 import { withLayout } from '../src/client/layout.ts'
 import {
@@ -172,7 +173,7 @@ describe('palette and property panel', () => {
     const deleted: string[] = []
     const tree = call(ui, 'PropertyPanel', {
       state: editor(),
-      selected: 'requirements',
+      selected: nodeIdOf('requirements'),
       onDefinitionPatch: () => {},
       onPatch: (id: string, patch: Record<string, unknown>) => patches.push({ id, patch }),
       onConnect: (source: string, target: string, kind: string) =>
@@ -184,26 +185,33 @@ describe('palette and property panel', () => {
       (element) => element.type === 'input' && element.props['aria-label'] === 'Step title',
     )
     fire(titleInput, 'onChange', 'Business requirements')
-    expect(patches[0]).toEqual({ id: 'requirements', patch: { title: 'Business requirements' } })
+    expect(patches[0]).toEqual({
+      id: nodeIdOf('requirements'),
+      patch: { title: 'Business requirements' },
+    })
 
     const nextSelect = found.find(
       (element) =>
         element.type === 'select' &&
-        elements(element).some((option) => option.props.value === 'architecture'),
+        elements(element).some((option) => option.props.value === nodeIdOf('architecture')),
     )
     expect(nextSelect).toBeDefined()
-    fire(nextSelect, 'onChange', 'architecture')
-    expect(connections[0]).toEqual({ source: 'requirements', target: 'architecture', kind: 'next' })
+    fire(nextSelect, 'onChange', nodeIdOf('architecture'))
+    expect(connections[0]).toEqual({
+      source: nodeIdOf('requirements'),
+      target: nodeIdOf('architecture'),
+      kind: 'next',
+    })
 
     const deleteButton = found.find(
       (element) => element.type === 'button' && text(element) === 'Delete step',
     )
     fire(deleteButton, 'onClick')
-    expect(deleted).toEqual(['requirements'])
+    expect(deleted).toEqual([nodeIdOf('requirements')])
   })
 
   it('patches a step through the shared state machine', () => {
-    const patched = patchStep(editor(), 'approval', { title: 'Owner sign-off' })
+    const patched = patchStep(editor(), nodeIdOf('approval'), { title: 'Owner sign-off' })
     expect(patched.document.definition.steps.at(-1)?.title).toBe('Owner sign-off')
     expect(patched.dirty).toBe(true)
   })
@@ -218,13 +226,21 @@ describe('list mode', () => {
       id: 'requirements',
       executor: 'main',
       evidenceKind: 'file',
-      'connection:next': 'architecture',
+      'connection:next': nodeIdOf('architecture'),
     })
     const patches: Record<string, unknown>[] = []
-    patchListField(step, 'title', 'Requirements', (_id, patch) => patches.push(patch))
-    patchListField(step, 'evidenceKind', 'declaration', (_id, patch) => patches.push(patch))
-    patchListField(step, 'prompt', 'Do it', (_id, patch) => patches.push(patch))
-    patchListField(step, 'loopMaxIterations', '4', (_id, patch) => patches.push(patch))
+    patchListField(nodeIdOf('requirements'), step, 'title', 'Requirements', (_id, patch) =>
+      patches.push(patch),
+    )
+    patchListField(nodeIdOf('requirements'), step, 'evidenceKind', 'declaration', (_id, patch) =>
+      patches.push(patch),
+    )
+    patchListField(nodeIdOf('requirements'), step, 'prompt', 'Do it', (_id, patch) =>
+      patches.push(patch),
+    )
+    patchListField(nodeIdOf('requirements'), step, 'loopMaxIterations', '4', (_id, patch) =>
+      patches.push(patch),
+    )
     expect(patches).toEqual([
       { title: 'Requirements' },
       { evidence: { kind: 'declaration' } },
@@ -237,22 +253,27 @@ describe('list mode', () => {
     const canvas = connectSteps(
       connectSteps(
         addStep(openNew({ ...blankDefinition(taken), id: 'canvas-demo' }), 'step'),
-        'step-1',
-        'step-2',
+        nodeIdOf('step-1'),
+        nodeIdOf('step-2'),
         'next',
       ),
-      'step-2',
+      nodeIdOf('step-2'),
       END_NODE,
       'next',
     )
     let list = openNew({ ...blankDefinition(taken), id: 'list-demo', name: 'List demo' })
     const first = list.document.definition.steps[0]
     if (first === undefined) throw new Error('missing blank step')
-    patchListField(first, 'title', 'First step', (id, patch) => {
+    patchListField(nodeIdOf('step-1'), first, 'title', 'First step', (id, patch) => {
       list = patchStep(list, id, patch)
     })
     list = addStep(list, 'step')
-    list = connectSteps(connectSteps(list, 'step-1', 'step-2', 'next'), 'step-2', END_NODE, 'next')
+    list = connectSteps(
+      connectSteps(list, nodeIdOf('step-1'), nodeIdOf('step-2'), 'next'),
+      nodeIdOf('step-2'),
+      END_NODE,
+      'next',
+    )
     expect(canvas.document.definition.steps.map((step) => step.id)).toEqual(['step-1', 'step-2'])
     expect(list.document.definition.steps.map((step) => step.id)).toEqual(['step-1', 'step-2'])
     expect(canvas.issues).toEqual([])
@@ -289,7 +310,11 @@ describe('layout integration', () => {
     expect(laidOut.nodes.find((node) => node.id === 'requirements')?.position).toEqual(
       positions.requirements,
     )
-    expect(currentTarget(graph.edges, 'requirements', 'next')).toBe('architecture')
-    expect(connectChoices(graph.nodes, 'approval').map((choice) => choice.kind)).toEqual(['next'])
+    expect(currentTarget(graph.edges, nodeIdOf('requirements'), 'next')).toBe(
+      nodeIdOf('architecture'),
+    )
+    expect(connectChoices(graph.nodes, nodeIdOf('approval')).map((choice) => choice.kind)).toEqual([
+      'next',
+    ])
   })
 })
