@@ -71,7 +71,10 @@ export async function cancelRun(workspace, runId, auth, now = Date.now(), sessio
     if (run === undefined) {
         throw new Error(`run "${runId}" is unsigned, modified, or unreadable; it cannot be cancelled`);
     }
-    if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+    // A completed run is authorization evidence and stays; a failed run is
+    // terminal but still counts as a related run for the archive gate, so
+    // clearing it is the documented recovery path for a change it dead-locked.
+    if (run.status === 'completed' || run.status === 'cancelled') {
         throw new Error(`run "${runId}" is ${run.status}; it is not cancelable`);
     }
     const stepId = pendingStep(run);

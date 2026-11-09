@@ -351,6 +351,22 @@ describe('startup recovery and resume', () => {
     )
   })
 
+  it('clears a failed run so it stops blocking the archive gate', async () => {
+    const workspace = await tempWorkspace()
+    let run = intakeRun(workspace, 'auth', 1_000)
+    run = settleStep(run, 'requirements', 'failed', { at: 1_100, reason: 'the step failed' })
+    run = setRunStatus(run, 'failed', 1_200)
+    await writeRun(workspace, run, auth())
+    const cancelled = await cancelRun(workspace, run.id, auth(), 2_000)
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.steps.find((step) => step.id === 'requirements')?.state).toBe('failed')
+    await expect(cancelRun(workspace, run.id, auth(), 3_000)).rejects.toThrow(/is cancelled/u)
+    const completed = await writeAndComplete(workspace, 'other', 4_000)
+    await expect(cancelRun(workspace, completed.id, auth(), 5_000)).rejects.toThrow(
+      /is completed; it is not cancelable/u,
+    )
+  })
+
   it('refuses a fabricated or modified completed run', async () => {
     const workspace = await tempWorkspace()
     const unsigned = setRunStatus(intakeRun(workspace, 'fake', 1_000), 'completed', 1_100)
