@@ -10553,6 +10553,9 @@ window.__ModuleLoader__.load({
         ...current,
         dirty: true,
         status: "dirty",
+        // A failed copy keeps its conflict so the next-id / save-as-copy recovery
+        // stays available even though the newer edits stay in the original draft.
+        conflict: saved.status === "error" ? saved.conflict : void 0,
         message: saved.status === "error" ? saved.message : "the copy was saved; the newer edits stay in this draft"
       };
     }

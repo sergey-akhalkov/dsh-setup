@@ -484,6 +484,19 @@ describe('revision contract', () => {
     expect(merged.document.definition.steps[0]?.title).toBe('During copy')
     expect(merged.dirty).toBe(true)
     expect(reconcileCopy(captured, captured, copyResult)).toBe(copyResult)
+
+    const failedCopy: EditorState = {
+      ...captured,
+      dirty: true,
+      status: 'error',
+      conflict: { kind: 'create', currentRevision: 'rev-1', nextId: 'demo-copy-2' },
+      message: 'the id already exists',
+    }
+    const recovering = reconcileCopy(captured, current, failedCopy)
+    expect(recovering.conflict).toMatchObject({ kind: 'create', nextId: 'demo-copy-2' })
+    expect(recovering.message).toContain('already exists')
+    expect(recovering.document.definition.steps[0]?.title).toBe('During copy')
+    expect(recovering.dirty).toBe(true)
   })
 })
 

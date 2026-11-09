@@ -510,6 +510,9 @@ export function reconcileCopy(
     ...current,
     dirty: true,
     status: 'dirty',
+    // A failed copy keeps its conflict so the next-id / save-as-copy recovery
+    // stays available even though the newer edits stay in the original draft.
+    conflict: saved.status === 'error' ? saved.conflict : undefined,
     message:
       saved.status === 'error'
         ? saved.message
