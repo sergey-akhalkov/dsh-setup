@@ -120,7 +120,8 @@ async function checkpointWorkflow(input: {
 /** The shipped await-review step judged by the production evidence reader. */
 async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecision> {
   const definition = loadShippedDefinitionsForFixtures().find((entry) => entry.id === 'task-review')
-  const evidence = definition?.steps.find((step) => step.id === 'await-review')?.evidence
+  if (definition === undefined) throw new Error('the shipped task-review definition is missing')
+  const evidence = definition.steps.find((step) => step.id === 'await-review')?.evidence
   if (evidence === undefined) throw new Error('the shipped await-review evidence is missing')
   const root = await mkdtemp(join(tmpdir(), 'workflows-parity-'))
   try {
@@ -149,14 +150,38 @@ async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecisi
       workspace: root,
       values: { name: 'change-a', taskId },
     })
-    return check.ok
+    let run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { name: 'change-a', taskId },
+      steps: ['start-review', 'await-review', 'complete-review'],
+      now: 1_000,
+    })
+    run = settleStep(run, 'start-review', 'done', { at: 1_001 })
+    if (check.ok) {
+      run = settleStep(run, 'await-review', 'done', { at: 1_002 })
+      run = settleStep(run, 'complete-review', 'done', { at: 1_003 })
+    }
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      enabledLegacy: new Set(),
+    })
+    return outcome.kind === 'allow'
       ? {
           decision: 'allow',
-          reason: `the shipped await-review accepts ${verdict ?? 'no record'}`,
+          reason: `the shipped task-review close gate allows ${verdict ?? 'no record'}`,
         }
       : {
           decision: 'refuse',
-          reason: `the shipped await-review rejects ${verdict ?? 'no record'}`,
+          reason: `the shipped task-review close gate rejects ${verdict ?? 'no record'}`,
         }
   } finally {
     await rm(root, { recursive: true, force: true })

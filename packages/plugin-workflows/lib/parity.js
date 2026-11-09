@@ -387,6 +387,20 @@ export function reviewerBinding(workspace) {
     }
     if (!isRecord(raw))
         return { invalid: 'openspec/review-approval.json is not a JSON object' };
+    const markerKeys = new Set([
+        'version',
+        'archiveGate',
+        'taskRule',
+        'reviewerProvider',
+        'reviewerModel',
+        'cutoff',
+        'grandfathered',
+    ]);
+    for (const key of Object.keys(raw)) {
+        if (!markerKeys.has(key)) {
+            return { invalid: `review-approval.json has an unknown field "${key}"` };
+        }
+    }
     if (raw.version !== 1)
         return { invalid: 'review-approval.json version must be 1' };
     if (typeof raw.archiveGate !== 'boolean') {
@@ -394,6 +408,20 @@ export function reviewerBinding(workspace) {
     }
     if (typeof raw.taskRule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(raw.taskRule)) {
         return { invalid: 'review-approval.json taskRule must be a kebab-case rule id' };
+    }
+    if (raw.cutoff !== undefined &&
+        (typeof raw.cutoff !== 'string' || raw.cutoff.trim() === '' || hasMachinePath(raw.cutoff))) {
+        return { invalid: 'review-approval.json cutoff must be a clean string' };
+    }
+    if (raw.grandfathered !== undefined) {
+        if (!isRecord(raw.grandfathered)) {
+            return { invalid: 'review-approval.json grandfathered must be an object' };
+        }
+        for (const value of Object.values(raw.grandfathered)) {
+            if (typeof value !== 'string' || value.trim() === '' || hasMachinePath(value)) {
+                return { invalid: 'review-approval.json grandfathered values must be clean strings' };
+            }
+        }
     }
     const provider = raw.reviewerProvider;
     const model = raw.reviewerModel;
@@ -540,15 +568,15 @@ function lanesOf(record) {
     if (!Array.isArray(record.lanes))
         return [];
     return record.lanes.filter(isRecord).map((lane) => ({
-        id: typeof lane.id === 'string' ? lane.id : '',
-        owner: typeof lane.owner === 'string' ? lane.owner : '',
+        id: typeof lane.id === 'string' ? lane.id.trim() : '',
+        owner: typeof lane.owner === 'string' ? lane.owner.trim() : '',
         scope: typeof lane.scope === 'string'
-            ? [lane.scope]
+            ? [lane.scope.trim()]
             : Array.isArray(lane.scope)
-                ? stringList(lane.scope)
+                ? stringList(lane.scope).map((entry) => entry.trim())
                 : [],
-        state: typeof lane.state === 'string' ? lane.state : 'running',
-        blockedBy: stringList(lane.blockedBy),
+        state: typeof lane.state === 'string' ? lane.state.trim() : 'running',
+        blockedBy: stringList(lane.blockedBy).map((entry) => entry.trim()),
     }));
 }
 function runnableLanes(lanes) {
@@ -634,9 +662,9 @@ export function checkpointCloseIssue(input) {
     if (bottleneck === undefined) {
         return 'the checkpoint is a continue plan without a bottleneck; call work_checkpoint with lanes, a bottleneck, and its remedy before the close';
     }
-    const id = typeof bottleneck.id === 'string' ? bottleneck.id : '';
-    const owner = typeof bottleneck.owner === 'string' ? bottleneck.owner : '';
-    const action = typeof bottleneck.action === 'string' ? bottleneck.action : '';
+    const id = typeof bottleneck.id === 'string' ? bottleneck.id.trim() : '';
+    const owner = typeof bottleneck.owner === 'string' ? bottleneck.owner.trim() : '';
+    const action = typeof bottleneck.action === 'string' ? bottleneck.action.trim() : '';
     if (id === '') {
         return 'the checkpoint bottleneck has no id; refresh work_checkpoint with a named bottleneck';
     }
@@ -650,7 +678,7 @@ export function checkpointCloseIssue(input) {
         if (workerOwned) {
             return `bottleneck "${id}" is owned by "${owner}"; use worker_start with a call carrying "${input.checkpointId}" and "${id}", or user_decision with ask_user_question; lead_action is refused when the bottleneck owner is not "lead"`;
         }
-        const targets = stringList(bottleneck.targets);
+        const targets = stringList(bottleneck.targets).map((entry) => entry.trim());
         const matched = later.some((entry) => (entry.toolName === 'edit' || entry.toolName === 'write') &&
             [entry.arguments.path, entry.arguments.file_path].some((value) => typeof value === 'string' && targetMatches(targets, value, workspace)));
         if (!matched) {

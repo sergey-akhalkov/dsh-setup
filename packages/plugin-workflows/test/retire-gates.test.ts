@@ -430,6 +430,67 @@ describe('owned checkpoint decisions', () => {
         workspace: '/workspace',
       }),
     ).toContain('parallel runnable lanes')
+
+    // Padded identifiers are normalized like the producer's validator.
+    expect(
+      checkpointCloseIssue({
+        record: {
+          outcome: 'continue',
+          lanes: [
+            { id: 'a', owner: 'lane-a', scope: ['src'], state: 'running' },
+            {
+              id: 'b',
+              owner: 'lane-b',
+              scope: ['src2'],
+              state: 'running',
+              blockedBy: [' done '],
+            },
+          ],
+          bottleneck: {
+            id: ' guard ',
+            owner: ' lead ',
+            action: 'lead_action',
+            blockingLanes: ['edit'],
+            targets: [' src '],
+          },
+        },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [
+          { toolName: 'subagent', arguments: { checkpoint: 'checkpoint-1-aaaaaaaa' }, ok: true },
+          { toolName: 'write', arguments: { file_path: 'src/app.ts' }, ok: true, at: 300 },
+          {
+            toolName: 'work_checkpoint',
+            arguments: {
+              lanes: [
+                { id: 'a', owner: 'lane-a', scope: ['src'], state: 'running' },
+                {
+                  id: 'b',
+                  owner: 'lane-b',
+                  scope: ['src2'],
+                  state: 'running',
+                  blockedBy: [' done '],
+                },
+              ],
+              bottleneck: {
+                id: ' guard ',
+                owner: ' lead ',
+                action: 'lead_action',
+                blockingLanes: ['edit'],
+                targets: [' src '],
+              },
+            },
+            ok: true,
+            at: 100,
+          },
+        ],
+        bottleneckAge: 2,
+        checkpointAt: 100,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+        workspace: '/workspace',
+      }),
+    ).toBeUndefined()
   })
 
   it('requires the remedy after the checkpoint and matches targets by path component', () => {
@@ -1135,6 +1196,22 @@ describe('owned task-review definition', () => {
       'utf8',
     )
     expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    for (const malformed of [
+      { version: 1, archiveGate: true, taskRule: 'task-review', reviewerModle: 'x' },
+      { version: 1, archiveGate: true, taskRule: 'task-review', grandfathered: 42 },
+      { version: 1, archiveGate: true, taskRule: 'task-review', cutoff: 42 },
+    ]) {
+      await writeFile(marker, JSON.stringify(malformed), 'utf8')
+      expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+      expect(
+        (
+          await verifyEvidence(awaitEvidence as never, {
+            workspace,
+            values: { name: 'auth', taskId },
+          })
+        ).ok,
+      ).toBe(false)
+    }
     await rm(workspace, { recursive: true, force: true })
   })
 
