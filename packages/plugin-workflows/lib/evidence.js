@@ -663,7 +663,11 @@ function verifyCheck(context, item) {
     // The legacy gate clears the obligation on a successful check, and a later
     // failed attempt does not re-dirty the turn; keep that parity.
     const successful = afterWrite
-        .filter((candidate) => candidate.ok !== false && candidate.exitCode === 0)
+        .filter((candidate) => candidate.ok !== false &&
+        candidate.exitCode === 0 &&
+        candidate.timedOut !== true &&
+        candidate.signal === undefined &&
+        candidate.sandboxDenied !== true)
         .reduce((last, candidate) => (last === undefined || candidate.at >= last.at ? candidate : last), undefined);
     const latest = afterWrite.reduce((last, candidate) => candidate.at >= last.at ? candidate : last);
     if (successful === undefined) {
@@ -880,7 +884,7 @@ export function describeEvidence(value, context) {
         }
         case 'check': {
             if (value.source === 'verify-settings') {
-                return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write`;
+                return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write${context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath})`}`;
             }
             const command = resolveEvidenceText(value.command ?? '', context, undefined);
             return `foreground command "${command.ok ? command.text : value.command}" exits 0`;

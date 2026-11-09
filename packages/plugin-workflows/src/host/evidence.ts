@@ -108,6 +108,8 @@ export interface EvidenceContext {
   readonly checkCommands?: readonly string[]
   /** When the turn last wrote a non-documentation file; absent means no code write. */
   readonly lastWriteAt?: number
+  /** The latest written path, for the bounded refusal text. */
+  readonly lastWritePath?: string
   /** Recorded user answers for the step's question. */
   readonly answers?: readonly HumanAnswerObservation[]
   /** Whether the step is marked nonCritical, the only declaration consumer. */
@@ -857,7 +859,14 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
   // The legacy gate clears the obligation on a successful check, and a later
   // failed attempt does not re-dirty the turn; keep that parity.
   const successful = afterWrite
-    .filter((candidate) => candidate.ok !== false && candidate.exitCode === 0)
+    .filter(
+      (candidate) =>
+        candidate.ok !== false &&
+        candidate.exitCode === 0 &&
+        candidate.timedOut !== true &&
+        candidate.signal === undefined &&
+        candidate.sandboxDenied !== true,
+    )
     .reduce<(typeof afterWrite)[number] | undefined>(
       (last, candidate) => (last === undefined || candidate.at >= last.at ? candidate : last),
       undefined,
@@ -1142,7 +1151,7 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
     }
     case 'check': {
       if (value.source === 'verify-settings') {
-        return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write`
+        return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write${context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath})`}`
       }
       const command = resolveEvidenceText(value.command ?? '', context, undefined)
       return `foreground command "${command.ok ? command.text : value.command}" exits 0`

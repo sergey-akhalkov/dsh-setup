@@ -375,7 +375,7 @@ Migrate in this order: the tracked parity report passes for the current and the 
 flip the two gate-only switches and the three definitions to `own` in one config change (the loader
 refuses `own` while its signal is enabled and `defer` while it is disabled, so a half-flipped state
 fails loudly); keep the legacy provider rows installed for one release so rollback is a config flip;
-delete them only after a clean release. The workflows row carries the mirrored settings:
+delete only the retired rows after a clean release, keeping the providers the retained spec-review and lane gates use. The workflows row carries the mirrored settings:
 `checkpointApplicability` (`minToolCalls`, `requireWrite`, `bottleneckAge`, `stepInterval`,
 `enforceParallel`) and `verify.commands`/`verify.maxBlocks`. The parity settings matrix must cover at
 least two non-empty command lists and two positive caps with one above 128. The release gate runs

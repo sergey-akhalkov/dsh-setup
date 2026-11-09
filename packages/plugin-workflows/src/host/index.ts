@@ -873,6 +873,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     /** Latest successful code write, independent of observation eviction. */
     lastWriteAt?: number
     lastWritePath?: string
+    /** Latest successful configured verification check. */
+    lastCheckAt?: number
   }
   const turnMetrics = new Map<string, TurnMetrics>()
   /** Bounded per-session observations the evidence verifier may consume. */
@@ -1440,6 +1442,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
         const command = isShellTool ? shellCommandOf(exec) : undefined
+        if (
+          command !== undefined &&
+          shellOutcome.ok &&
+          shellOutcome.background !== true &&
+          verifySettings.commands.some(
+            (configured) =>
+              configured.trim().replace(/^rtk\\s+/u, '') ===
+              command.trim().replace(/^rtk\\s+/u, ''),
+          )
+        ) {
+          metrics.lastCheckAt = journal.time()
+        }
         // A background or unreadable shell result cannot satisfy a check.
         if (command !== undefined && shellOutcome.background !== true) {
           const results = sessionShellResults.get(sessionId) ?? []
@@ -2473,9 +2487,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ? turnMetrics.get(sessionId)?.lastWriteAt
             : undefined
         if (verifyWriteAt !== undefined) {
-          const normalizeCommand = (value: string): string => value.trim().replace(/^rtk\\s+/u, '')
+          const normalizeCommand = (value: string): string => value.trim().replace(/^rtk\s+/u, '')
           const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand))
-          const lastCheckAt = (sessionShellResults.get(sessionId) ?? [])
+          const bufferCheckAt = (sessionShellResults.get(sessionId) ?? [])
             .filter(
               (result) =>
                 result.foreground &&
@@ -2489,6 +2503,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
             .map((result) => result.at)
             .sort((left, right) => right - left)[0]
+          const metricsCheckAt = turnMetrics.get(sessionId)?.lastCheckAt
+          const checkTimes = [bufferCheckAt, metricsCheckAt].filter(
+            (entry): entry is number => entry !== undefined,
+          )
+          const lastCheckAt = checkTimes.length === 0 ? undefined : Math.max(...checkTimes)
           const completedVerify = runs.find(
             (run) =>
               run.definition === 'verify' &&

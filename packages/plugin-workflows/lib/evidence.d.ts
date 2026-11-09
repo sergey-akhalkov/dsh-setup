@@ -72,6 +72,8 @@ export interface EvidenceContext {
     readonly checkCommands?: readonly string[];
     /** When the turn last wrote a non-documentation file; absent means no code write. */
     readonly lastWriteAt?: number;
+    /** The latest written path, for the bounded refusal text. */
+    readonly lastWritePath?: string;
     /** Recorded user answers for the step's question. */
     readonly answers?: readonly HumanAnswerObservation[];
     /** Whether the step is marked nonCritical, the only declaration consumer. */
