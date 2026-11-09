@@ -558,7 +558,7 @@ The plugin SHALL ship `change-intake` (active: requirements, architecture, inter
 
 ### Requirement: Retro applicability
 
-The `retro` trigger SHALL apply the installed goal-continuity checkpoint applicability decision before creating a run. A turn below the resolved `minToolCalls`, ending in `ask_user_question`, or, when `requireWrite` is set, with no writes or workers SHALL be recorded as `not-applicable` and MUST NOT create a retro run. A retro run that later evaluates as non-applicable SHALL be completed and pruned, never left blocked.
+The `retro` trigger SHALL apply the workflow row's `checkpointApplicability` (`minToolCalls` default 4, `requireWrite` default true) before creating a run; the operator MUST mirror the goal-continuity row. A turn below `minToolCalls`, ending in `ask_user_question`, or, when `requireWrite` is set, with no writes or workers SHALL record `not-applicable` and create no run. A retro run that later evaluates non-applicable SHALL be completed and pruned.
 
 #### Scenario: Short turn creates no retro run
 
@@ -574,6 +574,11 @@ The `retro` trigger SHALL apply the installed goal-continuity checkpoint applica
 
 - **WHEN** `requireWrite` is set and the turn has no writes or workers
 - **THEN** no retro run is created
+
+#### Scenario: Mirrored config applies
+
+- **WHEN** the workflow row sets `checkpointApplicability.minToolCalls` to a value different from goal-continuity's default
+- **THEN** retro applicability uses the workflow row's value and the docs state that the goal-continuity row must mirror it
 
 #### Scenario: Repeated non-applicable turns consume no capacity
 
@@ -682,12 +687,17 @@ Tool steps SHALL use an allowlist, paths SHALL stay inside the workspace, prompt
 
 ### Requirement: Configuration and off switch
 
-The engine SHALL be configured by `enabled`, `maxBlocks`, `maxRuns`, `definitionsDir`, `runRetentionDays`, and `allowIntent`, validated fail-loud. `enabled: false` SHALL stop new runs and steers while keeping existing run records readable. A configuration error MUST fail plugin load with the field.
+The engine SHALL be configured by `enabled`, `maxBlocks`, `maxRuns`, `definitionsDir`, `runRetentionDays`, `allowIntent`, and `checkpointApplicability` (`minToolCalls` default 4, `requireWrite` default true), validated fail-loud. `checkpointApplicability` MUST mirror the installed goal-continuity checkpoint settings; docs state this. `enabled: false` SHALL stop new runs and steers while keeping existing run records readable. A configuration error MUST fail plugin load with the field.
 
 #### Scenario: Defaults apply
 
 - **WHEN** the row omits the workflow config
 - **THEN** the engine is enabled with the documented defaults
+
+#### Scenario: Applicability defaults and override
+
+- **WHEN** the row omits `checkpointApplicability`
+- **THEN** `minToolCalls` is 4 and `requireWrite` is true; an explicit value replaces the default and an out-of-range value fails load with the field
 
 #### Scenario: Invalid configuration
 
