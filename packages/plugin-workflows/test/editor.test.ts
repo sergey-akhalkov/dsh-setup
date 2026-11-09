@@ -428,7 +428,7 @@ describe('pre-check and host error mapping', () => {
       taken: TAKEN,
     })
     expect(result.status).toBe('error')
-    expect(result.issues[0]).toMatchObject({ nodeId: 'two', path: 'steps[1].title' })
+    expect(result.issues[0]).toMatchObject({ nodeId: nodeIdOf('two'), path: 'steps[1].title' })
     expect(result.issues[0]?.message).toContain('non-empty string')
   })
 

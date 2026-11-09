@@ -430,7 +430,8 @@ export function mapHostErrors(
     if (stepMatch === null) return { path: entry.path, message: entry.message }
     const step = definition.steps[Number(stepMatch[1])]
     return {
-      ...(step === undefined ? {} : { nodeId: step.id }),
+      // The canvas addresses a step by its namespaced graph node id.
+      ...(step === undefined ? {} : { nodeId: nodeIdOf(step.id) }),
       path: entry.path,
       message: entry.message,
     }
