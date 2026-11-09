@@ -21,6 +21,7 @@ export interface RunStep {
   readonly state: string
   readonly at?: number
   readonly evidence?: string
+  readonly reason?: string
 }
 
 /** The one shape every adapter returns. */
@@ -38,7 +39,9 @@ export interface RunView {
   readonly record?: string
 }
 
-export const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints')
+export const KNOWN_STEP_STATES = new Set(['open', 'done', 'blocked', 'failed', 'cancelled'])
+
+const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints')
 export const DELEGATION_DIR = join('.dsh', 'delegation')
 export const WORKFLOW_EVENTS_DIR = join('.dsh', 'workflows', 'events')
 
@@ -115,11 +118,12 @@ function errorRun(
   id: string,
   source: RunSource,
   workspace: string,
-  file: string,
+  file: string | undefined,
   attribution: RunAttribution,
   session: string | undefined,
   error: string,
 ): RunView {
+  const display = file === undefined ? undefined : displayPath(workspace, file)
   return {
     id,
     source,
@@ -128,8 +132,8 @@ function errorRun(
     startedAt: 0,
     status: 'unknown',
     steps: [],
-    error: safeError(`${displayPath(workspace, file)}: ${error}`),
-    record: displayPath(workspace, file),
+    error: safeError(display === undefined ? error : `${display}: ${error}`),
+    ...(display === undefined ? {} : { record: display }),
     ...(session === undefined ? {} : { session }),
   }
 }
@@ -194,40 +198,10 @@ export async function checkpointRuns(workspace: string, sessionId: string): Prom
       continue
     }
     const record = parsed.value
-    if (
-      typeof record.outcome !== 'string' ||
-      (record.outcome !== 'done' && record.outcome !== 'continue') ||
-      typeof record.turn !== 'number' ||
-      !validLanes(record.lanes) ||
-      typeof record.next !== 'string'
-    ) {
+    const invalid = checkpointRecordError(record)
+    if (invalid !== undefined) {
       runs.push(
-        errorRun(
-          `checkpoint:${turn}`,
-          'checkpoint',
-          workspace,
-          file,
-          'local',
-          sessionId,
-          'missing or invalid outcome, turn, lanes, or next',
-        ),
-      )
-      continue
-    }
-    if (
-      (record.outcome === 'continue' && !validBottleneck(record.bottleneck)) ||
-      (record.bottleneck !== undefined && !validBottleneck(record.bottleneck))
-    ) {
-      runs.push(
-        errorRun(
-          `checkpoint:${turn}`,
-          'checkpoint',
-          workspace,
-          file,
-          'local',
-          sessionId,
-          'missing or invalid bottleneck for the checkpoint outcome',
-        ),
+        errorRun(`checkpoint:${turn}`, 'checkpoint', workspace, file, 'local', sessionId, invalid),
       )
       continue
     }
@@ -381,7 +355,27 @@ function validTarget(value: unknown): boolean {
 }
 
 /** The producer contract for a settled local review record. */
-function localRecordError(record: Record<string, unknown>): string | undefined {
+/** The goal-continuity checkpoint record shape every reader accepts. */
+export function checkpointRecordError(record: Record<string, unknown>): string | undefined {
+  if (
+    typeof record.outcome !== 'string' ||
+    (record.outcome !== 'done' && record.outcome !== 'continue') ||
+    typeof record.turn !== 'number' ||
+    !validLanes(record.lanes) ||
+    typeof record.next !== 'string'
+  ) {
+    return 'missing or invalid outcome, turn, lanes, or next'
+  }
+  if (
+    (record.outcome === 'continue' && !validBottleneck(record.bottleneck)) ||
+    (record.bottleneck !== undefined && !validBottleneck(record.bottleneck))
+  ) {
+    return 'missing or invalid bottleneck for the checkpoint outcome'
+  }
+  return undefined
+}
+
+export function localRecordError(record: Record<string, unknown>): string | undefined {
   for (const field of ['rule', 'change', 'phase', 'scope', 'digest', 'verdict', 'time']) {
     if (typeof record[field] !== 'string' || record[field] === '') {
       return `missing or invalid field "${field}"`
@@ -419,7 +413,7 @@ function localRecordError(record: Record<string, unknown>): string | undefined {
 }
 
 /** The producer contract for a portable task approval. */
-function portableRecordError(record: Record<string, unknown>): string | undefined {
+export function portableRecordError(record: Record<string, unknown>): string | undefined {
   for (const field of ['rule', 'change', 'scope', 'taskId', 'digest', 'verdict', 'time']) {
     if (typeof record[field] !== 'string' || record[field] === '') {
       return `missing or invalid field "${field}"`
@@ -761,6 +755,124 @@ export async function delegationObservations(workspace: string): Promise<Map<str
   return sessions
 }
 
+/**
+ * Engine obligation runs from `.dsh/workflows/runs/`. They are display-only
+ * here; authority reads authenticate them separately. A malformed or unsigned
+ * file is shown as an unreadable row, never silently dropped.
+ */
+export async function engineRuns(workspace: string): Promise<RunView[]> {
+  const directory = join(workspace, '.dsh', 'workflows', 'runs')
+  const runs: RunView[] = []
+  for (const name of await listFiles(workspace, directory)) {
+    if (!name.endsWith('.json')) continue
+    const file = join(directory, name)
+    const display = displayPath(workspace, file)
+    // A credential-shaped filename is redacted and never linked.
+    const id = redactText(name.slice(0, -'.json'.length))
+    const recordPath = redactText(display) === display ? display : undefined
+    const parsed = await readJson(workspace, file)
+    if ('error' in parsed) {
+      runs.push(
+        errorRun(
+          `workflow:${id}`,
+          'workflow',
+          workspace,
+          recordPath === undefined ? undefined : file,
+          'unattributed',
+          undefined,
+          parsed.error,
+        ),
+      )
+      continue
+    }
+    if (
+      !isRecord(parsed.value) ||
+      parsed.value.v !== 1 ||
+      typeof parsed.value.id !== 'string' ||
+      // A parseable file that is not a run record is a diagnostic, not a run.
+      typeof parsed.value.definition !== 'string' ||
+      typeof parsed.value.status !== 'string' ||
+      typeof parsed.value.session !== 'string' ||
+      !Array.isArray(parsed.value.steps)
+    ) {
+      runs.push(
+        errorRun(
+          `workflow:${id}`,
+          'workflow',
+          workspace,
+          recordPath === undefined ? undefined : file,
+          'unattributed',
+          undefined,
+          'the run record is missing required fields',
+        ),
+      )
+      continue
+    }
+    const record = parsed.value
+    const session = typeof record.session === 'string' ? record.session : undefined
+    const statusValue = record.status
+    const status: RunStatus =
+      statusValue === 'completed'
+        ? 'done'
+        : statusValue === 'failed' || statusValue === 'cancelled'
+          ? 'failed'
+          : statusValue === 'running' || statusValue === 'blocked' || statusValue === 'interrupted'
+            ? 'running'
+            : 'unknown'
+    const steps: RunStep[] = []
+    for (const entry of Array.isArray(record.steps) ? record.steps : []) {
+      if (!isRecord(entry) || typeof entry.id !== 'string') continue
+      const evidence = isRecord(entry.evidence) ? entry.evidence : undefined
+      steps.push({
+        id: redactText(entry.id),
+        title: redactText(entry.id),
+        state:
+          typeof entry.state === 'string' && KNOWN_STEP_STATES.has(entry.state)
+            ? entry.state
+            : 'unknown',
+        ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
+        ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
+        ...(evidence === undefined
+          ? {}
+          : {
+              evidence:
+                typeof evidence.path === 'string'
+                  ? safeText(evidence.path)
+                  : typeof evidence.kind === 'string'
+                    ? (safeText(evidence.kind) ?? 'evidence')
+                    : 'evidence',
+            }),
+      })
+    }
+    const violations = Array.isArray(record.violations) ? record.violations : []
+    for (const [index, violation] of violations.entries()) {
+      if (!isRecord(violation)) continue
+      steps.push({
+        id: `violation:${String(index)}`,
+        title: 'VIOLATION',
+        state: typeof violation.kind === 'string' ? redactText(violation.kind) : 'VIOLATION',
+        ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
+        ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
+      })
+    }
+    runs.push({
+      id: `workflow:${redactText(typeof record.id === 'string' ? record.id : id)}`,
+      source: 'workflow',
+      ...(session === undefined ? {} : { session }),
+      attribution: session === undefined ? 'unattributed' : 'local',
+      title: `${redactText(String(record.definition ?? 'workflow'))} intake`,
+      startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
+      status,
+      steps,
+      ...(typeof record.reason === 'string' && status === 'failed'
+        ? { error: safeError(record.reason) }
+        : {}),
+      ...(recordPath === undefined ? {} : { record: recordPath }),
+    })
+  }
+  return runs
+}
+
 /** Every projected run in one workspace, unattributed runs included. */
 export async function workspaceRuns(workspace: string): Promise<RunView[]> {
   const [observations, local] = await Promise.all([
@@ -782,7 +894,8 @@ export async function workspaceRuns(workspace: string): Promise<RunView[]> {
       failure.error,
     ),
   )
-  return [...delegation, ...reviews, ...failures].sort(compareRuns)
+  const engine = await engineRuns(workspace)
+  return [...delegation, ...reviews, ...failures, ...engine].sort(compareRuns)
 }
 
 /** The requesting session's timeline: only attributed runs, in time order. */
@@ -792,7 +905,14 @@ export async function sessionRuns(workspace: string, sessionId: string): Promise
     workspaceRuns(workspace),
   ])
   return [...checkpoints, ...workspaceRunsList]
-    .filter((run) => run.attribution !== 'unattributed' && run.session === sessionId)
+    .filter(
+      (run) =>
+        (run.attribution !== 'unattributed' && run.session === sessionId) ||
+        // Only unattributed malformed workflow records are workspace diagnostics.
+        (run.attribution === 'unattributed' &&
+          run.source === 'workflow' &&
+          run.error !== undefined),
+    )
     .sort(compareRuns)
 }
 

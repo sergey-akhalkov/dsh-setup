@@ -303,7 +303,7 @@ describe('workflow event recorder', () => {
     expect(records[3]?.turn).toBe(2)
     expect(records[4]?.subject).toBe('child-9')
     expect(records[4]?.turn).toBe(2)
-    expect(host.calls()).toEqual({ steers: 0, injects: 0, preExecute: 0 })
+    expect(host.calls()).toEqual({ steers: 0, injects: 0, preExecute: 1 })
     expect(host.steers).toEqual([])
   })
 
@@ -370,9 +370,13 @@ describe('workflow event recorder', () => {
       stopReason: 'completed',
     })
 
-    await waitFor(
-      async () => (await journal.read(workspace, 'child-b', 0, 50)).records.length === 3,
-    )
+    await waitFor(async () => {
+      const child = await journal.read(workspace, 'child-b', 0, 50)
+      const parent = await journal.read(workspace, 'session-1', 0, 50)
+      return (
+        child.records.length === 3 && parent.records.some((record) => record.subject === 'child-b')
+      )
+    })
     const parent = await journal.read(workspace, 'session-1', 0, 50)
     const nested = await journal.read(workspace, 'child-b', 0, 50)
     // Only the immediate parent records the grandchild, once.
@@ -974,7 +978,10 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => (await readHealth())?.listenerCount === 5)
+    await waitFor(async () => {
+      const current = await readHealth()
+      return current?.listenerCount === 5 && typeof current.lastCheckAt === 'number'
+    })
     const health = (await readHealth()) ?? {}
     expect(health.listenerCount).toBe(5)
     expect(health.triggerCount).toBe(9)
@@ -1037,9 +1044,13 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () =>
-      String((await readHealth())?.lastError ?? '').includes('watch failed'),
-    )
+    await waitFor(async () => {
+      const current = await readHealth()
+      return (
+        Number(current?.listenerCount) < 5 &&
+        String(current?.lastError ?? '').includes('watch failed')
+      )
+    })
     expect(String((await readHealth())?.lastError)).toContain('watch failed')
     expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
     host.dispose()
@@ -1201,11 +1212,18 @@ describe('workflow event recorder', () => {
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
     }).not.toThrow()
-    await waitFor(() => errors.mock.calls.length > 0)
-    expect(String(errors.mock.calls[0]?.[0])).toContain(
+    await waitFor(() =>
+      errors.mock.calls.some((call) =>
+        String(call[0]).includes('workflows: the session journal could not be written'),
+      ),
+    )
+    expect(errors.mock.calls.map((call) => String(call[0])).join('\n')).toContain(
       'workflows: the session journal could not be written',
     )
-    expect(String(errors.mock.calls[0]?.[0]).length).toBeLessThan(300)
+    const journalError = errors.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes('the session journal could not be written'))
+    expect((journalError ?? '').length).toBeLessThan(300)
     const healthFile = join(workspace, '.dsh', 'workflows', 'health.json')
     const readHealth = async (): Promise<Record<string, unknown> | undefined> => {
       try {
@@ -1214,7 +1232,14 @@ describe('workflow event recorder', () => {
         return undefined
       }
     }
-    await waitFor(async () => (await readHealth())?.journalWritable === false)
+    await waitFor(async () => {
+      const current = await readHealth()
+      return (
+        current?.journalWritable === false &&
+        typeof current?.lastEventAt === 'number' &&
+        typeof current?.lastCheckAt === 'number'
+      )
+    })
     expect((await readHealth())?.journalWritable).toBe(false)
   })
 })

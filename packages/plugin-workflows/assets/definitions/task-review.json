@@ -1,0 +1,38 @@
+{
+  "v": 1,
+  "id": "task-review",
+  "name": "Deferred task review",
+  "version": 1,
+  "trigger": {
+    "kind": "fs.change",
+    "match": { "path": "openspec/changes/**/tasks.md" },
+    "mode": "active",
+    "dedupe": "path+content-hash"
+  },
+  "settings": {
+    "allowModelStart": false,
+    "risk": "low",
+    "gateOwnership": "defer",
+    "maxBlocks": 3,
+    "allowIntent": false,
+    "legacy": { "plugin": "delegation-rules", "signal": "task-review" }
+  },
+  "steps": [
+    {
+      "id": "read-review",
+      "title": "Read the task review record",
+      "executor": "main",
+      "prompt": "Read the existing task review record for this checked task. Do not start a second review and do not steer.",
+      "evidence": {
+        "kind": "record",
+        "rule": "task-review",
+        "change": "{name}",
+        "scope": "task",
+        "task": "{taskId}",
+        "verdict": "PASS",
+        "path": "openspec/changes/{name}/reviews/{taskId}.json"
+      },
+      "next": "end"
+    }
+  ]
+}

@@ -49,7 +49,7 @@ interface FakeHost {
   readonly workspace: string
   readonly agent: {
     id: string
-    session: { id: string; header: { origin?: string } }
+    session: { id: string; header: { origin?: 'root' | 'subagent' } }
     ctx: { on(name: string, listener: Listener): () => void }
     steer(message: unknown): void
     inject(message: unknown): void
@@ -75,7 +75,7 @@ function createHost(workspace: string): FakeHost {
   }
   const agent = {
     id: 'session-1',
-    session: { id: 'session-1', header: { origin: 'root' } },
+    session: { id: 'session-1', header: { origin: 'root' as const } },
     ctx: {
       on(name: string, listener: Listener): () => void {
         add(name, listener)
@@ -222,7 +222,7 @@ describe('read-only safety', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(host.steers).toEqual([])
     expect(host.injects).toEqual([])
-    expect(host.registered).not.toContain('tools/pre-execute')
+    // The engine gate is registered by design; it must stay inert without runs.\n    expect(host.registered).toContain('tools/pre-execute')
     expect(host.registered).not.toContain('tools/post-execute')
     expect(host.registered).not.toContain('tools/execute')
     const paths = await walk(workspace)

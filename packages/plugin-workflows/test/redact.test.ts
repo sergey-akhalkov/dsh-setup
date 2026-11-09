@@ -84,7 +84,7 @@ describe('redaction', () => {
     const block = `before ${PEM_BEGIN}\n${'MIIEsecret\n'.repeat(200)}`
     const summary = summarize(block, 80).summary
     expect(summary).not.toContain('MIIEsecret')
-    expect(summary).not.toContain('BEGIN RSA PRIVATE KEY')
+    expect(summary).not.toContain(PEM_BEGIN)
     expect(summary).toBe(REDACTED_PAYLOAD)
   })
 
@@ -93,7 +93,7 @@ describe('redaction', () => {
     const text = redactText(`before\n${key}\nafter`)
     expect(text).toContain('[REDACTED PRIVATE KEY]')
     expect(text).not.toContain('MIIEsecret')
-    expect(text).not.toContain('BEGIN RSA PRIVATE KEY')
+    expect(text).not.toContain(PEM_BEGIN)
   })
 
   it('hides secret-named fields and nested strings', () => {
@@ -179,7 +179,7 @@ describe('redaction', () => {
     const summary = summarize(payload, 4000).summary
     expect(summary).not.toContain('MIIEsecret')
     expect(summary).not.toContain('tok-secret')
-    expect(summary).not.toContain('BEGIN RSA PRIVATE KEY')
+    expect(summary).not.toContain(PEM_BEGIN)
   })
 
   it('redacts plain YAML passwords containing punctuation', () => {
@@ -265,8 +265,7 @@ describe('redaction', () => {
   })
 
   it('redacts prefixed serialized credentials and encoded structures', () => {
-    const prefixed =
-      'Result: ' + JSON.stringify(JSON.stringify(JSON.stringify({ password: 'HUNTER-secret' })))
+    const prefixed = `Result: ${JSON.stringify(JSON.stringify(JSON.stringify({ password: 'HUNTER-secret' })))}`
     expect(summarize(prefixed, 4000).summary).toBe(REDACTED_PAYLOAD)
     const escaped = 'Result: {"pass\\u0077ord":"HUNTER-secret"}'
     expect(summarize(escaped, 4000).summary).toBe(REDACTED_PAYLOAD)

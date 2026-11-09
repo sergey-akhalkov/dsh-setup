@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 
 /**
  * Workspace file source for `openspec/changes/**`. The filesystem service owns
@@ -80,7 +80,14 @@ function errorOf(error: unknown): Error {
 /** Whether a canonical target stays inside a canonical root. */
 export function isInside(root: string, target: string): boolean {
   const rel = relative(root, target)
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  return (
+    rel === '' ||
+    (!isAbsolute(rel) &&
+      rel !== '..' &&
+      !rel.startsWith(`..${sep}`) &&
+      !rel.startsWith('../') &&
+      !rel.startsWith('..\\'))
+  )
 }
 
 async function canonicalInside(root: string, target: string): Promise<string | undefined> {
@@ -108,12 +115,16 @@ async function listEntries(
 }
 
 /** Read one file's identity; oversized files use size and mtime instead of bytes. */
-async function fileEntry(file: string): Promise<SnapshotEntry | undefined> {
+export async function fileEntry(file: string): Promise<SnapshotEntry | undefined> {
   try {
     const info = await stat(file)
     if (!info.isFile()) return undefined
     if (info.size > MAX_HASH_BYTES) {
-      return { sig: `${String(info.size)}:${String(info.mtimeMs)}`, hash: '' }
+      const sig = `${String(info.size)}:${String(info.mtimeMs)}`
+      return {
+        sig,
+        hash: createHash('sha256').update(sig).digest('hex').slice(0, 16),
+      }
     }
     const content = await readFile(file)
     const hash = createHash('sha256').update(content).digest('hex').slice(0, 16)

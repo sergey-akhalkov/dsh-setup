@@ -1,9 +1,11 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
+import type { Definition } from './definitions.js'
 import { isInside } from './fs-change.js'
 import type { WorkflowHealth } from './health.js'
 import type { Journal, TriggerEvaluationRecord } from './journal.js'
 import { type RunView, sessionRuns } from './projection.js'
+import type { WorkflowReceipt } from './receipts.js'
 import { redactPayload, redactValue } from './redact.js'
 import type { Trigger } from './triggers.js'
 
@@ -20,6 +22,8 @@ export const RUNS_ROUTE = '/api/workflows/runs'
 export const TRIGGERS_ROUTE = '/api/workflows/triggers'
 export const HEALTH_ROUTE = '/api/workflows/health'
 export const EVIDENCE_ROUTE = '/api/workflows/evidence'
+export const DEFINITIONS_ROUTE = '/api/workflows/definitions'
+export const RECEIPTS_ROUTE = '/api/workflows/receipts'
 
 /** Default and maximum page sizes. */
 export const DEFAULT_LIMIT = 50
@@ -48,6 +52,10 @@ export interface WorkflowApiServices {
   /** The requesting session's own last observed event time, if any. */
   readonly lastEventAtFor?: (session: string) => number | undefined
   readonly triggers: readonly Trigger[]
+  /** The approved definitions of one workspace. */
+  readonly definitionsFor?: (workspace: string) => readonly Definition[]
+  /** The authenticated receipts of one workspace. */
+  readonly receiptsFor?: (workspace: string) => Promise<readonly WorkflowReceipt[]>
 }
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -158,7 +166,12 @@ function route(path: string, handler: (request: Request) => Promise<Response>): 
 }
 
 /** Only settled record evidence inside the workspace may be served. */
-const EVIDENCE_PREFIXES = ['.dsh/delegation/', '.dsh/work-checkpoints/', 'openspec/changes/']
+const EVIDENCE_PREFIXES = [
+  '.dsh/delegation/',
+  '.dsh/work-checkpoints/',
+  '.dsh/workflows/runs/',
+  'openspec/changes/',
+]
 
 async function readEvidence(workspace: string, path: string): Promise<Response> {
   if (!EVIDENCE_PREFIXES.some((prefix) => path.startsWith(prefix))) {
@@ -239,17 +252,69 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       const resolved = resolveSession(services, request)
       if ('response' in resolved) return resolved.response
       const evaluations = await lastEvaluations(services, resolved.workspace, resolved.session)
+      const definitions = services.definitionsFor?.(resolved.workspace) ?? []
       return json(200, {
         session: resolved.session,
-        triggers: services.triggers.map((trigger) => ({
-          id: trigger.id,
-          event: trigger.event,
-          filter: trigger.filter,
-          mode: trigger.mode,
-          dedupe: trigger.dedupe,
-          ...(evaluations.get(trigger.id) === undefined
-            ? {}
-            : { last: evaluations.get(trigger.id) }),
+        triggers: [
+          ...services.triggers.map((trigger) => ({
+            id: trigger.id,
+            event: trigger.event,
+            filter: trigger.filter,
+            mode: trigger.mode,
+            dedupe: trigger.dedupe,
+            ...(evaluations.get(trigger.id) === undefined
+              ? {}
+              : { last: evaluations.get(trigger.id) }),
+          })),
+          ...definitions.map((definition) => ({
+            id: `definition:${definition.id}`,
+            event: definition.trigger.kind,
+            filter: definition.trigger.match,
+            mode: definition.trigger.mode,
+            dedupe: definition.trigger.dedupe,
+            source: 'workflow-definition',
+            ...(evaluations.get(`definition:${definition.id}`) === undefined
+              ? {}
+              : { last: evaluations.get(`definition:${definition.id}`) }),
+          })),
+        ],
+      })
+    }),
+    route(DEFINITIONS_ROUTE, async (request) => {
+      const resolved = resolveSession(services, request)
+      if ('response' in resolved) return resolved.response
+      const definitions = services.definitionsFor?.(resolved.workspace) ?? []
+      return json(200, {
+        session: resolved.session,
+        definitions: definitions.map((definition) => ({
+          id: definition.id,
+          name: definition.name,
+          version: definition.version,
+          trigger: definition.trigger,
+          risk: definition.settings.risk,
+          allowModelStart: definition.settings.allowModelStart,
+          gateOwnership: definition.settings.gateOwnership,
+          steps: definition.steps.map((step) => ({
+            id: step.id,
+            title: step.title,
+            executor: step.executor,
+            ownership: step.ownership ?? 'own',
+            blockTurnClose: step.blockTurnClose === true,
+          })),
+        })),
+      })
+    }),
+    route(RECEIPTS_ROUTE, async (request) => {
+      const resolved = resolveSession(services, request)
+      if ('response' in resolved) return resolved.response
+      const receipts = (await services.receiptsFor?.(resolved.workspace)) ?? []
+      return json(200, {
+        session: resolved.session,
+        receipts: receipts.map((receipt) => ({
+          change: receipt.change,
+          kind: receipt.kind,
+          digest: receipt.digest,
+          issuedAt: receipt.issuedAt,
         })),
       })
     }),

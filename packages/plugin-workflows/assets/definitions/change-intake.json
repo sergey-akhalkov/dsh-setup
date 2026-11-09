@@ -1,0 +1,125 @@
+{
+  "v": 1,
+  "id": "change-intake",
+  "name": "OpenSpec change intake",
+  "version": 1,
+  "trigger": {
+    "kind": "tool.pre-execute",
+    "match": { "tool": "shell", "command": "openspec new change <name>" },
+    "mode": "active",
+    "dedupe": "name"
+  },
+  "settings": {
+    "allowModelStart": false,
+    "risk": "low",
+    "gateOwnership": "own",
+    "maxBlocks": 3,
+    "allowIntent": false,
+    "allowTools": ["shell", "delegate"]
+  },
+  "steps": [
+    {
+      "id": "requirements",
+      "title": "Business requirements",
+      "executor": "main",
+      "prompt": "Capture users, problem, outcomes, non-goals, constraints, and acceptance criteria in .dsh/workflows/drafts/{name}/requirements.md. Do not create the OpenSpec change directory.",
+      "evidence": {
+        "kind": "file",
+        "path": ".dsh/workflows/drafts/{name}/requirements.md",
+        "minBytes": 200
+      },
+      "next": "architecture",
+      "blockTurnClose": true
+    },
+    {
+      "id": "architecture",
+      "title": "Architecture",
+      "executor": "main",
+      "prompt": "Write the architecture and the decisions that shape it, with alternatives and their trade-offs, in .dsh/workflows/drafts/{name}/architecture.md.",
+      "evidence": {
+        "kind": "file",
+        "path": ".dsh/workflows/drafts/{name}/architecture.md"
+      },
+      "next": "interface",
+      "blockTurnClose": true
+    },
+    {
+      "id": "interface",
+      "title": "Interface contract",
+      "executor": "main",
+      "prompt": "Write the interface contract: the exact commands, paths, inputs, outputs, and failure shapes in .dsh/workflows/drafts/{name}/interface.md.",
+      "evidence": {
+        "kind": "file",
+        "path": ".dsh/workflows/drafts/{name}/interface.md"
+      },
+      "next": "create-change",
+      "blockTurnClose": true
+    },
+    {
+      "id": "create-change",
+      "title": "Create the OpenSpec change",
+      "executor": "tool",
+      "tool": { "name": "shell", "command": "openspec new change {name}" },
+      "evidence": {
+        "kind": "all",
+        "items": [
+          { "kind": "tool", "name": "shell", "command": "openspec new change {name}" },
+          { "kind": "file", "path": "openspec/changes/{name}/.openspec.yaml" }
+        ]
+      },
+      "next": "spec",
+      "blockTurnClose": true
+    },
+    {
+      "id": "spec",
+      "title": "Write the spec set",
+      "executor": "main",
+      "prompt": "Write proposal.md, design.md, tasks.md, and at least one specs/<capability>/spec.md for the change, then run openspec validate {name} --strict.",
+      "evidence": {
+        "kind": "all",
+        "items": [
+          { "kind": "file", "path": "openspec/changes/{name}/proposal.md" },
+          { "kind": "file", "path": "openspec/changes/{name}/design.md" },
+          { "kind": "file", "path": "openspec/changes/{name}/tasks.md" },
+          { "kind": "file", "path": "openspec/changes/{name}/specs/**/spec.md", "glob": true },
+          { "kind": "check", "command": "openspec validate {name} --strict" }
+        ]
+      },
+      "next": "spec-review",
+      "blockTurnClose": true
+    },
+    {
+      "id": "spec-review",
+      "title": "Independent spec review",
+      "executor": "tool",
+      "ownership": "defer",
+      "legacy": { "plugin": "delegation-rules", "signal": "spec-review" },
+      "tool": {
+        "name": "delegate",
+        "args": { "rule": "spec-review", "change": "{name}" }
+      },
+      "evidence": {
+        "kind": "record",
+        "path": ".dsh/delegation/spec-review/{name}/spec.json",
+        "rule": "spec-review",
+        "change": "{name}",
+        "phase": "spec",
+        "scope": "whole",
+        "verdict": "PASS",
+        "digest": "current"
+      },
+      "next": "approval",
+      "blockTurnClose": true
+    },
+    {
+      "id": "approval",
+      "title": "Owner approval",
+      "executor": "human",
+      "prompt": "Approve the change spec before implementation starts.",
+      "human": { "timeoutAction": "block" },
+      "evidence": { "kind": "human", "answer": "yes" },
+      "next": "end",
+      "blockTurnClose": true
+    }
+  ]
+}

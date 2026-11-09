@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createWorkflowRoutes,
+  DEFINITIONS_ROUTE,
   EVENTS_ROUTE,
   EVIDENCE_ROUTE,
   type FetchRoute,
   HEALTH_ROUTE,
+  RECEIPTS_ROUTE,
   RUNS_ROUTE,
   registerWorkflowRoutes,
   TRIGGERS_ROUTE,
@@ -126,10 +128,18 @@ async function request(
 }
 
 describe('workflows read API', () => {
-  it('registers four buffered Fetch routes with a GET guard through the carrier', async () => {
+  it('registers the buffered Fetch routes with a GET guard through the carrier', async () => {
     const value = await setup()
     const paths = value.routes.map((route) => route.path)
-    expect(paths).toEqual([EVIDENCE_ROUTE, EVENTS_ROUTE, RUNS_ROUTE, TRIGGERS_ROUTE, HEALTH_ROUTE])
+    expect(paths).toEqual([
+      EVIDENCE_ROUTE,
+      EVENTS_ROUTE,
+      RUNS_ROUTE,
+      TRIGGERS_ROUTE,
+      DEFINITIONS_ROUTE,
+      RECEIPTS_ROUTE,
+      HEALTH_ROUTE,
+    ])
     for (const route of value.routes) {
       expect(route.methods).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
       expect(route.requestBody).toBe('buffered')
