@@ -2170,7 +2170,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           name: 'workflows',
           description:
             'Open the Workflows view, run/resume a workflow, install a definition after confirmation, adopt an existing change, or print a bounded status.',
-          handler: async (invocation: { agent: Agent; arguments?: unknown; text?: unknown }) => {
+          handler: async (invocation: {
+            agent: Agent
+            rawInput?: unknown
+            arguments?: unknown
+            text?: unknown
+          }) => {
             try {
               const workspace = workspaceFor(services, invocation.agent.session)
               if (workspace === undefined) {
@@ -2183,12 +2188,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               }
               const definitions = await definitionsFor(workspace)
               const sessionId = String(invocation.agent.session.id)
+              // DSH passes the exact text after the command name as rawInput;
+              // arguments/text stay for older callers and tests.
               const input =
-                typeof invocation.arguments === 'string'
-                  ? invocation.arguments
-                  : typeof invocation.text === 'string'
-                    ? invocation.text
-                    : ''
+                typeof invocation.rawInput === 'string'
+                  ? invocation.rawInput
+                  : typeof invocation.arguments === 'string'
+                    ? invocation.arguments
+                    : typeof invocation.text === 'string'
+                      ? invocation.text
+                      : ''
               const host: WorkflowCommandHost = {
                 workspace,
                 session: sessionId,

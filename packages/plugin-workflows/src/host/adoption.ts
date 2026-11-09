@@ -118,10 +118,26 @@ export async function adoptChange(input: AdoptionInput): Promise<AdoptionResult>
   if ((asked.answer ?? '').trim().toLowerCase() !== 'yes') {
     return { ok: false, reason: 'the user did not confirm; no receipt was written' }
   }
+  // The workspace may have changed while the question was open; only re-verified
+  // evidence with the same digest may be signed.
+  const reconfirmed = await verifyAdoptionEvidence(input.workspace, input.change)
+  if (!reconfirmed.ok) {
+    return {
+      ok: false,
+      reason: `the change changed while the confirmation was pending; no receipt was written (${reconfirmed.reason})`,
+    }
+  }
+  if (reconfirmed.digest !== verified.digest) {
+    return {
+      ok: false,
+      reason:
+        'the change or its whole-spec record changed while the confirmation was pending; no receipt was written',
+    }
+  }
   const receipt = await issueAdoptionReceipt(
     input.workspace,
     input.change,
-    verified.digest,
+    reconfirmed.digest,
     input.auth,
     input.now,
   )

@@ -2400,6 +2400,56 @@ describe('intake end-to-end in a fake host', () => {
   })
 })
 
+describe('/workflows adopt from the real command invocation', () => {
+  it('adopts an existing change from CommandInvocation.rawInput', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { userQuestions: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const receipts = await import('../src/host/receipts.ts')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    for (const [file, text] of [
+      ['proposal.md', '# proposal\n'],
+      ['design.md', '# design\n'],
+      ['tasks.md', '- [ ] 1.1 Task\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await mkdir(dirname(join(changeDir, file)), { recursive: true })
+      await writeFile(join(changeDir, file), text, 'utf8')
+    }
+    const digest = await currentSpecDigest(workspace, 'auth')
+    const recordDir = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    const result = await command?.handler({
+      agent: host.agent,
+      commandId: 'cmd-1',
+      rawInput: ' adopt auth',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(result?.kind).toBe('success')
+    expect(result?.text).toContain('adopted')
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'adoption',
+      change: 'auth',
+    })
+    expect(await readdir(changeDir)).toContain('proposal.md')
+  })
+})
+
 describe('archive gate on an unreadable run store', () => {
   it('refuses the archive when the run listing or stat fails and issues no authorization', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

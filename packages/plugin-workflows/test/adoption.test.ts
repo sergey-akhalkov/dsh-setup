@@ -144,6 +144,48 @@ describe('adoption of existing changes', () => {
     })
   })
 
+  it('refuses a change modified while the confirmation is pending', async () => {
+    const workspace = await tempWorkspace()
+    await adoptable(workspace)
+    const changed = await adoptChange({
+      workspace,
+      change: 'auth',
+      auth: auth(),
+      userStarted: true,
+      questions: {
+        ask: async () => {
+          await writeArtifact(workspace, 'openspec/changes/auth/proposal.md', '# changed\n')
+          return { answer: 'yes' }
+        },
+      },
+      now: 2_000,
+    })
+    expect(changed).toMatchObject({ ok: false })
+    await expect(readFile(receiptPath(workspace, 'auth'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+
+    const second = await tempWorkspace()
+    await adoptable(second)
+    const removed = await adoptChange({
+      workspace: second,
+      change: 'auth',
+      auth: auth(),
+      userStarted: true,
+      questions: {
+        ask: async () => {
+          await rm(join(second, 'openspec', 'changes', 'auth', 'design.md'))
+          return { answer: 'yes' }
+        },
+      },
+      now: 2_000,
+    })
+    expect(removed).toMatchObject({ ok: false })
+    await expect(readFile(receiptPath(second, 'auth'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+
   it('writes nothing when the user answers no or the model tries to adopt', async () => {
     const workspace = await tempWorkspace()
     await adoptable(workspace)
