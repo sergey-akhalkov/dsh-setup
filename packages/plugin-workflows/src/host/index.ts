@@ -2759,9 +2759,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     evidenceContext: (run, step) => {
       const sessionId = String(agent.session.id)
       const state = run.steps.find((entry) => entry.id === step.id)
+      const calls = sessionToolCalls.get(sessionId) ?? []
+      const metrics = turnMetrics.get(sessionId)
+      const lastWrite = lastCodeWriteAt(calls) ?? metrics?.lastWriteAt
       return {
-        toolCalls: sessionToolCalls.get(sessionId) ?? [],
+        toolCalls: calls,
         shellResults: sessionShellResults.get(sessionId) ?? [],
+        checkCommands: verifySettings.commands,
+        ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
+        ...(metrics?.lastWritePath === undefined
+          ? {}
+          : { lastWritePath: metrics.lastWritePath }),
         ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
         ...(typeof state?.evidence?.answer === 'string'
           ? { answers: [{ answer: state.evidence.answer }] }
