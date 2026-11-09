@@ -16,8 +16,8 @@
 
 ## 3. Serial integration (owns `packages/plugin-delegation-rules/package.json`, `packages/setup/**`, generated `lib/**`)
 
-- [ ] 3.1 Run `pnpm build` and `pnpm gen`, add any emitted `lib/host/*.{js,d.ts}` to `files` in the package manifest if the build introduced them, and verify `pnpm gen:check`, the vendored setup tree, and `pnpm build && git diff --exit-code`.
-- [ ] 3.2 Run `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, `openspec validate add-section-scoped-task-review --strict`, and the review audit; verify all pass and commit the generated output with the change.
+- [x] 3.1 Run `pnpm build` and `pnpm gen`, add any emitted `lib/host/*.{js,d.ts}` to `files` in the package manifest if the build introduced them, and verify `pnpm gen:check`, the vendored setup tree, and `pnpm build && git diff --exit-code`.
+- [x] 3.2 Run `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, `openspec validate add-section-scoped-task-review --strict`, and the review audit; verify all pass and commit the generated output with the change.
 
 ## Workflow follow-up
 
