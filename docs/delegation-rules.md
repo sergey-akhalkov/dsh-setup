@@ -213,6 +213,8 @@ selector is a `tasks.md` level-2 heading:
 - its normalized title, or `untitled` for tasks before the first heading.
 
 An unknown, empty, ambiguous, or unchecked-only section is rejected with the available sections.
+The `delegate` tool description and `delegation_status` also name the sections of the change the
+engine last inspected, so a selector can be chosen before the first call.
 The level-2 heading shape is the same one the lane guidance asks for:
 
 ```markdown
@@ -224,10 +226,10 @@ The level-2 heading shape is the same one the lane guidance asks for:
 One call starts one run over every checked task in that section: one prompt naming the section
 title, each checked task, and the unchecked tasks as out of scope; one frozen worktree snapshot;
 and one PASS/FINDINGS/ERROR verdict. The reviewer instruction asks every finding to name the
-affected task. A section PASS publishes the existing per-task
-`openspec/changes/<change>/reviews/<taskId>.json` approval for each covered checked task, so
-`pnpm reviews:check` and the archive gate are unchanged: one PASS per checked task, and unchecked
-tasks are never approved. A matching approval is kept byte-identical; the publication writes all
+affected task, so the one verdict stays actionable per task. A section PASS publishes the existing
+per-task `openspec/changes/<change>/reviews/<taskId>.json` approval for each covered checked task,
+so `pnpm reviews:check` and the archive gate are unchanged: one PASS per checked task, and
+unchecked tasks are never approved. A matching approval is kept byte-identical; the publication writes all
 temporaries before any rename and restores every replaced destination byte-identically on failure,
 so a failed publication approves nothing. Per-task and section publications share the
 rule/change publication lock: the later completion discards when an authoritative PASS exists,
@@ -833,8 +835,10 @@ The plugin adds no always-on prompt text. Its model-facing policy is the three t
 plus the skill catalog line, and the full workflow is loaded only when the skill is invoked.
 
 - Measured: three tool descriptions plus the skill catalog description are 2750 + 285 = 3035 UTF-8
-  bytes (~759 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 21208 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+  bytes (~759 estimated tokens at bytes / 4), against the 900 estimated tokens budget. The
+  `delegate` description may append at most 400 bytes of discovered section labels; the total
+  stays inside the same budget.
+- Measured: the skill body is 21323 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; a section review covers a
   related group in one run; set the optional integration review to `soft` or `none` if it adds

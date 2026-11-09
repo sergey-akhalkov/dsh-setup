@@ -253,6 +253,8 @@ export interface HarnessOptions {
   queueFault?: () => void
   /** Delays the once-per-workspace recovery scan. */
   recoverDelay?: () => Promise<void>
+  /** Holds a publication inside the lock before any record is written. */
+  publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
   /** Fake direct-user-answer service for lesson decisions. */
   userQuestions?: UserQuestionsService
 }
@@ -355,6 +357,7 @@ export class Harness {
       onPublished: (runId, record) => this.publishedRuns.push({ runId, verdict: record.verdict }),
       ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
       ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
+      ...(options.publishHold === undefined ? {} : { publishHold: options.publishHold }),
     })
   }
 

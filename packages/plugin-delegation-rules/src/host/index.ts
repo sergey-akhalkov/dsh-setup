@@ -304,6 +304,8 @@ export interface ApplyOptions {
   queueFault?: () => void
   /** Test seam: delays the once-per-workspace recovery scan. */
   recoverDelay?: () => Promise<void>
+  /** Test seam: runs inside the publication lock before any record is written. */
+  publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
 }
 
 /** Terminal review-run states reported to the settlement observer. */
@@ -1814,6 +1816,29 @@ function recordPath(
   return join(cwd, DELEGATION_DIR, rule.id, change, `${rule.phase}.json`)
 }
 
+/**
+ * Selector syntax is static, but the labels are not: remember the sections last
+ * inspected so the delegate tool description can name them before a call. One
+ * bounded catalog (the most recently inspected change); the rejection itself
+ * always names the selected change's sections.
+ */
+let sectionCatalog = ''
+const MAX_SECTION_CATALOG_CHARS = 400
+
+function rememberSections(change: string, lanes: readonly TaskLane[]): void {
+  if (lanes.length === 0) {
+    sectionCatalog = ''
+    return
+  }
+  sectionCatalog = ` Available sections in change "${change}": ${lanes
+    .map((lane) => sectionLabel(lane))
+    .join('; ')}`.slice(0, MAX_SECTION_CATALOG_CHARS)
+}
+
+function sectionCatalogNote(): string {
+  return sectionCatalog
+}
+
 /** One lock per rule/change publication: per-task and section writes serialize. */
 function publicationLockPath(cwd: string, rule: RuleConfig, change: string): string {
   return join(cwd, DELEGATION_DIR, rule.id, change, '.publication')
@@ -2368,14 +2393,23 @@ interface PublishFile {
 
 /**
  * Publish several record files as one transaction: all temporaries are written
- * before any rename, and a failure restores every destination byte-identically
- * while removing only files this transaction created.
+ * before any rename, and a failure restores every destination it replaced
+ * byte-identically while removing only files this transaction created. A
+ * destination that was never renamed is left untouched.
  */
 async function publishFilesTransaction(files: readonly PublishFile[]): Promise<void> {
+  const unique: PublishFile[] = []
+  const seen = new Set<string>()
+  for (const file of files) {
+    if (seen.has(file.path)) continue
+    seen.add(file.path)
+    unique.push(file)
+  }
   const originals = new Map<string, Buffer | undefined>()
   const temporary = new Map<string, string>()
+  const renamed = new Set<string>()
   try {
-    for (const file of files) {
+    for (const file of unique) {
       await mkdir(dirname(file.path), { recursive: true })
       try {
         originals.set(file.path, await readFile(file.path))
@@ -2385,25 +2419,39 @@ async function publishFilesTransaction(files: readonly PublishFile[]): Promise<v
         originals.set(file.path, undefined)
       }
     }
-    for (const file of files) {
+    for (const file of unique) {
       const path = `${file.path}.${randomUUID()}.tmp`
       await writeFile(path, file.body, 'utf8')
       temporary.set(file.path, path)
     }
-    for (const file of files) {
+    for (const file of unique) {
       await rename(temporary.get(file.path) as string, file.path)
+      renamed.add(file.path)
     }
   } catch (error) {
-    for (const [path, original] of originals) {
-      if (original === undefined) {
-        await unlink(path).catch(() => undefined)
-        continue
-      }
+    const failures: string[] = []
+    for (const path of renamed) {
+      const original = originals.get(path)
       try {
-        await writeFile(path, original)
-      } catch {
-        // Restoring is best effort; the original content is what remains valid.
+        if (original === undefined) {
+          await unlink(path)
+          continue
+        }
+        const restore = `${path}.${randomUUID()}.restore`
+        await writeFile(restore, original)
+        try {
+          await rename(restore, path)
+        } finally {
+          await unlink(restore).catch(() => undefined)
+        }
+      } catch (restoreError) {
+        failures.push(sanitizeText(errorMessage(restoreError), 200))
       }
+    }
+    if (failures.length > 0) {
+      throw new DelegationError(
+        `${errorMessage(error)}; restoring the previous records failed: ${failures.join('; ')}`,
+      )
     }
     throw error
   } finally {
@@ -2781,9 +2829,11 @@ function sectionKeyOf(title: string): string {
 
 /** One-line description of one lane's selectors, for the rejection message. */
 function sectionLabel(lane: TaskLane): string {
-  const title = lane.title === '' ? '(untitled)' : lane.title.slice(0, 80)
-  const key = sectionKeyOf(lane.title)
-  return lane.title === '' ? `untitled ${title}` : `${key} ${title}`
+  const title = normalizeTaskText(lane.title)
+  const number = sectionNumber(title)
+  if (number === undefined) return title === '' ? 'untitled (untitled)' : `${title.slice(0, 80)}`
+  const bare = normalizeTaskText(title.slice(number.length).replace(/^\./u, ''))
+  return `${number} ${bare.slice(0, 80)}`
 }
 
 /**
@@ -2877,12 +2927,15 @@ async function frozenSection(
   change: ChangeInfo,
 ): Promise<SectionInfo> {
   const lanes = parseTaskLanes(await readFile(join(snapshotChangeDir, 'tasks.md'), 'utf8'))
-  const coveredIds = new Set(section.covered.map((task) => task.id))
-  const lane = lanes.find((entry) => entry.tasks.some((task) => coveredIds.has(task.id)))
-  const tasks = lane?.tasks ?? section.tasks
+  const lane = lanes.find((entry) => sectionKeyOf(entry.title) === section.key)
+  if (lane === undefined) {
+    fail(
+      `section "${section.key}" is no longer present in the frozen snapshot of change "${change.name}"; re-run the review`,
+    )
+  }
   const covered: TaskInfo[] = []
   for (const selected of section.covered) {
-    const current = tasks.find((entry) => entry.id === selected.id)
+    const current = lane.tasks.find((entry) => entry.id === selected.id)
     if (current === undefined) {
       fail(
         `task "${selected.number} ${selected.text}" changed while the section review snapshot was prepared in change "${change.name}"; re-run the review`,
@@ -2897,10 +2950,10 @@ async function frozenSection(
   }
   return {
     key: section.key,
-    title: lane?.title ?? section.title,
-    tasks,
+    title: lane.title,
+    tasks: lane.tasks,
     covered,
-    unchecked: tasks.filter((task) => !task.checked),
+    unchecked: lane.tasks.filter((task) => !task.checked),
   }
 }
 
@@ -3013,6 +3066,14 @@ function recordIdentifies(
   return rule.scope !== 'task' || record.taskId === taskId
 }
 
+/** A run whose reviewed inputs moved cannot satisfy a task review; the writes must finish. */
+function reviewedInputsChanged(record: ReviewRecord): boolean {
+  return (
+    record.failureClass === 'reviewed-inputs-changed' ||
+    record.error?.includes('reviewed inputs changed') === true
+  )
+}
+
 /** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
 function recordSatisfies(
   state: RecordState,
@@ -3028,6 +3089,9 @@ function recordSatisfies(
   // A queue fault is not a review: the gate must ask for a fresh review rather
   // than treating its fallback ERROR as the reviewed outcome.
   if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error')) return false
+  // An input-mutation ERROR means the verdict was discarded; finish the writes
+  // and re-run instead of accepting the failure as the reviewed outcome.
+  if (record.verdict === 'ERROR' && reviewedInputsChanged(record)) return false
   if (scope === 'task' && record.taskId !== taskId) return false
   return digest === undefined || record.digest === digest
 }
@@ -3479,6 +3543,8 @@ interface EngineServices {
   queueFault?: () => void
   /** Test seam: delays the once-per-workspace recovery scan. */
   recoverDelay?: () => Promise<void>
+  /** Test seam: runs inside the publication lock before any record is written. */
+  publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
   /** Set by the engine after construction so the gate can see pending review runs. */
   pendingReview?: (
     workspaceRoot: string,
@@ -3909,6 +3975,8 @@ class DelegationEngine {
   private readonly runs = new Map<string, ManagedRun>()
   private readonly recoveryPromises = new Map<string, Promise<void>>()
   private readonly queue: ReviewQueue<ManagedRun>
+  /** Latest admitted identity per rule/change/section; a frozen older run discards. */
+  private readonly sectionIdentities = new Map<string, string>()
 
   constructor(
     private readonly config: EngineConfig,
@@ -3957,6 +4025,18 @@ class DelegationEngine {
 
   private now(): string {
     return this.services.now().toISOString()
+  }
+
+  private sectionIdentityKey(run: ManagedRun): string | undefined {
+    const section = run.context.section
+    if (section === undefined) return undefined
+    return `${run.workspaceRoot}\u0000${run.context.rule.id}\u0000${run.context.change.name}\u0000${section.key}`
+  }
+
+  /** Record the newest admitted section identity; an older frozen run must not publish. */
+  private rememberSectionIdentity(run: ManagedRun): void {
+    const key = this.sectionIdentityKey(run)
+    if (key !== undefined) this.sectionIdentities.set(key, run.file.identity)
   }
 
   async runDelegate(args: DelegateArguments, context: ToolAgentContext): Promise<string> {
@@ -4104,6 +4184,7 @@ class DelegationEngine {
         )
       }
       const lanes = await readTaskLanesOrFail(change)
+      rememberSections(change.name, lanes)
       section = resolveSectionArgument(change, lanes, args.section)
     } else if (args.task !== undefined) {
       if (rule.scope !== 'task') {
@@ -4168,6 +4249,7 @@ class DelegationEngine {
       return this.fallbackAfterQueueError(run, error)
     }
     if (admission.kind === 'duplicate') {
+      this.rememberSectionIdentity(admission.run)
       await this.discardSnapshot(run)
       this.runs.delete(run.file.id)
       // A duplicate can join an in-flight start; wait it out so the handle
@@ -4175,8 +4257,9 @@ class DelegationEngine {
       await this.queue.whenAdmitted(admission.run.file.id)
       return this.runHandleText(admission.run, 'duplicate')
     }
-    if (admission.kind === 'accepted' && admission.phase !== 'running') {
-      run.waitedInQueue = true
+    if (admission.kind === 'accepted') {
+      this.rememberSectionIdentity(run)
+      if (admission.phase !== 'running') run.waitedInQueue = true
     }
     if (admission.kind === 'full') {
       const error = new DelegationError(
@@ -4191,12 +4274,18 @@ class DelegationEngine {
 
   /** Re-read the selected task/section and refuse anything that is gone or unchecked. */
   private async validateSelectedTask(run: ManagedRun): Promise<void> {
-    const tasks = await readTasks(run.context.change.dir)
     const section = run.context.section
     if (section !== undefined) {
+      const lanes = await readTaskLanesOrFail(run.context.change)
+      const lane = lanes.find((entry) => sectionKeyOf(entry.title) === section.key)
+      if (lane === undefined) {
+        fail(
+          `section "${section.key}" is no longer a section in change "${run.context.change.name}"; start a fresh review`,
+        )
+      }
       const covered: TaskInfo[] = []
       for (const selected of section.covered) {
-        const current = tasks.find((entry) => entry.id === selected.id)
+        const current = lane.tasks.find((entry) => entry.id === selected.id)
         if (current === undefined || !current.checked) {
           fail(
             `task "${selected.number} ${selected.text}" selected for section "${section.key}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
@@ -4204,17 +4293,16 @@ class DelegationEngine {
         }
         covered.push(current)
       }
-      const refreshed = section.tasks.map(
-        (selected) => tasks.find((entry) => entry.id === selected.id) ?? selected,
-      )
       run.context.section = {
-        ...section,
-        tasks: refreshed,
+        key: section.key,
+        title: lane.title,
+        tasks: lane.tasks,
         covered,
-        unchecked: refreshed.filter((entry) => !entry.checked),
+        unchecked: lane.tasks.filter((entry) => !entry.checked),
       }
       return
     }
+    const tasks = await readTasks(run.context.change.dir)
     const task = run.context.task
     if (task === undefined) return
     const current = tasks.find((entry) => entry.id === task.id)
@@ -4424,6 +4512,7 @@ class DelegationEngine {
       throw conflict
     }
     run.fallback = true
+    this.rememberSectionIdentity(run)
     await this.startDirectFallback(run, error)
     return this.runHandleText(run, 'running')
   }
@@ -4485,6 +4574,7 @@ class DelegationEngine {
       return
     }
     run.reprepared = true
+    this.rememberSectionIdentity(run)
     await this.markRun(run, 'starting', this.withFallbackDetail(next, 're-prepared while queued'))
   }
 
@@ -4831,6 +4921,20 @@ class DelegationEngine {
           'this run no longer owns the current review identity; its completion was discarded',
         )
       }
+      const sectionKey = this.sectionIdentityKey(run)
+      if (sectionKey !== undefined) {
+        const latest = this.sectionIdentities.get(sectionKey)
+        if (latest !== undefined && latest !== run.file.identity) {
+          throw new DiscardedRun(
+            'a newer review identity for this section was admitted; its completion was discarded',
+          )
+        }
+      }
+      await this.services.publishHold?.({
+        rule: run.context.rule.id,
+        change: run.context.change.name,
+        ...(run.context.section === undefined ? {} : { section: run.context.section.key }),
+      })
       if (run.context.section !== undefined) {
         return await this.publishSectionRecordLocked(run, fields)
       }
@@ -5006,7 +5110,7 @@ class DelegationEngine {
           rule: record.rule,
           change: record.change,
           ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
-          ...(record.section === undefined ? {} : { section: record.section }),
+          ...(record.section === undefined ? {} : { section: sanitizeText(record.section, 200) }),
           ...(record.taskIds === undefined ? {} : { taskIds: record.taskIds }),
           verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
           digest: record.digest,
@@ -5654,6 +5758,7 @@ class DelegationEngine {
           `  this session: ${entry === undefined ? 'not involved' : involvementSummary(entry, attributedChecked)}`,
         )
         if (tasks === undefined) continue
+        rememberSections(change.name, await readTaskLanes(change.dir))
         const checked = tasks.filter((task) => task.checked)
         lines.push(`  tasks: ${checked.length}/${tasks.length} checked`)
         for (const rule of this.config.rules) {
@@ -6059,6 +6164,9 @@ async function evaluateGate(
     if (state.record.verdict === 'FINDINGS') {
       return `its FINDINGS record at ${record} is unresolved; fix the findings and re-review`
     }
+    if (state.record.verdict === 'ERROR' && reviewedInputsChanged(state.record)) {
+      return `its review at ${record} could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review`
+    }
     return `${state.record.verdict} record at ${record} is stale (recorded ${digestShort(state.record.digest)}, current ${digestShort(expectedDigest)})`
   }
   const pendingFor = (
@@ -6162,6 +6270,7 @@ async function evaluateGate(
       for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
         let satisfied = false
         let findingsOnly = false
+        let reviewedInputsMoved = false
         for (const rule of taskRules) {
           const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id))
           if (
@@ -6174,6 +6283,13 @@ async function evaluateGate(
             break
           }
           if (state.kind === 'record' && state.record.verdict === 'FINDINGS') findingsOnly = true
+          if (
+            state.kind === 'record' &&
+            state.record.verdict === 'ERROR' &&
+            reviewedInputsChanged(state.record)
+          ) {
+            reviewedInputsMoved = true
+          }
         }
         if (satisfied) continue
         const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review'
@@ -6183,9 +6299,11 @@ async function evaluateGate(
             ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
             : pending !== undefined
               ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
-              : findingsOnly
-                ? 'its review record has unresolved findings'
-                : 'it has no task-review PASS/ERROR record'
+              : reviewedInputsMoved
+                ? 'its review could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review'
+                : findingsOnly
+                  ? 'its review record has unresolved findings'
+                  : 'it has no task-review PASS/ERROR record'
         const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`
         const call =
           reviewer.error !== undefined
@@ -6943,6 +7061,14 @@ function buildToolDefinitions(
       },
     },
   ]
+  // The section labels come from the workspace the engine last inspected, so
+  // the model sees them before choosing a selector instead of by trial.
+  const delegate = definitions[0] as ToolDefinition
+  Object.defineProperty(delegate, 'description', {
+    enumerable: true,
+    configurable: true,
+    get: () => `${toolDescriptions.delegate}${sectionCatalogNote()}`,
+  })
   if (!config.reviewLearning.enabled) return definitions
   definitions.push(
     {
@@ -7201,6 +7327,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
     ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
     ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
     ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
+    ...(options.publishHold === undefined ? {} : { publishHold: options.publishHold }),
   }
   const engine = new DelegationEngine(validated, services)
   services.pendingReview = (workspaceRoot, ruleId, change, taskId) =>

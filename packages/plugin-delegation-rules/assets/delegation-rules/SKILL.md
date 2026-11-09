@@ -93,8 +93,9 @@ paths, an unreadable `tasks.md`, and a ticked task that no longer appears in it 
   section with one prompt, one frozen snapshot, and one verdict, and publishes the existing
   per-task `reviews/<taskId>.json` approvals for each covered task. `task` and `section` are
   mutually exclusive; unchecked tasks are out of scope and are never approved; a newly checked
-  task changes the section digest and needs a new section or task review. A section `ERROR`
-  writes an ERROR record for each covered task and publishes no approval.
+  task changes the section digest and needs a new section or task review. Every section finding
+  names the affected task's number or text, so the one verdict is still actionable per task. A
+  section `ERROR` writes an ERROR record for each covered task and publishes no approval.
 - **answer** — read-only prompt for a blocker, research, or advisor question; returns the answer
   with evidence and, for research, sources, and, for an advisor, a recommendation, the strongest
   counterargument, risks, a next action, and confidence. Writes no gate record. A failed answer is

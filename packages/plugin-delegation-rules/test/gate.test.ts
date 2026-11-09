@@ -511,6 +511,26 @@ describe('section review gate', () => {
     expect(status).toContain('missing 1.2 "Second task"')
     expect(status).not.toContain('1.1 First task')
   })
+  it('refuses turn close when a live section review loses its inputs', async () => {
+    const { dir, subagents, harness } = await sectionFixture()
+    harness.git.failSnapshot = true
+    subagents.respond = async (run) => {
+      await writeFile(join(dir, 'proposal.md'), '# Proposal\n\nChanged during the run.\n', 'utf8')
+      return passResponder(run)
+    }
+    const run = runIdFrom(
+      await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: '1',
+      }),
+    )
+    expect(await harness.waitForRun(run)).toContain('state=failed')
+    await harness.turnStopping(1)
+    const steer = combinedSteers(harness.agent)
+    expect(steer).toContain('reviewed inputs changed during the run')
+    expect(steer).toContain('finish the writes and re-run the review')
+  })
 })
 
 describe('implementation-work gate', () => {

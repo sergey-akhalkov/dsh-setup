@@ -61,6 +61,9 @@ function taskConfig(extraRules: BundleConfigLike['rules'] = []): BundleConfigLik
 async function fixture(
   tasks: string = plan,
   config: BundleConfigLike = taskConfig(),
+  extra: {
+    publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
+  } = {},
 ): Promise<{ root: string; dir: string; agents: FakeSubagents; harness: Harness }> {
   const workspace = await makeWorkspace()
   cleanups.push(workspace.cleanup)
@@ -68,7 +71,7 @@ async function fixture(
   await writeFile(join(dir, 'tasks.md'), tasks, 'utf8')
   const agents = new FakeSubagents()
   agents.addProvider('codex-subagent')
-  const harness = new Harness({ cwd: workspace.root, config, agents })
+  const harness = new Harness({ cwd: workspace.root, config, agents, ...extra })
   return { root: workspace.root, dir, agents, harness }
 }
 
@@ -173,6 +176,15 @@ const invalidOutput = (): SubagentResult => ({
 })
 
 describe('section selector resolution', () => {
+  it('names the available sections in the delegate description before a section call', async () => {
+    const { harness } = await fixture()
+    await harness.toolText('delegation_status', {})
+    const description = harness.tools.get('delegate')?.description ?? ''
+    expect(description).toContain('Available sections in change "change-a"')
+    expect(description).toContain('1 Engine')
+    expect(description).toContain('2 Docs')
+  })
+
   it('resolves the heading number, the wildcard, and the normalized title to one section', async () => {
     const { root, agents, harness } = await fixture()
     const first = runIdFrom(
@@ -385,6 +397,33 @@ describe('one section run, one verdict', () => {
         expect(portable[field]).toBeUndefined()
       }
     }
+  })
+
+  it('resolves identical task text within the selected frozen section', async () => {
+    const duplicate = `# Tasks
+
+## 1. First (lane 1, owns \`one/**\`)
+
+- [x] 1.1 Run regression tests
+
+## 2. Second (lane 2, owns \`two/**\`)
+
+- [x] 2.1 Run regression tests
+- [x] 2.2 Add parser
+`
+    const { root, dir, agents, harness } = await fixture(duplicate)
+    const run = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '2' }),
+    )
+    expect(await harness.waitForRun(run)).toContain('state=completed')
+    expect(agents.startCalls).toBe(1)
+    expect(agents.runs[0]?.prompt).toContain('Add parser')
+    const section = await readJson(sectionRecordPath(root, '2'))
+    expect(section.verdict).toBe('PASS')
+    const shared = taskIdFor('Run regression tests')
+    expect(await exists(portablePath(dir, shared))).toBe(true)
+    expect(await exists(portablePath(dir, taskIdFor('Add parser')))).toBe(true)
+    expect(await exists(localTaskPath(root, taskIdFor('Add parser')))).toBe(true)
   })
 
   it('accepts one FINDINGS verdict that names the affected task and publishes no approval', async () => {
@@ -609,6 +648,127 @@ describe('section approval publication', () => {
     expect(await readFile(portablePath(dir, FIRST), 'utf8')).toBe(sectionPortable)
   })
 
+  it('discards a frozen section run when a newer identity is admitted', async () => {
+    const { root, dir, agents, harness } = await fixture()
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let calls = 0
+    agents.respond = async (run) => {
+      calls += 1
+      if (calls === 1) await gate
+      return passResponder(run)
+    }
+    const older = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    // The newer identity comes from a changed checked set; the older run still
+    // reviews its frozen snapshot and must publish nothing.
+    await writeFile(
+      join(dir, 'tasks.md'),
+      plan.replace('- [ ] 1.3 Later task', '- [x] 1.3 Later task'),
+      'utf8',
+    )
+    const newer = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    expect(newer).not.toBe(older)
+    expect(await exists(portablePath(dir, FIRST))).toBe(false)
+    release()
+    expect(await harness.waitForRun(older)).toContain('state=discarded')
+    expect(await harness.waitForRun(newer)).toContain('state=completed')
+    expect(await exists(portablePath(dir, LATER))).toBe(true)
+    expect(await exists(sectionRecordPath(root))).toBe(true)
+  })
+
+  it('serializes a held section publication with a per-task publication', async () => {
+    let entered = (): void => undefined
+    let release = (): void => undefined
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { root, dir, agents, harness } = await fixture(plan, taskConfig(), {
+      publishHold: async (info) => {
+        if (info.section === undefined) return
+        entered()
+        await gate
+      },
+    })
+    const sectionRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    await enteredPromise
+    const perTaskRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', task: FIRST }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // With a shared publication lock the per-task completion is still waiting.
+    expect(await exists(localTaskPath(root, FIRST))).toBe(false)
+    release()
+    expect(await harness.waitForRun(sectionRun)).toContain('state=completed')
+    expect(await harness.waitForRun(perTaskRun)).toContain('state=discarded')
+    expect(await exists(portablePath(dir, FIRST))).toBe(true)
+    expect(await exists(portablePath(dir, SECOND))).toBe(true)
+    expect(agents.startCalls).toBe(2)
+  })
+
+  it('serializes a held per-task publication with a section publication', async () => {
+    let entered = (): void => undefined
+    let release = (): void => undefined
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { root, dir, agents, harness } = await fixture(plan, taskConfig(), {
+      publishHold: async (info) => {
+        if (info.section !== undefined) return
+        entered()
+        await gate
+      },
+    })
+    const perTaskRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', task: FIRST }),
+    )
+    await enteredPromise
+    const sectionRun = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // The section completion waits instead of writing during the held lock.
+    expect(await exists(sectionRecordPath(root))).toBe(false)
+    expect(await exists(portablePath(dir, SECOND))).toBe(false)
+    release()
+    expect(await harness.waitForRun(perTaskRun)).toContain('state=completed')
+    expect(await harness.waitForRun(sectionRun)).toContain('state=completed')
+    const kept = await readJson(localTaskPath(root, FIRST))
+    expect(kept.verdict).toBe('PASS')
+    expect(await exists(portablePath(dir, SECOND))).toBe(true)
+    expect(agents.startCalls).toBe(2)
+  })
+
+  it('leaves originals untouched when staging fails before any rename', async () => {
+    const { root, dir, harness } = await fixture()
+    await writeMarker(root)
+    await writePortable(dir, 'First task', { target: { provider: 'other-provider' } })
+    const original = await readFile(portablePath(dir, FIRST), 'utf8')
+    const records = join(root, '.dsh', 'delegation', 'task-review', 'change-a')
+    await mkdir(records, { recursive: true })
+    await writeFile(join(records, 'tasks'), 'not a directory', 'utf8')
+    const run = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    expect(await harness.waitForRun(run)).toContain('state=failed')
+    expect(await readFile(portablePath(dir, FIRST), 'utf8')).toBe(original)
+    expect(await exists(sectionRecordPath(root))).toBe(false)
+    expect(await exists(localTaskPath(root, FIRST))).toBe(false)
+  })
+
   it('discards a superseded section identity and approves no task', async () => {
     const { root, dir, agents, harness } = await fixture()
     let release = (): void => undefined
@@ -766,5 +926,28 @@ describe('section gate and status', () => {
     const retro = await harness.toolText('review_retro', { action: 'report' })
     expect(retro).toContain('2 settled review(s), 1 finding(s)')
     expect(retro).toContain('missing-test: 1 finding(s), 0 repeated')
+  })
+
+  it('sanitizes an unnumbered section key before writing finding history', async () => {
+    const title = 'Review C:\\Users\\me\\private token=synthetic-history-secret'
+    const untitled = `# Tasks\n\n## ${title}\n\n- [x] 1.1 First task\n`
+    const { root, harness } = await fixture(untitled)
+    const run = runIdFrom(
+      await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: title,
+      }),
+    )
+    expect(await harness.waitForRun(run)).toContain('state=completed')
+    const history = await readFindingHistory(root)
+    const entry = history.entries[0]
+    expect(entry?.kind).toBe('run')
+    if (entry?.kind === 'run') {
+      expect(entry.section).not.toContain('C:')
+      expect(entry.section).not.toContain('synthetic-history-secret')
+      expect(entry.section).toContain('[path]')
+      expect(entry.section).toContain('[secret]')
+    }
   })
 })

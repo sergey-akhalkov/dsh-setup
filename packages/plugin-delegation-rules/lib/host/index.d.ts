@@ -117,6 +117,12 @@ export interface ApplyOptions {
     queueFault?: () => void;
     /** Test seam: delays the once-per-workspace recovery scan. */
     recoverDelay?: () => Promise<void>;
+    /** Test seam: runs inside the publication lock before any record is written. */
+    publishHold?: (info: {
+        rule: string;
+        change: string;
+        section?: string;
+    }) => Promise<void> | void;
 }
 /** Terminal review-run states reported to the settlement observer. */
 export type SettledRunState = 'completed' | 'failed' | 'discarded';

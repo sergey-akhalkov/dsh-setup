@@ -1221,6 +1221,26 @@ function recordPath(cwd, rule, change, taskId, sectionKey) {
         fail(`rule "${rule.id}": a whole-scope record needs a phase`);
     return join(cwd, DELEGATION_DIR, rule.id, change, `${rule.phase}.json`);
 }
+/**
+ * Selector syntax is static, but the labels are not: remember the sections last
+ * inspected so the delegate tool description can name them before a call. One
+ * bounded catalog (the most recently inspected change); the rejection itself
+ * always names the selected change's sections.
+ */
+let sectionCatalog = '';
+const MAX_SECTION_CATALOG_CHARS = 400;
+function rememberSections(change, lanes) {
+    if (lanes.length === 0) {
+        sectionCatalog = '';
+        return;
+    }
+    sectionCatalog = ` Available sections in change "${change}": ${lanes
+        .map((lane) => sectionLabel(lane))
+        .join('; ')}`.slice(0, MAX_SECTION_CATALOG_CHARS);
+}
+function sectionCatalogNote() {
+    return sectionCatalog;
+}
 /** One lock per rule/change publication: per-task and section writes serialize. */
 function publicationLockPath(cwd, rule, change) {
     return join(cwd, DELEGATION_DIR, rule.id, change, '.publication');
@@ -1734,14 +1754,24 @@ function portableRecordOf(record, taskId) {
 }
 /**
  * Publish several record files as one transaction: all temporaries are written
- * before any rename, and a failure restores every destination byte-identically
- * while removing only files this transaction created.
+ * before any rename, and a failure restores every destination it replaced
+ * byte-identically while removing only files this transaction created. A
+ * destination that was never renamed is left untouched.
  */
 async function publishFilesTransaction(files) {
+    const unique = [];
+    const seen = new Set();
+    for (const file of files) {
+        if (seen.has(file.path))
+            continue;
+        seen.add(file.path);
+        unique.push(file);
+    }
     const originals = new Map();
     const temporary = new Map();
+    const renamed = new Set();
     try {
-        for (const file of files) {
+        for (const file of unique) {
             await mkdir(dirname(file.path), { recursive: true });
             try {
                 originals.set(file.path, await readFile(file.path));
@@ -1753,27 +1783,40 @@ async function publishFilesTransaction(files) {
                 originals.set(file.path, undefined);
             }
         }
-        for (const file of files) {
+        for (const file of unique) {
             const path = `${file.path}.${randomUUID()}.tmp`;
             await writeFile(path, file.body, 'utf8');
             temporary.set(file.path, path);
         }
-        for (const file of files) {
+        for (const file of unique) {
             await rename(temporary.get(file.path), file.path);
+            renamed.add(file.path);
         }
     }
     catch (error) {
-        for (const [path, original] of originals) {
-            if (original === undefined) {
-                await unlink(path).catch(() => undefined);
-                continue;
-            }
+        const failures = [];
+        for (const path of renamed) {
+            const original = originals.get(path);
             try {
-                await writeFile(path, original);
+                if (original === undefined) {
+                    await unlink(path);
+                    continue;
+                }
+                const restore = `${path}.${randomUUID()}.restore`;
+                await writeFile(restore, original);
+                try {
+                    await rename(restore, path);
+                }
+                finally {
+                    await unlink(restore).catch(() => undefined);
+                }
             }
-            catch {
-                // Restoring is best effort; the original content is what remains valid.
+            catch (restoreError) {
+                failures.push(sanitizeText(errorMessage(restoreError), 200));
             }
+        }
+        if (failures.length > 0) {
+            throw new DelegationError(`${errorMessage(error)}; restoring the previous records failed: ${failures.join('; ')}`);
         }
         throw error;
     }
@@ -2097,9 +2140,12 @@ function sectionKeyOf(title) {
 }
 /** One-line description of one lane's selectors, for the rejection message. */
 function sectionLabel(lane) {
-    const title = lane.title === '' ? '(untitled)' : lane.title.slice(0, 80);
-    const key = sectionKeyOf(lane.title);
-    return lane.title === '' ? `untitled ${title}` : `${key} ${title}`;
+    const title = normalizeTaskText(lane.title);
+    const number = sectionNumber(title);
+    if (number === undefined)
+        return title === '' ? 'untitled (untitled)' : `${title.slice(0, 80)}`;
+    const bare = normalizeTaskText(title.slice(number.length).replace(/^\./u, ''));
+    return `${number} ${bare.slice(0, 80)}`;
 }
 /**
  * Resolve a section selector against the level-2 task groups: the heading number
@@ -2164,12 +2210,13 @@ function sectionDigest(version, section, artifactDigest, tree) {
 /** Re-resolve the section against the frozen snapshot copy and validate coverage. */
 async function frozenSection(snapshotChangeDir, section, change) {
     const lanes = parseTaskLanes(await readFile(join(snapshotChangeDir, 'tasks.md'), 'utf8'));
-    const coveredIds = new Set(section.covered.map((task) => task.id));
-    const lane = lanes.find((entry) => entry.tasks.some((task) => coveredIds.has(task.id)));
-    const tasks = lane?.tasks ?? section.tasks;
+    const lane = lanes.find((entry) => sectionKeyOf(entry.title) === section.key);
+    if (lane === undefined) {
+        fail(`section "${section.key}" is no longer present in the frozen snapshot of change "${change.name}"; re-run the review`);
+    }
     const covered = [];
     for (const selected of section.covered) {
-        const current = tasks.find((entry) => entry.id === selected.id);
+        const current = lane.tasks.find((entry) => entry.id === selected.id);
         if (current === undefined) {
             fail(`task "${selected.number} ${selected.text}" changed while the section review snapshot was prepared in change "${change.name}"; re-run the review`);
         }
@@ -2180,10 +2227,10 @@ async function frozenSection(snapshotChangeDir, section, change) {
     }
     return {
         key: section.key,
-        title: lane?.title ?? section.title,
-        tasks,
+        title: lane.title,
+        tasks: lane.tasks,
         covered,
-        unchecked: tasks.filter((task) => !task.checked),
+        unchecked: lane.tasks.filter((task) => !task.checked),
     };
 }
 /** Resolve an explicit task id/text for one task-scoped review. */
@@ -2283,6 +2330,11 @@ function recordIdentifies(record, rule, change, taskId) {
         return false;
     return rule.scope !== 'task' || record.taskId === taskId;
 }
+/** A run whose reviewed inputs moved cannot satisfy a task review; the writes must finish. */
+function reviewedInputsChanged(record) {
+    return (record.failureClass === 'reviewed-inputs-changed' ||
+        record.error?.includes('reviewed inputs changed') === true);
+}
 /** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
 function recordSatisfies(state, change, scope, digest, taskId) {
     if (state.kind !== 'record')
@@ -2295,6 +2347,10 @@ function recordSatisfies(state, change, scope, digest, taskId) {
     // A queue fault is not a review: the gate must ask for a fresh review rather
     // than treating its fallback ERROR as the reviewed outcome.
     if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error'))
+        return false;
+    // An input-mutation ERROR means the verdict was discarded; finish the writes
+    // and re-run instead of accepting the failure as the reviewed outcome.
+    if (record.verdict === 'ERROR' && reviewedInputsChanged(record))
         return false;
     if (scope === 'task' && record.taskId !== taskId)
         return false;
@@ -2989,6 +3045,8 @@ class DelegationEngine {
     runs = new Map();
     recoveryPromises = new Map();
     queue;
+    /** Latest admitted identity per rule/change/section; a frozen older run discards. */
+    sectionIdentities = new Map();
     constructor(config, services) {
         this.config = config;
         this.services = services;
@@ -3029,6 +3087,18 @@ class DelegationEngine {
     }
     now() {
         return this.services.now().toISOString();
+    }
+    sectionIdentityKey(run) {
+        const section = run.context.section;
+        if (section === undefined)
+            return undefined;
+        return `${run.workspaceRoot}\u0000${run.context.rule.id}\u0000${run.context.change.name}\u0000${section.key}`;
+    }
+    /** Record the newest admitted section identity; an older frozen run must not publish. */
+    rememberSectionIdentity(run) {
+        const key = this.sectionIdentityKey(run);
+        if (key !== undefined)
+            this.sectionIdentities.set(key, run.file.identity);
     }
     async runDelegate(args, context) {
         const rule = this.rule(args.rule);
@@ -3142,6 +3212,7 @@ class DelegationEngine {
                 fail(`rule "${rule.id}" reviews the whole scope; omit section (only a task-scoped review accepts one)`);
             }
             const lanes = await readTaskLanesOrFail(change);
+            rememberSections(change.name, lanes);
             section = resolveSectionArgument(change, lanes, args.section);
         }
         else if (args.task !== undefined) {
@@ -3195,6 +3266,7 @@ class DelegationEngine {
             return this.fallbackAfterQueueError(run, error);
         }
         if (admission.kind === 'duplicate') {
+            this.rememberSectionIdentity(admission.run);
             await this.discardSnapshot(run);
             this.runs.delete(run.file.id);
             // A duplicate can join an in-flight start; wait it out so the handle
@@ -3202,8 +3274,10 @@ class DelegationEngine {
             await this.queue.whenAdmitted(admission.run.file.id);
             return this.runHandleText(admission.run, 'duplicate');
         }
-        if (admission.kind === 'accepted' && admission.phase !== 'running') {
-            run.waitedInQueue = true;
+        if (admission.kind === 'accepted') {
+            this.rememberSectionIdentity(run);
+            if (admission.phase !== 'running')
+                run.waitedInQueue = true;
         }
         if (admission.kind === 'full') {
             const error = new DelegationError(`review queue full: ${admission.depth} waiting run(s) at maxQueued=${admission.maxQueued}; let the current reviews settle, then start this review again`);
@@ -3216,26 +3290,31 @@ class DelegationEngine {
     }
     /** Re-read the selected task/section and refuse anything that is gone or unchecked. */
     async validateSelectedTask(run) {
-        const tasks = await readTasks(run.context.change.dir);
         const section = run.context.section;
         if (section !== undefined) {
+            const lanes = await readTaskLanesOrFail(run.context.change);
+            const lane = lanes.find((entry) => sectionKeyOf(entry.title) === section.key);
+            if (lane === undefined) {
+                fail(`section "${section.key}" is no longer a section in change "${run.context.change.name}"; start a fresh review`);
+            }
             const covered = [];
             for (const selected of section.covered) {
-                const current = tasks.find((entry) => entry.id === selected.id);
+                const current = lane.tasks.find((entry) => entry.id === selected.id);
                 if (current === undefined || !current.checked) {
                     fail(`task "${selected.number} ${selected.text}" selected for section "${section.key}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`);
                 }
                 covered.push(current);
             }
-            const refreshed = section.tasks.map((selected) => tasks.find((entry) => entry.id === selected.id) ?? selected);
             run.context.section = {
-                ...section,
-                tasks: refreshed,
+                key: section.key,
+                title: lane.title,
+                tasks: lane.tasks,
                 covered,
-                unchecked: refreshed.filter((entry) => !entry.checked),
+                unchecked: lane.tasks.filter((entry) => !entry.checked),
             };
             return;
         }
+        const tasks = await readTasks(run.context.change.dir);
         const task = run.context.task;
         if (task === undefined)
             return;
@@ -3405,6 +3484,7 @@ class DelegationEngine {
             throw conflict;
         }
         run.fallback = true;
+        this.rememberSectionIdentity(run);
         await this.startDirectFallback(run, error);
         return this.runHandleText(run, 'running');
     }
@@ -3451,6 +3531,7 @@ class DelegationEngine {
             return;
         }
         run.reprepared = true;
+        this.rememberSectionIdentity(run);
         await this.markRun(run, 'starting', this.withFallbackDetail(next, 're-prepared while queued'));
     }
     async prepareReview(run) {
@@ -3705,6 +3786,18 @@ class DelegationEngine {
                 !this.queue.ownsIdentity(run.file.id, run.file.identity)) {
                 throw new DiscardedRun('this run no longer owns the current review identity; its completion was discarded');
             }
+            const sectionKey = this.sectionIdentityKey(run);
+            if (sectionKey !== undefined) {
+                const latest = this.sectionIdentities.get(sectionKey);
+                if (latest !== undefined && latest !== run.file.identity) {
+                    throw new DiscardedRun('a newer review identity for this section was admitted; its completion was discarded');
+                }
+            }
+            await this.services.publishHold?.({
+                rule: run.context.rule.id,
+                change: run.context.change.name,
+                ...(run.context.section === undefined ? {} : { section: run.context.section.key }),
+            });
             if (run.context.section !== undefined) {
                 return await this.publishSectionRecordLocked(run, fields);
             }
@@ -3870,7 +3963,7 @@ class DelegationEngine {
                 rule: record.rule,
                 change: record.change,
                 ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
-                ...(record.section === undefined ? {} : { section: record.section }),
+                ...(record.section === undefined ? {} : { section: sanitizeText(record.section, 200) }),
                 ...(record.taskIds === undefined ? {} : { taskIds: record.taskIds }),
                 verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
                 digest: record.digest,
@@ -4422,6 +4515,7 @@ class DelegationEngine {
                 lines.push(`  this session: ${entry === undefined ? 'not involved' : involvementSummary(entry, attributedChecked)}`);
                 if (tasks === undefined)
                     continue;
+                rememberSections(change.name, await readTaskLanes(change.dir));
                 const checked = tasks.filter((task) => task.checked);
                 lines.push(`  tasks: ${checked.length}/${tasks.length} checked`);
                 for (const rule of this.config.rules) {
@@ -4742,6 +4836,9 @@ async function evaluateGate(deps, agent, turn, signal) {
         if (state.record.verdict === 'FINDINGS') {
             return `its FINDINGS record at ${record} is unresolved; fix the findings and re-review`;
         }
+        if (state.record.verdict === 'ERROR' && reviewedInputsChanged(state.record)) {
+            return `its review at ${record} could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review`;
+        }
         return `${state.record.verdict} record at ${record} is stale (recorded ${digestShort(state.record.digest)}, current ${digestShort(expectedDigest)})`;
     };
     const pendingFor = (ruleId, changeName, taskId) => workspaceRoot === undefined
@@ -4817,6 +4914,7 @@ async function evaluateGate(deps, agent, turn, signal) {
             for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
                 let satisfied = false;
                 let findingsOnly = false;
+                let reviewedInputsMoved = false;
                 for (const rule of taskRules) {
                     const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
                     if (reviewer.error === undefined &&
@@ -4828,6 +4926,11 @@ async function evaluateGate(deps, agent, turn, signal) {
                     }
                     if (state.kind === 'record' && state.record.verdict === 'FINDINGS')
                         findingsOnly = true;
+                    if (state.kind === 'record' &&
+                        state.record.verdict === 'ERROR' &&
+                        reviewedInputsChanged(state.record)) {
+                        reviewedInputsMoved = true;
+                    }
                 }
                 if (satisfied)
                     continue;
@@ -4837,9 +4940,11 @@ async function evaluateGate(deps, agent, turn, signal) {
                     ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
                     : pending !== undefined
                         ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
-                        : findingsOnly
-                            ? 'its review record has unresolved findings'
-                            : 'it has no task-review PASS/ERROR record';
+                        : reviewedInputsMoved
+                            ? 'its review could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review'
+                            : findingsOnly
+                                ? 'its review record has unresolved findings'
+                                : 'it has no task-review PASS/ERROR record';
                 const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`;
                 const call = reviewer.error !== undefined
                     ? `repair openspec/${APPROVAL_MARKER_FILE}`
@@ -5469,6 +5574,14 @@ function buildToolDefinitions(engine, config, services) {
             },
         },
     ];
+    // The section labels come from the workspace the engine last inspected, so
+    // the model sees them before choosing a selector instead of by trial.
+    const delegate = definitions[0];
+    Object.defineProperty(delegate, 'description', {
+        enumerable: true,
+        configurable: true,
+        get: () => `${toolDescriptions.delegate}${sectionCatalogNote()}`,
+    });
     if (!config.reviewLearning.enabled)
         return definitions;
     definitions.push({
@@ -5699,6 +5812,7 @@ export function apply(ctx, config = {}, options = {}) {
         ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
         ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
         ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
+        ...(options.publishHold === undefined ? {} : { publishHold: options.publishHold }),
     };
     const engine = new DelegationEngine(validated, services);
     services.pendingReview = (workspaceRoot, ruleId, change, taskId) => engine.pendingReview(workspaceRoot, ruleId, change, taskId);

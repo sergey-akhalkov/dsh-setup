@@ -211,6 +211,7 @@ describe('bundled prompts', () => {
     }
     expect(docs).toContain('the archive gate are unchanged')
     expect(docs).toContain('installs the regenerated setup')
+    expect(skill).toContain('Every section finding names the affected task')
     expect(toolDescriptions.delegate).toContain('section')
     expect(toolDescriptions.delegate).toContain('1.x')
   })
