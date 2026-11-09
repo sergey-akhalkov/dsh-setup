@@ -687,11 +687,14 @@ function verifyCheck(context, item) {
         .filter((candidate) => candidate.ok !== false &&
         candidate.exitCode === 0 &&
         candidate.timedOut !== true &&
+        candidate.aborted !== true &&
         candidate.signal === undefined &&
         candidate.sandboxDenied !== true)
         .reduce((last, candidate) => (last === undefined || candidate.at >= last.at ? candidate : last), undefined);
     const latest = afterWrite.reduce((last, candidate) => candidate.at >= last.at ? candidate : last);
     if (successful === undefined) {
+        if (latest.aborted === true)
+            return checkFailure(`"${latest.command}" was cancelled`, item);
         if (latest.timedOut === true)
             return checkFailure(`"${latest.command}" timed out`, item);
         if (latest.signal !== undefined) {

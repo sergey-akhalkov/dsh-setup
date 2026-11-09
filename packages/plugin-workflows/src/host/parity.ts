@@ -920,14 +920,22 @@ export function checkpointCloseIssue(input: {
   } else {
     return `bottleneck "${id}" has an unknown action "${action}"; use worker_start, lead_action, or user_decision`
   }
-  // An amended bottleneck has not been watched for the recorded time; only
-  // the unchanged record keeps its age.
-  const age =
-    rawArguments?.bottleneck !== undefined
-      ? 0
-      : typeof record.bottleneckAge === 'number'
-        ? record.bottleneckAge
-        : 0
+  // A changed bottleneck has not been watched for the recorded time; the
+  // model restates the same object on a successful call, which keeps its age.
+  const amendedBottleneck = rawArguments?.bottleneck
+  const changedBottleneck =
+    isRecord(amendedBottleneck) && isRecord(record.bottleneck)
+      ? ['id', 'action', 'owner', 'blockingLanes', 'targets'].some(
+          (key) =>
+            JSON.stringify(amendedBottleneck[key]) !==
+            JSON.stringify((record.bottleneck as Record<string, unknown> | undefined)?.[key]),
+        )
+      : false
+  const age = changedBottleneck
+    ? 0
+    : typeof record.bottleneckAge === 'number'
+      ? record.bottleneckAge
+      : 0
   if (
     age >= input.bottleneckAge &&
     record.bottleneckChanged !== true &&

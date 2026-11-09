@@ -892,6 +892,7 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
         candidate.ok !== false &&
         candidate.exitCode === 0 &&
         candidate.timedOut !== true &&
+        candidate.aborted !== true &&
         candidate.signal === undefined &&
         candidate.sandboxDenied !== true,
     )
@@ -903,6 +904,7 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
     candidate.at >= last.at ? candidate : last,
   )
   if (successful === undefined) {
+    if (latest.aborted === true) return checkFailure(`"${latest.command}" was cancelled`, item)
     if (latest.timedOut === true) return checkFailure(`"${latest.command}" timed out`, item)
     if (latest.signal !== undefined) {
       return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item)
