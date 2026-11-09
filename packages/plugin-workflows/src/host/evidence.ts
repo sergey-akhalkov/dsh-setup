@@ -79,6 +79,8 @@ export interface ShellResultObservation {
   readonly exitCode: number
   readonly foreground: boolean
   readonly signal?: string
+  /** The shell tool reported the model cancelled the call. */
+  readonly aborted?: boolean
   readonly timedOut?: boolean
   readonly sandboxDenied?: boolean
   /** The run's resolved working directory; when present it must be the workspace. */
@@ -801,9 +803,11 @@ export function lastCodeWriteAt(
   return last
 }
 
-/** The legacy command comparison: trim, then strip at most one leading `rtk `. */
-function normalizeCheckCommand(value: string): string {
-  return value.trim().replace(/^rtk\s+/u, '')
+/** The legacy command matcher: the invocation matches a configured command
+ * directly, or after removing one leading rtk wrapper from the invocation. */
+export function commandMatches(configured: string, invocation: string): boolean {
+  const command = invocation.trim()
+  return configured === command || configured === command.replace(/^rtk\s+/u, '')
 }
 
 function shownCommands(commands: readonly string[]): string {
@@ -848,11 +852,11 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
       },
     }
   }
-  const accepted = new Set(commands.map(normalizeCheckCommand))
+  const accepted = commands
   const results = (context.shellResults ?? []).filter(
     (candidate) =>
       candidate.foreground &&
-      accepted.has(normalizeCheckCommand(candidate.command)) &&
+      accepted.some((configured) => commandMatches(configured, candidate.command)) &&
       (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)),
   )
   // A persisted successful check survives buffer eviction; a later failed
@@ -888,6 +892,7 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
         candidate.ok !== false &&
         candidate.exitCode === 0 &&
         candidate.timedOut !== true &&
+        candidate.aborted !== true &&
         candidate.signal === undefined &&
         candidate.sandboxDenied !== true,
     )
@@ -899,6 +904,7 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
     candidate.at >= last.at ? candidate : last,
   )
   if (successful === undefined) {
+    if (latest.aborted === true) return checkFailure(`"${latest.command}" was cancelled`, item)
     if (latest.timedOut === true) return checkFailure(`"${latest.command}" timed out`, item)
     if (latest.signal !== undefined) {
       return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item)

@@ -476,9 +476,9 @@ describe('obligation engine live proxy', () => {
     const runId = String(intake?.id).replace(/^workflow:/u, '')
     expect(intake?.steps.find((step) => step.id === 'requirements')?.state).toBe('open')
 
-    // 2. The open requirements step refuses the close until the bounded cap,
+    // 2. The open requirements step refuses the close until the per-turn cap,
     // then the close is recorded as one visible violation in the run view.
-    for (const turn of [3, 4, 5, 6]) await turnStop(turn)
+    for (const _ of [1, 2, 3, 4]) await turnStop(3)
     expect(steers.length).toBeGreaterThan(0)
     await waitFor(async () =>
       (await runViews()).some(

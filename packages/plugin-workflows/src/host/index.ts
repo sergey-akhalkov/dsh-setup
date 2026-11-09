@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -30,6 +30,7 @@ import {
 } from './editor-api.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
+  commandMatches,
   ignoredWrite,
   lastCodeWriteAt,
   type ShellResultObservation,
@@ -887,6 +888,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const sessionToolCalls = new Map<string, ToolCallObservation[]>()
   /** A monotonic observation counter; eviction must not reuse sequence numbers. */
   const observationSeq = new Map<string, number>()
+  /** Invocation order per call, so a result recorded later keeps its call order. */
+  const pendingCallSeq = new Map<string, number>()
   const nextObservationSeq = (session: string): number => {
     const next = observationSeq.get(session) ?? 0
     observationSeq.set(session, next + 1)
@@ -1420,7 +1423,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             typeof args.file_path === 'string'
           ) {
             metrics.written += 1
-            if (!ignoredWrite(args.file_path)) {
+            if (!ignoredWrite(resolve(workspace, args.file_path))) {
               metrics.lastWriteAt = journal.time()
               metrics.lastWritePath = args.file_path
             }
@@ -1445,22 +1448,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: isShellTool ? shellOutcome.ok : !result.isError,
           at: journal.time(),
           detail: text.slice(0, 500),
-          seq: nextObservationSeq(sessionId),
+          seq: pendingCallSeq.get(String(exec.callId)) ?? nextObservationSeq(sessionId),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
+        pendingCallSeq.delete(String(exec.callId))
         const command = isShellTool ? shellCommandOf(exec) : undefined
         if (
           command !== undefined &&
           shellOutcome.ok &&
           shellOutcome.background !== true &&
+          shellOutcome.aborted !== true &&
           (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
-          verifySettings.commands.some(
-            (configured) =>
-              configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''),
-          )
+          verifySettings.commands.some((configured) => commandMatches(configured, command))
         ) {
           metrics.lastCheckAt = journal.time()
         }
@@ -1477,6 +1479,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
             ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
             ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
+            ...(shellOutcome.aborted === true ? { aborted: true } : {}),
             ...(shellOutcome.cwd === undefined ? {} : { cwd: shellOutcome.cwd }),
           })
           if (results.length > 50) results.shift()
@@ -1744,6 +1747,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     readonly ok: boolean
     readonly exitCode: number
     readonly timedOut?: boolean
+    readonly aborted?: boolean
     readonly signal?: string
     readonly sandboxDenied?: boolean
     readonly background?: boolean
@@ -1854,12 +1858,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: true,
           at: journal.time(),
           detail: JSON.stringify(first.result).slice(0, 500),
-          seq: nextObservationSeq(sessionId),
+          seq: pendingCallSeq.get(String(request.callId)) ?? nextObservationSeq(sessionId),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
+        pendingCallSeq.delete(String(request.callId))
         const command = request.arguments.command
         if (typeof command === 'string' && (request.name === 'pwsh' || request.name === 'bash')) {
           const results = sessionShellResults.get(sessionId) ?? []
@@ -2064,6 +2069,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       try {
         const agent = exec.agent
         if (agent === undefined) return await next()
+        // Invocation order: a call that started before a checkpoint amendment
+        // but returned after it must not count as a later remedy call.
+        if (workspaceFor(services, agent.session) !== undefined) {
+          pendingCallSeq.set(String(exec.callId), nextObservationSeq(String(agent.session.id)))
+        }
         const workspace = workspaceFor(services, agent.session)
         if (workspace === undefined) return await next()
         let auth = storedAuth
@@ -2502,18 +2512,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ? turnMetrics.get(sessionId)?.lastWriteAt
             : undefined
         if (verifyWriteAt !== undefined) {
-          const normalizeCommand = (value: string): string => value.trim().replace(/^rtk\s+/u, '')
-          const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand))
           const bufferCheckAt = (sessionShellResults.get(sessionId) ?? [])
             .filter(
               (result) =>
                 result.foreground &&
                 result.ok !== false &&
                 result.exitCode === 0 &&
+                result.aborted !== true &&
                 result.signal === undefined &&
                 result.timedOut !== true &&
                 result.sandboxDenied !== true &&
-                configuredCommands.has(normalizeCommand(result.command)) &&
+                verifySettings.commands.some((configured) =>
+                  commandMatches(configured, result.command),
+                ) &&
                 (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)),
             )
             .map((result) => result.at)
@@ -2538,7 +2549,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               ...completedVerify,
               status: 'running',
               updatedAt: journal.time(),
-              turnBlocks: 0,
               steps: completedVerify.steps.map((step) => ({
                 ...(Object.fromEntries(
                   Object.entries(step).filter(([key]) => key !== 'evidence' && key !== 'reason'),
@@ -2654,6 +2664,20 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const current = advanced.get(run.id)
           const definition = definitionOf.get(run.id)
           if (current === undefined || definition === undefined) continue
+          // A prior turn's retro obligation is obsolete: work_checkpoint only
+          // writes the current turn's record, so supersede it (keeping its
+          // violation history) instead of demanding the old record forever.
+          if (
+            run.definition === 'retro' &&
+            (run.status === 'running' || run.status === 'blocked') &&
+            typeof run.context.checkpoint === 'string' &&
+            checkpointTurnOf(run.context.checkpoint) !== payload.turn
+          ) {
+            const superseded = { ...run, status: 'cancelled' as const, updatedAt: journal.time() }
+            await writeRun(workspace, superseded, auth)
+            ordered.splice(ordered.indexOf(run), 1, superseded)
+            continue
+          }
           const sessionCalls = sessionToolCalls.get(sessionId) ?? []
           const observations = sessionCalls.map((call) => ({
             toolName: call.name,
@@ -2749,13 +2773,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               checkpointApplicability.bottleneckAge,
               checkpointOptions(payload.turn),
             )
-            const blocks = currentRetro.turnBlocks ?? 0
+            const blocks =
+              currentRetro.turnBlocksTurn === payload.turn ? (currentRetro.turnBlocks ?? 0) : 0
             const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3
             const alreadyUnchecked = (currentRetro.violations ?? []).some(
               (violation) => violation.reason?.includes('checkpoint freshness refused') === true,
             )
             if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
-              await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth)
+              await writeRun(
+                workspace,
+                {
+                  ...incrementTurnBlocks(currentRetro, journal.time()),
+                  turnBlocksTurn: payload.turn,
+                },
+                auth,
+              )
               payload.agent.steer({
                 id: randomUUID(),
                 role: 'user',
@@ -2763,13 +2795,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 source: { kind: 'workflows-gate' },
               } as never)
               refusedThisClose = true
-            } else if (issue !== undefined && !alreadyUnchecked && blocks >= limit) {
+            } else if (issue !== undefined && blocks === limit) {
               const violated = addViolation(
                 currentRetro,
                 `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`,
                 { at: journal.time() },
               )
-              await writeRun(workspace, violated, auth)
+              await writeRun(
+                workspace,
+                { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 },
+                auth,
+              )
               payload.agent.steer({
                 id: randomUUID(),
                 role: 'user',

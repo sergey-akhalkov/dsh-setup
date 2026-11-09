@@ -34,16 +34,23 @@ export function evaluateTurnClose(input) {
         }
         // A failed task-review dispatch is an unresolved obligation: it must not
         // let the run terminal-allow before the review retry path is used.
+        const blocksForTurn = (run) => run.turnBlocksTurn === input.turn ? (run.turnBlocks ?? 0) : 0;
+        // A new turn starts from zero, not from the previous turn's count.
+        const budgetRun = (run) => run.turnBlocksTurn === input.turn ? run : { ...run, turnBlocks: 0 };
+        const markTurn = (run) => ({
+            ...run,
+            turnBlocksTurn: input.turn,
+        });
         if (input.definition.id === 'task-review') {
             const failed = input.definition.steps.find((step) => step.blockTurnClose === true &&
                 input.run.steps.find((entry) => entry.id === step.id)?.state === 'failed');
             if (failed !== undefined) {
-                const blocks = input.run.turnBlocks ?? 0;
+                const blocks = blocksForTurn(input.run);
                 if (blocks >= input.maxBlocks) {
                     const detail = `step "${failed.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`;
                     return {
                         kind: 'violation',
-                        run: addViolation(input.run, detail, { step: failed.id, at }),
+                        run: markTurn(addViolation(input.run, detail, { step: failed.id, at })),
                         detail,
                     };
                 }
@@ -51,7 +58,7 @@ export function evaluateTurnClose(input) {
                 input.agent.steer(text);
                 return {
                     kind: 'refuse',
-                    run: incrementTurnBlocks(input.run, at),
+                    run: markTurn(incrementTurnBlocks(input.run, at)),
                     stepId: failed.id,
                     text,
                 };
@@ -67,6 +74,8 @@ export function evaluateTurnClose(input) {
                 reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
             };
         }
+        // The maxBlocks budget is per turn: a new turn starts a fresh budget, so a
+        // capped run never suppresses the obligation on a later turn.
         const step = selectBlockingStep(input.run, input.definition, input.installedLegacy, input.enabledLegacy);
         // A host-computed owned decision (completion coverage or the checkpoint
         // remedy/age rule) refuses before the generic step walk.
@@ -75,15 +84,15 @@ export function evaluateTurnClose(input) {
                 ? (input.completion.text ?? 'the completion coverage is incomplete')
                 : undefined);
         if (ownedText !== undefined && step === undefined) {
-            const blocks = input.run.turnBlocks ?? 0;
+            const blocks = blocksForTurn(input.run);
             if (blocks >= input.maxBlocks) {
                 const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`;
-                const run = addViolation(input.run, detail, { at });
+                const run = markTurn(addViolation(input.run, detail, { at }));
                 return { kind: 'violation', run, detail };
             }
             return {
                 kind: 'refuse',
-                run: incrementTurnBlocks(input.run, at),
+                run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
                 stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
                 text: ownedText,
             };
@@ -95,14 +104,20 @@ export function evaluateTurnClose(input) {
                 reason: 'no open blockTurnClose step is owned by this engine',
             };
         }
-        const blocks = input.run.turnBlocks ?? 0;
+        const blocks = blocksForTurn(input.run);
         if (blocks >= input.maxBlocks) {
             const detail = `turn close was refused ${String(blocks)} time(s) with step "${step.id}" open; the close is allowed once as a VIOLATION, never as a pass`;
-            const run = resetStepAttempts(addViolation(input.run, detail, { step: step.id, at }), step.id);
+            const run = markTurn(resetStepAttempts(addViolation(input.run, detail, { step: step.id, at }), step.id));
             return { kind: 'violation', run, detail };
         }
+        // A new turn also starts a fresh request budget: without this reset the
+        // previous turn's attempts would hit the request bound before the fresh
+        // maxBlocks budget could steer.
+        const steeringRun = input.run.turnBlocksTurn === input.turn
+            ? input.run
+            : resetStepAttempts(budgetRun(input.run), step.id);
         const steered = requestMainStep({
-            run: input.run,
+            run: steeringRun,
             definition: input.definition,
             step,
             agent: input.agent,
@@ -112,26 +127,26 @@ export function evaluateTurnClose(input) {
             ...(ownedText === undefined ? {} : { note: ownedText }),
             now: at,
         });
-        const run = incrementTurnBlocks(steered.run, at);
+        const run = markTurn(incrementTurnBlocks(steered.run, at));
         if (!steered.steered) {
             if (steered.reason.includes('request bound')) {
                 const detail = `step "${step.id}" reached its request bound; the close is allowed once as a VIOLATION, never as a pass`;
                 const recorded = addViolation(input.run, detail, { step: step.id, at });
                 return {
                     kind: 'violation',
-                    run: resetStepAttempts(recorded, step.id),
+                    run: markTurn(resetStepAttempts(recorded, step.id)),
                     detail,
                 };
             }
             // A failed dispatch stays an obligation until the run advances/retries;
             // never let the close pass silently on the failed step.
             if (steered.reason.includes('already failed')) {
-                const blocks = input.run.turnBlocks ?? 0;
+                const blocks = blocksForTurn(input.run);
                 if (blocks >= input.maxBlocks) {
                     const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`;
                     return {
                         kind: 'violation',
-                        run: addViolation(input.run, detail, { step: step.id, at }),
+                        run: markTurn(addViolation(input.run, detail, { step: step.id, at })),
                         detail,
                     };
                 }

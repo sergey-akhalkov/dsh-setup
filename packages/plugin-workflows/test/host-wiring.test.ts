@@ -2,6 +2,27 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const parityMock = vi.hoisted(() => ({
+  active: false,
+  report: undefined as unknown,
+  error: undefined as string | undefined,
+  path: undefined as string | undefined,
+}))
+vi.mock('../src/host/parity.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/host/parity.ts')>()
+  return {
+    ...actual,
+    readParityReport: (file?: string) =>
+      parityMock.active
+        ? parityMock.report === undefined
+          ? { error: parityMock.error ?? 'missing' }
+          : { report: parityMock.report }
+        : actual.readParityReport(file),
+    shippedParityReportPath: () => parityMock.path ?? actual.shippedParityReportPath(),
+  }
+})
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { apply, definitionEventsOf } from '../src/host/index.ts'
@@ -841,7 +862,7 @@ describe('verify auto-start', () => {
         agent: host.agent,
         callId: 'write-2',
         name: 'write',
-        arguments: { file_path: 'src/app.ts' },
+        arguments: { file_path: '.tmp/../src/app.ts' },
       },
       { isError: false, content: [{ type: 'text', text: 'ok' }] },
     )
@@ -908,12 +929,90 @@ describe('checkpoint rollback', () => {
   })
 })
 
-describe('parity report refusal at runtime', () => {
-  const runReport = async (file: string | undefined): Promise<string[]> => {
+describe('verify command contract', () => {
+  it('does not accept an unconfigured rtk-prefixed invocation', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
-    const previous = process.env.DSH_WORKFLOWS_PARITY_REPORT
-    if (file === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
-    else process.env.DSH_WORKFLOWS_PARITY_REPORT = file
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['rtk pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const shell = (callId: string, command: string) =>
+      host.emit(
+        'tools/result',
+        { agent: host.agent, callId, name: 'pwsh', arguments: { command } },
+        {
+          isError: false,
+          content: [{ type: 'text', text: 'ok' }],
+          value: {
+            kind: 'foreground',
+            cwd: workspace,
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            aborted: false,
+            timeoutMs: 120_000,
+            stdout: { text: '', truncated: false },
+            stderr: { text: '', truncated: false },
+          },
+        },
+      )
+    await shell('check-1', 'pnpm check')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBeGreaterThan(0)
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const verify = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'verify',
+    )
+    expect(verify?.status).not.toBe('completed')
+    await shell('check-2', 'rtk pnpm check')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const settled = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'verify',
+    )
+    expect(settled?.status).toBe('completed')
+  })
+})
+
+describe('parity report refusal at runtime', () => {
+  const runReport = async (variant?: {
+    report?: unknown
+    error?: string
+    path?: string
+    external?: string
+  }): Promise<string[]> => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    parityMock.active = variant !== undefined
+    parityMock.report = variant?.report
+    parityMock.error = variant?.error
+    parityMock.path = variant?.path
+    if (variant?.external !== undefined) {
+      process.env.DSH_WORKFLOWS_PARITY_REPORT = variant.external
+    }
     try {
       const workspace = await tempWorkspace()
       const host = fakeHost(workspace)
@@ -950,8 +1049,11 @@ describe('parity report refusal at runtime', () => {
       const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
       return (await runs.listAuthenticatedRuns(workspace, auth)).map((entry) => entry.definition.id)
     } finally {
-      if (previous === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
-      else process.env.DSH_WORKFLOWS_PARITY_REPORT = previous
+      parityMock.active = false
+      parityMock.report = undefined
+      parityMock.error = undefined
+      parityMock.path = undefined
+      delete process.env.DSH_WORKFLOWS_PARITY_REPORT
     }
   }
 
@@ -972,11 +1074,22 @@ describe('parity report refusal at runtime', () => {
     }
     await writeFile(failed, JSON.stringify(failedReport), 'utf8')
     await writeFile(mismatch, JSON.stringify(mismatchReport), 'utf8')
-    for (const file of [missing, failed, mismatch]) {
-      const definitions = await runReport(file)
+    const valid = join(directory, 'valid.json')
+    await writeFile(valid, JSON.stringify(report), 'utf8')
+    for (const variant of [
+      { error: 'missing', path: missing },
+      { report: failedReport, path: failed },
+      { report: mismatchReport, path: mismatch },
+    ]) {
+      const definitions = await runReport(variant)
       expect(definitions).not.toContain('verify')
       expect(definitions).not.toContain('retro')
     }
+    // An external report override cannot rescue a missing packaged report: the
+    // production loader only reads the packaged path.
+    const rescued = await runReport({ error: 'missing', path: missing, external: valid })
+    expect(rescued).not.toContain('verify')
+    expect(rescued).not.toContain('retro')
   })
 
   it('loads with the shipped report and honors profile maxBlocks 129', async () => {

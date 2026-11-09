@@ -104,10 +104,6 @@ export function parityAssetDirectory(): string {
 }
 
 export function shippedParityReportPath(): string {
-  // Test seam: the release check always uses the shipped asset unless a host
-  // sets this override explicitly for loader-refusal regressions.
-  const override = process.env.DSH_WORKFLOWS_PARITY_REPORT
-  if (override !== undefined && override !== '') return override
   return join(parityAssetDirectory(), PARITY_REPORT_NAME)
 }
 
@@ -864,7 +860,14 @@ export function checkpointCloseIssue(input: {
     )
   })
   const stale = input.fresh === false
-  const outcome = typeof record.outcome === 'string' ? record.outcome : ''
+  // The producer can fail to overwrite an older done record; the latest
+  // validated arguments are the authoritative attempted outcome.
+  const outcome =
+    typeof rawArguments?.outcome === 'string'
+      ? rawArguments.outcome
+      : typeof record.outcome === 'string'
+        ? record.outcome
+        : ''
   if (outcome !== 'continue') {
     return stale
       ? 'the checkpoint is older than the configured step interval; call work_checkpoint again before the close'
@@ -917,7 +920,35 @@ export function checkpointCloseIssue(input: {
   } else {
     return `bottleneck "${id}" has an unknown action "${action}"; use worker_start, lead_action, or user_decision`
   }
-  const age = typeof record.bottleneckAge === 'number' ? record.bottleneckAge : 0
+  // A changed bottleneck has not been watched for the recorded time; the
+  // model restates the same object on a successful call, which keeps its age.
+  // Compare normalized fields so equivalent spellings are not a change.
+  const amendedBottleneck = rawArguments?.bottleneck
+  const normalizeBottleneck = (value: Record<string, unknown>): string => {
+    const normalizedPath = (entry: unknown): unknown =>
+      typeof entry === 'string'
+        ? entry.replaceAll('\\', '/').replace(/\/+$/u, '')
+        : entry
+    const sorted = (entry: unknown): unknown =>
+      Array.isArray(entry) ? [...entry].map(normalizedPath).map(String).sort() : entry
+    return JSON.stringify({
+      id: typeof value.id === 'string' ? value.id.trim() : value.id,
+      action: value.action,
+      owner: value.owner,
+      blockingLanes: sorted(value.blockingLanes),
+      targets: sorted(value.targets),
+    })
+  }
+  const changedBottleneck =
+    isRecord(amendedBottleneck) && isRecord(record.bottleneck)
+      ? normalizeBottleneck(amendedBottleneck) !==
+        normalizeBottleneck(record.bottleneck as Record<string, unknown>)
+      : false
+  const age = changedBottleneck
+    ? 0
+    : typeof record.bottleneckAge === 'number'
+      ? record.bottleneckAge
+      : 0
   if (
     age >= input.bottleneckAge &&
     record.bottleneckChanged !== true &&
@@ -988,7 +1019,10 @@ export function checkpointGateIssue(
       : ''
   const lastCheckpointCall = observations
     .filter((entry) => entry.ok && entry.toolName === 'work_checkpoint')
-    .at(-1)
+    .reduce<(typeof observations)[number] | undefined>(
+      (last, entry) => (last === undefined || (entry.seq ?? 0) >= (last.seq ?? 0) ? entry : last),
+      undefined,
+    )
   const toolArguments = lastCheckpointCall?.arguments
   const issue = checkpointCloseIssue({
     record,

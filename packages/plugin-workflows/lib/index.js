@@ -1,16 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { adoptChange } from './adoption.js';
 import { registerWorkflowRoutes } from './api.js';
 import { installDefinition, loadApprovedDefinitions } from './approval-store.js';
 import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
-import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
-import { ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
+import { commandMatches, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose, } from './gates.js';
@@ -543,7 +542,7 @@ export function apply(ctx, config = {}) {
         try {
             const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event);
             const run = createRun({
-                definition: { id: definition.id, name: definition.name, version: definition.version },
+                definition: definition.id,
                 trigger: definition.trigger.kind,
                 session: event.session ?? '',
                 workspace,
@@ -671,6 +670,8 @@ export function apply(ctx, config = {}) {
     const sessionToolCalls = new Map();
     /** A monotonic observation counter; eviction must not reuse sequence numbers. */
     const observationSeq = new Map();
+    /** Invocation order per call, so a result recorded later keeps its call order. */
+    const pendingCallSeq = new Map();
     const nextObservationSeq = (session) => {
         const next = observationSeq.get(session) ?? 0;
         observationSeq.set(session, next + 1);
@@ -870,7 +871,7 @@ export function apply(ctx, config = {}) {
                     if (row.reason !== 'not-applicable')
                         continue;
                     const definitionId = row.id.slice('definition:'.length);
-                    const existing = knownRuns.find((run) => run.definition.id === definitionId &&
+                    const existing = knownRuns.find((run) => run.definition === definitionId &&
                         run.session === input.session &&
                         (run.status === 'running' || run.status === 'blocked'));
                     if (existing === undefined)
@@ -1048,11 +1049,7 @@ export function apply(ctx, config = {}) {
                                             turn: payload.turn,
                                         });
                                         const run = createRun({
-                                            definition: {
-                                                id: definition.id,
-                                                name: definition.name,
-                                                version: definition.version,
-                                            },
+                                            definition: definition.id,
                                             trigger: 'intent',
                                             session: sessionId,
                                             workspace: activeWorkspace,
@@ -1148,7 +1145,7 @@ export function apply(ctx, config = {}) {
                 if ((exec.name === 'write' || exec.name === 'edit') &&
                     typeof args.file_path === 'string') {
                     metrics.written += 1;
-                    if (!ignoredWrite(args.file_path)) {
+                    if (!ignoredWrite(resolve(workspace, args.file_path))) {
                         metrics.lastWriteAt = journal.time();
                         metrics.lastWritePath = args.file_path;
                     }
@@ -1171,19 +1168,21 @@ export function apply(ctx, config = {}) {
                 ok: isShellTool ? shellOutcome.ok : !result.isError,
                 at: journal.time(),
                 detail: text.slice(0, 500),
-                seq: nextObservationSeq(sessionId),
+                seq: pendingCallSeq.get(String(exec.callId)) ?? nextObservationSeq(sessionId),
                 ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
                 ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
             });
             if (observed.length > 100)
                 observed.shift();
             sessionToolCalls.set(sessionId, observed);
+            pendingCallSeq.delete(String(exec.callId));
             const command = isShellTool ? shellCommandOf(exec) : undefined;
             if (command !== undefined &&
                 shellOutcome.ok &&
                 shellOutcome.background !== true &&
+                shellOutcome.aborted !== true &&
                 (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
-                verifySettings.commands.some((configured) => configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''))) {
+                verifySettings.commands.some((configured) => commandMatches(configured, command))) {
                 metrics.lastCheckAt = journal.time();
             }
             // A background or unreadable shell result cannot satisfy a check.
@@ -1199,6 +1198,7 @@ export function apply(ctx, config = {}) {
                     ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
                     ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
                     ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
+                    ...(shellOutcome.aborted === true ? { aborted: true } : {}),
                     ...(shellOutcome.cwd === undefined ? {} : { cwd: shellOutcome.cwd }),
                 });
                 if (results.length > 50)
@@ -1540,13 +1540,14 @@ export function apply(ctx, config = {}) {
                     ok: true,
                     at: journal.time(),
                     detail: JSON.stringify(first.result).slice(0, 500),
-                    seq: nextObservationSeq(sessionId),
+                    seq: pendingCallSeq.get(String(request.callId)) ?? nextObservationSeq(sessionId),
                     ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
                     ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
                 });
                 if (observed.length > 100)
                     observed.shift();
                 sessionToolCalls.set(sessionId, observed);
+                pendingCallSeq.delete(String(request.callId));
                 const command = request.arguments.command;
                 if (typeof command === 'string' && (request.name === 'pwsh' || request.name === 'bash')) {
                     const results = sessionShellResults.get(sessionId) ?? [];
@@ -1661,7 +1662,7 @@ export function apply(ctx, config = {}) {
         reserveStart(workspace);
         try {
             const run = createRun({
-                definition: { id: definition.id, name: definition.name, version: definition.version },
+                definition: definition.id,
                 trigger: definition.trigger.kind,
                 session: sessionId,
                 workspace,
@@ -1726,6 +1727,11 @@ export function apply(ctx, config = {}) {
             const agent = exec.agent;
             if (agent === undefined)
                 return await next();
+            // Invocation order: a call that started before a checkpoint amendment
+            // but returned after it must not count as a later remedy call.
+            if (workspaceFor(services, agent.session) !== undefined) {
+                pendingCallSeq.set(String(exec.callId), nextObservationSeq(String(agent.session.id)));
+            }
             const workspace = workspaceFor(services, agent.session);
             if (workspace === undefined)
                 return await next();
@@ -2130,23 +2136,22 @@ export function apply(ctx, config = {}) {
                 ? turnMetrics.get(sessionId)?.lastWriteAt
                 : undefined;
             if (verifyWriteAt !== undefined) {
-                const normalizeCommand = (value) => value.trim().replace(/^rtk\s+/u, '');
-                const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand));
                 const bufferCheckAt = (sessionShellResults.get(sessionId) ?? [])
                     .filter((result) => result.foreground &&
                     result.ok !== false &&
                     result.exitCode === 0 &&
+                    result.aborted !== true &&
                     result.signal === undefined &&
                     result.timedOut !== true &&
                     result.sandboxDenied !== true &&
-                    configuredCommands.has(normalizeCommand(result.command)) &&
+                    verifySettings.commands.some((configured) => commandMatches(configured, result.command)) &&
                     (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)))
                     .map((result) => result.at)
                     .sort((left, right) => right - left)[0];
                 const metricsCheckAt = turnMetrics.get(sessionId)?.lastCheckAt;
                 const checkTimes = [bufferCheckAt, metricsCheckAt].filter((entry) => entry !== undefined);
                 const lastCheckAt = checkTimes.length === 0 ? undefined : Math.max(...checkTimes);
-                const completedVerify = runs.find((run) => run.definition.id === 'verify' &&
+                const completedVerify = runs.find((run) => run.definition === 'verify' &&
                     run.session === sessionId &&
                     run.status === 'completed' &&
                     Number(run.dedupeKey?.split('\u0000').at(-1)) === payload.turn);
@@ -2156,7 +2161,6 @@ export function apply(ctx, config = {}) {
                         ...completedVerify,
                         status: 'running',
                         updatedAt: journal.time(),
-                        turnBlocks: 0,
                         steps: completedVerify.steps.map((step) => ({
                             ...Object.fromEntries(Object.entries(step).filter(([key]) => key !== 'evidence' && key !== 'reason')),
                             state: 'open',
@@ -2217,7 +2221,7 @@ export function apply(ctx, config = {}) {
             const advanced = new Map();
             const definitionOf = new Map();
             for (const run of ordered) {
-                const definition = definitions.find((entry) => entry.id === run.definition.id);
+                const definition = definitions.find((entry) => entry.id === run.definition);
                 if (definition === undefined)
                     continue;
                 // A retro run must not complete on the record alone: while the host
@@ -2242,6 +2246,18 @@ export function apply(ctx, config = {}) {
                 const definition = definitionOf.get(run.id);
                 if (current === undefined || definition === undefined)
                     continue;
+                // A prior turn's retro obligation is obsolete: work_checkpoint only
+                // writes the current turn's record, so supersede it (keeping its
+                // violation history) instead of demanding the old record forever.
+                if (run.definition === 'retro' &&
+                    (run.status === 'running' || run.status === 'blocked') &&
+                    typeof run.context.checkpoint === 'string' &&
+                    checkpointTurnOf(run.context.checkpoint) !== payload.turn) {
+                    const superseded = { ...run, status: 'cancelled', updatedAt: journal.time() };
+                    await writeRun(workspace, superseded, auth);
+                    ordered.splice(ordered.indexOf(run), 1, superseded);
+                    continue;
+                }
                 const sessionCalls = sessionToolCalls.get(sessionId) ?? [];
                 const observations = sessionCalls.map((call) => ({
                     toolName: call.name,
@@ -2313,18 +2329,20 @@ export function apply(ctx, config = {}) {
             // later in the same turn: re-check the current-turn record on every
             // close and steer when the obligation reappears.
             if (!refusedThisClose && workflowOwnsCheckpoint) {
-                const currentRetro = runs.find((run) => run.definition.id === 'retro' &&
+                const currentRetro = runs.find((run) => run.definition === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn &&
                     run.session === sessionId &&
                     run.status !== 'cancelled');
                 if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
                     const issue = checkpointGateIssue(workspace, currentRetro.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
-                    const blocks = currentRetro.turnBlocks ?? 0;
+                    const blocks = currentRetro.turnBlocksTurn === payload.turn ? (currentRetro.turnBlocks ?? 0) : 0;
                     const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3;
-                    const alreadyUnchecked = (currentRetro.violations ?? []).some((violation) => violation.reason?.includes('checkpoint freshness refused') === true);
-                    if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
-                        await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth);
+                    if (issue !== undefined && blocks < limit) {
+                        await writeRun(workspace, {
+                            ...incrementTurnBlocks(currentRetro, journal.time()),
+                            turnBlocksTurn: payload.turn,
+                        }, auth);
                         payload.agent.steer({
                             id: randomUUID(),
                             role: 'user',
@@ -2333,9 +2351,9 @@ export function apply(ctx, config = {}) {
                         });
                         refusedThisClose = true;
                     }
-                    else if (issue !== undefined && !alreadyUnchecked && blocks >= limit) {
+                    else if (issue !== undefined && blocks === limit) {
                         const violated = addViolation(currentRetro, `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`, { at: journal.time() });
-                        await writeRun(workspace, violated, auth);
+                        await writeRun(workspace, { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 }, auth);
                         payload.agent.steer({
                             id: randomUUID(),
                             role: 'user',
@@ -2506,7 +2524,7 @@ export function apply(ctx, config = {}) {
                         const run = await readAuthenticatedRun(workspace, runId, auth);
                         if (run === undefined)
                             return;
-                        const definition = definitions.find((entry) => entry.id === run.definition.id);
+                        const definition = definitions.find((entry) => entry.id === run.definition);
                         if (definition === undefined)
                             return;
                         const step = definition.steps.find((entry) => entry.id === pendingStep(run));
@@ -2612,18 +2630,9 @@ export function apply(ctx, config = {}) {
         lastEventAtFor: (session) => sessionEventAt.get(session),
         triggers,
         definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
-        definitionEntriesFor: (workspace) => listEditorDefinitions(workspace),
-        definitionDocumentFor: (workspace, id) => readEditorDefinitionDocument(workspace, id),
         receiptsFor: async (workspace) => {
             const auth = storedAuth;
             return auth === undefined ? [] : listReceipts(workspace, auth);
         },
-    });
-    // The Design mode's write API shares the read API's carrier and host key, so a
-    // saved definition is approved exactly as a `/workflows install` would be.
-    registerEditorRoutes(ctx, {
-        agents: services.agents,
-        workingDirectory: services.workingDirectory,
-        auth: async () => (storedAuth === undefined ? ensureAuth() : storedAuth),
     });
 }

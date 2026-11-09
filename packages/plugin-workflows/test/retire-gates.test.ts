@@ -7,7 +7,7 @@ import {
   loadShippedDefinitions,
   resolveOwnership,
 } from '../src/host/definitions.ts'
-import { verifyEvidence } from '../src/host/evidence.ts'
+import { commandMatches, verifyEvidence } from '../src/host/evidence.ts'
 import { evaluateArchiveGate, evaluateTurnClose } from '../src/host/gates.ts'
 import {
   checkpointCloseIssue,
@@ -926,6 +926,7 @@ describe('owned verification evidence', () => {
         now: 1_000,
       })
       run = settleStep(run, 'check', 'open', { at: 1_001 })
+      run = { ...run, turnBlocksTurn: 1 }
       for (let index = 0; index < blocks; index += 1) run = incrementTurnBlocks(run, 1_001)
       return run
     }
@@ -988,6 +989,19 @@ describe('owned verification evidence', () => {
       run = outcome.run
     }
     expect(kinds).toEqual(['refuse', 'refuse', 'refuse', 'violation', 'violation'])
+    // A later turn starts a fresh budget: the capped turn does not suppress it.
+    const nextTurn = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 2,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+      checkpointIssue: { text: 'execute the bottleneck remedy' },
+    })
+    expect(nextTurn.kind).toBe('refuse')
   })
 
   it('bounds a very long written path in the refusal', () => {
@@ -1075,6 +1089,67 @@ describe('owned verification evidence', () => {
       workspace,
     })
     expect(issue).toBeUndefined()
+  })
+
+  it('uses the latest attempted checkpoint outcome over a stale record', () => {
+    const issue = checkpointCloseIssue({
+      record: {
+        outcome: 'done',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'worker',
+          action: 'worker_start',
+          blockingLanes: ['edit'],
+          targets: ['.'],
+        },
+      },
+      checkpointArguments: { outcome: 'continue' },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [],
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: false,
+      workspace: '/repo/app',
+    })
+    expect(issue).toContain('execute the bottleneck remedy')
+  })
+
+  it('does not treat a call that started before the checkpoint as later', () => {
+    const issue = checkpointCloseIssue({
+      record: {
+        outcome: 'continue',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'worker',
+          action: 'worker_start',
+          blockingLanes: ['edit'],
+          targets: ['.'],
+        },
+      },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        { toolName: 'spawn_teammate', arguments: {}, ok: true, seq: 3, detail: 'started' },
+      ],
+      checkpointSeq: 5,
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: false,
+      workspace: '/repo/app',
+    })
+    expect(issue).toContain('execute the bottleneck remedy')
+  })
+
+  it('matches the legacy rtk wrapper contract', () => {
+    expect(commandMatches('pnpm check', 'pnpm check')).toBe(true)
+    expect(commandMatches('pnpm check', 'rtk pnpm check')).toBe(true)
+    expect(commandMatches('rtk pnpm check', 'rtk rtk pnpm check')).toBe(true)
+    expect(commandMatches('rtk pnpm check', 'pnpm check')).toBe(false)
   })
 
   it('requires a passing configured command after the last code write', async () => {
