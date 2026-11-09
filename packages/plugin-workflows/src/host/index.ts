@@ -71,6 +71,7 @@ import { registerActiveRunsContext } from './prompt.js'
 import { listReceipts } from './receipts.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
+  addViolation,
   completeNotApplicable,
   createRun,
   DEFAULT_MAX_RUNS,
@@ -873,6 +874,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
   /** The current pre-step index per session, for checkpoint freshness. */
   const turnSteps = new Map<string, number>()
+  /** Per-session, per-turn fresh-checkpoint refusal budget for the recheck. */
+  const retroStaleBlocks = new Map<string, number>()
   /** The checked task ids last seen per session and change, for the delta. */
   const checkedTasksSeen = new Map<string, ReadonlySet<string>>()
   /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -2482,7 +2485,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           return Number.isSafeInteger(turn) ? turn : undefined
         }
         let refusedThisClose = false
-        const retroStaleBlocks = new Map<string, number>()
         // Advance every run first: an owned tool step (the review start) must
         // dispatch for every newly checked task before one close is refused.
         const advanced = new Map<string, WorkflowRun>()
@@ -2591,6 +2593,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               run.definition === 'retro' &&
               typeof run.context.checkpoint === 'string' &&
               checkpointTurnOf(run.context.checkpoint) === payload.turn &&
+              run.session === sessionId &&
               run.status !== 'cancelled',
           )
           if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
@@ -2613,6 +2616,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 source: { kind: 'workflows-gate' },
               } as never)
               refusedThisClose = true
+            } else if (issue !== undefined && blocks === limit) {
+              retroStaleBlocks.set(key, blocks + 1)
+              const violated = addViolation(
+                currentRetro,
+                `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`,
+                { at: journal.time() },
+              )
+              await writeRun(workspace, violated, auth)
+              payload.agent.steer({
+                id: randomUUID(),
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: `Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`,
+                  },
+                ],
+                source: { kind: 'workflows-gate' },
+              } as never)
             }
           }
         }

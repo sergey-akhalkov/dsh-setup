@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Definition } from './definitions.js'
 
@@ -618,24 +618,27 @@ function mentions(value: Readonly<Record<string, unknown>>, wanted: string): boo
   return argumentStrings(value).some((text) => text.includes(wanted))
 }
 
-function normalizePath(value: string): string {
-  const parts: string[] = []
-  for (const part of value.replaceAll('\\', '/').split('/')) {
-    if (part === '' || part === '.') continue
-    if (part === '..') {
-      parts.pop()
-    } else {
-      parts.push(part)
-    }
-  }
-  return parts.join('/')
+/** Resolve one path against the workspace; undefined when it escapes it. */
+function workspacePath(value: string, workspace: string): string | undefined {
+  const normalized = value.replaceAll('\\', '/')
+  const absolute = isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized)
+  const rel = relative(workspace, absolute).replaceAll('\\', '/')
+  if (rel === '') return ''
+  if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return undefined
+  return process.platform === 'win32' ? rel.toLowerCase() : rel
 }
 
 /** A destination matches a target when it is the target or lies beneath it. */
-function targetMatches(targets: readonly string[], destination: string): boolean {
-  const path = normalizePath(destination)
+function targetMatches(
+  targets: readonly string[],
+  destination: string,
+  workspace: string,
+): boolean {
+  const path = workspacePath(destination, workspace)
+  if (path === undefined) return false
   return targets.some((target) => {
-    const wanted = normalizePath(target)
+    const wanted = workspacePath(target, workspace)
+    if (wanted === undefined) return false
     return wanted === '' || path === wanted || path.startsWith(`${wanted}/`)
   })
 }
@@ -703,8 +706,13 @@ function runnableLanes(lanes: readonly LanePlan[]): LanePlan[] {
   })
 }
 
-function scopeOverlaps(left: readonly string[], right: readonly string[]): boolean {
-  const parts = (value: string): string[] => normalizePath(value).split('/').filter(Boolean)
+function scopeOverlaps(
+  left: readonly string[],
+  right: readonly string[],
+  workspace: string,
+): boolean {
+  const parts = (value: string): string[] =>
+    (workspacePath(value, workspace) ?? '\\u0000').split('/').filter(Boolean)
   return left.some((a) =>
     right.some((b) => {
       const x = parts(a)
@@ -717,13 +725,15 @@ function scopeOverlaps(left: readonly string[], right: readonly string[]): boole
   )
 }
 
-function parallelPlan(record: CheckpointCloseRecord): boolean {
+function parallelPlan(record: CheckpointCloseRecord, workspace: string): boolean {
   const runnable = runnableLanes(lanesOf(record))
   for (let i = 0; i < runnable.length; i += 1) {
     for (let j = i + 1; j < runnable.length; j += 1) {
       const left = runnable[i] as LanePlan
       const right = runnable[j] as LanePlan
-      if (left.owner !== right.owner && !scopeOverlaps(left.scope, right.scope)) return true
+      if (left.owner !== right.owner && !scopeOverlaps(left.scope, right.scope, workspace)) {
+        return true
+      }
     }
   }
   return false
@@ -748,7 +758,10 @@ export function checkpointCloseIssue(input: {
   readonly workerVisible?: boolean
   /** Whether the parallel-action gate is enabled; absent means enabled. */
   readonly enforceParallel?: boolean
+  /** The workspace absolute/relative paths resolve against. */
+  readonly workspace?: string
 }): string | undefined {
+  const workspace = input.workspace ?? process.cwd()
   const record = input.record
   if (record === undefined) return undefined
   const later = input.observations.filter(
@@ -769,7 +782,7 @@ export function checkpointCloseIssue(input: {
     !stale &&
     input.enforceParallel !== false &&
     workerVisible &&
-    parallelPlan(record) &&
+    parallelPlan(record, workspace) &&
     !taggedWorkerStart(later, input.checkpointId)
   ) {
     return `the checkpoint has parallel runnable lanes; start one tagged worker whose arguments name "${input.checkpointId}", or amend the plan in a new work_checkpoint`
@@ -798,7 +811,7 @@ export function checkpointCloseIssue(input: {
       (entry) =>
         (entry.toolName === 'edit' || entry.toolName === 'write') &&
         [entry.arguments.path, entry.arguments.file_path].some(
-          (value) => typeof value === 'string' && targetMatches(targets, value),
+          (value) => typeof value === 'string' && targetMatches(targets, value, workspace),
         ),
     )
     if (!matched) {
@@ -886,6 +899,7 @@ export function checkpointGateIssue(
     observations,
     bottleneckAge,
     ...options,
+    workspace,
   })
   return issue === undefined ? undefined : { text: issue }
 }

@@ -707,6 +707,19 @@ describe('retro fresh checkpoint', () => {
     for (let step = 2; step <= 42; step += 1) await emitStep(step)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.steers.length).toBeGreaterThan(before)
+    // The per-session budget persists: three refusals then one UNCHECKED notice.
+    for (let close = 0; close < 4; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    const staleSteers = host.steers
+      .slice(before)
+      .map((message) =>
+        ((message as { content?: Array<{ text?: string }> }).content ?? [])
+          .map((block) => block.text ?? '')
+          .join(''),
+      )
+    expect(staleSteers.filter((text) => text.includes('UNCHECKED')).length).toBe(1)
+    expect(staleSteers.length).toBeLessThanOrEqual(4)
   })
 })
 

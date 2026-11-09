@@ -132,6 +132,53 @@ describe('retirement parity report', () => {
     )
   })
 
+  it('fails when the verify definition stops blocking the close', async () => {
+    const { loadShippedDefinitions } = await import(
+      '../../packages/plugin-workflows/lib/definitions.js'
+    )
+    const { evaluateTurnClose } = await import('../../packages/plugin-workflows/lib/gates.js')
+    const { createRun } = await import('../../packages/plugin-workflows/lib/runs.js')
+    const verify = loadShippedDefinitions().find((entry) => entry.id === 'verify')
+    if (verify === undefined) throw new Error('the verify definition is missing')
+    const unblocked = {
+      ...verify,
+      steps: verify.steps.map((step) => ({ ...step, blockTurnClose: false })),
+    }
+    const crafted = {
+      id: 'verify-without-blocking-close',
+      gate: 'verification' as const,
+      legacy: { decision: 'refuse' as const, reason: 'legacy refuses the unverified close' },
+      workflow: (): Promise<{ decision: 'allow' | 'refuse'; reason: string }> => {
+        const outcome = evaluateTurnClose({
+          run: createRun({
+            definition: 'verify',
+            trigger: 'turn.stopping',
+            session: 'session-1',
+            workspace: '/workspace',
+            context: {},
+            steps: ['check'],
+            now: 1_000,
+          }),
+          definition: unblocked,
+          agent: { steer: () => undefined },
+          evidenceContext: { workspace: '/workspace', values: {} },
+          turn: 1,
+          maxBlocks: 8,
+          installedLegacy: new Set(),
+          enabledLegacy: new Set(),
+        })
+        return Promise.resolve(
+          outcome.kind === 'allow'
+            ? { decision: 'allow', reason: 'the unblocked step closed' }
+            : { decision: 'refuse', reason: 'the step blocked' },
+        )
+      },
+    }
+    const report = await buildParityReport(new Date(), [...PARITY_CASES, crafted])
+    expect(report.mismatches.join('\n')).toContain('verify-without-blocking-close')
+    expect(parityExitCode(report)).toBe(1)
+  })
+
   it('compares allow/refuse decisions and names a deliberate mismatch', async () => {
     const mismatch = {
       id: 'deliberate-mismatch',

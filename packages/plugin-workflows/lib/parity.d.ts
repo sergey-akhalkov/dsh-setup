@@ -127,6 +127,8 @@ export declare function checkpointCloseIssue(input: {
     readonly workerVisible?: boolean;
     /** Whether the parallel-action gate is enabled; absent means enabled. */
     readonly enforceParallel?: boolean;
+    /** The workspace absolute/relative paths resolve against. */
+    readonly workspace?: string;
 }): string | undefined;
 /** The completion branch: applies only when the task list is fully checked. */
 export declare function taskReviewCompletion(workspace: string, change: string): {

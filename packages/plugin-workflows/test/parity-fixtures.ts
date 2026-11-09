@@ -163,7 +163,7 @@ async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecisi
   }
 }
 
-function verifyWorkflow(input: {
+async function verifyWorkflow(input: {
   readonly commands: readonly string[]
   readonly lastWriteAt?: number
   readonly results?: ReadonlyArray<{
@@ -177,18 +177,47 @@ function verifyWorkflow(input: {
     readonly sandboxDenied?: boolean
   }>
 }): Promise<ParityDecision> {
+  const definition = loadVerifyDefinition()
   const evidence: Evidence = { kind: 'check', source: 'verify-settings' }
-  return verifyEvidence(evidence, {
+  const check = await verifyEvidence(evidence, {
     workspace: '/workspace',
     values: {},
     checkCommands: input.commands,
     ...(input.lastWriteAt === undefined ? {} : { lastWriteAt: input.lastWriteAt }),
     shellResults: input.results ?? [],
-  }).then((check) =>
-    check.ok
-      ? { decision: 'allow', reason: 'a configured check passed after the last code write' }
-      : { decision: 'refuse', reason: check.failure.detail },
-  )
+  })
+  let run = createRun({
+    definition: 'verify',
+    trigger: 'turn.stopping',
+    session: 'session-1',
+    workspace: '/workspace',
+    context: {},
+    steps: ['check'],
+    now: 1_000,
+  })
+  if (check.ok) run = settleStep(run, 'check', 'done', { at: 1_001 })
+  const outcome = evaluateTurnClose({
+    run,
+    definition,
+    agent: { steer: () => undefined },
+    evidenceContext: {
+      workspace: '/workspace',
+      values: {},
+      checkCommands: input.commands,
+      ...(input.lastWriteAt === undefined ? {} : { lastWriteAt: input.lastWriteAt }),
+      shellResults: input.results ?? [],
+    },
+    turn: 1,
+    maxBlocks: definition.settings.maxBlocks,
+    installedLegacy: new Set(),
+    enabledLegacy: new Set(),
+  })
+  return outcome.kind === 'allow' || outcome.kind === 'violation'
+    ? {
+        decision: 'allow',
+        reason: check.ok ? 'the shipped verify check passed' : 'the override state allowed',
+      }
+    : { decision: 'refuse', reason: check.ok ? 'the check step is open' : check.failure.detail }
 }
 
 /** Build a throwaway workspace with a change and its approvals, then judge it. */
@@ -440,7 +469,6 @@ function verifyCapDecision(maxBlocks: number, blocks: number): ParityDecision {
     maxBlocks,
     installedLegacy: new Set(),
     enabledLegacy: new Set(),
-    checkpointIssue: { text: 'run the configured check' },
   })
   return outcome.kind === 'violation'
     ? { decision: 'allow', reason: 'the refusal cap allows the close once as a VIOLATION' }

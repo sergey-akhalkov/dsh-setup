@@ -21,7 +21,7 @@ import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifyS
 import { registerActiveRunsContext } from './prompt.js';
 import { listReceipts } from './receipts.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { checkedTaskIds } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, loadCatalog, obligationDedupeKey, } from './triggers.js';
@@ -671,6 +671,8 @@ export function apply(ctx, config = {}) {
     const sessionShellResults = new Map();
     /** The current pre-step index per session, for checkpoint freshness. */
     const turnSteps = new Map();
+    /** Per-session, per-turn fresh-checkpoint refusal budget for the recheck. */
+    const retroStaleBlocks = new Map();
     /** The checked task ids last seen per session and change, for the delta. */
     const checkedTasksSeen = new Map();
     /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -2124,7 +2126,6 @@ export function apply(ctx, config = {}) {
                 return Number.isSafeInteger(turn) ? turn : undefined;
             };
             let refusedThisClose = false;
-            const retroStaleBlocks = new Map();
             // Advance every run first: an owned tool step (the review start) must
             // dispatch for every newly checked task before one close is refused.
             const advanced = new Map();
@@ -2208,6 +2209,7 @@ export function apply(ctx, config = {}) {
                 const currentRetro = runs.find((run) => run.definition === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn &&
+                    run.session === sessionId &&
                     run.status !== 'cancelled');
                 if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
                     const issue = checkpointGateIssue(workspace, currentRetro.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
@@ -2223,6 +2225,22 @@ export function apply(ctx, config = {}) {
                             source: { kind: 'workflows-gate' },
                         });
                         refusedThisClose = true;
+                    }
+                    else if (issue !== undefined && blocks === limit) {
+                        retroStaleBlocks.set(key, blocks + 1);
+                        const violated = addViolation(currentRetro, `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`, { at: journal.time() });
+                        await writeRun(workspace, violated, auth);
+                        payload.agent.steer({
+                            id: randomUUID(),
+                            role: 'user',
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`,
+                                },
+                            ],
+                            source: { kind: 'workflows-gate' },
+                        });
                     }
                 }
             }

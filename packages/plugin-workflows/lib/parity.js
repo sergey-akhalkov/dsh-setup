@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -487,25 +487,26 @@ function argumentStrings(value) {
 function mentions(value, wanted) {
     return argumentStrings(value).some((text) => text.includes(wanted));
 }
-function normalizePath(value) {
-    const parts = [];
-    for (const part of value.replaceAll('\\', '/').split('/')) {
-        if (part === '' || part === '.')
-            continue;
-        if (part === '..') {
-            parts.pop();
-        }
-        else {
-            parts.push(part);
-        }
-    }
-    return parts.join('/');
+/** Resolve one path against the workspace; undefined when it escapes it. */
+function workspacePath(value, workspace) {
+    const normalized = value.replaceAll('\\', '/');
+    const absolute = isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized);
+    const rel = relative(workspace, absolute).replaceAll('\\', '/');
+    if (rel === '')
+        return '';
+    if (rel === '..' || rel.startsWith('../') || isAbsolute(rel))
+        return undefined;
+    return process.platform === 'win32' ? rel.toLowerCase() : rel;
 }
 /** A destination matches a target when it is the target or lies beneath it. */
-function targetMatches(targets, destination) {
-    const path = normalizePath(destination);
+function targetMatches(targets, destination, workspace) {
+    const path = workspacePath(destination, workspace);
+    if (path === undefined)
+        return false;
     return targets.some((target) => {
-        const wanted = normalizePath(target);
+        const wanted = workspacePath(target, workspace);
+        if (wanted === undefined)
+            return false;
         return wanted === '' || path === wanted || path.startsWith(`${wanted}/`);
     });
 }
@@ -558,8 +559,8 @@ function runnableLanes(lanes) {
         return !lane.blockedBy.some((id) => byId.get(id)?.state !== 'done');
     });
 }
-function scopeOverlaps(left, right) {
-    const parts = (value) => normalizePath(value).split('/').filter(Boolean);
+function scopeOverlaps(left, right, workspace) {
+    const parts = (value) => (workspacePath(value, workspace) ?? '\\u0000').split('/').filter(Boolean);
     return left.some((a) => right.some((b) => {
         const x = parts(a);
         const y = parts(b);
@@ -570,14 +571,15 @@ function scopeOverlaps(left, right) {
         return x.slice(0, min).every((part, index) => part === y[index]);
     }));
 }
-function parallelPlan(record) {
+function parallelPlan(record, workspace) {
     const runnable = runnableLanes(lanesOf(record));
     for (let i = 0; i < runnable.length; i += 1) {
         for (let j = i + 1; j < runnable.length; j += 1) {
             const left = runnable[i];
             const right = runnable[j];
-            if (left.owner !== right.owner && !scopeOverlaps(left.scope, right.scope))
+            if (left.owner !== right.owner && !scopeOverlaps(left.scope, right.scope, workspace)) {
                 return true;
+            }
         }
     }
     return false;
@@ -589,6 +591,7 @@ function parallelPlan(record) {
  * the observations the host already recorded.
  */
 export function checkpointCloseIssue(input) {
+    const workspace = input.workspace ?? process.cwd();
     const record = input.record;
     if (record === undefined)
         return undefined;
@@ -606,7 +609,7 @@ export function checkpointCloseIssue(input) {
     if (!stale &&
         input.enforceParallel !== false &&
         workerVisible &&
-        parallelPlan(record) &&
+        parallelPlan(record, workspace) &&
         !taggedWorkerStart(later, input.checkpointId)) {
         return `the checkpoint has parallel runnable lanes; start one tagged worker whose arguments name "${input.checkpointId}", or amend the plan in a new work_checkpoint`;
     }
@@ -632,7 +635,7 @@ export function checkpointCloseIssue(input) {
         }
         const targets = stringList(bottleneck.targets);
         const matched = later.some((entry) => (entry.toolName === 'edit' || entry.toolName === 'write') &&
-            [entry.arguments.path, entry.arguments.file_path].some((value) => typeof value === 'string' && targetMatches(targets, value)));
+            [entry.arguments.path, entry.arguments.file_path].some((value) => typeof value === 'string' && targetMatches(targets, value, workspace)));
         if (!matched) {
             return `execute the bottleneck remedy: write one of the declared targets of bottleneck "${id}" before the close`;
         }
@@ -701,6 +704,7 @@ export function checkpointGateIssue(workspace, checkpointPath, observations, bot
         observations,
         bottleneckAge,
         ...options,
+        workspace,
     });
     return issue === undefined ? undefined : { text: issue };
 }
