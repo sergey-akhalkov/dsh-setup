@@ -68,6 +68,15 @@ describe('always-on contract budget', () => {
     expect(contract).toContain('single-turn, one-line, or informational request is exempt')
   })
 
+  it('names the workflow as the review owner while the tools and records remain', () => {
+    const claims = (contract.split('## Claims are evidence or they are nothing')[1] ?? '').replace(
+      /\s+/g,
+      ' ',
+    )
+    expect(claims).toContain('The workflow owns the review close')
+    expect(claims).toContain('tools and records remain')
+  })
+
   it('carries the lane plan, bottleneck, remedy, and next action in a checkpoint', () => {
     const section = (contract.split('## Recover instead of repeating')[1] ?? '').replace(
       /\s+/g,

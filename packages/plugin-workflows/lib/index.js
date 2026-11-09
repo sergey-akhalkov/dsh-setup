@@ -827,7 +827,8 @@ export function apply(ctx, config = {}) {
                         if (rootSessions.get(input.session) !== true)
                             return false;
                         const calls = (sessionToolCalls.get(input.session) ?? []).filter((call) => call.turn === undefined || call.turn === input.turn);
-                        return lastCodeWriteAt(calls) !== undefined;
+                        return (lastCodeWriteAt(calls) !== undefined ||
+                            (metrics?.turn === input.turn && metrics?.lastWriteAt !== undefined));
                     }
                     if (definition.trigger.applicability !== 'checkpoint-required')
                         return undefined;
@@ -1137,6 +1138,8 @@ export function apply(ctx, config = {}) {
                 if ((exec.name === 'write' || exec.name === 'edit') &&
                     typeof args.file_path === 'string') {
                     metrics.written += 1;
+                    metrics.lastWriteAt = journal.time();
+                    metrics.lastWritePath = args.file_path;
                 }
                 if (WORKER_TOOL_NAMES.has(exec.name) &&
                     (exec.name !== 'delegate' || delegateStarted(text))) {
@@ -1547,6 +1550,7 @@ export function apply(ctx, config = {}) {
     };
     /** Advance one run through its verified evidence; a deferred step never steers. */
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn) => {
+        const writeMetrics = turnMetrics.get(String(agent.session.id));
         // Only a fully applicable deferred observation advances; a run whose
         // trigger is no longer applicable becomes terminal and pruneable.
         if (definition.trigger.applicability === 'checkpoint-required') {
@@ -1570,7 +1574,9 @@ export function apply(ctx, config = {}) {
             // The verify definition observes only a turn that wrote code; a
             // documentation-only or inspection turn completes the run as inapplicable.
             const calls = (sessionToolCalls.get(String(agent.session.id)) ?? []).filter((call) => call.turn === undefined || call.turn === turn);
-            if (lastCodeWriteAt(calls) === undefined) {
+            const writeAt = lastCodeWriteAt(calls) ??
+                (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined);
+            if (writeAt === undefined) {
                 const completed = completeNotApplicable(run, journal.time());
                 await writeRun(workspace, completed, auth);
                 return completed;
@@ -1596,9 +1602,12 @@ export function apply(ctx, config = {}) {
                 toolCalls,
                 shellResults,
                 checkCommands: verifySettings.commands,
-                ...(lastCodeWriteAt(toolCalls) === undefined
+                ...(lastCodeWriteAt(toolCalls) === undefined && writeMetrics?.lastWriteAt === undefined
                     ? {}
-                    : { lastWriteAt: lastCodeWriteAt(toolCalls) }),
+                    : { lastWriteAt: lastCodeWriteAt(toolCalls) ?? writeMetrics?.lastWriteAt }),
+                ...(writeMetrics?.lastWritePath === undefined
+                    ? {}
+                    : { lastWritePath: writeMetrics.lastWritePath }),
                 ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
             },
             owned: ownedCalls,
@@ -2090,6 +2099,41 @@ export function apply(ctx, config = {}) {
             const definitions = await definitionsFor(workspace);
             const runs = await listAuthenticatedRuns(workspace, auth);
             const sessionId = String(payload.agent.session.id);
+            // A later code write invalidates a completed verification for the same
+            // turn; reopen the run so a fresh check is required before the close.
+            const verifyWriteAt = turnMetrics.get(sessionId)?.turn === payload.turn
+                ? turnMetrics.get(sessionId)?.lastWriteAt
+                : undefined;
+            if (verifyWriteAt !== undefined) {
+                const lastCheckAt = (sessionShellResults.get(sessionId) ?? [])
+                    .filter((result) => result.foreground &&
+                    result.exitCode === 0 &&
+                    result.timedOut !== true &&
+                    result.sandboxDenied !== true &&
+                    verifySettings.commands.includes(result.command))
+                    .map((result) => result.at)
+                    .sort((left, right) => right - left)[0];
+                const completedVerify = runs.find((run) => run.definition === 'verify' &&
+                    run.session === sessionId &&
+                    run.status === 'completed' &&
+                    Number(run.dedupeKey?.split('\u0000').at(-1)) === payload.turn);
+                if (completedVerify !== undefined &&
+                    (lastCheckAt === undefined || verifyWriteAt > lastCheckAt)) {
+                    const reopened = {
+                        ...completedVerify,
+                        status: 'running',
+                        updatedAt: journal.time(),
+                        turnBlocks: 0,
+                        steps: completedVerify.steps.map((step) => ({
+                            ...Object.fromEntries(Object.entries(step).filter(([key]) => key !== 'evidence' && key !== 'reason')),
+                            state: 'open',
+                            attempts: 0,
+                        })),
+                    };
+                    await writeRun(workspace, reopened, auth);
+                    runs.splice(runs.indexOf(completedVerify), 1, reopened);
+                }
+            }
             const eligible = runs.filter((run) => run.session === sessionId && (run.status === 'running' || run.status === 'blocked'));
             const ownerId = mainStepOwners.get(sessionId);
             const owner = ownerId === undefined ? undefined : eligible.find((run) => run.id === ownerId);
@@ -2189,7 +2233,23 @@ export function apply(ctx, config = {}) {
                             source: { kind: 'workflows-gate' },
                         }),
                     },
-                    evidenceContext: { workspace, values: current.context },
+                    evidenceContext: {
+                        workspace,
+                        values: current.context,
+                        ...(definition.id === 'verify'
+                            ? {
+                                checkCommands: verifySettings.commands,
+                                ...(turnMetrics.get(sessionId)?.lastWriteAt === undefined
+                                    ? {}
+                                    : {
+                                        lastWriteAt: turnMetrics.get(sessionId)?.lastWriteAt,
+                                        ...(turnMetrics.get(sessionId)?.lastWritePath === undefined
+                                            ? {}
+                                            : { lastWritePath: turnMetrics.get(sessionId)?.lastWritePath }),
+                                    }),
+                            }
+                            : {}),
+                    },
                     turn: payload.turn,
                     maxBlocks: definition.settings.maxBlocks,
                     installedLegacy: legacy.installed,
