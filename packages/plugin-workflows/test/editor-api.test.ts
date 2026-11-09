@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installDefinition, loadApprovedDefinitions } from '../src/host/approval-store.ts'
-import { validateDefinition } from '../src/host/definitions.ts'
+import { loadShippedDefinitions, validateDefinition } from '../src/host/definitions.ts'
 import {
   createEditorRoutes,
   EDITOR_DEFINITION_ROUTE,
@@ -157,12 +157,24 @@ describe('editor read API', () => {
     const one = await call(routes, EDITOR_DEFINITION_ROUTE, { query: { id: 'editor-demo' } })
     expect(one.status).toBe(200)
     expect(one.body).toMatchObject({ revision: installedRevision, source: 'local' })
+    expect(one.body.definition).toEqual(validateDefinition(DEFINITION))
     const missing = await call(routes, EDITOR_DEFINITION_ROUTE, { query: { id: 'nope' } })
     expect(missing.status).toBe(404)
     const shippedRead = await call(routes, EDITOR_DEFINITION_ROUTE, {
       query: { id: 'change-intake' },
     })
     expect(shippedRead.body).toMatchObject({ revision: null, source: 'shipped' })
+    expect(shippedRead.body.definition).toEqual(
+      loadShippedDefinitions().find((entry) => entry.id === 'change-intake'),
+    )
+    expect(templates.body.templates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'change-intake',
+          definition: expect.objectContaining({ id: 'change-intake', steps: expect.any(Array) }),
+        }),
+      ]),
+    )
 
     const emptyLayout = await call(routes, EDITOR_LAYOUT_ROUTE, { query: { id: 'editor-demo' } })
     expect(emptyLayout.body).toEqual({ layout: null, revision: null })
@@ -436,6 +448,37 @@ describe('editor layout writes', () => {
     expect(positions.step_one).toEqual({ x: 10, y: 20 })
     expect(Object.hasOwn(positions, '__proto__')).toBe(true)
     expect(positions['__proto__']).toEqual({ x: 30, y: 40 })
+  })
+
+  it('never returns a revision for a layout symlink outside the workspace', async () => {
+    const workspace = await tempWorkspace()
+    const external = await tempWorkspace()
+    const externalFile = join(external, 'layout.json')
+    await writeFile(
+      externalFile,
+      `${JSON.stringify({ v: 1, id: 'linked', positions: {} }, null, 2)}\n`,
+      'utf8',
+    )
+    const layoutDirectory = join(workspace, '.dsh', 'workflows', 'layout')
+    await mkdir(layoutDirectory, { recursive: true })
+    try {
+      await symlink(externalFile, join(layoutDirectory, 'linked.json'), 'file')
+    } catch (error) {
+      // Creating a file symlink needs developer mode on Windows; skip only the
+      // host that cannot express the attack.
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        return
+      }
+      throw error
+    }
+    const routes = createEditorRoutes(services(workspace))
+    const read = await call(routes, EDITOR_LAYOUT_ROUTE, { query: { id: 'linked' } })
+    expect(read.status).toBe(200)
+    expect(read.body.layout).toBeNull()
+    expect(read.body.revision).toBeNull()
+    expect(read.body.errors).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('link') }),
+    ])
   })
 
   it('refuses a malformed layout', () => {

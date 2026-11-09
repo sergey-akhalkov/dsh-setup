@@ -515,6 +515,30 @@ async function readLayout(workspace, id) {
     const text = await readFile(resolved, 'utf8');
     return { layout: validateLayout(JSON.parse(text), id), revision: revisionOf(text) };
 }
+/**
+ * The revision of a layout the editor may replace: only a regular file reached
+ * through the contained layout directory. A linked or escaped path has no
+ * revision the editor may send back.
+ */
+async function containedLayoutRevision(workspace, id) {
+    try {
+        const root = await realpath(workspace);
+        const directory = await realpath(layoutDirectory(workspace));
+        if (!isInside(root, directory))
+            return null;
+        const target = join(directory, `${id}.json`);
+        const info = await lstat(target);
+        if (info.isSymbolicLink() || !info.isFile())
+            return null;
+        const resolved = await realpath(target);
+        if (!isInside(root, resolved))
+            return null;
+        return revisionOf(await readFile(resolved));
+    }
+    catch {
+        return null;
+    }
+}
 /** Build the editor write routes; the caller registers them on the carrier. */
 export function createEditorRoutes(services) {
     return [
@@ -599,7 +623,8 @@ export function createEditorRoutes(services) {
                 catch (error) {
                     // An unreadable sidecar is reported with its revision so the editor
                     // can replace it instead of being stuck on a conflict it cannot see.
-                    const revision = await fileRevision(join(await realpath(resolved.workspace), ...LAYOUT_DIRECTORY, `${id}.json`));
+                    // A linked or escaped file has no revision the editor may use.
+                    const revision = await containedLayoutRevision(resolved.workspace, id);
                     return json(200, {
                         layout: null,
                         revision,
