@@ -21,6 +21,7 @@
   },
   "files": [
     "icon.svg",
+    "THIRD_PARTY_NOTICES.md",
     "locale/*.json",
     "assets/triggers/*.json",
     "assets/definitions/*.json",
