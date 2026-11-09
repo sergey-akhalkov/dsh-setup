@@ -44,10 +44,9 @@ export interface RunStep {
 export declare function classifyFailure(reason: string | undefined): string;
 /** A visible refusal or bypass; never a pass. */
 export interface RunViolation {
+    readonly stepId?: string;
     readonly at: number;
-    readonly kind: string;
-    readonly step?: string;
-    readonly detail: string;
+    readonly reason: string;
 }
 /** The definition identity a run records at creation; copied, never looked up. */
 export interface RunDefinitionRef {

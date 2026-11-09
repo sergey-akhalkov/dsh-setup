@@ -878,14 +878,24 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
     const violationViews: RunViolationView[] = []
     for (const [index, violation] of violations.entries()) {
       if (!isRecord(violation)) continue
+      // The record persists { stepId, at, reason }; older files wrote
+      // { kind, detail, step }, so both shapes are readable.
       const reason =
-        typeof violation.detail === 'string'
-          ? (safeError(violation.detail) ?? 'violation')
-          : typeof violation.kind === 'string'
-            ? (safeText(violation.kind) ?? 'violation')
-            : 'violation'
+        typeof violation.reason === 'string'
+          ? (safeError(violation.reason) ?? 'violation')
+          : typeof violation.detail === 'string'
+            ? (safeError(violation.detail) ?? 'violation')
+            : typeof violation.kind === 'string'
+              ? (safeText(violation.kind) ?? 'violation')
+              : 'violation'
+      const stepId =
+        typeof violation.stepId === 'string'
+          ? violation.stepId
+          : typeof violation.step === 'string'
+            ? violation.step
+            : undefined
       violationViews.push({
-        ...(typeof violation.step === 'string' ? { stepId: safeText(violation.step) } : {}),
+        ...(stepId === undefined ? {} : { stepId: safeText(stepId) }),
         at: typeof violation.at === 'number' ? violation.at : 0,
         reason,
       })
@@ -895,7 +905,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         state: typeof violation.kind === 'string' ? redactText(violation.kind) : 'VIOLATION',
         synthetic: true,
         ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
-        ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
+        evidence: reason,
       })
     }
     const definitionRef = definitionRefOf(

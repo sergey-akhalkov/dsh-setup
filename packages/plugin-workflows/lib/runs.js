@@ -354,10 +354,9 @@ export function addViolation(run, detail, options = {}) {
         violations: [
             ...run.violations,
             {
+                ...(options.step === undefined ? {} : { stepId: options.step }),
                 at,
-                kind: options.kind ?? 'VIOLATION',
-                detail,
-                ...(options.step === undefined ? {} : { step: options.step }),
+                reason: detail,
             },
         ],
     };

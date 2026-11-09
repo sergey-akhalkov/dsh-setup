@@ -390,17 +390,23 @@ describe('Workflows Client half', () => {
           state: 'failed',
           at: 2,
           failureClass: 'rejected-answer',
-          evidenceRef: { kind: 'record', ref: '.dsh/record.json' },
+          evidenceRef: { kind: 'record', ref: '.dsh/delegation/record.json' },
           reason: 'the answer was rejected',
         },
       ],
       violations: [],
     }
-    const text = childText(renderTree(module.RunDetail?.({ run, t: translate })))
+    const detail = renderTree(module.RunDetail?.({ run, t: translate, session: 'session-1' }))
+    const text = childText(detail)
     expect(text).toContain('OpenSpec change intake')
     expect(text).toContain('v7')
     expect(text).toContain('rejected-answer')
-    expect(text).toContain('record: .dsh/record.json')
+    expect(text).toContain('record: .dsh/delegation/record.json')
+    const link = elements(detail).find(
+      (element) => element.type === 'a' && element.props['data-evidence-kind'] === 'record',
+    )
+    expect(String(link?.props.href)).toContain('/api/workflows/evidence')
+    expect(String(link?.props.href)).toContain('.dsh%2Fdelegation%2Frecord.json')
   })
 
   it('shows a malformed-record run as an error row and a retry control', () => {

@@ -191,8 +191,9 @@ describe('turn-close gate', () => {
     if (capped.kind !== 'violation') return
     expect(capped.detail).toContain('VIOLATION')
     expect(capped.run.violations[0]).toMatchObject({
-      kind: 'VIOLATION',
-      step: 'requirements',
+      stepId: 'requirements',
+      at: 3_000,
+      reason: expect.stringContaining('never as a pass'),
     })
     expect(capped.run.turnBlocks).toBe(0)
     expect(agent.messages).toHaveLength(2)

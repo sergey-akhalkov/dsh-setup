@@ -494,10 +494,27 @@ window.__ModuleLoader__.load({
               ] })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.evidenceRef !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-wf-node-evidence", "data-evidence-kind": step.evidenceRef.kind, children: [
-              step.evidenceRef.kind,
-              step.evidenceRef.ref === void 0 ? "" : `: ${step.evidenceRef.ref}`
-            ] }) : step.evidence === void 0 ? "\u2014" : props.session === void 0 || !isRecordEvidence(step.evidence) ? step.evidence : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.evidenceRef !== void 0 ? (() => {
+              const ref = step.evidenceRef?.ref;
+              const label = `${step.evidenceRef?.kind ?? "evidence"}${ref === void 0 ? "" : `: ${ref}`}`;
+              return props.session !== void 0 && ref !== void 0 && isRecordEvidence(ref) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "a",
+                {
+                  href: evidenceUrl(props.session, ref),
+                  target: "_blank",
+                  rel: "noreferrer",
+                  "data-evidence-kind": step.evidenceRef?.kind,
+                  children: label
+                }
+              ) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "span",
+                {
+                  className: "dsh-wf-node-evidence",
+                  "data-evidence-kind": step.evidenceRef?.kind,
+                  children: label
+                }
+              );
+            })() : step.evidence === void 0 ? "\u2014" : props.session === void 0 || !isRecordEvidence(step.evidence) ? step.evidence : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
               "a",
               {
                 href: evidenceUrl(props.session, step.evidence),

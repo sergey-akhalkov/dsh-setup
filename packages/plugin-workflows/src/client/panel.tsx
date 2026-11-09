@@ -512,10 +512,29 @@ export function RunDetail(props: { run: RunView; t: Translate; session?: string 
               <td>{step.at === undefined ? '—' : formatTime(step.at, t)}</td>
               <td>
                 {step.evidenceRef !== undefined ? (
-                  <span className="dsh-wf-node-evidence" data-evidence-kind={step.evidenceRef.kind}>
-                    {step.evidenceRef.kind}
-                    {step.evidenceRef.ref === undefined ? '' : `: ${step.evidenceRef.ref}`}
-                  </span>
+                  (() => {
+                    const ref = step.evidenceRef?.ref
+                    const label = `${step.evidenceRef?.kind ?? 'evidence'}${ref === undefined ? '' : `: ${ref}`}`
+                    return props.session !== undefined &&
+                      ref !== undefined &&
+                      isRecordEvidence(ref) ? (
+                      <a
+                        href={evidenceUrl(props.session, ref)}
+                        target="_blank"
+                        rel="noreferrer"
+                        data-evidence-kind={step.evidenceRef?.kind}
+                      >
+                        {label}
+                      </a>
+                    ) : (
+                      <span
+                        className="dsh-wf-node-evidence"
+                        data-evidence-kind={step.evidenceRef?.kind}
+                      >
+                        {label}
+                      </span>
+                    )
+                  })()
                 ) : step.evidence === undefined ? (
                   '—'
                 ) : props.session === undefined || !isRecordEvidence(step.evidence) ? (
