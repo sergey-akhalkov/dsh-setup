@@ -1450,6 +1450,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           command !== undefined &&
           shellOutcome.ok &&
           shellOutcome.background !== true &&
+          shellOutcome.aborted !== true &&
           (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
           verifySettings.commands.some((configured) => commandMatches(configured, command))
         ) {
@@ -1468,6 +1469,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
             ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
             ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
+            ...(shellOutcome.aborted === true ? { aborted: true } : {}),
             ...(shellOutcome.cwd === undefined ? {} : { cwd: shellOutcome.cwd }),
           })
           if (results.length > 50) results.shift()
@@ -1735,6 +1737,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     readonly ok: boolean
     readonly exitCode: number
     readonly timedOut?: boolean
+    readonly aborted?: boolean
     readonly signal?: string
     readonly sandboxDenied?: boolean
     readonly background?: boolean
@@ -2504,6 +2507,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 result.foreground &&
                 result.ok !== false &&
                 result.exitCode === 0 &&
+                result.aborted !== true &&
                 result.signal === undefined &&
                 result.timedOut !== true &&
                 result.sandboxDenied !== true &&

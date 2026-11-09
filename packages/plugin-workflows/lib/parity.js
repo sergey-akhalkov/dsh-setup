@@ -727,7 +727,13 @@ export function checkpointCloseIssue(input) {
     else {
         return `bottleneck "${id}" has an unknown action "${action}"; use worker_start, lead_action, or user_decision`;
     }
-    const age = typeof record.bottleneckAge === 'number' ? record.bottleneckAge : 0;
+    // An amended bottleneck has not been watched for the recorded time; only
+    // the unchanged record keeps its age.
+    const age = rawArguments?.bottleneck !== undefined
+        ? 0
+        : typeof record.bottleneckAge === 'number'
+            ? record.bottleneckAge
+            : 0;
     if (age >= input.bottleneckAge &&
         record.bottleneckChanged !== true &&
         action !== 'user_decision') {
@@ -779,7 +785,7 @@ export function checkpointGateIssue(workspace, checkpointPath, observations, bot
         : '';
     const lastCheckpointCall = observations
         .filter((entry) => entry.ok && entry.toolName === 'work_checkpoint')
-        .at(-1);
+        .reduce((last, entry) => (last === undefined || (entry.seq ?? 0) >= (last.seq ?? 0) ? entry : last), undefined);
     const toolArguments = lastCheckpointCall?.arguments;
     const issue = checkpointCloseIssue({
         record,

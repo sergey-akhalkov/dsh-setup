@@ -45,6 +45,8 @@ export interface ShellResultObservation {
     readonly exitCode: number;
     readonly foreground: boolean;
     readonly signal?: string;
+    /** The shell tool reported the model cancelled the call. */
+    readonly aborted?: boolean;
     readonly timedOut?: boolean;
     readonly sandboxDenied?: boolean;
     /** The run's resolved working directory; when present it must be the workspace. */

@@ -1180,6 +1180,7 @@ export function apply(ctx, config = {}) {
             if (command !== undefined &&
                 shellOutcome.ok &&
                 shellOutcome.background !== true &&
+                shellOutcome.aborted !== true &&
                 (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
                 verifySettings.commands.some((configured) => commandMatches(configured, command))) {
                 metrics.lastCheckAt = journal.time();
@@ -1197,6 +1198,7 @@ export function apply(ctx, config = {}) {
                     ...(shellOutcome.timedOut === true ? { timedOut: true } : {}),
                     ...(shellOutcome.signal === undefined ? {} : { signal: shellOutcome.signal }),
                     ...(shellOutcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
+                    ...(shellOutcome.aborted === true ? { aborted: true } : {}),
                     ...(shellOutcome.cwd === undefined ? {} : { cwd: shellOutcome.cwd }),
                 });
                 if (results.length > 50)
@@ -2138,6 +2140,7 @@ export function apply(ctx, config = {}) {
                     .filter((result) => result.foreground &&
                     result.ok !== false &&
                     result.exitCode === 0 &&
+                    result.aborted !== true &&
                     result.signal === undefined &&
                     result.timedOut !== true &&
                     result.sandboxDenied !== true &&
