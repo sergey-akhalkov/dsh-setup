@@ -354,6 +354,7 @@ describe('one section run, one verdict', () => {
     expect(section.section).toBe('1')
     expect(section.sectionTitle).toBe('1. Engine (lane 1, owns `packages/engine/**`)')
     expect(section.verdict).toBe('PASS')
+    expect(section.failureClass).toBeUndefined()
     expect((section.taskIds as string[]).sort()).toEqual([FIRST, SECOND].sort())
 
     const first = await readJson(localTaskPath(root, FIRST))

@@ -4925,7 +4925,9 @@ class DelegationEngine {
       runId: run.file.id,
       time: this.now(),
       ...(fields.error === undefined ? {} : { error: fields.error }),
-      ...(run.file.failureClass === undefined ? {} : { failureClass: run.file.failureClass }),
+      ...(fields.verdict === 'ERROR' && run.file.failureClass !== undefined
+        ? { failureClass: run.file.failureClass }
+        : {}),
     }
     const reviewer = await readReviewerBinding(dirname(dirname(change.dir)))
     const files: PublishFile[] = [{ path: run.recordPath, body: jsonText(record) }]
