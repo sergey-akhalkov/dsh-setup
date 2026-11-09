@@ -1054,6 +1054,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               return outcome
             },
             resolveApplicability: (definition) => {
+              if (definition.trigger.applicability === 'code-write') {
+                // The verify definition observes only a turn that wrote code.
+                if (rootSessions.get(input.session) !== true) return false
+                const calls = (sessionToolCalls.get(input.session) ?? []).filter(
+                  (call) => call.turn === undefined || call.turn === input.turn,
+                )
+                return lastCodeWriteAt(calls) !== undefined
+              }
               if (definition.trigger.applicability !== 'checkpoint-required') return undefined
               // The legacy checkpoint gate excludes subagent sessions.
               if (rootSessions.get(input.session) !== true) return false

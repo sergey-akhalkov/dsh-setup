@@ -723,6 +723,51 @@ describe('retro fresh checkpoint', () => {
   })
 })
 
+describe('verify auto-start', () => {
+  it('starts the owned verify run on a code-writing turn and steers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let verifyRun: { id: string } | undefined
+    await waitFor(async () => {
+      verifyRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'verify',
+      )
+      return verifyRun !== undefined
+    })
+    expect(verifyRun?.id).toBeDefined()
+    expect(host.steers.length).toBeGreaterThan(0)
+  })
+})
+
 describe('retro applicability evidence', () => {
   it('counts only successful writes and started delegates', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

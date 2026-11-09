@@ -211,8 +211,7 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
           // A failed dispatch is a blocking obligation only for the owned
           // review retry; other workflows keep their terminal failure.
           return {
-            run:
-              input.definition.id === 'task-review' ? setRunStatus(run, 'blocked', at) : run,
+            run: input.definition.id === 'task-review' ? setRunStatus(run, 'blocked', at) : run,
             completed: false,
             waiting: waitingFor(step, input.evidenceContext),
           }
