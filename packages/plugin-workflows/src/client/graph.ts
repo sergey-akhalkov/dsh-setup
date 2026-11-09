@@ -441,27 +441,33 @@ export function autoPositions(
     list.push(node.id)
     columns.set(column, list)
   }
-  // Rows follow design.md: a branch/loop child sits one row below its parent,
-  // and unconstrained nodes in a column are ordered by step node id.
-  const branchParent = new Map<string, string>()
+  // Rows follow design.md: a branch/loop child sits one row below every one of
+  // its branch/loop parents, and unconstrained nodes in a column are ordered by
+  // step node id.
+  const branchParents = new Map<string, string[]>()
   for (const entry of edges) {
     if (entry.kind !== 'true' && entry.kind !== 'false' && entry.kind !== 'exit') continue
-    const current = branchParent.get(entry.target)
-    if (current === undefined || entry.source.localeCompare(current) < 0) {
-      branchParent.set(entry.target, entry.source)
-    }
+    const parents = branchParents.get(entry.target) ?? []
+    if (!parents.includes(entry.source)) parents.push(entry.source)
+    branchParents.set(entry.target, parents)
   }
   const rows = new Map<string, number>()
+  const wantedRow = (id: string): number | undefined => {
+    const parents = branchParents.get(id)
+    if (parents === undefined || parents.length === 0) return undefined
+    let row = 0
+    for (const parent of parents) row = Math.max(row, (rows.get(parent) ?? 0) + 1)
+    return row
+  }
   const positions = Object.create(null) as Record<string, { x: number; y: number }>
   for (const column of [...columns.keys()].sort((left, right) => left - right)) {
     const ids = (columns.get(column) ?? []).sort((left, right) => left.localeCompare(right))
     const constrained = ids
-      .filter((id) => branchParent.has(id))
-      .sort((left, right) => {
-        const leftRow = (rows.get(branchParent.get(left) ?? '') ?? 0) + 1
-        const rightRow = (rows.get(branchParent.get(right) ?? '') ?? 0) + 1
-        return leftRow - rightRow || left.localeCompare(right)
-      })
+      .filter((id) => wantedRow(id) !== undefined)
+      .sort(
+        (left, right) =>
+          (wantedRow(left) ?? 0) - (wantedRow(right) ?? 0) || left.localeCompare(right),
+      )
     const occupied = new Set<number>()
     const place = (id: string, wanted: number): void => {
       let row = Math.max(0, wanted)
@@ -471,9 +477,9 @@ export function autoPositions(
       positions[id] = { x: column * 240, y: row * 120 }
     }
     for (const id of constrained) {
-      place(id, (rows.get(branchParent.get(id) ?? '') ?? 0) + 1)
+      place(id, wantedRow(id) ?? 0)
     }
-    for (const id of ids.filter((entry) => !branchParent.has(entry))) {
+    for (const id of ids.filter((entry) => wantedRow(entry) === undefined)) {
       place(id, 0)
     }
   }

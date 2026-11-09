@@ -329,4 +329,23 @@ describe('deterministic auto layout', () => {
     // b and z share a column from different parents; the step id decides.
     expect(row(nodeIdOf('b'))).toBeLessThan(row(nodeIdOf('z')))
   })
+
+  it('places a shared branch target below every branch parent', () => {
+    const definition = baseDefinition({
+      steps: [
+        // biome-ignore lint/suspicious/noThenProperty: branch targets, not thenables
+        step('root', 'branch', { branch: { predicate: {}, then: 'left', else: 'right' } }),
+        // biome-ignore lint/suspicious/noThenProperty: branch targets, not thenables
+        step('left', 'branch', { branch: { predicate: {}, then: 'join', else: 'join' } }),
+        // biome-ignore lint/suspicious/noThenProperty: branch targets, not thenables
+        step('right', 'branch', { branch: { predicate: {}, then: 'join', else: 'join' } }),
+        step('join', 'main', { next: 'end' }),
+      ],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const positions = autoPositions(graph.nodes, graph.edges)
+    const row = (id: string): number => positions[id]?.y ?? -1
+    expect(row(nodeIdOf('join'))).toBeGreaterThan(row(nodeIdOf('left')))
+    expect(row(nodeIdOf('join'))).toBeGreaterThan(row(nodeIdOf('right')))
+  })
 })

@@ -10222,23 +10222,27 @@ window.__ModuleLoader__.load({
         list.push(node.id);
         columns.set(column, list);
       }
-      const branchParent = /* @__PURE__ */ new Map();
+      const branchParents = /* @__PURE__ */ new Map();
       for (const entry of edges) {
         if (entry.kind !== "true" && entry.kind !== "false" && entry.kind !== "exit") continue;
-        const current = branchParent.get(entry.target);
-        if (current === void 0 || entry.source.localeCompare(current) < 0) {
-          branchParent.set(entry.target, entry.source);
-        }
+        const parents = branchParents.get(entry.target) ?? [];
+        if (!parents.includes(entry.source)) parents.push(entry.source);
+        branchParents.set(entry.target, parents);
       }
       const rows = /* @__PURE__ */ new Map();
+      const wantedRow = (id2) => {
+        const parents = branchParents.get(id2);
+        if (parents === void 0 || parents.length === 0) return void 0;
+        let row = 0;
+        for (const parent of parents) row = Math.max(row, (rows.get(parent) ?? 0) + 1);
+        return row;
+      };
       const positions = /* @__PURE__ */ Object.create(null);
       for (const column of [...columns.keys()].sort((left, right) => left - right)) {
         const ids = (columns.get(column) ?? []).sort((left, right) => left.localeCompare(right));
-        const constrained = ids.filter((id2) => branchParent.has(id2)).sort((left, right) => {
-          const leftRow = (rows.get(branchParent.get(left) ?? "") ?? 0) + 1;
-          const rightRow = (rows.get(branchParent.get(right) ?? "") ?? 0) + 1;
-          return leftRow - rightRow || left.localeCompare(right);
-        });
+        const constrained = ids.filter((id2) => wantedRow(id2) !== void 0).sort(
+          (left, right) => (wantedRow(left) ?? 0) - (wantedRow(right) ?? 0) || left.localeCompare(right)
+        );
         const occupied = /* @__PURE__ */ new Set();
         const place = (id2, wanted) => {
           let row = Math.max(0, wanted);
@@ -10248,9 +10252,9 @@ window.__ModuleLoader__.load({
           positions[id2] = { x: column * 240, y: row * 120 };
         };
         for (const id2 of constrained) {
-          place(id2, (rows.get(branchParent.get(id2) ?? "") ?? 0) + 1);
+          place(id2, wantedRow(id2) ?? 0);
         }
-        for (const id2 of ids.filter((entry) => !branchParent.has(entry))) {
+        for (const id2 of ids.filter((entry) => wantedRow(entry) === void 0)) {
           place(id2, 0);
         }
       }
