@@ -10301,8 +10301,17 @@ window.__ModuleLoader__.load({
         if (!taken.has(next)) return next;
       }
     }
+    function nextCopyId(candidate, taken) {
+      const match = /^(.*)-copy(?:-(\d+))?$/u.exec(candidate);
+      const base = match?.[1] ?? candidate;
+      const first = match?.[2] === void 0 ? 1 : Number(match[2]) + 1;
+      for (let index2 = first; ; index2 += 1) {
+        const id2 = index2 === 1 ? `${base}-copy` : `${base}-copy-${String(index2)}`;
+        if (!taken.has(id2)) return id2;
+      }
+    }
     function copyId(sourceId, taken) {
-      return nextFreeId(`${sourceId}-copy`, taken);
+      return nextCopyId(sourceId, taken);
     }
     function stepIds(definition) {
       return definition.steps.map((step) => step.id);
@@ -10530,7 +10539,7 @@ window.__ModuleLoader__.load({
           conflict: {
             ...failed2.conflict,
             kind: "create",
-            nextId: nextFreeId(`${state.document.definition.id}-copy`, context.taken)
+            nextId: nextCopyId(state.document.definition.id, context.taken)
           },
           message: "the id already exists; pick the next free id or save a copy"
         };

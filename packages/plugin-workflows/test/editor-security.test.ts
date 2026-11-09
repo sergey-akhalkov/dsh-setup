@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -112,6 +112,39 @@ describe('editor trust boundary', () => {
       'utf8',
     ).catch(() => undefined)
     expect(definitions).toBeUndefined()
+  })
+
+  it('refuses to delete through a linked definitions directory', async () => {
+    const workspace = await tempWorkspace()
+    const external = await tempWorkspace()
+    const externalDirectory = join(external, 'definitions')
+    await mkdir(externalDirectory, { recursive: true })
+    const externalFile = join(externalDirectory, 'linked-demo.json')
+    await writeFile(
+      externalFile,
+      `${JSON.stringify({ ...DEFINITION, id: 'linked-demo' }, null, 2)}\n`,
+      'utf8',
+    )
+    const definitions = join(workspace, '.dsh', 'workflows', 'definitions')
+    await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
+    try {
+      await symlink(externalDirectory, definitions, 'junction')
+    } catch (error) {
+      // A locked-down Windows account cannot create junctions; the containment
+      // check is still exercised by the realpath branch on hosts that can.
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        return
+      }
+      throw error
+    }
+    const routes = createEditorRoutes(services({ s1: workspace }))
+    const deleted = await call(routes, EDITOR_DEFINITION_ROUTE, {
+      session: 's1',
+      method: 'DELETE',
+      body: { id: 'linked-demo', expectedRevision: 'a'.repeat(64) },
+    })
+    expect(deleted.status).not.toBe(200)
+    expect(await readFile(externalFile, 'utf8')).toContain('linked-demo')
   })
 
   it('writes only the workspace owned by the requesting session', async () => {

@@ -473,9 +473,29 @@ async function deleteDefinition(
   const target = join(directory, `${id}.json`)
   if (dirname(target) !== directory) return json(400, { error: 'the definition id is unsafe' })
   return serialize(`definition:${target}`, async () => {
+    // Resolve the file before reading or deleting it: a linked definitions
+    // directory must not let a delete reach a file outside the workspace.
+    let resolved: string
+    try {
+      const root = await realpath(workspace)
+      const realDirectory = await realpath(directory)
+      if (!isInside(root, realDirectory)) {
+        return json(400, { error: 'the definitions directory escapes the workspace' })
+      }
+      const info = await lstat(target)
+      if (info.isSymbolicLink() || !info.isFile()) {
+        return json(400, { error: 'the definition file is a link and is refused' })
+      }
+      resolved = await realpath(target)
+      if (!isInside(root, resolved)) {
+        return json(400, { error: 'the definition file escapes the workspace' })
+      }
+    } catch {
+      return json(409, { revision: null })
+    }
     let current: string | null
     try {
-      current = revisionOf(await readFile(target))
+      current = revisionOf(await readFile(resolved))
     } catch {
       current = null
     }
@@ -494,7 +514,7 @@ async function deleteDefinition(
         runs: active.map((run) => run.id),
       })
     }
-    await unlink(target)
+    await unlink(resolved)
     // The stale approval record no longer authorizes anything (the file is gone);
     // it is kept so a failed delete can never be half-applied.
     return json(200, { ok: true })

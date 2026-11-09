@@ -10,6 +10,7 @@ import {
   type EditorState,
   installDraft,
   moveStep,
+  nextCopyId,
   nextFreeId,
   openDocument,
   openDraft,
@@ -228,6 +229,17 @@ describe('definition lifecycle', () => {
     })
     expect(colliding.conflict?.nextId).toBe('demo-copy')
     expect(nextFreeId('demo-copy', new Set(['demo-copy']))).toBe('demo-copy-2')
+    // A collision on an already-generated copy keeps the numeric sequence.
+    const copyCollision = await save(openNew({ ...definition, id: 'demo-copy' }), {
+      api: fakeApi({
+        save: () => ({ ok: false, kind: 'conflict', status: 409, revision: 'rev-1' }),
+      }).api,
+      taken: new Set(['demo', 'demo-copy']),
+    })
+    expect(copyCollision.conflict?.nextId).toBe('demo-copy-2')
+    expect(nextCopyId('demo-copy-2', new Set(['demo', 'demo-copy', 'demo-copy-2']))).toBe(
+      'demo-copy-3',
+    )
   })
 })
 

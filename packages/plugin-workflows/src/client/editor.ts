@@ -145,9 +145,20 @@ export function nextFreeId(candidate: string, taken: ReadonlySet<string>): strin
   }
 }
 
+/** The copy id sequence: `<base>-copy`, then `<base>-copy-2`, `<base>-copy-3`, … */
+export function nextCopyId(candidate: string, taken: ReadonlySet<string>): string {
+  const match = /^(.*)-copy(?:-(\d+))?$/u.exec(candidate)
+  const base = match?.[1] ?? candidate
+  const first = match?.[2] === undefined ? 1 : Number(match[2]) + 1
+  for (let index = first; ; index += 1) {
+    const id = index === 1 ? `${base}-copy` : `${base}-copy-${String(index)}`
+    if (!taken.has(id)) return id
+  }
+}
+
 /** The copy id rule: `<id>-copy`, then `<id>-copy-2`, … */
 export function copyId(sourceId: string, taken: ReadonlySet<string>): string {
-  return nextFreeId(`${sourceId}-copy`, taken)
+  return nextCopyId(sourceId, taken)
 }
 
 function stepIds(definition: GraphDefinition): string[] {
@@ -469,7 +480,7 @@ export async function save(state: EditorState, context: SaveContext): Promise<Ed
       conflict: {
         ...(failed.conflict as EditorConflict),
         kind: 'create',
-        nextId: nextFreeId(`${state.document.definition.id}-copy`, context.taken),
+        nextId: nextCopyId(state.document.definition.id, context.taken),
       },
       message: 'the id already exists; pick the next free id or save a copy',
     }
