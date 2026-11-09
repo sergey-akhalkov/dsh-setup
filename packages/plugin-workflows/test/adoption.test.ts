@@ -94,6 +94,25 @@ describe('adoption of existing changes', () => {
     ).toBe('# artifact\n')
   })
 
+  it('adopts a pre-existing active change, including add-workflow-obligations', async () => {
+    const workspace = await tempWorkspace()
+    const change = 'add-workflow-obligations'
+    const digest = await adoptable(workspace, change)
+    const result = await adoptChange({
+      workspace,
+      change,
+      auth: auth(),
+      userStarted: true,
+      questions: answers('yes'),
+      now: 2_100,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.receipt).toMatchObject({ kind: 'adoption', change, digest })
+      expect(await readReceipt(workspace, change, auth())).toMatchObject({ change })
+    }
+  })
+
   it('blocks a missing artifact and a stale record without writing a receipt', async () => {
     const workspace = await tempWorkspace()
     await adoptable(workspace)
