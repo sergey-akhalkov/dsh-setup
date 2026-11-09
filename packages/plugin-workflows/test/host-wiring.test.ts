@@ -948,7 +948,7 @@ describe('parity report refusal at runtime', () => {
       const runs = await import('../src/host/runs.ts')
       const { HostAuth } = await import('../src/host/host-auth.ts')
       const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-      return (await runs.listAuthenticatedRuns(workspace, auth)).map((entry) => entry.definition)
+      return (await runs.listAuthenticatedRuns(workspace, auth)).map((entry) => entry.definition.id)
     } finally {
       if (previous === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
       else process.env.DSH_WORKFLOWS_PARITY_REPORT = previous
