@@ -2917,19 +2917,21 @@ function resolveSectionArgument(
   }
 }
 
-/** The section digest: key, sorted covered ids and texts, artifact digest, and tree. */
+/** The section digest: key, sorted covered ids, numbers, texts, artifact digest, and tree. */
 function sectionDigest(
   version: string,
   section: SectionInfo,
   artifactDigest: string,
   tree: string,
 ): string {
-  const covered = [...section.covered].sort((left, right) => left.id.localeCompare(right.id))
+  const covered = [...section.covered].sort((left, right) =>
+    `${left.id}\u0000${left.number}`.localeCompare(`${right.id}\u0000${right.number}`),
+  )
   return hashParts([
     version,
     section.key,
     section.title,
-    ...covered.flatMap((task) => [task.id, task.text]),
+    ...covered.flatMap((task) => [task.id, task.number, task.text]),
     artifactDigest,
     tree,
   ])

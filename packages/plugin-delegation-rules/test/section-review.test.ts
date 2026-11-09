@@ -408,6 +408,35 @@ describe('one section run, one verdict', () => {
     }
   })
 
+  it('changes the digest when a checked duplicate-text occurrence switches', async () => {
+    const planFor = (checked: '1.1' | '1.2'): string => `# Tasks
+
+## 1. First (lane 1, owns \`one/**\`)
+
+- [${checked === '1.1' ? 'x' : ' '}] 1.1 Run regression tests
+- [${checked === '1.2' ? 'x' : ' '}] 1.2 Run regression tests
+`
+    const { root, dir, agents, harness } = await fixture(planFor('1.1'))
+    const first = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    expect(await harness.waitForRun(first)).toContain('state=completed')
+    const firstDigest = (await readJson(sectionRecordPath(root))).digest
+    await writeFile(join(dir, 'tasks.md'), planFor('1.2'), 'utf8')
+    const second = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    expect(await harness.waitForRun(second)).toContain('state=completed')
+    expect(agents.startCalls).toBe(2)
+    expect((await readJson(sectionRecordPath(root))).digest).not.toBe(firstDigest)
+    const prompt = agents.runs[1]?.prompt ?? ''
+    const scope = prompt.slice(
+      prompt.indexOf('Checked tasks in scope'),
+      prompt.indexOf('Out of scope'),
+    )
+    expect(scope).toContain('1.2 Run regression tests')
+  })
+
   it('resolves identical task text within the selected frozen section', async () => {
     const duplicate = `# Tasks
 
