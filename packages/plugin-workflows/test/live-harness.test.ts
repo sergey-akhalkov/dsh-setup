@@ -478,7 +478,7 @@ describe('obligation engine live proxy', () => {
 
     // 2. The open requirements step refuses the close until the per-turn cap,
     // then the close is recorded as one visible violation in the run view.
-    for (const stop of [1, 2, 3, 4]) await turnStop(3 + stop - 1)
+    for (const _ of [1, 2, 3, 4]) await turnStop(3)
     expect(steers.length).toBeGreaterThan(0)
     await waitFor(async () =>
       (await runViews()).some(

@@ -108,8 +108,12 @@ export function evaluateTurnClose(input) {
             const run = markTurn(resetStepAttempts(addViolation(input.run, detail, { step: step.id, at }), step.id));
             return { kind: 'violation', run, detail };
         }
+        // A new turn also starts a fresh request budget: without this reset the
+        // previous turn's attempts would hit the request bound before the fresh
+        // maxBlocks budget could steer.
+        const steeringRun = input.run.turnBlocksTurn === input.turn ? input.run : resetStepAttempts(input.run, step.id);
         const steered = requestMainStep({
-            run: input.run,
+            run: steeringRun,
             definition: input.definition,
             step,
             agent: input.agent,

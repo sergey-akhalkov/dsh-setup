@@ -213,6 +213,40 @@ describe('turn-close gate', () => {
     expect(agent.messages).toHaveLength(3)
   })
 
+  it('restores the request budget on a new turn after a capped turn', () => {
+    const definition = blockingDefinition()
+    const agent = new FakeAgent()
+    let run = runFor(definition)
+    for (const attempt of [1, 2]) {
+      const outcome = evaluateTurnClose({
+        run,
+        definition,
+        agent,
+        evidenceContext,
+        turn: 1,
+        maxBlocks: 2,
+        installedLegacy: installed,
+        now: 2_000 + attempt,
+      })
+      expect(outcome.kind).toBe('refuse')
+      run = outcome.run
+    }
+    // Turn 1 stopped steering at its request bound, but turn 2 is fresh and
+    // steers again instead of becoming a violation.
+    const nextTurn = evaluateTurnClose({
+      run,
+      definition,
+      agent,
+      evidenceContext,
+      turn: 2,
+      maxBlocks: 2,
+      installedLegacy: installed,
+      now: 3_000,
+    })
+    expect(nextTurn.kind).toBe('refuse')
+    expect(agent.messages).toHaveLength(3)
+  })
+
   it('never steers a deferred step and skips a subagent turn', () => {
     const definition = deferredDefinition()
     const agent = new FakeAgent()

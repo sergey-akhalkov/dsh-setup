@@ -70,11 +70,6 @@ export function parityAssetDirectory() {
     return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 export function shippedParityReportPath() {
-    // Test seam: the release check always uses the shipped asset unless a host
-    // sets this override explicitly for loader-refusal regressions.
-    const override = process.env.DSH_WORKFLOWS_PARITY_REPORT;
-    if (override !== undefined && override !== '')
-        return override;
     return join(parityAssetDirectory(), PARITY_REPORT_NAME);
 }
 function isRecord(value) {

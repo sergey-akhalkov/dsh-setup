@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { shippedParityReportPath } from '../../packages/plugin-workflows/src/host/parity.ts'
 import {
   assertArchiveRecognition,
   PARITY_CASES,
@@ -34,6 +36,19 @@ async function tempDirectory(): Promise<string> {
 }
 
 describe('retirement parity report', () => {
+  it('ignores an external report override for the packaged path', () => {
+    const previous = process.env.DSH_WORKFLOWS_PARITY_REPORT
+    process.env.DSH_WORKFLOWS_PARITY_REPORT = join(tmpdir(), 'external-override.json')
+    try {
+      const path = shippedParityReportPath()
+      expect(path).not.toContain('external-override')
+      expect(readFileSync(path, 'utf8')).toContain('retire-legacy-gates')
+    } finally {
+      if (previous === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
+      else process.env.DSH_WORKFLOWS_PARITY_REPORT = previous
+    }
+  })
+
   it('passes every retired gate and records the retained legacy cases', async () => {
     const report = await buildParityReport(new Date('2026-11-08T00:00:00.000Z'))
     expect(report.change).toBe('retire-legacy-gates')
