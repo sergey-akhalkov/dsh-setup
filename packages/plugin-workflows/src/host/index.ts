@@ -634,17 +634,26 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   /** Seed the checked-task baselines from the current workspace changes. */
   const seedCheckedTasks = (workspace: string, session: string): void => {
+    let changes: string[]
     try {
-      for (const change of readdirSync(join(workspace, 'openspec', 'changes'))) {
-        if (!CHANGE_NAME.test(change)) continue
+      changes = readdirSync(join(workspace, 'openspec', 'changes'))
+    } catch {
+      // No readable change tree yet; the first event seeds the baseline.
+      return
+    }
+    for (const change of changes) {
+      // The archive collection is not an active change, and one incomplete
+      // change must not stop the remaining baselines from seeding.
+      if (!CHANGE_NAME.test(change) || change === 'archive') continue
+      try {
         const markdown = readFileSync(
           join(workspace, 'openspec', 'changes', change, 'tasks.md'),
           'utf8',
         )
         checkedTasksSeen.set(`${session}\u0000${change}`, new Set(checkedTaskIds(markdown)))
+      } catch {
+        // An incomplete change has no tasks.md; keep seeding the rest.
       }
-    } catch {
-      // No readable change tree yet; the first event seeds the baseline.
     }
   }
   /** The session's current main-step owner; a second run waits for it to settle. */

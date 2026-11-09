@@ -430,6 +430,10 @@ describe('task-review runtime from a tasks.md change', () => {
   it('names the change and the task from the path and checked delta and never steers', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
+    // The archive collection and an incomplete change precede the real change;
+    // neither may stop the baseline seeding for auth.
+    await mkdir(join(workspace, 'openspec', 'changes', 'archive'), { recursive: true })
+    await mkdir(join(workspace, 'openspec', 'changes', 'aaa-incomplete'), { recursive: true })
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
     await mkdir(join(changeDir, 'reviews'), { recursive: true })
     await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
