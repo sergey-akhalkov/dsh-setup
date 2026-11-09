@@ -25,7 +25,7 @@ vi.mock('../src/host/parity.ts', async (importOriginal) => {
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
-import { apply, definitionEventsOf } from '../src/host/index.ts'
+import { apply, definitionEventsOf, inject } from '../src/host/index.ts'
 
 /**
  * Host-level regression for the engine wiring: a `tools/pre-execute` call for
@@ -317,6 +317,12 @@ async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 3000
 }
 
 describe('engine host wiring', () => {
+  it('declares the system-prompt service it reads', () => {
+    expect(inject).toEqual(
+      expect.arrayContaining(['agents', 'workingDirectory', 'fs', 'connection', 'systemPrompt']),
+    )
+  })
+
   it('records a pre-execute evaluation with run-created and the run id', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()

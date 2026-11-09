@@ -32,7 +32,7 @@ export const name = '@dsh-setup/plugin-workflows';
  * Host services the recorder needs. A host without them stays inert instead of
  * registering half a surface; the Client half independently checks its own.
  */
-export const inject = ['agents', 'workingDirectory', 'fs', 'connection'];
+export const inject = ['agents', 'workingDirectory', 'fs', 'connection', 'systemPrompt'];
 /**
  * The tools whose presence means a legacy activation plugin is installed. The
  * row itself is not readable from a plugin, so its registered tools are the
