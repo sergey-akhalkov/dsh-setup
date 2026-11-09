@@ -183,6 +183,7 @@ function settingsFields(props: PropertiesProps): ReactNode {
         />
       </label>
       <JsonField
+        key={`settings-legacy:${props.state.document.definition.id}`}
         label="Legacy (JSON)"
         value={settings.legacy}
         ariaLabel="Settings legacy JSON"
@@ -264,6 +265,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
         </select>
       </label>
       <JsonField
+        key={`legacy:${node.id}`}
         label="Legacy (JSON)"
         value={step.legacy}
         ariaLabel="Step legacy JSON"
@@ -294,6 +296,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
         />
       </label>
       <JsonField
+        key={`evidence:${node.id}`}
         label="Evidence (JSON)"
         value={step.evidence}
         ariaLabel="Evidence JSON"
@@ -341,6 +344,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
       )}
       {step.tool === undefined ? null : (
         <JsonField
+          key={`tool:${node.id}`}
           label="Tool config (JSON)"
           value={step.tool}
           ariaLabel="Tool config JSON"
@@ -349,6 +353,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
       )}
       {step.subagent === undefined ? null : (
         <JsonField
+          key={`subagent:${node.id}`}
           label="Subagent config (JSON)"
           value={step.subagent}
           ariaLabel="Subagent config JSON"
@@ -358,6 +363,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
       {branch === undefined ? null : (
         <>
           <JsonField
+            key={`predicate:${node.id}`}
             label="Branch predicate (JSON)"
             value={branch.predicate}
             ariaLabel="Branch predicate JSON"
@@ -384,6 +390,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
             />
           </label>
           <JsonField
+            key={`stop:${node.id}`}
             label="Loop stop (JSON)"
             value={loop.stop}
             ariaLabel="Loop stop JSON"
@@ -512,6 +519,7 @@ function triggerFields(props: PropertiesProps): ReactNode {
         </select>
       </label>
       <JsonField
+        key={`match:${props.state.document.definition.id}`}
         label="Trigger match (JSON)"
         value={match ?? {}}
         ariaLabel="Trigger match JSON"

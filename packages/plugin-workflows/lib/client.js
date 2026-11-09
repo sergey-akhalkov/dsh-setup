@@ -11635,7 +11635,8 @@ window.__ModuleLoader__.load({
             ariaLabel: "Settings legacy JSON",
             allowEmpty: true,
             commit: (value2) => patch({ ...settings, legacy: value2 })
-          }
+          },
+          `settings-legacy:${props.state.document.definition.id}`
         )
       ] });
     }
@@ -11722,7 +11723,8 @@ window.__ModuleLoader__.load({
             ariaLabel: "Step legacy JSON",
             allowEmpty: true,
             commit: (value2) => props.onPatch(node.id, { legacy: value2 })
-          }
+          },
+          `legacy:${node.id}`
         ),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Executor",
@@ -11757,7 +11759,8 @@ window.__ModuleLoader__.load({
             rows: 3,
             allowEmpty: true,
             commit: (value2) => props.onPatch(node.id, { evidence: value2 })
-          }
+          },
+          `evidence:${node.id}`
         ),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Evidence kind",
@@ -11798,7 +11801,8 @@ window.__ModuleLoader__.load({
             value: step.tool,
             ariaLabel: "Tool config JSON",
             commit: (value2) => props.onPatch(node.id, { tool: value2 })
-          }
+          },
+          `tool:${node.id}`
         ),
         step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
           JsonField,
@@ -11807,7 +11811,8 @@ window.__ModuleLoader__.load({
             value: step.subagent,
             ariaLabel: "Subagent config JSON",
             commit: (value2) => props.onPatch(node.id, { subagent: value2 })
-          }
+          },
+          `subagent:${node.id}`
         ),
         branch === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -11817,7 +11822,8 @@ window.__ModuleLoader__.load({
               value: branch.predicate,
               ariaLabel: "Branch predicate JSON",
               commit: (value2) => props.onPatch(node.id, { branch: { ...branch, predicate: value2 } })
-            }
+            },
+            `predicate:${node.id}`
           ),
           selectTarget(props, node, "true"),
           selectTarget(props, node, "false")
@@ -11845,7 +11851,8 @@ window.__ModuleLoader__.load({
               value: loop.stop,
               ariaLabel: "Loop stop JSON",
               commit: (value2) => props.onPatch(node.id, { loop: { ...loop, stop: value2 } })
-            }
+            },
+            `stop:${node.id}`
           ),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
             "Loop list key",
@@ -11969,7 +11976,8 @@ window.__ModuleLoader__.load({
             value: match ?? {},
             ariaLabel: "Trigger match JSON",
             commit: (value2) => props.onDefinitionPatch({ trigger: { ...trigger, match: value2 } })
-          }
+          },
+          `match:${props.state.document.definition.id}`
         ),
         triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind))
       ] });

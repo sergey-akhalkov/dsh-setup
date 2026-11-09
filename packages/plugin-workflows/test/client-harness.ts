@@ -9,12 +9,12 @@ import { buildSync } from 'esbuild'
 
 export const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
-export type Element = { type: unknown; props: Record<string, unknown> }
+export type Element = { type: unknown; props: Record<string, unknown>; key?: string }
 
 const Fragment = Symbol('Fragment')
 
-export function jsx(type: unknown, props: Record<string, unknown> | null): Element {
-  return { type, props: props ?? {} }
+export function jsx(type: unknown, props: Record<string, unknown> | null, key?: string): Element {
+  return { type, props: props ?? {}, ...(key === undefined ? {} : { key }) }
 }
 
 class StubComponent {

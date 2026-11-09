@@ -87,7 +87,10 @@ const FAILURE_CLASSES = [
 ] as const
 
 export function classifyFailure(reason: string | undefined): string {
-  const text = (reason ?? '').toLowerCase()
+  const raw = (reason ?? '').toLowerCase()
+  // A parenthesized detail is context, not the cause; classify the leading
+  // reason so a detail token cannot override the actual failure class.
+  const text = raw.includes(' (') ? raw.slice(0, raw.indexOf(' (')) : raw
   for (const failureClass of FAILURE_CLASSES) {
     if (text.includes(failureClass)) return failureClass
   }

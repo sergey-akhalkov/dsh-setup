@@ -39,6 +39,21 @@ import {
 
 const ui = loadClientModules(['palette.tsx', 'properties.tsx', 'list.tsx', 'canvas.tsx'])
 
+/** Walk elements without rendering function components, keeping their keys. */
+function rawElements(node: unknown, found: Element[] = []): Element[] {
+  if (node === null || typeof node !== 'object') return found
+  if (Array.isArray(node)) {
+    for (const child of node) rawElements(child, found)
+    return found
+  }
+  const element = node as Element
+  if (element.props !== undefined) {
+    found.push(element)
+    for (const value of Object.values(element.props)) rawElements(value, found)
+  }
+  return found
+}
+
 /** Render a JsonField element (the shared JSON textarea) and return its textarea. */
 function jsonTextarea(tree: unknown, label: string): Element | undefined {
   return elements(tree).find(
@@ -448,6 +463,33 @@ describe('palette and property panel', () => {
       applicability: 'checkpoint-required',
     })
     expect(validateDefinition(state.document.definition).trigger.repeat).toBe(true)
+  })
+
+  it('scopes a JSON draft identity to the selected node', () => {
+    let state = addStep(openNew(blankDefinition(new Set(['keys-demo']))), 'step')
+    state = patchStep(state, nodeIdOf('step-2'), {
+      prompt: 'Two.',
+      evidence: { kind: 'declaration' },
+      nonCritical: true,
+    })
+    const fieldKey = (selected: string): string | undefined => {
+      const tree = call(ui, 'PropertyPanel', {
+        state,
+        selected,
+        onDefinitionPatch: () => {},
+        onPatch: () => {},
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+      return rawElements(tree).find((element) => element.props['ariaLabel'] === 'Evidence JSON')
+        ?.key
+    }
+    const first = fieldKey(nodeIdOf('step-1'))
+    const second = fieldKey(nodeIdOf('step-2'))
+    expect(first).toContain(nodeIdOf('step-1'))
+    expect(second).toContain(nodeIdOf('step-2'))
+    expect(first).not.toBe(second)
   })
 
   it('opens the property panel for the selected node', () => {

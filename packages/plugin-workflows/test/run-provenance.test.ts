@@ -90,6 +90,11 @@ describe('run provenance record', () => {
     expect(classifyFailure('the tool was not observed')).toBe('no-call')
     expect(classifyFailure('the child returned an invalid schema result')).toBe('invalid-result')
     expect(classifyFailure(undefined)).toBe('check-failed')
+    // A detail in parentheses is context, never the cause.
+    expect(
+      classifyFailure('waiting for the legacy gate: no-call (record-mismatch in the detail)'),
+    ).toBe('no-call')
+    expect(classifyFailure('the user answer "no" is not one of: yes')).toBe('rejected-answer')
     const workspace = '/workspace'
     const run = createRun({
       definition: 'demo',
