@@ -534,24 +534,18 @@ function resolveWorkspacePath(value, workspace) {
     }
     return isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized);
 }
-function workspacePath(value, workspace) {
-    const absolute = resolveWorkspacePath(value, workspace);
-    const rel = relative(workspace, absolute).replaceAll('\\', '/');
-    if (rel === '')
-        return '';
-    if (rel === '..' || rel.startsWith('../') || isAbsolute(rel))
-        return undefined;
-    return process.platform === 'win32' ? rel.toLowerCase() : rel;
-}
+/** A destination matches a target when it is the target or lies beneath it. */
 /** A destination matches a target when it is the target or lies beneath it. */
 function targetMatches(targets, destination, workspace) {
-    const path = workspacePath(destination, workspace);
-    if (path === undefined)
-        return false;
+    // Remedy targets may deliberately live outside the workspace (a sibling
+    // checkout); resolve both sides against the workspace and compare containment.
+    const normalize = (value) => {
+        const absolute = resolveWorkspacePath(value, workspace).replaceAll('\\', '/');
+        return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+    };
+    const path = normalize(destination);
     return targets.some((target) => {
-        const wanted = workspacePath(target, workspace);
-        if (wanted === undefined)
-            return false;
+        const wanted = normalize(target);
         return wanted === '' || path === wanted || path.startsWith(`${wanted}/`);
     });
 }

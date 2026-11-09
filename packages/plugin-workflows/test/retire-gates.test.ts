@@ -581,6 +581,29 @@ describe('owned checkpoint decisions', () => {
       enforceParallel: true,
     })
     expect(after).toBeUndefined()
+    const external = checkpointCloseIssue({
+      record: {
+        outcome: 'continue',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'lead',          action: 'lead_action',
+          blockingLanes: ['edit'],
+          targets: ['../shared'],
+        },
+      },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        { toolName: 'write', arguments: { file_path: '../shared/helper.ts' }, ok: true, at: 300 },
+      ],
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: false,
+      enforceParallel: false,
+      workspace: '/repo/app',
+    })
+    expect(external).toBeUndefined()
     const sibling = checkpointCloseIssue({
       record,
       checkpointId: 'checkpoint-1-aaaaaaaa',
