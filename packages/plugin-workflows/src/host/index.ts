@@ -1074,7 +1074,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   (call) => call.turn === undefined || call.turn === input.turn,
                 )
                 return (
-                  lastCodeWriteAt(calls) !== undefined ||
+                  lastCodeWriteAt(calls, workspace) !== undefined ||
                   (metrics?.turn === input.turn && metrics?.lastWriteAt !== undefined)
                 )
               }
@@ -1909,7 +1909,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         (call) => call.turn === undefined || call.turn === turn,
       )
       const writeAt =
-        lastCodeWriteAt(calls) ??
+        lastCodeWriteAt(calls, workspace) ??
         (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined)
       if (writeAt === undefined) {
         const completed = completeNotApplicable(run, journal.time())
@@ -1937,12 +1937,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         toolCalls,
         shellResults,
         checkCommands: verifySettings.commands,
-        ...(lastCodeWriteAt(toolCalls) === undefined && writeMetrics?.lastWriteAt === undefined
+        ...(lastCodeWriteAt(toolCalls, workspace) === undefined &&
+        writeMetrics?.lastWriteAt === undefined
           ? {}
-          : { lastWriteAt: lastCodeWriteAt(toolCalls) ?? writeMetrics?.lastWriteAt }),
+          : { lastWriteAt: lastCodeWriteAt(toolCalls, workspace) ?? writeMetrics?.lastWriteAt }),
         ...(writeMetrics?.lastWritePath === undefined
           ? {}
           : { lastWritePath: writeMetrics.lastWritePath }),
+        ...(writeMetrics?.lastCheckAt === undefined
+          ? {}
+          : { lastCheckAt: writeMetrics.lastCheckAt }),
         ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
       },
       owned: ownedCalls,
@@ -2687,6 +2691,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                           ...(turnMetrics.get(sessionId)?.lastWritePath === undefined
                             ? {}
                             : { lastWritePath: turnMetrics.get(sessionId)?.lastWritePath }),
+                          ...(turnMetrics.get(sessionId)?.lastCheckAt === undefined
+                            ? {}
+                            : { lastCheckAt: turnMetrics.get(sessionId)?.lastCheckAt }),
                         }),
                   }
                 : {}),
@@ -2791,13 +2798,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const state = run.steps.find((entry) => entry.id === step.id)
       const calls = sessionToolCalls.get(sessionId) ?? []
       const metrics = turnMetrics.get(sessionId)
-      const lastWrite = lastCodeWriteAt(calls) ?? metrics?.lastWriteAt
+      const lastWrite = lastCodeWriteAt(calls, workspace) ?? metrics?.lastWriteAt
       return {
         toolCalls: calls,
         shellResults: sessionShellResults.get(sessionId) ?? [],
         checkCommands: verifySettings.commands,
         ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
         ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
+        ...(metrics?.lastCheckAt === undefined ? {} : { lastCheckAt: metrics.lastCheckAt }),
         ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
         ...(typeof state?.evidence?.answer === 'string'
           ? { answers: [{ answer: state.evidence.answer }] }

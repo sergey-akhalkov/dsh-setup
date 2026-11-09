@@ -832,7 +832,7 @@ export function apply(ctx, config = {}) {
                         if (rootSessions.get(input.session) !== true)
                             return false;
                         const calls = (sessionToolCalls.get(input.session) ?? []).filter((call) => call.turn === undefined || call.turn === input.turn);
-                        return (lastCodeWriteAt(calls) !== undefined ||
+                        return (lastCodeWriteAt(calls, workspace) !== undefined ||
                             (metrics?.turn === input.turn && metrics?.lastWriteAt !== undefined));
                     }
                     if (definition.trigger.applicability !== 'checkpoint-required')
@@ -1590,7 +1590,7 @@ export function apply(ctx, config = {}) {
             // The verify definition observes only a turn that wrote code; a
             // documentation-only or inspection turn completes the run as inapplicable.
             const calls = (sessionToolCalls.get(String(agent.session.id)) ?? []).filter((call) => call.turn === undefined || call.turn === turn);
-            const writeAt = lastCodeWriteAt(calls) ??
+            const writeAt = lastCodeWriteAt(calls, workspace) ??
                 (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined);
             if (writeAt === undefined) {
                 const completed = completeNotApplicable(run, journal.time());
@@ -1618,12 +1618,15 @@ export function apply(ctx, config = {}) {
                 toolCalls,
                 shellResults,
                 checkCommands: verifySettings.commands,
-                ...(lastCodeWriteAt(toolCalls) === undefined && writeMetrics?.lastWriteAt === undefined
+                ...(lastCodeWriteAt(toolCalls, workspace) === undefined && writeMetrics?.lastWriteAt === undefined
                     ? {}
-                    : { lastWriteAt: lastCodeWriteAt(toolCalls) ?? writeMetrics?.lastWriteAt }),
+                    : { lastWriteAt: lastCodeWriteAt(toolCalls, workspace) ?? writeMetrics?.lastWriteAt }),
                 ...(writeMetrics?.lastWritePath === undefined
                     ? {}
                     : { lastWritePath: writeMetrics.lastWritePath }),
+                ...(writeMetrics?.lastCheckAt === undefined
+                    ? {}
+                    : { lastCheckAt: writeMetrics.lastCheckAt }),
                 ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
             },
             owned: ownedCalls,
@@ -2272,6 +2275,9 @@ export function apply(ctx, config = {}) {
                                         ...(turnMetrics.get(sessionId)?.lastWritePath === undefined
                                             ? {}
                                             : { lastWritePath: turnMetrics.get(sessionId)?.lastWritePath }),
+                                        ...(turnMetrics.get(sessionId)?.lastCheckAt === undefined
+                                            ? {}
+                                            : { lastCheckAt: turnMetrics.get(sessionId)?.lastCheckAt }),
                                     }),
                             }
                             : {}),
@@ -2357,13 +2363,14 @@ export function apply(ctx, config = {}) {
             const state = run.steps.find((entry) => entry.id === step.id);
             const calls = sessionToolCalls.get(sessionId) ?? [];
             const metrics = turnMetrics.get(sessionId);
-            const lastWrite = lastCodeWriteAt(calls) ?? metrics?.lastWriteAt;
+            const lastWrite = lastCodeWriteAt(calls, workspace) ?? metrics?.lastWriteAt;
             return {
                 toolCalls: calls,
                 shellResults: sessionShellResults.get(sessionId) ?? [],
                 checkCommands: verifySettings.commands,
                 ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
                 ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
+                ...(metrics?.lastCheckAt === undefined ? {} : { lastCheckAt: metrics.lastCheckAt }),
                 ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
                 ...(typeof state?.evidence?.answer === 'string'
                     ? { answers: [{ answer: state.evidence.answer }] }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
 import type {
   AllEvidence,
@@ -110,6 +110,8 @@ export interface EvidenceContext {
   readonly lastWriteAt?: number
   /** The latest written path, for the bounded refusal text. */
   readonly lastWritePath?: string
+  /** The latest successful configured check, retained across buffer eviction. */
+  readonly lastCheckAt?: number
   /** Recorded user answers for the step's question. */
   readonly answers?: readonly HumanAnswerObservation[]
   /** Whether the step is marked nonCritical, the only declaration consumer. */
@@ -782,13 +784,18 @@ export function ignoredWrite(path: string): boolean {
 }
 
 /** When the turn last wrote a non-documentation file, from its tool calls. */
-export function lastCodeWriteAt(calls: readonly ToolCallObservation[]): number | undefined {
+export function lastCodeWriteAt(
+  calls: readonly ToolCallObservation[],
+  workspace?: string,
+): number | undefined {
   let last: number | undefined
   for (const call of calls) {
     if (!call.ok || call.at === undefined) continue
     if (call.name !== 'edit' && call.name !== 'write') continue
     const raw = call.arguments.file_path ?? call.arguments.path
-    if (typeof raw !== 'string' || raw.trim() === '' || ignoredWrite(raw)) continue
+    if (typeof raw !== 'string' || raw.trim() === '') continue
+    const resolved = workspace === undefined ? raw : resolve(workspace, raw)
+    if (ignoredWrite(resolved)) continue
     if (last === undefined || call.at > last) last = call.at
   }
   return last
@@ -850,9 +857,24 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
   )
   const afterWrite = results.filter((candidate) => candidate.at > lastWrite)
   const shown = shownCommands(commands)
+  const target =
+    context.lastWritePath === undefined
+      ? ''
+      : ` (last write: ${context.lastWritePath.slice(0, 120)})`
   if (afterWrite.length === 0) {
+    if (context.lastCheckAt !== undefined && context.lastCheckAt > lastWrite) {
+      return {
+        ok: true,
+        evidence: {
+          kind: 'check',
+          callId: 'persisted-check',
+          at: context.lastCheckAt,
+          detail: 'a configured check succeeded after the last write',
+        },
+      }
+    }
     return checkFailure(
-      `no configured verification command completed after the last code write; run ${shown}`,
+      `no configured verification command completed after the last code write${target}; run ${shown}`,
       item,
     )
   }

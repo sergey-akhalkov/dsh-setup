@@ -74,6 +74,8 @@ export interface EvidenceContext {
     readonly lastWriteAt?: number;
     /** The latest written path, for the bounded refusal text. */
     readonly lastWritePath?: string;
+    /** The latest successful configured check, retained across buffer eviction. */
+    readonly lastCheckAt?: number;
     /** Recorded user answers for the step's question. */
     readonly answers?: readonly HumanAnswerObservation[];
     /** Whether the step is marked nonCritical, the only declaration consumer. */
@@ -119,7 +121,7 @@ export declare function sameCheckDirectory(left: string, right: string): boolean
 /** True when a write target is planning scratch or documentation, not code. */
 export declare function ignoredWrite(path: string): boolean;
 /** When the turn last wrote a non-documentation file, from its tool calls. */
-export declare function lastCodeWriteAt(calls: readonly ToolCallObservation[]): number | undefined;
+export declare function lastCodeWriteAt(calls: readonly ToolCallObservation[], workspace?: string): number | undefined;
 /** Resolve every workspace-relative path an evidence contract will check. */
 export declare function collectEvidencePaths(value: Evidence, context: EvidenceContext, item?: string): string[];
 export declare function describeEvidence(value: Evidence, context: EvidenceContext): string;

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 import { isInside } from './fs-change.js';
@@ -592,7 +592,7 @@ export function ignoredWrite(path) {
     return /(?:^|\/)(?:\.dsh|\.tmp|node_modules|openspec)\//iu.test(normalized);
 }
 /** When the turn last wrote a non-documentation file, from its tool calls. */
-export function lastCodeWriteAt(calls) {
+export function lastCodeWriteAt(calls, workspace) {
     let last;
     for (const call of calls) {
         if (!call.ok || call.at === undefined)
@@ -600,7 +600,10 @@ export function lastCodeWriteAt(calls) {
         if (call.name !== 'edit' && call.name !== 'write')
             continue;
         const raw = call.arguments.file_path ?? call.arguments.path;
-        if (typeof raw !== 'string' || raw.trim() === '' || ignoredWrite(raw))
+        if (typeof raw !== 'string' || raw.trim() === '')
+            continue;
+        const resolved = workspace === undefined ? raw : resolve(workspace, raw);
+        if (ignoredWrite(resolved))
             continue;
         if (last === undefined || call.at > last)
             last = call.at;
@@ -657,8 +660,20 @@ function verifyCheck(context, item) {
         (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)));
     const afterWrite = results.filter((candidate) => candidate.at > lastWrite);
     const shown = shownCommands(commands);
+    const target = context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath.slice(0, 120)})`;
     if (afterWrite.length === 0) {
-        return checkFailure(`no configured verification command completed after the last code write; run ${shown}`, item);
+        if (context.lastCheckAt !== undefined && context.lastCheckAt > lastWrite) {
+            return {
+                ok: true,
+                evidence: {
+                    kind: 'check',
+                    callId: 'persisted-check',
+                    at: context.lastCheckAt,
+                    detail: 'a configured check succeeded after the last write',
+                },
+            };
+        }
+        return checkFailure(`no configured verification command completed after the last code write${target}; run ${shown}`, item);
     }
     // The legacy gate clears the obligation on a successful check, and a later
     // failed attempt does not re-dirty the turn; keep that parity.
