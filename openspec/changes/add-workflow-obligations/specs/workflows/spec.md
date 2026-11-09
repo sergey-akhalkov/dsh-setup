@@ -448,17 +448,22 @@ The `workflows` tool SHALL expose `list`, `start`, `resume`, `status`, `evidence
 
 ### Requirement: User interface
 
-The plugin SHALL register `/workflows` (opens the Workflows view in the current session), `/workflows resume <runId>` (resumes an interrupted run), `/workflows install <path>` (installs and approves a definition), and `/workflows adopt <name>` (adopts an existing change). The view SHALL show definitions, triggers, runs, step state, evidence, receipts, and the trigger evaluation log. It MUST NOT require a separate main panel and MUST NOT execute a workflow from a display-only action.
+The plugin SHALL register `/workflows` (names the Workflows tab as the entry point), `/workflows run <id>`, `/workflows resume <runId>`, `/workflows install <path>`, and `/workflows adopt <name>`. `run`/`resume` SHALL activate an `own` pending step by steering the root agent; a `defer` step MUST NOT steer. The view SHALL show definitions, triggers, runs, step state, evidence, receipts, and the evaluation log, and a display-only action MUST NOT execute a workflow.
 
-#### Scenario: Command opens the view
+#### Scenario: Command names the tab
 
 - **WHEN** the user runs `/workflows`
-- **THEN** the Workflows view opens for the current session
+- **THEN** the response identifies the Workflows tab as the entry point and no client view opens from the command
 
 #### Scenario: Resume command continues a run
 
-- **WHEN** the user runs `/workflows resume <runId>` for an interrupted run
+- **WHEN** the user runs `/workflows resume <runId>` for an interrupted run and the pending step is `own`
 - **THEN** the run continues at its pending step and no new run starts
+
+#### Scenario: Deferred step is not steered
+
+- **WHEN** the user runs `/workflows resume <runId>` for an interrupted intake whose pending step is the deferred spec-review
+- **THEN** the command does not steer, the step awaits the legacy record, and only the legacy spec-review gate steers
 
 #### Scenario: Install command is user-started
 
