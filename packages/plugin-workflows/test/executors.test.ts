@@ -283,6 +283,7 @@ describe('subagent executor', () => {
     expect(run.status).toBe('failed')
     expect(run.steps[0]?.state).toBe('failed')
     expect(run.steps[0]?.reason).toContain('does not match the schema')
+    expect(run.steps[0]?.failureClass).toBe('invalid-result')
     expect(run.steps[0]?.evidence).toMatchObject({ kind: 'subagent', callId: 'child-2' })
     expect(runner.requests).toHaveLength(1)
   })

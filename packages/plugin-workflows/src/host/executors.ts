@@ -1288,6 +1288,7 @@ export async function runSubagentStep(input: SubagentStepInput): Promise<Workflo
         settleStep(input.run, input.step.id, 'failed', {
           at: input.now,
           reason: `the child result does not match the schema: ${mismatch.slice(0, 200)}`,
+          failureClass: 'invalid-result',
           evidence: {
             kind: 'subagent',
             callId: result.childId,
