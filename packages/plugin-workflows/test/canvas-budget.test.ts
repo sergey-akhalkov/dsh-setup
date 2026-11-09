@@ -14,6 +14,7 @@ import { packageDir } from './client-harness.ts'
 
 const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
   scripts?: Record<string, string>
+  files?: readonly string[]
   devDependencies?: Record<string, string>
   dsh?: { client?: { external?: readonly string[] } }
 }
@@ -102,6 +103,9 @@ describe('React Flow dependency', () => {
   })
 
   it('ships the MIT license notice with the package', () => {
+    // The publishable file list is what the setup bundle vendors; the notice
+    // must be in it, not only in the source checkout.
+    expect(manifest.files ?? []).toContain('THIRD_PARTY_NOTICES.md')
     const notice = readFileSync(join(packageDir, 'THIRD_PARTY_NOTICES.md'), 'utf8')
     expect(notice).toContain('MIT License')
     expect(notice).toContain('Copyright (c) 2019-2025 webkid GmbH')
