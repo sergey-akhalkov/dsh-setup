@@ -83,6 +83,8 @@ describe('mode and fallback', () => {
   })
 
   it('renders the list when the canvas render throws, with a bounded notice', () => {
+    // The fallback is client-only: it neither calls the host nor reads/writes runs.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const boundary = new (
       ui.CanvasBoundary as unknown as new (
         props: Record<string, unknown>,
@@ -111,6 +113,8 @@ describe('mode and fallback', () => {
     expect(onError).toHaveBeenCalledTimes(1)
     errors.mockRestore()
     expect(fallbackIsClientOnly()).toBe(true)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
     // The fallback is a client-only state; a module evaluation failure happens
     // before render and is reported by the Harness loader instead.
     expect(CLIENT_MODULE_FAILURE_NOTE).toContain('Harness loader')
