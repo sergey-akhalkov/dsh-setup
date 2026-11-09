@@ -664,9 +664,17 @@ function mentions(value: Readonly<Record<string, unknown>>, wanted: string): boo
 }
 
 /** Resolve one path against the workspace; undefined when it escapes it. */
-function workspacePath(value: string, workspace: string): string | undefined {
+function resolveWorkspacePath(value: string, workspace: string): string {
   const normalized = value.replaceAll('\\', '/')
-  const absolute = isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized)
+  if (process.platform === 'win32' && /^\/[^/]/u.test(normalized)) {
+    const drive = /^([A-Za-z]):/u.exec(workspace)?.[1]
+    if (drive !== undefined) return resolve(`${drive}:${normalized}`)
+  }
+  return isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized)
+}
+
+function workspacePath(value: string, workspace: string): string | undefined {
+  const absolute = resolveWorkspacePath(value, workspace)
   const rel = relative(workspace, absolute).replaceAll('\\', '/')
   if (rel === '') return ''
   if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return undefined

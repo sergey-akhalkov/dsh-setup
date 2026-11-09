@@ -4,7 +4,7 @@ import { requestMainStep } from './executors.js';
 import { addViolation, incrementTurnBlocks, resetStepAttempts, resetTurnBlocks, setRunStatus, settleStep, } from './runs.js';
 function stepIsOpen(run, stepId) {
     const state = run.steps.find((step) => step.id === stepId)?.state;
-    return state === 'open' || state === 'blocked' || state === 'failed';
+    return state === 'open' || state === 'blocked';
 }
 /**
  * The first open `blockTurnClose` owned step, unless an earlier open step is
@@ -31,6 +31,29 @@ export function evaluateTurnClose(input) {
     try {
         if (input.origin === 'subagent') {
             return { kind: 'allow', run: input.run, reason: 'a subagent turn is exempt' };
+        }
+        // A failed task-review dispatch is an unresolved obligation: it must not
+        // let the run terminal-allow before the review retry path is used.
+        if (input.definition.id === 'task-review') {
+            const failed = input.definition.steps.find((step) => step.blockTurnClose === true &&
+                input.run.steps.find((entry) => entry.id === step.id)?.state === 'failed');
+            if (failed !== undefined) {
+                const blocks = input.run.turnBlocks ?? 0;
+                if (blocks >= input.maxBlocks) {
+                    const detail = `step "${failed.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`;
+                    return {
+                        kind: 'violation',
+                        run: resetTurnBlocks(addViolation(input.run, detail, { step: failed.id, at }), at),
+                        detail,
+                    };
+                }
+                return {
+                    kind: 'refuse',
+                    run: incrementTurnBlocks(input.run, at),
+                    stepId: failed.id,
+                    text: `step "${failed.id}" has a failed dispatch; retry it before the close`,
+                };
+            }
         }
         // A terminal run is never revived by a later steer.
         if (input.run.status === 'completed' ||

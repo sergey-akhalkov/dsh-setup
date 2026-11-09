@@ -2441,6 +2441,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const ordered =
           owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
         const legacy = legacySignalState()
+        const workflowOwnsCheckpoint = !legacy.enabled.has('goal-continuity/work_checkpoint')
         const checkpointObservations = (session: string): CheckpointObservation[] =>
           (sessionToolCalls.get(session) ?? []).map((call) => ({
             toolName: call.name,
@@ -2495,6 +2496,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // A retro run must not complete on the record alone: while the host
           // checkpoint remedy/age rule fails, keep the run open and steer.
           if (
+            workflowOwnsCheckpoint &&
             definition.id === 'retro' &&
             typeof run.context.checkpoint === 'string' &&
             checkpointTurnOf(run.context.checkpoint) === payload.turn
@@ -2587,7 +2589,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // A completed retro run must not hide a checkpoint that went stale
         // later in the same turn: re-check the current-turn record on every
         // close and steer when the obligation reappears.
-        if (!refusedThisClose) {
+        if (!refusedThisClose && workflowOwnsCheckpoint) {
           const currentRetro = runs.find(
             (run) =>
               run.definition === 'retro' &&

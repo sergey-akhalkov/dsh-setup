@@ -204,7 +204,13 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
           ...(input.signal === undefined ? {} : { signal: input.signal }),
         })
         if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
-          return { run, completed: false, waiting: waitingFor(step, input.evidenceContext) }
+          // A failed dispatch is a blocking obligation, not a terminal run:
+          // keep it retryable so the close gate cannot pass over it.
+          return {
+            run: setRunStatus(run, 'blocked', at),
+            completed: false,
+            waiting: waitingFor(step, input.evidenceContext),
+          }
         }
       }
       const check = await verifyEvidence(

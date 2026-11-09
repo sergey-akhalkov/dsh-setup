@@ -2090,6 +2090,7 @@ export function apply(ctx, config = {}) {
                 mainStepOwners.delete(sessionId);
             const ordered = owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)];
             const legacy = legacySignalState();
+            const workflowOwnsCheckpoint = !legacy.enabled.has('goal-continuity/work_checkpoint');
             const checkpointObservations = (session) => (sessionToolCalls.get(session) ?? []).map((call) => ({
                 toolName: call.name,
                 arguments: call.arguments,
@@ -2136,7 +2137,8 @@ export function apply(ctx, config = {}) {
                     continue;
                 // A retro run must not complete on the record alone: while the host
                 // checkpoint remedy/age rule fails, keep the run open and steer.
-                if (definition.id === 'retro' &&
+                if (workflowOwnsCheckpoint &&
+                    definition.id === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn) {
                     const DEBUG_ISSUE = checkpointGateIssue(workspace, run.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
@@ -2205,7 +2207,7 @@ export function apply(ctx, config = {}) {
             // A completed retro run must not hide a checkpoint that went stale
             // later in the same turn: re-check the current-turn record on every
             // close and steer when the obligation reappears.
-            if (!refusedThisClose) {
+            if (!refusedThisClose && workflowOwnsCheckpoint) {
                 const currentRetro = runs.find((run) => run.definition === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn &&
