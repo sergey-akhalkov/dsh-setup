@@ -122,6 +122,9 @@ export declare function sameCheckDirectory(left: string, right: string): boolean
 export declare function ignoredWrite(path: string): boolean;
 /** When the turn last wrote a non-documentation file, from its tool calls. */
 export declare function lastCodeWriteAt(calls: readonly ToolCallObservation[], workspace?: string): number | undefined;
+/** The legacy command matcher: the invocation matches a configured command
+ * directly, or after removing one leading rtk wrapper from the invocation. */
+export declare function commandMatches(configured: string, invocation: string): boolean;
 /** Resolve every workspace-relative path an evidence contract will check. */
 export declare function collectEvidencePaths(value: Evidence, context: EvidenceContext, item?: string): string[];
 export declare function describeEvidence(value: Evidence, context: EvidenceContext): string;

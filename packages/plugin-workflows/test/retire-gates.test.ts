@@ -7,7 +7,7 @@ import {
   loadShippedDefinitions,
   resolveOwnership,
 } from '../src/host/definitions.ts'
-import { verifyEvidence } from '../src/host/evidence.ts'
+import { commandMatches, verifyEvidence } from '../src/host/evidence.ts'
 import { evaluateArchiveGate, evaluateTurnClose } from '../src/host/gates.ts'
 import {
   checkpointCloseIssue,
@@ -1089,6 +1089,13 @@ describe('owned verification evidence', () => {
       workspace,
     })
     expect(issue).toBeUndefined()
+  })
+
+  it('matches the legacy rtk wrapper contract', () => {
+    expect(commandMatches('pnpm check', 'pnpm check')).toBe(true)
+    expect(commandMatches('pnpm check', 'rtk pnpm check')).toBe(true)
+    expect(commandMatches('rtk pnpm check', 'rtk rtk pnpm check')).toBe(true)
+    expect(commandMatches('rtk pnpm check', 'pnpm check')).toBe(false)
   })
 
   it('requires a passing configured command after the last code write', async () => {

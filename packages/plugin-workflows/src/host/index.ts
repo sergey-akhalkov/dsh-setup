@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -25,6 +25,7 @@ import {
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
+  commandMatches,
   ignoredWrite,
   lastCodeWriteAt,
   type ShellResultObservation,
@@ -1410,7 +1411,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             typeof args.file_path === 'string'
           ) {
             metrics.written += 1
-            if (!ignoredWrite(args.file_path)) {
+            if (!ignoredWrite(resolve(workspace, args.file_path))) {
               metrics.lastWriteAt = journal.time()
               metrics.lastWritePath = args.file_path
             }
@@ -2491,8 +2492,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ? turnMetrics.get(sessionId)?.lastWriteAt
             : undefined
         if (verifyWriteAt !== undefined) {
-          const normalizeCommand = (value: string): string => value.trim().replace(/^rtk\s+/u, '')
-          const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand))
           const bufferCheckAt = (sessionShellResults.get(sessionId) ?? [])
             .filter(
               (result) =>
@@ -2502,7 +2501,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 result.signal === undefined &&
                 result.timedOut !== true &&
                 result.sandboxDenied !== true &&
-                configuredCommands.has(normalizeCommand(result.command)) &&
+                verifySettings.commands.some((configured) =>
+                  commandMatches(configured, result.command),
+                ) &&
                 (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)),
             )
             .map((result) => result.at)
@@ -2642,6 +2643,20 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const current = advanced.get(run.id)
           const definition = definitionOf.get(run.id)
           if (current === undefined || definition === undefined) continue
+          // A prior turn's retro obligation is obsolete: work_checkpoint only
+          // writes the current turn's record, so supersede it (keeping its
+          // violation history) instead of demanding the old record forever.
+          if (
+            run.definition === 'retro' &&
+            (run.status === 'running' || run.status === 'blocked') &&
+            typeof run.context.checkpoint === 'string' &&
+            checkpointTurnOf(run.context.checkpoint) !== payload.turn
+          ) {
+            const superseded = { ...run, status: 'cancelled' as const, updatedAt: journal.time() }
+            await writeRun(workspace, superseded, auth)
+            ordered.splice(ordered.indexOf(run), 1, superseded)
+            continue
+          }
           const sessionCalls = sessionToolCalls.get(sessionId) ?? []
           const observations = sessionCalls.map((call) => ({
             toolName: call.name,

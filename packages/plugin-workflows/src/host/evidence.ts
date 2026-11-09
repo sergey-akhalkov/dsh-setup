@@ -801,9 +801,11 @@ export function lastCodeWriteAt(
   return last
 }
 
-/** The legacy command comparison: trim, then strip at most one leading `rtk `. */
-function normalizeCheckCommand(value: string): string {
-  return value.trim().replace(/^rtk\s+/u, '')
+/** The legacy command matcher: the invocation matches a configured command
+ * directly, or after removing one leading rtk wrapper from the invocation. */
+export function commandMatches(configured: string, invocation: string): boolean {
+  const command = invocation.trim()
+  return configured === command || configured === command.replace(/^rtk\s+/u, '')
 }
 
 function shownCommands(commands: readonly string[]): string {
@@ -848,11 +850,11 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
       },
     }
   }
-  const accepted = new Set(commands.map(normalizeCheckCommand))
+  const accepted = commands
   const results = (context.shellResults ?? []).filter(
     (candidate) =>
       candidate.foreground &&
-      accepted.has(normalizeCheckCommand(candidate.command)) &&
+      accepted.some((configured) => commandMatches(configured, candidate.command)) &&
       (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)),
   )
   // A persisted successful check survives buffer eviction; a later failed

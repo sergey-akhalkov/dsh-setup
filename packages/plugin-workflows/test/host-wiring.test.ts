@@ -862,7 +862,7 @@ describe('verify auto-start', () => {
         agent: host.agent,
         callId: 'write-2',
         name: 'write',
-        arguments: { file_path: 'src/app.ts' },
+        arguments: { file_path: '.tmp/../src/app.ts' },
       },
       { isError: false, content: [{ type: 'text', text: 'ok' }] },
     )

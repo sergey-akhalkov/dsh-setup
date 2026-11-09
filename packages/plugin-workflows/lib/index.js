@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { adoptChange } from './adoption.js';
 import { registerWorkflowRoutes } from './api.js';
 import { installDefinition, loadApprovedDefinitions } from './approval-store.js';
@@ -9,7 +9,7 @@ import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './comman
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { evaluateEvent } from './evaluate.js';
-import { ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
+import { commandMatches, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose, } from './gates.js';
@@ -1143,7 +1143,7 @@ export function apply(ctx, config = {}) {
                 if ((exec.name === 'write' || exec.name === 'edit') &&
                     typeof args.file_path === 'string') {
                     metrics.written += 1;
-                    if (!ignoredWrite(args.file_path)) {
+                    if (!ignoredWrite(resolve(workspace, args.file_path))) {
                         metrics.lastWriteAt = journal.time();
                         metrics.lastWritePath = args.file_path;
                     }
@@ -2125,8 +2125,6 @@ export function apply(ctx, config = {}) {
                 ? turnMetrics.get(sessionId)?.lastWriteAt
                 : undefined;
             if (verifyWriteAt !== undefined) {
-                const normalizeCommand = (value) => value.trim().replace(/^rtk\s+/u, '');
-                const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand));
                 const bufferCheckAt = (sessionShellResults.get(sessionId) ?? [])
                     .filter((result) => result.foreground &&
                     result.ok !== false &&
@@ -2134,7 +2132,7 @@ export function apply(ctx, config = {}) {
                     result.signal === undefined &&
                     result.timedOut !== true &&
                     result.sandboxDenied !== true &&
-                    configuredCommands.has(normalizeCommand(result.command)) &&
+                    verifySettings.commands.some((configured) => commandMatches(configured, result.command)) &&
                     (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)))
                     .map((result) => result.at)
                     .sort((left, right) => right - left)[0];
@@ -2236,6 +2234,18 @@ export function apply(ctx, config = {}) {
                 const definition = definitionOf.get(run.id);
                 if (current === undefined || definition === undefined)
                     continue;
+                // A prior turn's retro obligation is obsolete: work_checkpoint only
+                // writes the current turn's record, so supersede it (keeping its
+                // violation history) instead of demanding the old record forever.
+                if (run.definition === 'retro' &&
+                    (run.status === 'running' || run.status === 'blocked') &&
+                    typeof run.context.checkpoint === 'string' &&
+                    checkpointTurnOf(run.context.checkpoint) !== payload.turn) {
+                    const superseded = { ...run, status: 'cancelled', updatedAt: journal.time() };
+                    await writeRun(workspace, superseded, auth);
+                    ordered.splice(ordered.indexOf(run), 1, superseded);
+                    continue;
+                }
                 const sessionCalls = sessionToolCalls.get(sessionId) ?? [];
                 const observations = sessionCalls.map((call) => ({
                     toolName: call.name,
