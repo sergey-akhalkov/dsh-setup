@@ -2183,10 +2183,10 @@ export function apply(ctx, config = {}) {
                     ...(last?.at === undefined ? {} : { checkpointAt: last.at }),
                 };
             };
-            const workerToolVisible = () => {
+            const workerToolVisible = (agent) => {
                 try {
                     const tools = ctx.get('tools');
-                    return ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate'].some((name) => tools?.get?.(name) !== undefined);
+                    return ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate'].some((name) => tools?.get?.(name, agent) !== undefined);
                 }
                 catch {
                     return true;
@@ -2194,7 +2194,7 @@ export function apply(ctx, config = {}) {
             };
             const checkpointOptions = (turn) => ({
                 ...checkpointFreshness(sessionId, turn),
-                workerVisible: workerToolVisible(),
+                workerVisible: workerToolVisible(payload.agent),
                 enforceParallel: checkpointApplicability.enforceParallel,
             });
             const checkpointTurnOf = (path) => {

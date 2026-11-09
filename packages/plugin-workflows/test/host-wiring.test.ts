@@ -765,7 +765,7 @@ describe('verify auto-start', () => {
       return verifyRun !== undefined
     })
     expect(verifyRun?.id).toBeDefined()
-    expect(host.steers.length).toBeGreaterThan(0)
+    expect(host.steers).toHaveLength(1)
   })
 
   it('reopens verification when a later write follows a successful check', async () => {

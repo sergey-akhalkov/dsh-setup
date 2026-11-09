@@ -19,7 +19,7 @@ import {
   templateHash,
   withVerifySettings,
 } from '../src/host/parity.ts'
-import { createRun, settleStep, type WorkflowRun } from '../src/host/runs.ts'
+import { createRun, incrementTurnBlocks, settleStep, type WorkflowRun } from '../src/host/runs.ts'
 
 /**
  * The retirement load gate, the owned close/archive decisions, and the verify
@@ -860,6 +860,56 @@ describe('owned verification evidence', () => {
     )
     expect(check.ok).toBe(false)
     if (!check.ok) expect(check.failure.detail.length).toBeLessThan(600)
+  })
+
+  it('applies a profile maxBlocks above 128 to the close cap', () => {
+    const definition = withVerifySettings(shipped('verify'), {
+      commands: ['pnpm check'],
+      maxBlocks: 129,
+    })
+    const blocked = (blocks: number) => {
+      let run = createRun({
+        definition: 'verify',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: '/workspace',
+        context: {},
+        steps: ['check'],
+        now: 1_000,
+      })
+      run = settleStep(run, 'check', 'open', { at: 1_001 })
+      for (let index = 0; index < blocks; index += 1) run = incrementTurnBlocks(run, 1_001)
+      return run
+    }
+    const context = {
+      workspace: '/workspace',
+      values: {},
+      checkCommands: ['pnpm check'],
+      lastWriteAt: 100,
+      shellResults: [],
+    }
+    const below = evaluateTurnClose({
+      run: blocked(128),
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: context,
+      turn: 1,
+      maxBlocks: definition.settings.maxBlocks,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+    })
+    expect(below.kind).toBe('refuse')
+    const atCap = evaluateTurnClose({
+      run: blocked(129),
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: context,
+      turn: 1,
+      maxBlocks: definition.settings.maxBlocks,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+    })
+    expect(atCap.kind).toBe('violation')
   })
 
   it('requires a passing configured command after the last code write', async () => {

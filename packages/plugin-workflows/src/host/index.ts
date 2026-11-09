@@ -2571,11 +2571,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(last?.at === undefined ? {} : { checkpointAt: last.at }),
           }
         }
-        const workerToolVisible = (): boolean => {
+        const workerToolVisible = (agent: unknown): boolean => {
           try {
-            const tools = ctx.get('tools') as { get?: (name: string) => unknown } | undefined
+            const tools = ctx.get('tools') as
+              | { get?: (name: string, caller?: unknown) => unknown }
+              | undefined
             return ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate'].some(
-              (name) => tools?.get?.(name) !== undefined,
+              (name) => tools?.get?.(name, agent) !== undefined,
             )
           } catch {
             return true
@@ -2583,7 +2585,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         const checkpointOptions = (turn: number) => ({
           ...checkpointFreshness(sessionId, turn),
-          workerVisible: workerToolVisible(),
+          workerVisible: workerToolVisible(payload.agent),
           enforceParallel: checkpointApplicability.enforceParallel,
         })
         const checkpointTurnOf = (path: string): number | undefined => {
