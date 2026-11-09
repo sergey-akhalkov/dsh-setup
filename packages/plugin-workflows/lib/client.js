@@ -10197,12 +10197,11 @@ window.__ModuleLoader__.load({
         indegree.set(entry.target, (indegree.get(entry.target) ?? 0) + 1);
       }
       const depth = /* @__PURE__ */ new Map();
-      if (indegree.has(TRIGGER_NODE)) depth.set(TRIGGER_NODE, 0);
-      const order = [];
-      const ready = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0).map((node) => node.id).sort();
+      const roots = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0).map((node) => node.id).sort();
+      for (const root2 of roots) depth.set(root2, 0);
+      const ready = [...roots];
       while (ready.length > 0) {
         const current = ready.shift();
-        order.push(current);
         const targets = (outgoing.get(current) ?? []).sort(
           (left, right) => left.target.localeCompare(right.target)
         );
@@ -10216,9 +10215,6 @@ window.__ModuleLoader__.load({
           }
         }
       }
-      for (const node of nodes) {
-        if (!order.includes(node.id)) order.push(node.id);
-      }
       const columns = /* @__PURE__ */ new Map();
       for (const node of nodes) {
         const column = depth.get(node.id) ?? nodes.length;
@@ -10226,14 +10222,37 @@ window.__ModuleLoader__.load({
         list.push(node.id);
         columns.set(column, list);
       }
+      const branchParent = /* @__PURE__ */ new Map();
+      for (const entry of edges) {
+        if (entry.kind !== "true" && entry.kind !== "false" && entry.kind !== "exit") continue;
+        const current = branchParent.get(entry.target);
+        if (current === void 0 || entry.source.localeCompare(current) < 0) {
+          branchParent.set(entry.target, entry.source);
+        }
+      }
+      const rows = /* @__PURE__ */ new Map();
       const positions = /* @__PURE__ */ Object.create(null);
       for (const column of [...columns.keys()].sort((left, right) => left - right)) {
-        const ids = (columns.get(column) ?? []).sort(
-          (left, right) => order.indexOf(left) - order.indexOf(right) || left.localeCompare(right)
-        );
-        ids.forEach((id2, row) => {
-          positions[id2] = { x: column * 240, y: row * 120 };
+        const ids = (columns.get(column) ?? []).sort((left, right) => left.localeCompare(right));
+        const constrained = ids.filter((id2) => branchParent.has(id2)).sort((left, right) => {
+          const leftRow = (rows.get(branchParent.get(left) ?? "") ?? 0) + 1;
+          const rightRow = (rows.get(branchParent.get(right) ?? "") ?? 0) + 1;
+          return leftRow - rightRow || left.localeCompare(right);
         });
+        const occupied = /* @__PURE__ */ new Set();
+        const place = (id2, wanted) => {
+          let row = Math.max(0, wanted);
+          while (occupied.has(row)) row += 1;
+          occupied.add(row);
+          rows.set(id2, row);
+          positions[id2] = { x: column * 240, y: row * 120 };
+        };
+        for (const id2 of constrained) {
+          place(id2, (rows.get(branchParent.get(id2) ?? "") ?? 0) + 1);
+        }
+        for (const id2 of ids.filter((entry) => !branchParent.has(entry))) {
+          place(id2, 0);
+        }
       }
       return positions;
     }

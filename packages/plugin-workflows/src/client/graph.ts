@@ -411,15 +411,16 @@ export function autoPositions(
     indegree.set(entry.target, (indegree.get(entry.target) ?? 0) + 1)
   }
   const depth = new Map<string, number>()
-  if (indegree.has(TRIGGER_NODE)) depth.set(TRIGGER_NODE, 0)
-  const order: string[] = []
-  const ready = nodes
+  const roots = nodes
     .filter((node) => (indegree.get(node.id) ?? 0) === 0)
     .map((node) => node.id)
     .sort()
+  // Every root starts at column 0 (the trigger is one of them), so a detached
+  // chain still runs forward with the trigger.
+  for (const root of roots) depth.set(root, 0)
+  const ready = [...roots]
   while (ready.length > 0) {
     const current = ready.shift() as string
-    order.push(current)
     const targets = (outgoing.get(current) ?? []).sort((left, right) =>
       left.target.localeCompare(right.target),
     )
@@ -433,11 +434,6 @@ export function autoPositions(
       }
     }
   }
-  // A malformed graph can leave unreachable nodes; keep them in a final column
-  // instead of looping forever.
-  for (const node of nodes) {
-    if (!order.includes(node.id)) order.push(node.id)
-  }
   const columns = new Map<number, string[]>()
   for (const node of nodes) {
     const column = depth.get(node.id) ?? nodes.length
@@ -445,14 +441,41 @@ export function autoPositions(
     list.push(node.id)
     columns.set(column, list)
   }
+  // Rows follow design.md: a branch/loop child sits one row below its parent,
+  // and unconstrained nodes in a column are ordered by step node id.
+  const branchParent = new Map<string, string>()
+  for (const entry of edges) {
+    if (entry.kind !== 'true' && entry.kind !== 'false' && entry.kind !== 'exit') continue
+    const current = branchParent.get(entry.target)
+    if (current === undefined || entry.source.localeCompare(current) < 0) {
+      branchParent.set(entry.target, entry.source)
+    }
+  }
+  const rows = new Map<string, number>()
   const positions = Object.create(null) as Record<string, { x: number; y: number }>
   for (const column of [...columns.keys()].sort((left, right) => left - right)) {
-    const ids = (columns.get(column) ?? []).sort(
-      (left, right) => order.indexOf(left) - order.indexOf(right) || left.localeCompare(right),
-    )
-    ids.forEach((id, row) => {
+    const ids = (columns.get(column) ?? []).sort((left, right) => left.localeCompare(right))
+    const constrained = ids
+      .filter((id) => branchParent.has(id))
+      .sort((left, right) => {
+        const leftRow = (rows.get(branchParent.get(left) ?? '') ?? 0) + 1
+        const rightRow = (rows.get(branchParent.get(right) ?? '') ?? 0) + 1
+        return leftRow - rightRow || left.localeCompare(right)
+      })
+    const occupied = new Set<number>()
+    const place = (id: string, wanted: number): void => {
+      let row = Math.max(0, wanted)
+      while (occupied.has(row)) row += 1
+      occupied.add(row)
+      rows.set(id, row)
       positions[id] = { x: column * 240, y: row * 120 }
-    })
+    }
+    for (const id of constrained) {
+      place(id, (rows.get(branchParent.get(id) ?? '') ?? 0) + 1)
+    }
+    for (const id of ids.filter((entry) => !branchParent.has(entry))) {
+      place(id, 0)
+    }
   }
   return positions
 }

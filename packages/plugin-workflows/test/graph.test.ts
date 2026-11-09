@@ -294,4 +294,39 @@ describe('deterministic auto layout', () => {
     expect(Object.keys(positions)).toHaveLength(graph.nodes.length)
     expect(Number.isFinite(positions[nodeIdOf('join')]?.x)).toBe(true)
   })
+
+  it('lays a detached chain forward from column zero', () => {
+    const definition = baseDefinition({
+      steps: [
+        step('entry', 'main', { next: 'end' }),
+        step('detached', 'main', { next: 'child' }),
+        step('child', 'main', { next: 'end' }),
+      ],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const positions = autoPositions(graph.nodes, graph.edges)
+    expect(positions[nodeIdOf('detached')]?.x).toBe(0)
+    expect(positions[nodeIdOf('child')]?.x).toBeGreaterThan(positions[nodeIdOf('detached')]?.x ?? 0)
+    expect(positions[END_NODE]?.x).toBeGreaterThan(positions[nodeIdOf('child')]?.x ?? 0)
+  })
+
+  it('places branch children one row below the parent and orders column ties by step id', () => {
+    const definition = baseDefinition({
+      steps: [
+        // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+        step('branch', 'branch', { branch: { predicate: {}, then: 'a', else: 'zz' } }),
+        step('a', 'main', { next: 'z' }),
+        step('zz', 'main', { next: 'b' }),
+        step('z', 'main', { next: 'end' }),
+        step('b', 'main', { next: 'end' }),
+      ],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const positions = autoPositions(graph.nodes, graph.edges)
+    const row = (id: string): number => positions[id]?.y ?? -1
+    expect(row(nodeIdOf('a'))).toBeGreaterThan(row(nodeIdOf('branch')))
+    expect(row(nodeIdOf('zz'))).toBeGreaterThan(row(nodeIdOf('a')))
+    // b and z share a column from different parents; the step id decides.
+    expect(row(nodeIdOf('b'))).toBeLessThan(row(nodeIdOf('z')))
+  })
 })
