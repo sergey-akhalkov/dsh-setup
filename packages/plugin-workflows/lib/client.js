@@ -11183,6 +11183,59 @@ window.__ModuleLoader__.load({
                 ]
               }
             )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Repeat",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+              "input",
+              {
+                type: "checkbox",
+                checked: trigger.repeat === true,
+                "aria-label": "Trigger repeat",
+                onChange: (event) => props.onDefinitionPatch({
+                  trigger: { ...trigger, repeat: event.currentTarget.checked }
+                })
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Applicability",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+              "select",
+              {
+                value: typeof trigger.applicability === "string" ? trigger.applicability : "",
+                "aria-label": "Trigger applicability",
+                onChange: (event) => props.onDefinitionPatch({
+                  trigger: {
+                    ...trigger,
+                    ...event.currentTarget.value === "" ? { applicability: void 0 } : { applicability: event.currentTarget.value }
+                  }
+                }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(none)" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
+                ]
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Match (JSON)",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+              "textarea",
+              {
+                defaultValue: JSON.stringify(trigger.match ?? {}),
+                "aria-label": "Trigger match JSON",
+                rows: 2,
+                onChange: (event) => {
+                  try {
+                    const match = JSON.parse(event.currentTarget.value);
+                    props.onDefinitionPatch({ trigger: { ...trigger, match } });
+                  } catch {
+                  }
+                }
+              },
+              `match:${props.state.document.definition.id}:${JSON.stringify(trigger.match ?? {})}`
+            )
           ] })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("table", { className: "dsh-wf-list", "aria-label": "Definition steps", children: [
@@ -11459,6 +11512,113 @@ window.__ModuleLoader__.load({
         )
       ] }, kind);
     }
+    function settingsFields(props) {
+      const settings = props.state.document.definition.settings;
+      const allowTools = Array.isArray(settings.allowTools) ? settings.allowTools.join(", ") : "";
+      const patch = (value2) => props.onDefinitionPatch({ settings: value2 });
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("fieldset", { className: "dsh-wf-row-actions", "data-section": "settings", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("legend", { children: "Settings" }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Risk",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "select",
+            {
+              value: typeof settings.risk === "string" ? settings.risk : "low",
+              "aria-label": "Risk",
+              onChange: (event) => patch({ ...settings, risk: event.currentTarget.value }),
+              children: ["low", "medium", "high"].map((risk) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: risk, children: risk }, risk))
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              type: "checkbox",
+              checked: settings.allowModelStart === true,
+              "aria-label": "Allow model start",
+              onChange: (event) => patch({ ...settings, allowModelStart: event.currentTarget.checked })
+            }
+          ),
+          "model start"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Max blocks",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              type: "number",
+              min: 1,
+              value: Number(settings.maxBlocks ?? 3),
+              "aria-label": "Max blocks",
+              onChange: (event) => patch({ ...settings, maxBlocks: Number(event.currentTarget.value) })
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              type: "checkbox",
+              checked: settings.allowIntent === true,
+              "aria-label": "Allow intent",
+              onChange: (event) => patch({ ...settings, allowIntent: event.currentTarget.checked })
+            }
+          ),
+          "intent"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Gate ownership",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof settings.gateOwnership === "string" ? settings.gateOwnership : "own",
+              "aria-label": "Gate ownership",
+              onChange: (event) => patch({ ...settings, gateOwnership: event.currentTarget.value }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "own", children: "own" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Allowed tools",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              value: allowTools,
+              "aria-label": "Allowed tools",
+              onChange: (event) => patch({
+                ...settings,
+                allowTools: event.currentTarget.value.split(",").map((name) => name.trim()).filter((name) => name !== "")
+              })
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Legacy (JSON)",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "textarea",
+            {
+              defaultValue: jsonText(settings.legacy),
+              "aria-label": "Settings legacy JSON",
+              rows: 2,
+              onChange: (event) => {
+                const text2 = event.currentTarget.value;
+                if (text2.trim() === "") {
+                  patch({ ...settings, legacy: void 0 });
+                  return;
+                }
+                const parsed = parseJsonField(text2);
+                if (parsed.ok) patch({ ...settings, legacy: parsed.value });
+              }
+            },
+            `settings-legacy:${jsonText(settings.legacy)}`
+          )
+        ] })
+      ] });
+    }
     function stepFields(props, node, step) {
       const branch = step.branch;
       const loop = step.loop;
@@ -11515,6 +11675,45 @@ window.__ModuleLoader__.load({
             ),
             "blocks turn close"
           ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Ownership",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof step.ownership === "string" ? step.ownership : "",
+              "aria-label": "Step ownership",
+              onChange: (event) => props.onPatch(node.id, {
+                ...event.currentTarget.value === "" ? { ownership: void 0 } : { ownership: event.currentTarget.value }
+              }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(default)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "own", children: "own" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Legacy (JSON)",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "textarea",
+            {
+              defaultValue: jsonText(step.legacy),
+              "aria-label": "Step legacy JSON",
+              rows: 2,
+              onChange: (event) => {
+                const text2 = event.currentTarget.value;
+                if (text2.trim() === "") {
+                  props.onPatch(node.id, { legacy: void 0 });
+                  return;
+                }
+                const parsed = parseJsonField(text2);
+                if (parsed.ok) props.onPatch(node.id, { legacy: parsed.value });
+              }
+            },
+            `legacy:${node.id}:${jsonText(step.legacy)}`
+          )
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Executor",
@@ -11761,6 +11960,40 @@ window.__ModuleLoader__.load({
           )
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              type: "checkbox",
+              checked: trigger.repeat === true,
+              "aria-label": "Trigger repeat",
+              onChange: (event) => props.onDefinitionPatch({
+                trigger: { ...trigger, repeat: event.currentTarget.checked }
+              })
+            }
+          ),
+          "repeat"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Applicability",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof trigger.applicability === "string" ? trigger.applicability : "",
+              "aria-label": "Trigger applicability",
+              onChange: (event) => props.onDefinitionPatch({
+                trigger: {
+                  ...trigger,
+                  ...event.currentTarget.value === "" ? { applicability: void 0 } : { applicability: event.currentTarget.value }
+                }
+              }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
+              ]
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Trigger match (JSON)",
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "textarea",
@@ -11794,6 +12027,7 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
+        settingsFields(props),
         node === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-muted", children: "Select a node to edit it." }) : node.kind === "trigger" ? triggerFields(props) : node.kind === "end" || node.step === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-muted", children: "The end node has no fields." }) : stepFields(props, node, node.step)
       ] });
     }

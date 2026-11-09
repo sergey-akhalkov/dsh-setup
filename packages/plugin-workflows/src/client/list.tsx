@@ -185,6 +185,56 @@ export function ListEditor(props: ListEditorProps): ReactNode {
             ))}
           </select>
         </label>
+        <label>
+          Repeat
+          <input
+            type="checkbox"
+            checked={trigger.repeat === true}
+            aria-label="Trigger repeat"
+            onChange={(event) =>
+              props.onDefinitionPatch({
+                trigger: { ...trigger, repeat: event.currentTarget.checked },
+              })
+            }
+          />
+        </label>
+        <label>
+          Applicability
+          <select
+            value={typeof trigger.applicability === 'string' ? trigger.applicability : ''}
+            aria-label="Trigger applicability"
+            onChange={(event) =>
+              props.onDefinitionPatch({
+                trigger: {
+                  ...trigger,
+                  ...(event.currentTarget.value === ''
+                    ? { applicability: undefined }
+                    : { applicability: event.currentTarget.value }),
+                },
+              })
+            }
+          >
+            <option value="">(none)</option>
+            <option value="checkpoint-required">checkpoint-required</option>
+          </select>
+        </label>
+        <label>
+          Match (JSON)
+          <textarea
+            key={`match:${props.state.document.definition.id}:${JSON.stringify(trigger.match ?? {})}`}
+            defaultValue={JSON.stringify(trigger.match ?? {})}
+            aria-label="Trigger match JSON"
+            rows={2}
+            onChange={(event) => {
+              try {
+                const match = JSON.parse(event.currentTarget.value) as unknown
+                props.onDefinitionPatch({ trigger: { ...trigger, match } })
+              } catch {
+                // Incomplete JSON stays in the textarea until it parses.
+              }
+            }}
+          />
+        </label>
       </section>
       <table className="dsh-wf-list" aria-label="Definition steps">
         <thead>

@@ -62,6 +62,105 @@ function selectTarget(props: PropertiesProps, node: DiagramNode, kind: EdgeKind)
   )
 }
 
+function settingsFields(props: PropertiesProps): ReactNode {
+  const settings = props.state.document.definition.settings
+  const allowTools = Array.isArray(settings.allowTools) ? settings.allowTools.join(', ') : ''
+  const patch = (value: Record<string, unknown>): void =>
+    props.onDefinitionPatch({ settings: value })
+  return (
+    <fieldset className="dsh-wf-row-actions" data-section="settings">
+      <legend>Settings</legend>
+      <label>
+        Risk
+        <select
+          value={typeof settings.risk === 'string' ? settings.risk : 'low'}
+          aria-label="Risk"
+          onChange={(event) => patch({ ...settings, risk: event.currentTarget.value })}
+        >
+          {['low', 'medium', 'high'].map((risk) => (
+            <option key={risk} value={risk}>
+              {risk}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={settings.allowModelStart === true}
+          aria-label="Allow model start"
+          onChange={(event) => patch({ ...settings, allowModelStart: event.currentTarget.checked })}
+        />
+        model start
+      </label>
+      <label>
+        Max blocks
+        <input
+          type="number"
+          min={1}
+          value={Number(settings.maxBlocks ?? 3)}
+          aria-label="Max blocks"
+          onChange={(event) => patch({ ...settings, maxBlocks: Number(event.currentTarget.value) })}
+        />
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={settings.allowIntent === true}
+          aria-label="Allow intent"
+          onChange={(event) => patch({ ...settings, allowIntent: event.currentTarget.checked })}
+        />
+        intent
+      </label>
+      <label>
+        Gate ownership
+        <select
+          value={typeof settings.gateOwnership === 'string' ? settings.gateOwnership : 'own'}
+          aria-label="Gate ownership"
+          onChange={(event) => patch({ ...settings, gateOwnership: event.currentTarget.value })}
+        >
+          <option value="own">own</option>
+          <option value="defer">defer</option>
+        </select>
+      </label>
+      <label>
+        Allowed tools
+        <input
+          value={allowTools}
+          aria-label="Allowed tools"
+          onChange={(event) =>
+            patch({
+              ...settings,
+              allowTools: event.currentTarget.value
+                .split(',')
+                .map((name) => name.trim())
+                .filter((name) => name !== ''),
+            })
+          }
+        />
+      </label>
+      <label>
+        Legacy (JSON)
+        <textarea
+          key={`settings-legacy:${jsonText(settings.legacy)}`}
+          defaultValue={jsonText(settings.legacy)}
+          aria-label="Settings legacy JSON"
+          rows={2}
+          onChange={(event) => {
+            const text = event.currentTarget.value
+            if (text.trim() === '') {
+              patch({ ...settings, legacy: undefined })
+              return
+            }
+            const parsed = parseJsonField(text)
+            if (parsed.ok) patch({ ...settings, legacy: parsed.value })
+          }}
+        />
+      </label>
+    </fieldset>
+  )
+}
+
 function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep): ReactNode {
   const branch = step.branch
   const loop = step.loop
@@ -113,6 +212,42 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           />
           blocks turn close
         </label>
+      </label>
+      <label>
+        Ownership
+        <select
+          value={typeof step.ownership === 'string' ? step.ownership : ''}
+          aria-label="Step ownership"
+          onChange={(event) =>
+            props.onPatch(node.id, {
+              ...(event.currentTarget.value === ''
+                ? { ownership: undefined }
+                : { ownership: event.currentTarget.value }),
+            })
+          }
+        >
+          <option value="">(default)</option>
+          <option value="own">own</option>
+          <option value="defer">defer</option>
+        </select>
+      </label>
+      <label>
+        Legacy (JSON)
+        <textarea
+          key={`legacy:${node.id}:${jsonText(step.legacy)}`}
+          defaultValue={jsonText(step.legacy)}
+          aria-label="Step legacy JSON"
+          rows={2}
+          onChange={(event) => {
+            const text = event.currentTarget.value
+            if (text.trim() === '') {
+              props.onPatch(node.id, { legacy: undefined })
+              return
+            }
+            const parsed = parseJsonField(text)
+            if (parsed.ok) props.onPatch(node.id, { legacy: parsed.value })
+          }}
+        />
       </label>
       <label>
         Executor
@@ -363,6 +498,39 @@ function triggerFields(props: PropertiesProps): ReactNode {
         </select>
       </label>
       <label>
+        <input
+          type="checkbox"
+          checked={trigger.repeat === true}
+          aria-label="Trigger repeat"
+          onChange={(event) =>
+            props.onDefinitionPatch({
+              trigger: { ...trigger, repeat: event.currentTarget.checked },
+            })
+          }
+        />
+        repeat
+      </label>
+      <label>
+        Applicability
+        <select
+          value={typeof trigger.applicability === 'string' ? trigger.applicability : ''}
+          aria-label="Trigger applicability"
+          onChange={(event) =>
+            props.onDefinitionPatch({
+              trigger: {
+                ...trigger,
+                ...(event.currentTarget.value === ''
+                  ? { applicability: undefined }
+                  : { applicability: event.currentTarget.value }),
+              },
+            })
+          }
+        >
+          <option value="">(none)</option>
+          <option value="checkpoint-required">checkpoint-required</option>
+        </select>
+      </label>
+      <label>
         Trigger match (JSON)
         <textarea
           key={`match:${props.state.document.definition.id}:${jsonText(match ?? {})}`}
@@ -395,6 +563,7 @@ export function PropertyPanel(props: PropertiesProps): ReactNode {
           onChange={(event) => props.onDefinitionPatch({ name: event.currentTarget.value })}
         />
       </label>
+      {settingsFields(props)}
       {node === undefined ? (
         <p className="dsh-wf-muted">Select a node to edit it.</p>
       ) : node.kind === 'trigger' ? (

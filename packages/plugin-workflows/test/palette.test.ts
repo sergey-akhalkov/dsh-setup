@@ -23,6 +23,7 @@ import {
   type GraphDefinition,
   type GraphStep,
   nodeIdOf,
+  TRIGGER_NODE,
 } from '../src/client/graph.ts'
 import { withLayout } from '../src/client/layout.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
@@ -347,6 +348,102 @@ describe('palette and property panel', () => {
     expect(validateDefinition(state.document.definition).steps[0]?.loop?.cap).toBe('failed')
   })
 
+  it('creates a validated tool workflow from the shared forms', () => {
+    let state = openNew(blankDefinition(new Set(['tool-demo'])))
+    const render = (): unknown =>
+      call(ui, 'PropertyPanel', {
+        state,
+        selected: nodeIdOf('step-1'),
+        onDefinitionPatch: (patch: Record<string, unknown>) => {
+          state = patchDefinition(state, patch)
+        },
+        onPatch: (id: string, patch: Record<string, unknown>) => {
+          state = patchStep(state, id, patch)
+        },
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+    const find = (label: string): Element | undefined =>
+      elements(render()).find(
+        (element) =>
+          (element.type === 'input' || element.type === 'select' || element.type === 'textarea') &&
+          element.props['aria-label'] === label,
+      )
+    fire(find('Allowed tools'), 'onChange', 'shell')
+    expect(state.document.definition.settings.allowTools).toEqual(['shell'])
+    fire(find('Executor'), 'onChange', 'tool')
+    expect(state.document.definition.steps[0]?.executor).toBe('tool')
+    fire(find('Tool config JSON'), 'onChange', '{"name":"shell","command":"echo ok"}')
+    expect(state.document.definition.steps[0]?.tool).toMatchObject({
+      name: 'shell',
+      command: 'echo ok',
+    })
+    const validated = validateDefinition(state.document.definition)
+    expect(validated.steps[0]?.executor).toBe('tool')
+    expect(validated.settings.allowTools).toEqual(['shell'])
+  })
+
+  it('edits ownership, legacy, and the remaining trigger fields with validation', () => {
+    let state = openNew(blankDefinition(new Set(['fields-demo'])))
+    const render = (): unknown =>
+      call(ui, 'PropertyPanel', {
+        state,
+        selected: nodeIdOf('step-1'),
+        onDefinitionPatch: (patch: Record<string, unknown>) => {
+          state = patchDefinition(state, patch)
+        },
+        onPatch: (id: string, patch: Record<string, unknown>) => {
+          state = patchStep(state, id, patch)
+        },
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+    const find = (label: string): Element | undefined =>
+      elements(render()).find(
+        (element) =>
+          (element.type === 'input' || element.type === 'select' || element.type === 'textarea') &&
+          element.props['aria-label'] === label,
+      )
+    fire(find('Step ownership'), 'onChange', 'defer')
+    fire(
+      find('Step legacy JSON'),
+      'onChange',
+      '{"plugin":"delegation-rules","signal":"task-review"}',
+    )
+    expect(state.document.definition.steps[0]?.ownership).toBe('defer')
+    expect(state.document.definition.steps[0]?.legacy).toEqual({
+      plugin: 'delegation-rules',
+      signal: 'task-review',
+    })
+    expect(validateDefinition(state.document.definition).steps[0]?.ownership).toBe('defer')
+    const renderTrigger = (): unknown =>
+      call(ui, 'PropertyPanel', {
+        state,
+        selected: TRIGGER_NODE,
+        onDefinitionPatch: (patch: Record<string, unknown>) => {
+          state = patchDefinition(state, patch)
+        },
+        onPatch: () => {},
+        onConnect: () => {},
+        onDelete: () => {},
+      })
+    const trigger = (label: string): Element | undefined =>
+      elements(renderTrigger()).find(
+        (element) =>
+          (element.type === 'input' || element.type === 'select') &&
+          element.props['aria-label'] === label,
+      )
+    fire(trigger('Trigger repeat'), 'onChange', true)
+    fire(trigger('Trigger applicability'), 'onChange', 'checkpoint-required')
+    expect(state.document.definition.trigger).toMatchObject({
+      repeat: true,
+      applicability: 'checkpoint-required',
+    })
+    expect(validateDefinition(state.document.definition).trigger.repeat).toBe(true)
+  })
+
   it('opens the property panel for the selected node', () => {
     const state = editor()
     const step = DEFINITION.steps[1]
@@ -494,6 +591,28 @@ describe('list mode', () => {
       'turn.stopping',
     )
     expect(state.document.definition.trigger.kind).toBe('turn.stopping')
+    fire(
+      elements(list()).find(
+        (element) =>
+          element.type === 'textarea' && element.props['aria-label'] === 'Trigger match JSON',
+      ),
+      'onChange',
+      '{"tool":"shell"}',
+    )
+    expect(state.document.definition.trigger.match).toEqual({ tool: 'shell' })
+    fire(
+      elements(list()).find(
+        (element) => element.type === 'input' && element.props['aria-label'] === 'Trigger repeat',
+      ),
+      'onChange',
+      true,
+    )
+    fire(select('Trigger applicability'), 'onChange', 'checkpoint-required')
+    expect(state.document.definition.trigger).toMatchObject({
+      repeat: true,
+      applicability: 'checkpoint-required',
+    })
+    expect(validateDefinition(state.document.definition).trigger.match).toEqual({ tool: 'shell' })
     fire(select('Start step'), 'onChange', nodeIdOf('step-2'))
     expect(state.document.definition.steps[0]?.id).toBe('step-2')
     state = deleteStep(state, nodeIdOf('step-2'))
