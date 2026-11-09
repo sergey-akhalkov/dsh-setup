@@ -1098,6 +1098,30 @@ describe('OpenSpec panel data layer', () => {
     expect(decoded.counts).toEqual({ active: 2, archived: 34, capabilities: 19 })
   })
 
+  it('keeps a commit page only when the host sends a web link', async () => {
+    const page = 'https://github.com/o/r/commit/7e87448'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          changes: [
+            row('with-link', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+              commit: { ...COMMIT, url: page },
+            }),
+            row('with-script', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+              commit: { ...COMMIT, url: 'javascript:alert(1)' },
+            }),
+          ],
+          archived: [],
+          counts: { active: 2, archived: 0, capabilities: 0 },
+        }),
+      ),
+    )
+    const decoded = await requestChangeList('s1')
+    expect(decoded.changes[0]?.commit?.url).toBe(page)
+    expect(decoded.changes[1]?.commit).toEqual(COMMIT)
+  })
+
   it('builds the root watch addresses from a row and its delta capabilities', () => {
     const active = row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
       deltaCapabilities: ['auth', 'identity/auth'],
@@ -1850,11 +1874,61 @@ describe('OpenSpec root view', () => {
     expect(String(purpose?.props.className)).toContain('dsh-openspec-purpose-clamp')
     const phaseTag = typed(tree, 'Tag').find((tag) => tag.props.children === 'applying')
     expect(phaseTag?.props.tone).toBe('info')
-    expect(typed(tree, 'StateDot')[0]?.props.state).toBe('ongoing')
+    // The status tag is the card's only phase marker; no spinner sits beside it.
+    expect(typed(card, 'StateDot')).toHaveLength(0)
     const progress = nodes(tree).find((node) => node.props.role === 'progressbar')
     expect(progress?.props['aria-valuenow']).toBe(4)
     expect(progress?.props['aria-valuemax']).toBe(12)
     expect(typed(tree, 'Tooltip')[0]?.props.label).toBe('Add authentication to the product.')
+  })
+
+  it('links the commit hash to its origin page without leaving the card', () => {
+    const commit = { ...COMMIT, url: 'https://github.com/o/r/commit/7e87448' }
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              commit,
+            }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const link = nodes(card).find((node) => node.type === 'a' && textOf(node) === '7e87448')
+    expect(link?.props.href).toBe('https://github.com/o/r/commit/7e87448')
+    expect(link?.props.target).toBe('_blank')
+    expect(link?.props.rel).toBe('noreferrer')
+    const stops: string[] = []
+    const stop = link?.props.onClick as ((event: { stopPropagation(): void }) => void) | undefined
+    stop?.({ stopPropagation: () => stops.push('stopped') })
+    expect(stops).toEqual(['stopped'])
+  })
+
+  it('keeps the commit hash plain when the host has no commit page', () => {
+    const tree = RootView(
+      rootProps({
+        changes: {
+          phase: 'ready',
+          value: listOf([
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              commit: COMMIT,
+            }),
+          ]),
+        },
+        now: NOW,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    expect(nodes(card).some((node) => node.type === 'a' && textOf(node) === '7e87448')).toBe(false)
+    expect(textOf(card)).toContain('7e87448')
   })
 
   it('shows the whole Why in the card tooltip and expands it on focus', () => {

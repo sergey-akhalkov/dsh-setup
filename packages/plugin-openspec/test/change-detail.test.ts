@@ -1296,7 +1296,8 @@ describe('openspec capability reads', () => {
       'ccc4444',
     ])
     expect(capability.commit).toEqual(expect.objectContaining({ short: 'fff1111' }))
-    expect(execFileMock).toHaveBeenCalledTimes(1)
+    // One bounded log read, then the origin read that turns each hash into a link.
+    expect(execFileMock).toHaveBeenCalledTimes(2)
     const args = execFileMock.mock.calls[0]?.[1] as string[]
     expect(args).toEqual(
       expect.arrayContaining([
@@ -1306,6 +1307,7 @@ describe('openspec capability reads', () => {
         'openspec/changes/archive/2026-10-01-add-alpha',
       ]),
     )
+    expect(execFileMock.mock.calls[1]?.[1]).toEqual(['remote', 'get-url', 'origin'])
   })
 
   it('falls back to the CLI overview when the spec has no Purpose section', async () => {

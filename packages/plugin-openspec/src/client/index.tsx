@@ -70,7 +70,6 @@ import {
   PROPOSE_DRAFT,
   parseTaskGroups,
   parseTaskLines,
-  phaseDot,
   phaseOf,
   phaseTone,
   type ReadState,
@@ -1361,11 +1360,7 @@ function ChangeCard(props: {
       onClick={() => props.onOpen(props.row.name)}
     >
       <span className="dsh-openspec-card-head">
-        {archived ? (
-          <primitives.IconCheckCircleOutlineRegular size={14} />
-        ) : (
-          <StateDot state={phaseDot(phase)} />
-        )}
+        {archived ? <primitives.IconCheckCircleOutlineRegular size={14} /> : null}
         <Tag tone={phaseTone(phase)}>{props.t(`phase.${phase}`)}</Tag>
         <span className="dsh-openspec-card-title">{props.row.name}</span>
         {updated === null ? null : (
@@ -1482,19 +1477,39 @@ export function ProgressBar(props: {
   )
 }
 
-/** The branch icon, short hash, commit date, and the subject on demand. */
+/** The branch icon, short hash (a commit page when known), date, and subject on demand. */
 function CommitFactView(props: {
-  readonly commit: { readonly short: string; readonly at: string; readonly subject: string }
+  readonly commit: {
+    readonly short: string
+    readonly at: string
+    readonly subject: string
+    readonly url?: string
+  }
 }): ReactNode {
+  const href = props.commit.url
   return (
     <span className="dsh-openspec-commit">
-      <primitives.IconBranchOutlineRegular size={14} />
-      <primitives.Tooltip
-        label={props.commit.subject === '' ? props.commit.short : props.commit.subject}
-        portal
-      >
-        <span>{props.commit.short}</span>
-      </primitives.Tooltip>
+      <span className="dsh-openspec-commit-ref">
+        <primitives.IconBranchOutlineRegular size={14} />
+        <primitives.Tooltip
+          label={props.commit.subject === '' ? props.commit.short : props.commit.subject}
+          portal
+        >
+          {href === undefined ? (
+            <span>{props.commit.short}</span>
+          ) : (
+            <a
+              className="dsh-openspec-commit-link"
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {props.commit.short}
+            </a>
+          )}
+        </primitives.Tooltip>
+      </span>
       {props.commit.at === '' ? null : (
         <span className="dsh-openspec-meta">{props.commit.at.slice(0, 10)}</span>
       )}
@@ -2402,11 +2417,26 @@ export const PANEL_CSS = `
 .dsh-openspec-commit {
   display: inline-flex;
   align-items: center;
+  /* The date is a peer fact: two 8px tag paddings plus the tag row's 10px gap. */
+  gap: 26px;
+  min-width: 0;
+}
+.dsh-openspec-commit-ref {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
   min-width: 0;
 }
-.dsh-openspec-commit > span {
+.dsh-openspec-commit-ref > span,
+.dsh-openspec-commit-ref > a {
   overflow-wrap: anywhere;
+}
+.dsh-openspec-commit-link {
+  color: inherit;
+  text-decoration: none;
+}
+.dsh-openspec-commit-link:hover {
+  text-decoration: underline;
 }
 .dsh-openspec-state {
   display: flex;

@@ -200,12 +200,6 @@ window.__ModuleLoader__.load({
       if (phase === "archived") return "quiet";
       return "info";
     }
-    function phaseDot(phase) {
-      if (phase === "planning") return "warning";
-      if (phase === "complete") return "done";
-      if (phase === "archived") return "idle";
-      return "ongoing";
-    }
     function relativeLabel(modified, now = /* @__PURE__ */ new Date()) {
       if (modified === null || modified === void 0) return null;
       const at = new Date(modified).getTime();
@@ -355,12 +349,15 @@ window.__ModuleLoader__.load({
         specs: integer(value.specs) ?? 0
       };
     }
+    var COMMIT_PAGE = /^https?:\/\/[^\s"'<>]+$/;
     function decodeCommit(value) {
       if (!isRecord(value) || typeof value.short !== "string" || value.short.trim() === "") return null;
+      const url = typeof value.url === "string" && COMMIT_PAGE.test(value.url) ? value.url : void 0;
       return {
         short: value.short,
         at: typeof value.at === "string" ? value.at : "",
-        subject: typeof value.subject === "string" ? value.subject : ""
+        subject: typeof value.subject === "string" ? value.subject : "",
+        ...url === void 0 ? {} : { url }
       };
     }
     function decodePhase(value) {
@@ -1472,7 +1469,7 @@ window.__ModuleLoader__.load({
           onClick: () => props.onOpen(props.row.name),
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
-              archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.StateDot, { state: phaseDot(phase) }),
+              archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : null,
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(phase), children: props.t(`phase.${phase}`) }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
               updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
@@ -1536,16 +1533,29 @@ window.__ModuleLoader__.load({
       );
     }
     function CommitFactView(props) {
+      const href = props.commit.url;
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-commit", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBranchOutlineRegular, { size: 14 }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-          primitives2.Tooltip,
-          {
-            label: props.commit.subject === "" ? props.commit.short : props.commit.subject,
-            portal: true,
-            children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: props.commit.short })
-          }
-        ),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-commit-ref", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconBranchOutlineRegular, { size: 14 }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+            primitives2.Tooltip,
+            {
+              label: props.commit.subject === "" ? props.commit.short : props.commit.subject,
+              portal: true,
+              children: href === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: props.commit.short }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                "a",
+                {
+                  className: "dsh-openspec-commit-link",
+                  href,
+                  target: "_blank",
+                  rel: "noreferrer",
+                  onClick: (event) => event.stopPropagation(),
+                  children: props.commit.short
+                }
+              )
+            }
+          )
+        ] }),
         props.commit.at === "" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.commit.at.slice(0, 10) })
       ] });
     }
@@ -2209,11 +2219,26 @@ window.__ModuleLoader__.load({
     .dsh-openspec-commit {
       display: inline-flex;
       align-items: center;
+      /* The date is a peer fact: two 8px tag paddings plus the tag row's 10px gap. */
+      gap: 26px;
+      min-width: 0;
+    }
+    .dsh-openspec-commit-ref {
+      display: inline-flex;
+      align-items: center;
       gap: 4px;
       min-width: 0;
     }
-    .dsh-openspec-commit > span {
+    .dsh-openspec-commit-ref > span,
+    .dsh-openspec-commit-ref > a {
       overflow-wrap: anywhere;
+    }
+    .dsh-openspec-commit-link {
+      color: inherit;
+      text-decoration: none;
+    }
+    .dsh-openspec-commit-link:hover {
+      text-decoration: underline;
     }
     .dsh-openspec-state {
       display: flex;

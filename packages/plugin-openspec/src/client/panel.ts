@@ -58,6 +58,8 @@ export interface CommitFact {
   readonly short: string
   readonly at: string
   readonly subject: string
+  /** The commit's page on the origin remote; absent when the host has none. */
+  readonly url?: string
 }
 
 /** One row of the change-list route; every post-redesign field is optional. */
@@ -638,12 +640,17 @@ function decodePresence(value: unknown): ChangePresence {
   }
 }
 
+/** A commit's page is kept only as a plain web link; anything else is dropped. */
+const COMMIT_PAGE = /^https?:\/\/[^\s"'<>]+$/
+
 function decodeCommit(value: unknown): CommitFact | null {
   if (!isRecord(value) || typeof value.short !== 'string' || value.short.trim() === '') return null
+  const url = typeof value.url === 'string' && COMMIT_PAGE.test(value.url) ? value.url : undefined
   return {
     short: value.short,
     at: typeof value.at === 'string' ? value.at : '',
     subject: typeof value.subject === 'string' ? value.subject : '',
+    ...(url === undefined ? {} : { url }),
   }
 }
 

@@ -32,6 +32,8 @@ export interface CommitFact {
   readonly short: string
   readonly at: string
   readonly subject: string
+  /** The commit's page on the origin remote, when that remote maps to a web URL. */
+  readonly url?: string
 }
 
 /** One CLI row, before the file facts are joined. */
@@ -774,10 +776,38 @@ export function scanArchiveProducers(workspace: string): Map<string, ArchiveProd
   return producers
 }
 
+/** Remote forms that map to a host/repository page: URL, ssh URL, and scp-like. */
+const REMOTE_FORMS = [
+  /^(?<scheme>https?):\/\/(?<host>[^/]+)\/(?<path>.+)$/,
+  /^ssh:\/\/(?:[^@/]+@)?(?<host>[^/:]+)(?::\d+)?\/(?<path>.+)$/,
+  /^(?:[^@/]+@)?(?<host>[A-Za-z0-9.-]+\.[A-Za-z]{2,}):(?<path>.+)$/,
+]
+
+/**
+ * The web base of a git remote's repository, or null when it cannot map to a
+ * commit page. A token or user in the remote is dropped so it never reaches an
+ * href, and a local path, a file URL, or garbage yields no link.
+ * @param remote - the `origin` remote URL git reports.
+ */
+export function commitWebBase(remote: string): string | null {
+  const text = remote.trim()
+  if (text === '' || /[\s"'<>\\]/.test(text)) return null
+  for (const form of REMOTE_FORMS) {
+    const groups = form.exec(text)?.groups
+    if (groups === undefined) continue
+    const host = (groups.host ?? '').replace(/^[^@/]+@/, '')
+    const path = (groups.path ?? '').replace(/\/+$/, '').replace(/\.git$/, '')
+    if (host === '' || path === '' || path.startsWith('/')) return null
+    return `${groups.scheme ?? 'https'}://${host}/${path}`
+  }
+  return null
+}
+
 /**
  * Run one bounded `git log` over workspace-relative paths and return its commit
  * sections newest first, or null on every failure (no git, no repository, a
- * timeout, malformed output, or an unsafe path).
+ * timeout, malformed output, or an unsafe path). A readable `origin` remote adds
+ * each commit's page URL; an unreadable one only leaves the link out.
  *
  * `execFile` means no shell; the limit, timeout, and output cap are fixed; the
  * paths follow `--` so a request name can never become an option.
@@ -817,7 +847,23 @@ export async function readGitLog(
   } catch {
     return null
   }
-  return parseGitLog(output)
+  const entries = parseGitLog(output)
+  if (entries === null) return null
+  const base = await originWebBase(workspace, runner)
+  if (base === null) return entries
+  return entries.map((entry) => ({
+    ...entry,
+    commit: { ...entry.commit, url: `${base}/commit/${entry.commit.short}` },
+  }))
+}
+
+/** The workspace repository's commit-page base from its `origin` remote, or null. */
+async function originWebBase(workspace: string, runner: GitRunner): Promise<string | null> {
+  try {
+    return commitWebBase(await runner(['remote', 'get-url', 'origin'], workspace))
+  } catch {
+    return null
+  }
 }
 
 /** One workspace-relative path normalized to forward slashes, or null when unsafe. */

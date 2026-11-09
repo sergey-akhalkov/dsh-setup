@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   cliOnPath,
   commitFor,
+  commitWebBase,
   GIT_MAX_OUTPUT_BYTES,
   GIT_TIMEOUT_MS,
   LIST_TIMEOUT_MS,
@@ -543,6 +544,41 @@ describe('openspec change list', () => {
 })
 
 describe('git provenance', () => {
+  it('maps a repository remote to a commit page without its credentials', () => {
+    expect(commitWebBase('https://github.com/o/r.git')).toBe('https://github.com/o/r')
+    expect(commitWebBase('https://user:token@github.com/o/r.git')).toBe('https://github.com/o/r')
+    expect(commitWebBase('git@github.com:o/r.git')).toBe('https://github.com/o/r')
+    expect(commitWebBase('ssh://git@git.example.com:2222/o/r.git')).toBe(
+      'https://git.example.com/o/r',
+    )
+    expect(commitWebBase('git.example.com:o/r')).toBe('https://git.example.com/o/r')
+    expect(commitWebBase('https://gitlab.com/group/sub/r')).toBe('https://gitlab.com/group/sub/r')
+    expect(commitWebBase('git.example.com\\repo')).toBeNull()
+    expect(commitWebBase('/srv/git/r.git')).toBeNull()
+    expect(commitWebBase('not a remote')).toBeNull()
+  })
+
+  it('adds the origin commit page to every read commit', async () => {
+    const cwd = workspace(true)
+    const runner = vi.fn(async (args: readonly string[]) =>
+      args[0] === 'remote'
+        ? 'git@github.com:o/r.git\n'
+        : '\0abc1234\t2026-11-01T10:00:00+03:00\tfeat\nopenspec/changes/a/tasks.md\n',
+    )
+    const entries = await readGitLog(cwd, ['openspec/changes'], runner)
+    expect(entries?.[0]?.commit.url).toBe('https://github.com/o/r/commit/abc1234')
+    expect(runner).toHaveBeenLastCalledWith(['remote', 'get-url', 'origin'], cwd)
+  })
+
+  it('keeps commits when the origin remote cannot be read', async () => {
+    const cwd = workspace(true)
+    const entries = await readGitLog(cwd, ['openspec/changes'], async (args) => {
+      if (args[0] === 'remote') throw new Error('no origin remote')
+      return '\0abc1234\t2026-11-01T10:00:00+03:00\tfeat\nopenspec/changes/a/tasks.md\n'
+    })
+    expect(entries?.[0]?.commit).not.toHaveProperty('url')
+  })
+
   it('reads one batched log and maps a file or directory path to its newest commit', async () => {
     const cwd = workspace(true)
     const runner = vi.fn(async () =>
@@ -681,7 +717,12 @@ describe('git provenance', () => {
       { cwd: repo },
     )
     const runner = async (args: readonly string[], cwd: string): Promise<string> =>
-      real.execFileSync('git', [...args], { cwd, encoding: 'utf8' })
+      real.execFileSync('git', [...args], {
+        cwd,
+        encoding: 'utf8',
+        // The origin remote is absent here; keep git's complaint out of the test log.
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
     const entries = await readGitLog(nested, ['openspec/specs/alpha'], runner)
     expect(commitFor(entries, 'openspec/specs/alpha')).not.toBeNull()
   })
