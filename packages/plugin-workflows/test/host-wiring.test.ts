@@ -379,7 +379,7 @@ describe('retro applicability through the journal path', () => {
           agent: host.agent,
           callId: `call-${name}`,
           name,
-          arguments: {},
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
         },
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
@@ -394,6 +394,11 @@ describe('retro applicability through the journal path', () => {
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    // No checkpoint record for this turn: the run and its step stay blocked.
+    const blockedRetro = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'retro',
+    )
+    expect(blockedRetro?.steps[0]?.state).toBe('blocked')
     const runId = String(
       (await retroRows()).find((row) => row.reason === 'run-created')?.runId ?? '',
     )
@@ -457,7 +462,12 @@ describe('retro fresh checkpoint', () => {
     for (const name of ['read', 'read', 'read', 'read', 'write']) {
       await host.emit(
         'tools/result',
-        { agent: host.agent, callId: `call-${name}`, name, arguments: {} },
+        {
+          agent: host.agent,
+          callId: `call-${name}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
     }
@@ -472,12 +482,101 @@ describe('retro fresh checkpoint', () => {
       )
       return retroRun !== undefined
     })
-    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     await waitFor(async () => {
       const stored = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
       return stored?.steps[0]?.state === 'done'
     })
     expect(host.steers).toHaveLength(0)
+  })
+})
+
+describe('retro applicability evidence', () => {
+  it('counts only successful writes and started delegates', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const retroRows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(journalFile, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:retro')
+    const emitTurn = async (
+      turn: number,
+      results: ReadonlyArray<{
+        name: string
+        args: Record<string, unknown>
+        isError?: boolean
+        text?: string
+      }>,
+    ): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      for (const [index, result] of results.entries()) {
+        await host.emit(
+          'tools/result',
+          {
+            agent: host.agent,
+            callId: `call-${String(turn)}-${String(index)}`,
+            name: result.name,
+            arguments: result.args,
+          },
+          {
+            isError: result.isError === true,
+            content: [{ type: 'text', text: result.text ?? 'ok' }],
+          },
+        )
+      }
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn })
+    }
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const retroRuns = async (): Promise<Array<{ id: string }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition === 'retro',
+      )
+
+    // Three reads plus a failed write is not a write: no run.
+    await emitTurn(1, [
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'write', args: { file_path: 'src/app.ts' }, isError: true },
+    ])
+    await waitFor(async () => (await retroRows()).some((row) => row.reason === 'not-applicable'))
+    expect(await retroRuns()).toHaveLength(0)
+
+    // Three reads plus a started delegate is a worker: one run.
+    await emitTurn(2, [
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'delegate', args: {}, text: 'rule "task-review" review started' },
+    ])
+    await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
+    expect(await retroRuns()).toHaveLength(1)
   })
 })
 

@@ -289,7 +289,30 @@ function describe(value: unknown): string {
   }
 }
 
-const WORKER_TOOL_NAMES = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow'])
+const WORKER_TOOL_NAMES = new Set([
+  'subagent',
+  'subagent_fork',
+  'spawn_teammate',
+  'workflow',
+  'delegate',
+])
+
+/** Whether a delegate result's first line reports a started run rather than reuse. */
+function delegateStarted(resultText: string): boolean {
+  // Answer-contract results always ran a target and END with this trailer; a
+  // cached record may quote it inside its evidence, which proves nothing.
+  if (
+    resultText
+      .trimEnd()
+      .endsWith('(no gate record: this answer does not satisfy a strict review rule)')
+  ) {
+    return true
+  }
+  const first = resultText.split(/\r?\n/u)[0] ?? ''
+  if (/^rule "[^"]+" review (?:already pending|queued)$/u.test(first)) return false
+  // Only the engine's own cached-record envelope is a reuse.
+  return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first)
+}
 
 /** Characters a tool name may keep in a journal summary. */
 const SAFE_NAME = /[^A-Za-z0-9._-]+/gu
@@ -1103,16 +1126,30 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const metrics = metricsFor(String(session.id), turns.get(String(session.id)) ?? 0)
         metrics.toolCalls += 1
         metrics.lastTool = exec.name
-        if (exec.name === 'write' || exec.name === 'edit') metrics.written += 1
-        if (WORKER_TOOL_NAMES.has(exec.name)) metrics.workers += 1
         const text = toolResultText(result)
-        const summary = toolSummary(exec.name, result.isError, text)
-        const bytes = Buffer.byteLength(text, 'utf8')
-        const sessionId = String(session.id)
         const args =
           typeof exec.arguments === 'object' && exec.arguments !== null
             ? (exec.arguments as Record<string, unknown>)
             : {}
+        // Match the goal-continuity evidence collection: only a successful
+        // write with a path and a successfully started worker count.
+        if (!result.isError) {
+          if (
+            (exec.name === 'write' || exec.name === 'edit') &&
+            typeof args.file_path === 'string'
+          ) {
+            metrics.written += 1
+          }
+          if (
+            WORKER_TOOL_NAMES.has(exec.name) &&
+            (exec.name !== 'delegate' || delegateStarted(text))
+          ) {
+            metrics.workers += 1
+          }
+        }
+        const summary = toolSummary(exec.name, result.isError, text)
+        const bytes = Buffer.byteLength(text, 'utf8')
+        const sessionId = String(session.id)
         const shellOutcome = shellOutcomeOf(result)
         const isShellTool = exec.name === 'pwsh' || exec.name === 'bash'
         const observed = sessionToolCalls.get(sessionId) ?? []
@@ -2053,6 +2090,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (payload.agent.session.header.origin === 'subagent') return
         const workspace = workspaceFor(services, payload.agent.session)
         if (workspace === undefined) return
+        // The journal record that creates an observational run is queued before
+        // this listener; settle it so a run created by this stop is advanced now.
+        const queuedRecord = recordQueues.get(String(payload.agent.session.id))
+        if (queuedRecord !== undefined) await queuedRecord.catch(() => undefined)
         await ensureAuth()
         const auth = storedAuth
         if (auth === undefined) return
