@@ -16,6 +16,7 @@ import {
   openDraft,
   openNew,
   patchStep,
+  reconcileCopy,
   reconcileSave,
   renameDefinition,
   type SaveResult,
@@ -235,9 +236,10 @@ describe('definition lifecycle', () => {
       api: fakeApi({
         save: () => ({ ok: false, kind: 'conflict', status: 409, revision: 'rev-1' }),
       }).api,
-      taken: new Set(['demo', 'demo-copy']),
+      taken: new Set(['demo']),
     })
     expect(copyCollision.conflict?.nextId).toBe('demo-copy-2')
+    expect(nextCopyId('demo-copy', new Set(['demo']))).toBe('demo-copy-2')
     expect(nextCopyId('demo-copy-2', new Set(['demo', 'demo-copy', 'demo-copy-2']))).toBe(
       'demo-copy-3',
     )
@@ -400,6 +402,32 @@ describe('revision contract', () => {
     expect(merged.document.revision).toBe('rev-9')
     expect(merged.document.definition.version).toBe(5)
     expect(merged.dirty).toBe(true)
+  })
+
+  it('adopts the saved layout revision when reconciling an in-flight edit', async () => {
+    const { api, calls } = fakeApi()
+    const captured = opened()
+    const first = await save(captured, { api, taken: TAKEN })
+    expect(first.layoutRevision).toBe('layout-3')
+    const current = patchStep(captured, nodeIdOf('one'), { title: 'During save' })
+    const merged = reconcileSave(captured, current, first)
+    expect(merged.layoutRevision).toBe('layout-3')
+    // The newer positions can be saved with the file revision from the first save.
+    const second = await save(merged, { api, taken: TAKEN })
+    expect(calls.saveLayout.at(-1)?.expected).toBe('layout-3')
+    expect(second.status).toBe('saved')
+  })
+
+  it('keeps newer edits in the original draft when a copy completes', async () => {
+    const { api } = fakeApi()
+    const captured = opened()
+    const current = patchStep(captured, nodeIdOf('one'), { title: 'During copy' })
+    const copyResult = await saveAsCopy(captured, { api, taken: TAKEN })
+    const merged = reconcileCopy(captured, current, copyResult)
+    expect(merged.document.definition.id).toBe('demo')
+    expect(merged.document.definition.steps[0]?.title).toBe('During copy')
+    expect(merged.dirty).toBe(true)
+    expect(reconcileCopy(captured, captured, copyResult)).toBe(copyResult)
   })
 })
 

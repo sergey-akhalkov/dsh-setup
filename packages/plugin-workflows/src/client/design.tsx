@@ -20,6 +20,7 @@ import {
   openNew,
   patchDefinition,
   patchStep,
+  reconcileCopy,
   reconcileSave,
   reload,
   save,
@@ -263,7 +264,11 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setLoading(true)
     try {
       const result = await saveAsCopy(editor, { api, taken })
-      setEditor(result)
+      setEditor((current) => {
+        if (current === undefined) return result
+        if (current === editor) return result
+        return reconcileCopy(editor, current, result)
+      })
       if (result.status === 'saved') {
         await refreshLibrary()
         await loadRuns(result.document.definition.id)

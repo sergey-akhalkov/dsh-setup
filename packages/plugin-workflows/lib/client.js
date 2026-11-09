@@ -10304,7 +10304,7 @@ window.__ModuleLoader__.load({
     function nextCopyId(candidate, taken) {
       const match = /^(.*)-copy(?:-(\d+))?$/u.exec(candidate);
       const base = match?.[1] ?? candidate;
-      const first = match?.[2] === void 0 ? 1 : Number(match[2]) + 1;
+      const first = match === null ? 1 : match[2] === void 0 ? 2 : Number(match[2]) + 1;
       for (let index2 = first; ; index2 += 1) {
         const id2 = index2 === 1 ? `${base}-copy` : `${base}-copy-${String(index2)}`;
         if (!taken.has(id2)) return id2;
@@ -10503,7 +10503,8 @@ window.__ModuleLoader__.load({
         if (stepMatch === null) return { path: entry.path, message: entry.message };
         const step = definition.steps[Number(stepMatch[1])];
         return {
-          ...step === void 0 ? {} : { nodeId: step.id },
+          // The canvas addresses a step by its namespaced graph node id.
+          ...step === void 0 ? {} : { nodeId: nodeIdOf(step.id) },
           path: entry.path,
           message: entry.message
         };
@@ -10535,10 +10536,22 @@ window.__ModuleLoader__.load({
           source: saved.document.source
         },
         diagram: { ...current.diagram, definition },
+        // The layout file, not the current positions, owns the layout revision: a
+        // successful save must advance it even when newer positions are still dirty.
+        layoutRevision: saved.status === "saved" ? saved.layoutRevision : current.layoutRevision,
         dirty: true,
         status: "dirty",
         conflict: void 0,
         message: saved.status === "error" ? saved.message : void 0
+      };
+    }
+    function reconcileCopy(captured, current, saved) {
+      if (current === captured) return saved;
+      return {
+        ...current,
+        dirty: true,
+        status: "dirty",
+        message: saved.status === "error" ? saved.message : "the copy was saved; the newer edits stay in this draft"
       };
     }
     async function save(state, context) {
@@ -10570,12 +10583,14 @@ window.__ModuleLoader__.load({
       if (!result.ok) {
         const failed2 = failure(saving, result);
         if (result.kind !== "conflict" || expected !== null) return failed2;
+        const occupied = new Set(context.taken);
+        occupied.add(state.document.definition.id);
         return {
           ...failed2,
           conflict: {
             ...failed2.conflict,
             kind: "create",
-            nextId: nextCopyId(state.document.definition.id, context.taken)
+            nextId: nextCopyId(state.document.definition.id, occupied)
           },
           message: "the id already exists; pick the next free id or save a copy"
         };
@@ -11701,7 +11716,11 @@ window.__ModuleLoader__.load({
         setLoading(true);
         try {
           const result = await saveAsCopy(editor, { api, taken });
-          setEditor(result);
+          setEditor((current) => {
+            if (current === void 0) return result;
+            if (current === editor) return result;
+            return reconcileCopy(editor, current, result);
+          });
           if (result.status === "saved") {
             await refreshLibrary();
             await loadRuns(result.document.definition.id);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -138,13 +139,19 @@ describe('editor trust boundary', () => {
       throw error
     }
     const routes = createEditorRoutes(services({ s1: workspace }))
+    const externalBytes = await readFile(externalFile)
+    const externalRevision = createHash('sha256').update(externalBytes).digest('hex')
     const deleted = await call(routes, EDITOR_DEFINITION_ROUTE, {
       session: 's1',
       method: 'DELETE',
-      body: { id: 'linked-demo', expectedRevision: 'a'.repeat(64) },
+      body: { id: 'linked-demo', expectedRevision: externalRevision },
     })
-    expect(deleted.status).not.toBe(200)
-    expect(await readFile(externalFile, 'utf8')).toContain('linked-demo')
+    // The revision is correct for the external file; only the containment
+    // check can refuse it. Without that check the old code returned 200 and
+    // unlinked the file, so this assertion fails against the vulnerable path.
+    expect(deleted.status).toBe(400)
+    expect(String(deleted.body.error)).toContain('escapes the workspace')
+    expect(await readFile(externalFile)).toEqual(externalBytes)
   })
 
   it('writes only the workspace owned by the requesting session', async () => {

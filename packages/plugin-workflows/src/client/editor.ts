@@ -149,7 +149,8 @@ export function nextFreeId(candidate: string, taken: ReadonlySet<string>): strin
 export function nextCopyId(candidate: string, taken: ReadonlySet<string>): string {
   const match = /^(.*)-copy(?:-(\d+))?$/u.exec(candidate)
   const base = match?.[1] ?? candidate
-  const first = match?.[2] === undefined ? 1 : Number(match[2]) + 1
+  // `<base>-copy` is already the first copy; the next one starts at `-2`.
+  const first = match === null ? 1 : match[2] === undefined ? 2 : Number(match[2]) + 1
   for (let index = first; ; index += 1) {
     const id = index === 1 ? `${base}-copy` : `${base}-copy-${String(index)}`
     if (!taken.has(id)) return id
@@ -482,10 +483,35 @@ export function reconcileSave(
       source: saved.document.source,
     },
     diagram: { ...current.diagram, definition },
+    // The layout file, not the current positions, owns the layout revision: a
+    // successful save must advance it even when newer positions are still dirty.
+    layoutRevision: saved.status === 'saved' ? saved.layoutRevision : current.layoutRevision,
     dirty: true,
     status: 'dirty',
     conflict: undefined,
     message: saved.status === 'error' ? saved.message : undefined,
+  }
+}
+
+/**
+ * A completed save-as-copy returns a new document. When the user edited the
+ * captured draft while the request ran, keep those newer edits in the original
+ * draft instead of replacing them; the saved copy is available from the list.
+ */
+export function reconcileCopy(
+  captured: EditorState,
+  current: EditorState,
+  saved: EditorState,
+): EditorState {
+  if (current === captured) return saved
+  return {
+    ...current,
+    dirty: true,
+    status: 'dirty',
+    message:
+      saved.status === 'error'
+        ? saved.message
+        : 'the copy was saved; the newer edits stay in this draft',
   }
 }
 
@@ -524,12 +550,15 @@ export async function save(state: EditorState, context: SaveContext): Promise<Ed
     const failed = failure(saving, result)
     if (result.kind !== 'conflict' || expected !== null) return failed
     // A create collision offers the next free id so the draft is never lost.
+    // The rejected id is occupied even when the cached list is stale.
+    const occupied = new Set(context.taken)
+    occupied.add(state.document.definition.id)
     return {
       ...failed,
       conflict: {
         ...(failed.conflict as EditorConflict),
         kind: 'create',
-        nextId: nextCopyId(state.document.definition.id, context.taken),
+        nextId: nextCopyId(state.document.definition.id, occupied),
       },
       message: 'the id already exists; pick the next free id or save a copy',
     }
