@@ -159,6 +159,29 @@ describe('workflows view data', () => {
     expect(sentinelRows).not.toContain('review-sentinel')
     expect(sentinelRows).not.toContain('violation-sentinel')
     expect(sentinelRows).not.toContain('step-id-sentinel')
+    // Filename-derived ids and record labels are redacted too.
+    await writeFile(
+      join(runsDirectory(workspace), 'token=filename-sentinel.json'),
+      JSON.stringify({
+        v: 1,
+        id: 'safe-valid-id',
+        session: 'session-1',
+        definition: 'change-intake',
+        status: 'running',
+        steps: [],
+        createdAt: 1_000,
+      }),
+      'utf8',
+    )
+    await writeFile(
+      join(runsDirectory(workspace), 'token=malformed-sentinel.json'),
+      '{not json\n',
+      'utf8',
+    )
+    const filenameRows = await sessionRuns(workspace, 'session-1')
+    expect(JSON.stringify(filenameRows)).not.toContain('filename-sentinel')
+    expect(JSON.stringify(filenameRows)).not.toContain('malformed-sentinel')
+    expect(filenameRows.find((run) => run.id === 'workflow:safe-valid-id')?.record).toBeUndefined()
     // Another session's valid failed run stays in its own session.
     const otherBase = createRun({
       definition: 'change-intake',

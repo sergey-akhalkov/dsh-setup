@@ -118,11 +118,12 @@ function errorRun(
   id: string,
   source: RunSource,
   workspace: string,
-  file: string,
+  file: string | undefined,
   attribution: RunAttribution,
   session: string | undefined,
   error: string,
 ): RunView {
+  const display = file === undefined ? undefined : displayPath(workspace, file)
   return {
     id,
     source,
@@ -131,8 +132,8 @@ function errorRun(
     startedAt: 0,
     status: 'unknown',
     steps: [],
-    error: safeError(`${displayPath(workspace, file)}: ${error}`),
-    record: displayPath(workspace, file),
+    error: safeError(display === undefined ? error : `${display}: ${error}`),
+    ...(display === undefined ? {} : { record: display }),
     ...(session === undefined ? {} : { session }),
   }
 }
@@ -765,7 +766,10 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
   for (const name of await listFiles(workspace, directory)) {
     if (!name.endsWith('.json')) continue
     const file = join(directory, name)
-    const id = name.slice(0, -'.json'.length)
+    const display = displayPath(workspace, file)
+    // A credential-shaped filename is redacted and never linked.
+    const id = redactText(name.slice(0, -'.json'.length))
+    const recordPath = redactText(display) === display ? display : undefined
     const parsed = await readJson(workspace, file)
     if ('error' in parsed) {
       runs.push(
@@ -773,7 +777,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
           `workflow:${id}`,
           'workflow',
           workspace,
-          file,
+          recordPath,
           'unattributed',
           undefined,
           parsed.error,
@@ -796,7 +800,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
           `workflow:${id}`,
           'workflow',
           workspace,
-          file,
+          recordPath,
           'unattributed',
           undefined,
           'the run record is missing required fields',
@@ -863,7 +867,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       ...(typeof record.reason === 'string' && status === 'failed'
         ? { error: safeError(record.reason) }
         : {}),
-      record: displayPath(workspace, file),
+      ...(recordPath === undefined ? {} : { record: recordPath }),
     })
   }
   return runs
