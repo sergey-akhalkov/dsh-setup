@@ -625,9 +625,13 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
     .map((run) => ({ run, open: openRequiredStep(run) }))
     .find((entry) => entry.open !== undefined)
   if (blocked !== undefined && blocked.open !== undefined) {
+    const coverage =
+      input.taskReview !== undefined && !input.taskReview.ok
+        ? `; ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}`
+        : ''
     return {
       kind: 'deny',
-      reason: `the archive of "${input.change}" is refused: run "${blocked.run.id}" step "${blocked.open.step}" is open and has no verified evidence`,
+      reason: `the archive of "${input.change}" is refused: run "${blocked.run.id}" step "${blocked.open.step}" is open and has no verified evidence${coverage}`,
     }
   }
   const completed = related.find((run) => isCompletedIntake(run, input.change))
@@ -647,9 +651,10 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
     }
   }
   if (input.taskReview !== undefined && !input.taskReview.ok) {
+    const relatedRun = related.find((run) => run.definition === 'task-review')
     return {
       kind: 'deny',
-      reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}`,
+      reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}${relatedRun === undefined ? '' : ` (related review run "${relatedRun.id}")`}`,
     }
   }
   return {

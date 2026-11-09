@@ -550,6 +550,73 @@ describe('retro fresh checkpoint', () => {
     })
     expect(host.steers).toHaveLength(0)
   })
+  it('keeps the run open while the checkpoint remedy is unexecuted', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    for (const [index, name] of ['read', 'read', 'read', 'read', 'write'].entries()) {
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: `call-${String(index)}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let retroRun: { id: string; context: Record<string, unknown> } | undefined
+    await waitFor(async () => {
+      retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'retro',
+      ) as typeof retroRun
+      return retroRun !== undefined
+    })
+    const checkpoint = String(retroRun?.context.checkpoint ?? '')
+    await mkdir(dirname(join(workspace, checkpoint)), { recursive: true })
+    await writeFile(
+      join(workspace, checkpoint),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'continue',
+        turn: 1,
+        lanes: [],
+        next: 'fix the guard',
+        bottleneck: {
+          id: 'guard',
+          owner: 'lead',
+          action: 'lead_action',
+          blockingLanes: ['edit'],
+          targets: ['src/unexecuted.ts'],
+        },
+      }),
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const settled = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
+    expect(settled?.status).toBe('running')
+    expect(settled?.steps[0]?.state).toBe('open')
+    expect(host.steers.length).toBeGreaterThan(0)
+  })
 })
 
 describe('retro applicability evidence', () => {

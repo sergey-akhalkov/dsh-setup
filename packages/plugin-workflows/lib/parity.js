@@ -363,7 +363,8 @@ export function taskReviewCoverage(workspace, change) {
     // A checked line the task parser cannot read is an unapproved checked task,
     // not an absent one; refuse the completion instead of silently skipping it.
     for (const line of markdown.split('\n')) {
-        if (/^\s*-\s*\[[xX]\]\s+/u.test(line) && !/^\s*-\s*\[[xX]\]\s+\d+(?:\.\d+)*\s+\S/u.test(line)) {
+        if (/^\s*[-*+]\s*\[[xX]\]/u.test(line) &&
+            !/^\s*-\s*\[[xX]\]\s+\d+(?:\.\d+)*\s+\S/u.test(line)) {
             gaps.push(`checked task line "${line.trim()}" is not a numbered task; fix tasks.md so its review can be matched`);
         }
     }

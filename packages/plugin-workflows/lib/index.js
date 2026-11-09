@@ -2069,6 +2069,20 @@ export function apply(ctx, config = {}) {
                 const definition = definitions.find((entry) => entry.id === run.definition);
                 if (definition === undefined)
                     continue;
+                // A retro run must not complete on the record alone: while the host
+                // checkpoint remedy/age rule fails, keep the run open and steer.
+                if (definition.id === 'retro' && typeof run.context.checkpoint === 'string') {
+                    const calls = (sessionToolCalls.get(sessionId) ?? []).map((call) => ({
+                        toolName: call.name,
+                        arguments: call.arguments,
+                        ok: call.ok,
+                    }));
+                    if (checkpointGateIssue(workspace, run.context.checkpoint, calls, checkpointApplicability.bottleneckAge) !== undefined) {
+                        advanced.set(run.id, run);
+                        definitionOf.set(run.id, definition);
+                        continue;
+                    }
+                }
                 const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn);
                 advanced.set(run.id, current);
                 definitionOf.set(run.id, definition);

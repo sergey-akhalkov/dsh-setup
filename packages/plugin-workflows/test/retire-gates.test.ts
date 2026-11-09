@@ -271,6 +271,27 @@ describe('owned task-review decisions', () => {
     if (refused.kind === 'deny') expect(refused.reason).toContain('portable PASS')
     const allowed = evaluateArchiveGate({ ...base, taskReview: { ok: true } })
     expect(allowed.kind).toBe('allow')
+
+    // The refusal names both the blocking review run and the missing task;
+    // the coverage-only branch names the related run id.
+    const review = { ...runFor(shipped('task-review'), false), id: 'run-review' }
+    const blocked = evaluateArchiveGate({
+      ...base,
+      runs: [...base.runs, review],
+      taskReview: { ok: false, text: 'checked task "1.1 Task" has no portable PASS' },
+    })
+    expect(blocked.kind).toBe('deny')
+    expect(blocked.reason).toContain('run-review')
+    expect(blocked.reason).toContain('1.1 Task')
+    const completedReview = { ...review, status: 'completed' as const }
+    const coverageOnly = evaluateArchiveGate({
+      ...base,
+      runs: [...base.runs, completedReview],
+      taskReview: { ok: false, text: 'checked task "1.1 Task" has no portable PASS' },
+    })
+    expect(coverageOnly.kind).toBe('deny')
+    expect(coverageOnly.reason).toContain('run-review')
+    expect(coverageOnly.reason).toContain('1.1 Task')
   })
 
   it('allows an ERROR to close an intermediate turn without approving', () => {
@@ -775,9 +796,35 @@ describe('owned task-review definition', () => {
       }),
       'utf8',
     )
-    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
-    expect(taskReviewCompletion(workspace, 'auth')?.ok).toBe(false)
-    await rm(workspace, { recursive: true, force: true })
+    for (const malformed of [
+      '- [x] 1.1 Task\n* [x] Foreign task\n',
+      '- [x] 1.1 Task\n+ [x] 1.2 Foreign task\n',
+      '- [x] 1.1 Task\n- [x]Foreign task\n',
+    ]) {
+      const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
+      const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+      await mkdir(join(changeDir, 'reviews'), { recursive: true })
+      await writeFile(join(changeDir, 'tasks.md'), malformed, 'utf8')
+      const id = (await import('../src/host/tasks.ts')).taskIdOf('Task')
+      await writeFile(
+        join(changeDir, 'reviews', `${id}.json`),
+        JSON.stringify({
+          rule: 'task-review',
+          change: 'auth',
+          scope: 'task',
+          taskId: id,
+          digest: 'a'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-11-08T00:00:00.000Z',
+        }),
+        'utf8',
+      )
+      expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+      expect(taskReviewCompletion(workspace, 'auth')?.ok).toBe(false)
+      await rm(workspace, { recursive: true, force: true })
+    }
   })
 
   it('requires portable PASS coverage for every checked task at completion', async () => {
