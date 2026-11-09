@@ -72,16 +72,31 @@ export interface RunStep {
 
 /**
  * The producer-owned failure vocabulary. The editor renders the stored value
- * verbatim and never derives a class from a message; this mapping only turns
- * the executor's own reason into the record's class at settlement time.
+ * verbatim and never derives a class from a message; executors and gates embed
+ * their structured reason in the message, so a known reason token wins before
+ * the fallback wording checks.
  */
+const FAILURE_CLASSES = [
+  'missing-file',
+  'record-mismatch',
+  'no-answer',
+  'no-call',
+  'invalid-result',
+  'rejected-answer',
+  'check-failed',
+] as const
+
 export function classifyFailure(reason: string | undefined): string {
   const text = (reason ?? '').toLowerCase()
+  for (const failureClass of FAILURE_CLASSES) {
+    if (text.includes(failureClass)) return failureClass
+  }
   if (/missing-file|does not exist|not found|enoent/u.test(text)) return 'missing-file'
-  if (/digest|hash|signature|mismatch|tampered|record/u.test(text)) return 'record-mismatch'
-  if (/rejected|not accepted/u.test(text)) return 'rejected-answer'
+  if (/not one of|rejected|not accepted|does not match/u.test(text)) return 'rejected-answer'
+  // A missing call's detail may mention a recorded call; classify it first.
+  if (/no call|not observed|no evidence|not recorded/u.test(text)) return 'no-call'
+  if (/digest|hash|signature|tampered|record/u.test(text)) return 'record-mismatch'
   if (/answer|question/u.test(text)) return 'no-answer'
-  if (/no call|not observed|no evidence/u.test(text)) return 'no-call'
   if (/schema|invalid|result/u.test(text)) return 'invalid-result'
   return 'check-failed'
 }

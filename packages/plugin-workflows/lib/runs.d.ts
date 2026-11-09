@@ -41,11 +41,6 @@ export interface RunStep {
     /** The producer-owned failure class of a blocked or failed step. */
     readonly failureClass?: string;
 }
-/**
- * The producer-owned failure vocabulary. The editor renders the stored value
- * verbatim and never derives a class from a message; this mapping only turns
- * the executor's own reason into the record's class at settlement time.
- */
 export declare function classifyFailure(reason: string | undefined): string;
 /** A visible refusal or bypass; never a pass. */
 export interface RunViolation {

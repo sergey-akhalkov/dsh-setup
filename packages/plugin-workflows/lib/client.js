@@ -58,7 +58,7 @@ window.__ModuleLoader__.load({
                 "The result of getSnapshot should be cached to avoid an infinite loop"
               ), didWarnUncachedGetSnapshot = true);
             }
-            cachedValue = useState4({
+            cachedValue = useState5({
               inst: { value: value2, getSnapshot }
             });
             var inst = cachedValue[0].inst, forceUpdate = cachedValue[1];
@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
             return getSnapshot();
           }
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-          var React = require("react"), objectIs = "function" === typeof Object.is ? Object.is : is, useState4 = React.useState, useEffect4 = React.useEffect, useLayoutEffect2 = React.useLayoutEffect, useDebugValue2 = React.useDebugValue, didWarnOld18Alpha = false, didWarnUncachedGetSnapshot = false, shim = "undefined" === typeof window || "undefined" === typeof window.document || "undefined" === typeof window.document.createElement ? useSyncExternalStore$1 : useSyncExternalStore$2;
+          var React = require("react"), objectIs = "function" === typeof Object.is ? Object.is : is, useState5 = React.useState, useEffect4 = React.useEffect, useLayoutEffect2 = React.useLayoutEffect, useDebugValue2 = React.useDebugValue, didWarnOld18Alpha = false, didWarnUncachedGetSnapshot = false, shim = "undefined" === typeof window || "undefined" === typeof window.document || "undefined" === typeof window.document.createElement ? useSyncExternalStore$1 : useSyncExternalStore$2;
           exports.useSyncExternalStore = void 0 !== React.useSyncExternalStore ? React.useSyncExternalStore : shim;
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop(Error());
         })();
@@ -529,10 +529,10 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_react6 = require("react");
+    var import_react7 = require("react");
 
     // packages/plugin-workflows/src/client/design.tsx
-    var import_react5 = require("react");
+    var import_react6 = require("react");
 
     // packages/plugin-workflows/src/client/a11y.ts
     var NARROW_WIDTH = 720;
@@ -11471,6 +11471,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/properties.tsx
+    var import_react5 = require("react");
     var import_jsx_runtime6 = require("react/jsx-runtime");
     function parseJsonField(text2) {
       try {
@@ -11481,6 +11482,36 @@ window.__ModuleLoader__.load({
     }
     function jsonText(value2) {
       return value2 === void 0 ? "" : JSON.stringify(value2);
+    }
+    function JsonField(props) {
+      const committed = jsonText(props.value);
+      const [draft, setDraft] = (0, import_react5.useState)(committed);
+      const [seen, setSeen] = (0, import_react5.useState)(committed);
+      if (seen !== committed) {
+        setSeen(committed);
+        setDraft(committed);
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+        props.label,
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "textarea",
+          {
+            value: draft,
+            "aria-label": props.ariaLabel,
+            rows: props.rows ?? 2,
+            onChange: (event) => {
+              const text2 = event.currentTarget.value;
+              setDraft(text2);
+              if (text2.trim() === "" && props.allowEmpty === true) {
+                props.commit(void 0);
+                return;
+              }
+              const parsed = parseJsonField(text2);
+              if (parsed.ok) props.commit(parsed.value);
+            }
+          }
+        )
+      ] });
     }
     var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
@@ -11596,27 +11627,16 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Legacy (JSON)",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              defaultValue: jsonText(settings.legacy),
-              "aria-label": "Settings legacy JSON",
-              rows: 2,
-              onChange: (event) => {
-                const text2 = event.currentTarget.value;
-                if (text2.trim() === "") {
-                  patch({ ...settings, legacy: void 0 });
-                  return;
-                }
-                const parsed = parseJsonField(text2);
-                if (parsed.ok) patch({ ...settings, legacy: parsed.value });
-              }
-            },
-            `settings-legacy:${jsonText(settings.legacy)}`
-          )
-        ] })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          JsonField,
+          {
+            label: "Legacy (JSON)",
+            value: settings.legacy,
+            ariaLabel: "Settings legacy JSON",
+            allowEmpty: true,
+            commit: (value2) => patch({ ...settings, legacy: value2 })
+          }
+        )
       ] });
     }
     function stepFields(props, node, step) {
@@ -11694,27 +11714,16 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Legacy (JSON)",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              defaultValue: jsonText(step.legacy),
-              "aria-label": "Step legacy JSON",
-              rows: 2,
-              onChange: (event) => {
-                const text2 = event.currentTarget.value;
-                if (text2.trim() === "") {
-                  props.onPatch(node.id, { legacy: void 0 });
-                  return;
-                }
-                const parsed = parseJsonField(text2);
-                if (parsed.ok) props.onPatch(node.id, { legacy: parsed.value });
-              }
-            },
-            `legacy:${node.id}:${jsonText(step.legacy)}`
-          )
-        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          JsonField,
+          {
+            label: "Legacy (JSON)",
+            value: step.legacy,
+            ariaLabel: "Step legacy JSON",
+            allowEmpty: true,
+            commit: (value2) => props.onPatch(node.id, { legacy: value2 })
+          }
+        ),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Executor",
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -11739,27 +11748,17 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Evidence (JSON)",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              defaultValue: jsonText(step.evidence),
-              "aria-label": "Evidence JSON",
-              rows: 3,
-              onChange: (event) => {
-                const text2 = event.currentTarget.value;
-                if (text2.trim() === "") {
-                  props.onPatch(node.id, { evidence: void 0 });
-                  return;
-                }
-                const parsed = parseJsonField(text2);
-                if (parsed.ok) props.onPatch(node.id, { evidence: parsed.value });
-              }
-            },
-            `evidence:${node.id}:${jsonText(step.evidence)}`
-          )
-        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          JsonField,
+          {
+            label: "Evidence (JSON)",
+            value: step.evidence,
+            ariaLabel: "Evidence JSON",
+            rows: 3,
+            allowEmpty: true,
+            commit: (value2) => props.onPatch(node.id, { evidence: value2 })
+          }
+        ),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Evidence kind",
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
@@ -11792,57 +11791,34 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Tool config (JSON)",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              defaultValue: jsonText(step.tool),
-              "aria-label": "Tool config JSON",
-              rows: 2,
-              onChange: (event) => {
-                const parsed = parseJsonField(event.currentTarget.value);
-                if (parsed.ok) props.onPatch(node.id, { tool: parsed.value });
-              }
-            },
-            `tool:${node.id}:${jsonText(step.tool)}`
-          )
-        ] }),
-        step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Subagent config (JSON)",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              defaultValue: jsonText(step.subagent),
-              "aria-label": "Subagent config JSON",
-              rows: 2,
-              onChange: (event) => {
-                const parsed = parseJsonField(event.currentTarget.value);
-                if (parsed.ok) props.onPatch(node.id, { subagent: parsed.value });
-              }
-            },
-            `subagent:${node.id}:${jsonText(step.subagent)}`
-          )
-        ] }),
+        step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          JsonField,
+          {
+            label: "Tool config (JSON)",
+            value: step.tool,
+            ariaLabel: "Tool config JSON",
+            commit: (value2) => props.onPatch(node.id, { tool: value2 })
+          }
+        ),
+        step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          JsonField,
+          {
+            label: "Subagent config (JSON)",
+            value: step.subagent,
+            ariaLabel: "Subagent config JSON",
+            commit: (value2) => props.onPatch(node.id, { subagent: value2 })
+          }
+        ),
         branch === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Branch predicate (JSON)",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "textarea",
-              {
-                defaultValue: jsonText(branch.predicate),
-                "aria-label": "Branch predicate JSON",
-                rows: 2,
-                onChange: (event) => {
-                  const parsed = parseJsonField(event.currentTarget.value);
-                  if (parsed.ok) {
-                    props.onPatch(node.id, { branch: { ...branch, predicate: parsed.value } });
-                  }
-                }
-              },
-              `predicate:${node.id}:${jsonText(branch.predicate)}`
-            )
-          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            JsonField,
+            {
+              label: "Branch predicate (JSON)",
+              value: branch.predicate,
+              ariaLabel: "Branch predicate JSON",
+              commit: (value2) => props.onPatch(node.id, { branch: { ...branch, predicate: value2 } })
+            }
+          ),
           selectTarget(props, node, "true"),
           selectTarget(props, node, "false")
         ] }),
@@ -11862,22 +11838,15 @@ window.__ModuleLoader__.load({
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Loop stop (JSON)",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "textarea",
-              {
-                defaultValue: jsonText(loop.stop),
-                "aria-label": "Loop stop JSON",
-                rows: 2,
-                onChange: (event) => {
-                  const parsed = parseJsonField(event.currentTarget.value);
-                  if (parsed.ok) props.onPatch(node.id, { loop: { ...loop, stop: parsed.value } });
-                }
-              },
-              `stop:${node.id}:${jsonText(loop.stop)}`
-            )
-          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            JsonField,
+            {
+              label: "Loop stop (JSON)",
+              value: loop.stop,
+              ariaLabel: "Loop stop JSON",
+              commit: (value2) => props.onPatch(node.id, { loop: { ...loop, stop: value2 } })
+            }
+          ),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
             "Loop list key",
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -11993,22 +11962,15 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Trigger match (JSON)",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              defaultValue: jsonText(match ?? {}),
-              "aria-label": "Trigger match JSON",
-              rows: 2,
-              onChange: (event) => {
-                const parsed = parseJsonField(event.currentTarget.value);
-                if (parsed.ok) props.onDefinitionPatch({ trigger: { ...trigger, match: parsed.value } });
-              }
-            },
-            `match:${props.state.document.definition.id}:${jsonText(match ?? {})}`
-          )
-        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          JsonField,
+          {
+            label: "Trigger match (JSON)",
+            value: match ?? {},
+            ariaLabel: "Trigger match JSON",
+            commit: (value2) => props.onDefinitionPatch({ trigger: { ...trigger, match: value2 } })
+          }
+        ),
         triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind))
       ] });
     }
@@ -12106,24 +12068,24 @@ window.__ModuleLoader__.load({
     }
     function DesignMode(props) {
       const { sessionId, t } = props;
-      const api = (0, import_react5.useMemo)(() => fetchEditorApi(sessionId ?? ""), [sessionId]);
-      const [library, setLibrary] = (0, import_react5.useState)({
+      const api = (0, import_react6.useMemo)(() => fetchEditorApi(sessionId ?? ""), [sessionId]);
+      const [library, setLibrary] = (0, import_react6.useState)({
         definitions: [],
         templates: [],
         drafts: []
       });
-      const [editor, setEditor] = (0, import_react5.useState)();
-      const [selected2, setSelected] = (0, import_react5.useState)();
-      const [runs, setRuns] = (0, import_react5.useState)([]);
-      const [runId, setRunId] = (0, import_react5.useState)();
-      const [canvasFailed, setCanvasFailed] = (0, import_react5.useState)(false);
-      const [connectValue, setConnectValue] = (0, import_react5.useState)();
-      const [confirmDelete, setConfirmDelete] = (0, import_react5.useState)(false);
-      const [loading, setLoading] = (0, import_react5.useState)(false);
-      const [message, setMessage] = (0, import_react5.useState)();
-      const [templateName, setTemplateName] = (0, import_react5.useState)("");
-      const [draftName, setDraftName] = (0, import_react5.useState)("");
-      const taken = (0, import_react5.useMemo)(() => idsOf(library.definitions), [library]);
+      const [editor, setEditor] = (0, import_react6.useState)();
+      const [selected2, setSelected] = (0, import_react6.useState)();
+      const [runs, setRuns] = (0, import_react6.useState)([]);
+      const [runId, setRunId] = (0, import_react6.useState)();
+      const [canvasFailed, setCanvasFailed] = (0, import_react6.useState)(false);
+      const [connectValue, setConnectValue] = (0, import_react6.useState)();
+      const [confirmDelete, setConfirmDelete] = (0, import_react6.useState)(false);
+      const [loading, setLoading] = (0, import_react6.useState)(false);
+      const [message, setMessage] = (0, import_react6.useState)();
+      const [templateName, setTemplateName] = (0, import_react6.useState)("");
+      const [draftName, setDraftName] = (0, import_react6.useState)("");
+      const taken = (0, import_react6.useMemo)(() => idsOf(library.definitions), [library]);
       const refreshLibrary = async () => {
         try {
           const [definitions, templates, drafts] = await Promise.all([
@@ -12140,10 +12102,10 @@ window.__ModuleLoader__.load({
           setMessage(error instanceof Error ? error.message : String(error));
         }
       };
-      (0, import_react5.useEffect)(() => {
+      (0, import_react6.useEffect)(() => {
         void refreshLibrary();
       }, [sessionId]);
-      (0, import_react5.useEffect)(() => {
+      (0, import_react6.useEffect)(() => {
         if (typeof window === "undefined" || selected2 === void 0) return;
         const onKeyDown = (event) => {
           if (event.key !== "c" && event.key !== "C") return;
@@ -12779,12 +12741,12 @@ window.__ModuleLoader__.load({
     }
     function WorkflowsView(props) {
       const { sessionId, t } = props;
-      const [state, setState] = (0, import_react6.useState)({ phase: "loading" });
-      const [design, setDesign] = (0, import_react6.useState)(false);
-      const [selected2, setSelected] = (0, import_react6.useState)(void 0);
-      const loadId = (0, import_react6.useRef)(0);
-      const pendingPages = (0, import_react6.useRef)(/* @__PURE__ */ new Set());
-      const [pageStates, setPageStates] = (0, import_react6.useState)({
+      const [state, setState] = (0, import_react7.useState)({ phase: "loading" });
+      const [design, setDesign] = (0, import_react7.useState)(false);
+      const [selected2, setSelected] = (0, import_react7.useState)(void 0);
+      const loadId = (0, import_react7.useRef)(0);
+      const pendingPages = (0, import_react7.useRef)(/* @__PURE__ */ new Set());
+      const [pageStates, setPageStates] = (0, import_react7.useState)({
         events: void 0,
         runs: void 0
       });
@@ -12825,7 +12787,7 @@ window.__ModuleLoader__.load({
           }
         );
       };
-      (0, import_react6.useEffect)(() => {
+      (0, import_react7.useEffect)(() => {
         load();
         return () => {
           loadId.current += 1;

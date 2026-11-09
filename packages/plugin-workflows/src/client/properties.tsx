@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { connectChoices, currentTarget, EDGE_LABELS, outputKinds } from './edges.ts'
 import type { EditorState } from './editor.ts'
 import type { DiagramNode, EdgeKind, GraphStep } from './graph.ts'
@@ -21,6 +21,49 @@ export function parseJsonField(
 
 export function jsonText(value: unknown): string {
   return value === undefined ? '' : JSON.stringify(value)
+}
+
+/**
+ * A JSON textarea with a stable identity: it keeps the user's draft while they
+ * type and synchronizes only when the committed value changes from elsewhere
+ * (for example an executor change rewriting the evidence), so focus and caret
+ * survive ordinary multi-character edits.
+ */
+function JsonField(props: {
+  readonly label: string
+  readonly value: unknown
+  readonly ariaLabel: string
+  readonly rows?: number
+  readonly allowEmpty?: boolean
+  readonly commit: (value: unknown) => void
+}): ReactNode {
+  const committed = jsonText(props.value)
+  const [draft, setDraft] = useState(committed)
+  const [seen, setSeen] = useState(committed)
+  if (seen !== committed) {
+    setSeen(committed)
+    setDraft(committed)
+  }
+  return (
+    <label>
+      {props.label}
+      <textarea
+        value={draft}
+        aria-label={props.ariaLabel}
+        rows={props.rows ?? 2}
+        onChange={(event) => {
+          const text = event.currentTarget.value
+          setDraft(text)
+          if (text.trim() === '' && props.allowEmpty === true) {
+            props.commit(undefined)
+            return
+          }
+          const parsed = parseJsonField(text)
+          if (parsed.ok) props.commit(parsed.value)
+        }}
+      />
+    </label>
+  )
 }
 
 const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
@@ -139,24 +182,13 @@ function settingsFields(props: PropertiesProps): ReactNode {
           }
         />
       </label>
-      <label>
-        Legacy (JSON)
-        <textarea
-          key={`settings-legacy:${jsonText(settings.legacy)}`}
-          defaultValue={jsonText(settings.legacy)}
-          aria-label="Settings legacy JSON"
-          rows={2}
-          onChange={(event) => {
-            const text = event.currentTarget.value
-            if (text.trim() === '') {
-              patch({ ...settings, legacy: undefined })
-              return
-            }
-            const parsed = parseJsonField(text)
-            if (parsed.ok) patch({ ...settings, legacy: parsed.value })
-          }}
-        />
-      </label>
+      <JsonField
+        label="Legacy (JSON)"
+        value={settings.legacy}
+        ariaLabel="Settings legacy JSON"
+        allowEmpty
+        commit={(value) => patch({ ...settings, legacy: value })}
+      />
     </fieldset>
   )
 }
@@ -231,24 +263,13 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           <option value="defer">defer</option>
         </select>
       </label>
-      <label>
-        Legacy (JSON)
-        <textarea
-          key={`legacy:${node.id}:${jsonText(step.legacy)}`}
-          defaultValue={jsonText(step.legacy)}
-          aria-label="Step legacy JSON"
-          rows={2}
-          onChange={(event) => {
-            const text = event.currentTarget.value
-            if (text.trim() === '') {
-              props.onPatch(node.id, { legacy: undefined })
-              return
-            }
-            const parsed = parseJsonField(text)
-            if (parsed.ok) props.onPatch(node.id, { legacy: parsed.value })
-          }}
-        />
-      </label>
+      <JsonField
+        label="Legacy (JSON)"
+        value={step.legacy}
+        ariaLabel="Step legacy JSON"
+        allowEmpty
+        commit={(value) => props.onPatch(node.id, { legacy: value })}
+      />
       <label>
         Executor
         <select
@@ -272,24 +293,14 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           onChange={(event) => props.onPatch(node.id, { prompt: event.currentTarget.value })}
         />
       </label>
-      <label>
-        Evidence (JSON)
-        <textarea
-          key={`evidence:${node.id}:${jsonText(step.evidence)}`}
-          defaultValue={jsonText(step.evidence)}
-          aria-label="Evidence JSON"
-          rows={3}
-          onChange={(event) => {
-            const text = event.currentTarget.value
-            if (text.trim() === '') {
-              props.onPatch(node.id, { evidence: undefined })
-              return
-            }
-            const parsed = parseJsonField(text)
-            if (parsed.ok) props.onPatch(node.id, { evidence: parsed.value })
-          }}
-        />
-      </label>
+      <JsonField
+        label="Evidence (JSON)"
+        value={step.evidence}
+        ariaLabel="Evidence JSON"
+        rows={3}
+        allowEmpty
+        commit={(value) => props.onPatch(node.id, { evidence: value })}
+      />
       <label>
         Evidence kind
         <select
@@ -329,52 +340,29 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
         </label>
       )}
       {step.tool === undefined ? null : (
-        <label>
-          Tool config (JSON)
-          <textarea
-            key={`tool:${node.id}:${jsonText(step.tool)}`}
-            defaultValue={jsonText(step.tool)}
-            aria-label="Tool config JSON"
-            rows={2}
-            onChange={(event) => {
-              const parsed = parseJsonField(event.currentTarget.value)
-              if (parsed.ok) props.onPatch(node.id, { tool: parsed.value })
-            }}
-          />
-        </label>
+        <JsonField
+          label="Tool config (JSON)"
+          value={step.tool}
+          ariaLabel="Tool config JSON"
+          commit={(value) => props.onPatch(node.id, { tool: value })}
+        />
       )}
       {step.subagent === undefined ? null : (
-        <label>
-          Subagent config (JSON)
-          <textarea
-            key={`subagent:${node.id}:${jsonText(step.subagent)}`}
-            defaultValue={jsonText(step.subagent)}
-            aria-label="Subagent config JSON"
-            rows={2}
-            onChange={(event) => {
-              const parsed = parseJsonField(event.currentTarget.value)
-              if (parsed.ok) props.onPatch(node.id, { subagent: parsed.value })
-            }}
-          />
-        </label>
+        <JsonField
+          label="Subagent config (JSON)"
+          value={step.subagent}
+          ariaLabel="Subagent config JSON"
+          commit={(value) => props.onPatch(node.id, { subagent: value })}
+        />
       )}
       {branch === undefined ? null : (
         <>
-          <label>
-            Branch predicate (JSON)
-            <textarea
-              key={`predicate:${node.id}:${jsonText(branch.predicate)}`}
-              defaultValue={jsonText(branch.predicate)}
-              aria-label="Branch predicate JSON"
-              rows={2}
-              onChange={(event) => {
-                const parsed = parseJsonField(event.currentTarget.value)
-                if (parsed.ok) {
-                  props.onPatch(node.id, { branch: { ...branch, predicate: parsed.value } })
-                }
-              }}
-            />
-          </label>
+          <JsonField
+            label="Branch predicate (JSON)"
+            value={branch.predicate}
+            ariaLabel="Branch predicate JSON"
+            commit={(value) => props.onPatch(node.id, { branch: { ...branch, predicate: value } })}
+          />
           {selectTarget(props, node, 'true')}
           {selectTarget(props, node, 'false')}
         </>
@@ -395,19 +383,12 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
               }
             />
           </label>
-          <label>
-            Loop stop (JSON)
-            <textarea
-              key={`stop:${node.id}:${jsonText(loop.stop)}`}
-              defaultValue={jsonText(loop.stop)}
-              aria-label="Loop stop JSON"
-              rows={2}
-              onChange={(event) => {
-                const parsed = parseJsonField(event.currentTarget.value)
-                if (parsed.ok) props.onPatch(node.id, { loop: { ...loop, stop: parsed.value } })
-              }}
-            />
-          </label>
+          <JsonField
+            label="Loop stop (JSON)"
+            value={loop.stop}
+            ariaLabel="Loop stop JSON"
+            commit={(value) => props.onPatch(node.id, { loop: { ...loop, stop: value } })}
+          />
           <label>
             Loop list key
             <input
@@ -530,19 +511,12 @@ function triggerFields(props: PropertiesProps): ReactNode {
           <option value="checkpoint-required">checkpoint-required</option>
         </select>
       </label>
-      <label>
-        Trigger match (JSON)
-        <textarea
-          key={`match:${props.state.document.definition.id}:${jsonText(match ?? {})}`}
-          defaultValue={jsonText(match ?? {})}
-          aria-label="Trigger match JSON"
-          rows={2}
-          onChange={(event) => {
-            const parsed = parseJsonField(event.currentTarget.value)
-            if (parsed.ok) props.onDefinitionPatch({ trigger: { ...trigger, match: parsed.value } })
-          }}
-        />
-      </label>
+      <JsonField
+        label="Trigger match (JSON)"
+        value={match ?? {}}
+        ariaLabel="Trigger match JSON"
+        commit={(value) => props.onDefinitionPatch({ trigger: { ...trigger, match: value } })}
+      />
       {triggerNode === undefined
         ? null
         : outputKinds('trigger').map((kind) => selectTarget(props, triggerNode, kind))}

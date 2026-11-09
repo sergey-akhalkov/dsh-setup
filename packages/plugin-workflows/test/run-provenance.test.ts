@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createWorkflowRoutes, RUNS_ROUTE } from '../src/host/api.ts'
+import { installDefinition, loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { loadShippedDefinitions } from '../src/host/definitions.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { engineRuns } from '../src/host/projection.ts'
@@ -11,6 +12,7 @@ import {
   classifyFailure,
   createRun,
   runsDirectory,
+  setRunStatus,
   settleStep,
   writeRun,
 } from '../src/host/runs.ts'
@@ -161,6 +163,67 @@ describe('run provenance record', () => {
 })
 
 describe('runs route definition filter', () => {
+  it('keeps the creation snapshot and settled history after the definition changes and is deleted', async () => {
+    const workspace = await tempWorkspace()
+    const shipped = loadShippedDefinitions()[0]
+    if (shipped === undefined) throw new Error('no shipped definition')
+    const stepId = shipped.steps[0]?.id
+    if (stepId === undefined) throw new Error('no shipped step')
+    const source = async (name: string, value: unknown): Promise<string> => {
+      const path = join(workspace, name)
+      await writeFile(path, `${JSON.stringify(value, null, 2)}\n`)
+      return path
+    }
+    await installDefinition(workspace, await source('v1.json', shipped), auth())
+    const installed = (await loadApprovedDefinitions(workspace, { auth: auth() })).definitions.find(
+      (definition) => definition.id === shipped.id,
+    )
+    if (installed === undefined) throw new Error('the shipped definition was not installed')
+    let run = createRun({
+      definition: installed.id,
+      definitionName: installed.name,
+      definitionVersion: installed.version,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: {},
+      steps: [stepId],
+      now: 1_000,
+    })
+    run = settleStep(run, stepId, 'failed', {
+      at: 2_000,
+      reason: 'the user answer "no" is not one of: yes',
+      evidence: { kind: 'record', ref: 'record-1.json' },
+    })
+    run = addViolation(run, 'the step bypassed its gate', {
+      kind: 'BYPASS',
+      step: stepId,
+      at: 2_100,
+    })
+    run = setRunStatus(run, 'failed', 2_200, 'the answer was rejected')
+    await writeRun(workspace, run, auth())
+    // The definition changes, then disappears; the run keeps its own snapshot.
+    await installDefinition(
+      workspace,
+      await source('v2.json', { ...shipped, name: 'Renamed', version: shipped.version + 1 }),
+      auth(),
+    )
+    await rm(join(workspace, '.dsh', 'workflows', 'definitions', `${shipped.id}.json`))
+    const view = (await engineRuns(workspace))[0]
+    expect(view?.definition).toEqual({
+      id: shipped.id,
+      name: shipped.name,
+      version: shipped.version,
+    })
+    const viewStep = view?.steps.find((step) => step.id === stepId)
+    expect(viewStep?.evidenceRef).toMatchObject({ kind: 'record', ref: 'record-1.json' })
+    expect(viewStep?.failureClass).toBe('rejected-answer')
+    expect(view?.violations[0]).toMatchObject({
+      stepId,
+      reason: expect.stringContaining('bypassed'),
+    })
+  })
+
   it('filters by definition and source and returns the newest first', async () => {
     const workspace = await tempWorkspace()
     const first = createRun({

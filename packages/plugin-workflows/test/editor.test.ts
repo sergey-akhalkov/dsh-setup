@@ -649,12 +649,14 @@ describe('pre-check and host error mapping', () => {
 
   it('keeps a connected next target across an executor change', () => {
     let state = opened()
-    state = connectSteps(state, nodeIdOf('one'), nodeIdOf('two'), 'next')
+    // The fixture already points one at two; connect it to end so a stale node
+    // target (two) would be visibly different from the intended target.
+    state = connectSteps(state, nodeIdOf('one'), END_NODE, 'next')
     const connected = state.document.definition.steps.find((step) => step.id === 'one')
-    expect(connected?.next).toBe('two')
+    expect(connected?.next).toBe('end')
     state = patchStep(state, nodeIdOf('one'), { executor: 'human' })
-    expect(state.document.definition.steps[0]?.next).toBe('two')
-    expect(validateDefinition(state.document.definition).steps[0]?.next).toBe('two')
+    expect(state.document.definition.steps[0]?.next).toBe('end')
+    expect(validateDefinition(state.document.definition).steps[0]?.next).toBe('end')
   })
 
   it('normalizes required configuration when the executor changes', () => {

@@ -39,6 +39,13 @@ import {
 
 const ui = loadClientModules(['palette.tsx', 'properties.tsx', 'list.tsx', 'canvas.tsx'])
 
+/** Render a JsonField element (the shared JSON textarea) and return its textarea. */
+function jsonTextarea(tree: unknown, label: string): Element | undefined {
+  return elements(tree).find(
+    (element) => element.type === 'textarea' && element.props['aria-label'] === label,
+  )
+}
+
 const listRowModel = ui.listRowModel as (
   state: EditorState,
   step: GraphStep,
@@ -261,15 +268,15 @@ describe('palette and property panel', () => {
       onConnect: () => {},
       onDelete: () => {},
     })
-    const evidence = elements(tree).find(
-      (element) => element.type === 'textarea' && element.props['aria-label'] === 'Evidence JSON',
-    )
-    expect(evidence?.props.value).toBeUndefined()
-    expect(evidence?.props.defaultValue).toBeDefined()
+    const evidence = jsonTextarea(tree, 'Evidence JSON')
+    expect(evidence?.props.value).toBeDefined()
     fire(evidence, 'onChange', '{')
     expect(patches).toEqual([])
     fire(evidence, 'onChange', '{"kind":"declaration"}')
     expect(patches[0]).toEqual({ evidence: { kind: 'declaration' } })
+    // A second valid edit from the same focused field keeps committing.
+    fire(evidence, 'onChange', '{"kind":"file","path":"notes.md"}')
+    expect(patches[1]).toEqual({ evidence: { kind: 'file', path: 'notes.md' } })
   })
 
   it('refreshes a JSON field when another control changes the committed value', () => {
@@ -284,16 +291,11 @@ describe('palette and property panel', () => {
         onDelete: () => {},
         onRename: () => {},
       })
-    const evidence = (tree: unknown) =>
-      elements(tree).find(
-        (element) => element.type === 'textarea' && element.props['aria-label'] === 'Evidence JSON',
-      )
-    const first = render(state)
-    fire(evidence(first), 'onChange', '{"kind":"declaration"}')
+    fire(jsonTextarea(render(state), 'Evidence JSON'), 'onChange', '{"kind":"declaration"}')
     state = patchStep(state, nodeIdOf('requirements'), { evidence: { kind: 'declaration' } })
-    expect(evidence(render(state))?.props.defaultValue).toBe('{"kind":"declaration"}')
+    expect(jsonTextarea(render(state), 'Evidence JSON')?.props.value).toBe('{"kind":"declaration"}')
     state = patchStep(state, nodeIdOf('requirements'), { executor: 'human' })
-    expect(String(evidence(render(state))?.props.defaultValue)).toContain('"human"')
+    expect(String(jsonTextarea(render(state), 'Evidence JSON')?.props.value)).toContain('"human"')
   })
 
   it('edits flags, human timeout, loop cap, and the step id with validation', () => {
@@ -374,7 +376,11 @@ describe('palette and property panel', () => {
     expect(state.document.definition.settings.allowTools).toEqual(['shell'])
     fire(find('Executor'), 'onChange', 'tool')
     expect(state.document.definition.steps[0]?.executor).toBe('tool')
-    fire(find('Tool config JSON'), 'onChange', '{"name":"shell","command":"echo ok"}')
+    fire(
+      jsonTextarea(render(), 'Tool config JSON'),
+      'onChange',
+      '{"name":"shell","command":"echo ok"}',
+    )
     expect(state.document.definition.steps[0]?.tool).toMatchObject({
       name: 'shell',
       command: 'echo ok',
@@ -408,7 +414,7 @@ describe('palette and property panel', () => {
       )
     fire(find('Step ownership'), 'onChange', 'defer')
     fire(
-      find('Step legacy JSON'),
+      jsonTextarea(render(), 'Step legacy JSON'),
       'onChange',
       '{"plugin":"delegation-rules","signal":"task-review"}',
     )
