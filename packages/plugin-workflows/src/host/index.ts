@@ -1454,7 +1454,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     agent: Agent,
     auth: HostAuth,
     installedLegacy: ReadonlySet<string>,
+    turn: number,
   ): Promise<WorkflowRun> => {
+    // Only a fully applicable deferred observation advances; a run whose
+    // trigger is no longer applicable becomes terminal and pruneable.
+    if (definition.trigger.applicability === 'checkpoint-required') {
+      const metrics = turnMetrics.get(String(agent.session.id))
+      const current = metrics !== undefined && metrics.turn === turn ? metrics : undefined
+      const applicable = checkpointRequired({
+        toolCalls: current?.toolCalls ?? 0,
+        ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
+        written: current?.written ?? 0,
+        workers: current?.workers ?? 0,
+      })
+      if (!applicable) {
+        const completed = completeNotApplicable(run, journal.time())
+        await writeRun(workspace, completed, auth)
+        return completed
+      }
+    }
     const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked')
     const sessionId = String(agent.session.id)
     // The host dispatch records into these live arrays, and the verifier must
@@ -2012,6 +2030,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             payload.agent,
             auth,
             installedLegacy,
+            payload.turn,
           )
           const outcome = evaluateTurnClose({
             run: current,

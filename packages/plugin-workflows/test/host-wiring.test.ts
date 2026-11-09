@@ -380,6 +380,41 @@ describe('retro applicability through the journal path', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect((await retroRows()).some((row) => row.reason === 'run-created')).toBe(true)
+
+    // A later short turn completes the existing observational run and makes it
+    // pruneable instead of leaving it blocked forever.
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const runId = String(
+      (await retroRows()).find((row) => row.reason === 'run-created')?.runId ?? '',
+    )
+    expect(runId).not.toBe('')
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 3,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 3 })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    console.log(
+      'DEBUG-RETRO',
+      JSON.stringify(await retroRows()),
+      JSON.stringify(await runs.readAuthenticatedRun(workspace, runId, auth)),
+    )
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, runId, auth)
+      return stored?.status === 'completed'
+    })
+    const terminal = await runs.readAuthenticatedRun(workspace, runId, auth)
+    expect(terminal?.reason).toBe('not-applicable')
   })
 })
 
