@@ -82,10 +82,10 @@ describe('React Flow dependency', () => {
       gzipBytes: gzipped.length,
       artifactBytes: artifact?.size,
     }
-    // Recorded at implementation time: esbuild bundle 537,759 bytes, the
-    // shipped lib/client.js is larger (the loader wrapper indents every line),
-    // minified 260,419 bytes, gzip 80,786 bytes. The shared build does not
-    // minify client bundles, so the whole single artifact is over 500 KiB
+    // Recorded with the 1.3 editor in place: esbuild bundle 539,493 bytes, the
+    // shipped lib/client.js 591,739 bytes (the loader wrapper indents every
+    // line), minified 272,959 bytes, gzip 83,590 bytes. The shared build does
+    // not minify client bundles, so the whole single artifact is over 500 KiB
     // unminified and the 250 KB design estimate is exceeded at the minified
     // payload as well. The documented reason is this change's own design:
     // React Flow ships statically in the one client artifact (no lazy chunk or
