@@ -729,10 +729,24 @@ export function checkpointCloseIssue(input) {
     }
     // A changed bottleneck has not been watched for the recorded time; the
     // model restates the same object on a successful call, which keeps its age.
+    // Compare normalized fields so equivalent spellings are not a change.
     const amendedBottleneck = rawArguments?.bottleneck;
+    const normalizeBottleneck = (value) => {
+        const normalizedPath = (entry) => typeof entry === 'string'
+            ? entry.replaceAll('\\', '/').replace(/\/+$/u, '')
+            : entry;
+        const sorted = (entry) => Array.isArray(entry) ? [...entry].map(normalizedPath).map(String).sort() : entry;
+        return JSON.stringify({
+            id: typeof value.id === 'string' ? value.id.trim() : value.id,
+            action: value.action,
+            owner: value.owner,
+            blockingLanes: sorted(value.blockingLanes),
+            targets: sorted(value.targets),
+        });
+    };
     const changedBottleneck = isRecord(amendedBottleneck) && isRecord(record.bottleneck)
-        ? ['id', 'action', 'owner', 'blockingLanes', 'targets'].some((key) => JSON.stringify(amendedBottleneck[key]) !==
-            JSON.stringify(record.bottleneck?.[key]))
+        ? normalizeBottleneck(amendedBottleneck) !==
+            normalizeBottleneck(record.bottleneck)
         : false;
     const age = changedBottleneck
         ? 0
