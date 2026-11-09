@@ -156,7 +156,9 @@ export function fire(element: Element | undefined, handler: string, value?: unkn
   const callback = element?.props[handler]
   if (typeof callback !== 'function') throw new Error(`no ${handler} handler`)
   ;(callback as (event: unknown) => void)({
-    ...(value === undefined ? {} : { currentTarget: { value } }),
+    ...(value === undefined
+      ? {}
+      : { currentTarget: { value, checked: typeof value === 'boolean' ? value : undefined } }),
     key: value,
     preventDefault: () => {},
   })

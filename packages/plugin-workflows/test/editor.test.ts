@@ -647,10 +647,21 @@ describe('pre-check and host error mapping', () => {
     ).toEqual(['main', 'main'])
   })
 
+  it('keeps a connected next target across an executor change', () => {
+    let state = opened()
+    state = connectSteps(state, nodeIdOf('one'), nodeIdOf('two'), 'next')
+    const connected = state.document.definition.steps.find((step) => step.id === 'one')
+    expect(connected?.next).toBe('two')
+    state = patchStep(state, nodeIdOf('one'), { executor: 'human' })
+    expect(state.document.definition.steps[0]?.next).toBe('two')
+    expect(validateDefinition(state.document.definition).steps[0]?.next).toBe('two')
+  })
+
   it('normalizes required configuration when the executor changes', () => {
     let state = opened()
     state = patchStep(state, nodeIdOf('one'), { executor: 'branch' })
     expect(state.document.definition.steps[0]?.branch).toMatchObject({
+      // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
       then: 'end',
       else: 'end',
     })

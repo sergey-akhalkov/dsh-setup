@@ -6,10 +6,13 @@ import {
   addStep,
   blankDefinition,
   connectSteps,
+  deleteStep,
   type EditorApi,
   type EditorState,
   openNew,
+  patchDefinition,
   patchStep,
+  renameStepId,
   save,
   setMode,
 } from '../src/client/editor.ts'
@@ -22,6 +25,7 @@ import {
   nodeIdOf,
 } from '../src/client/graph.ts'
 import { withLayout } from '../src/client/layout.ts'
+import { validateDefinition } from '../src/host/definitions.ts'
 import {
   call,
   type Element,
@@ -267,6 +271,82 @@ describe('palette and property panel', () => {
     expect(patches[0]).toEqual({ evidence: { kind: 'declaration' } })
   })
 
+  it('refreshes a JSON field when another control changes the committed value', () => {
+    let state = editor()
+    const render = (current: EditorState): unknown =>
+      call(ui, 'PropertyPanel', {
+        state: current,
+        selected: nodeIdOf('requirements'),
+        onDefinitionPatch: () => {},
+        onPatch: () => {},
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+    const evidence = (tree: unknown) =>
+      elements(tree).find(
+        (element) => element.type === 'textarea' && element.props['aria-label'] === 'Evidence JSON',
+      )
+    const first = render(state)
+    fire(evidence(first), 'onChange', '{"kind":"declaration"}')
+    state = patchStep(state, nodeIdOf('requirements'), { evidence: { kind: 'declaration' } })
+    expect(evidence(render(state))?.props.defaultValue).toBe('{"kind":"declaration"}')
+    state = patchStep(state, nodeIdOf('requirements'), { executor: 'human' })
+    expect(String(evidence(render(state))?.props.defaultValue)).toContain('"human"')
+  })
+
+  it('edits flags, human timeout, loop cap, and the step id with validation', () => {
+    let state = openNew(blankDefinition(new Set(['flags-demo'])))
+    const render = (current: EditorState, selected: string): unknown =>
+      call(ui, 'PropertyPanel', {
+        state: current,
+        selected,
+        onDefinitionPatch: () => {},
+        onPatch: (id: string, patch: Record<string, unknown>) => {
+          state = patchStep(state, id, patch)
+        },
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: (id: string, nextId: string) => {
+          state = renameStepId(state, id, nextId)
+        },
+      })
+    const find = (tree: unknown, label: string): Element | undefined =>
+      elements(tree).find(
+        (element) =>
+          (element.type === 'input' || element.type === 'select') &&
+          element.props['aria-label'] === label,
+      )
+    // A declaration requires non-critical: turning that flag off must be
+    // visible to the real validator, and turning it back on must pass.
+    fire(find(render(state, nodeIdOf('step-1')), 'Non-critical step'), 'onChange', false)
+    expect(() => validateDefinition(state.document.definition)).toThrow(/nonCritical/u)
+    fire(find(render(state, nodeIdOf('step-1')), 'Non-critical step'), 'onChange', true)
+    expect(validateDefinition(state.document.definition).steps[0]?.nonCritical).toBe(true)
+
+    // Renaming the id updates the node and keeps the definition valid.
+    fire(find(render(state, nodeIdOf('step-1')), 'Step id'), 'onBlur', 'renamed-step')
+    expect(state.document.definition.steps[0]?.id).toBe('renamed-step')
+    expect(state.diagram.nodes.some((node) => node.id === nodeIdOf('renamed-step'))).toBe(true)
+    expect(validateDefinition(state.document.definition).steps[0]?.id).toBe('renamed-step')
+
+    // Human timeout and loop cap are editable and validate.
+    state = patchStep(state, nodeIdOf('renamed-step'), { executor: 'human' })
+    fire(
+      find(render(state, nodeIdOf('renamed-step')), 'Human timeout action'),
+      'onChange',
+      'cancel',
+    )
+    expect(state.document.definition.steps[0]?.human?.timeoutAction).toBe('cancel')
+    expect(validateDefinition(state.document.definition).steps[0]?.human?.timeoutAction).toBe(
+      'cancel',
+    )
+    state = patchStep(state, nodeIdOf('renamed-step'), { executor: 'loop' })
+    fire(find(render(state, nodeIdOf('renamed-step')), 'Loop cap'), 'onChange', 'failed')
+    expect(state.document.definition.steps[0]?.loop?.cap).toBe('failed')
+    expect(validateDefinition(state.document.definition).steps[0]?.loop?.cap).toBe('failed')
+  })
+
   it('opens the property panel for the selected node', () => {
     const state = editor()
     const step = DEFINITION.steps[1]
@@ -374,6 +454,59 @@ describe('list mode', () => {
     })
     expect(expected).toEqual(['rev-1'])
     expect(saved.status).toBe('saved')
+  })
+  it('edits the trigger and start connection from the list and repairs a deletion', () => {
+    let state = addStep(openNew(blankDefinition(new Set(['list-trigger']))), 'step')
+    state = patchStep(state, nodeIdOf('step-2'), {
+      prompt: 'Two.',
+      evidence: { kind: 'declaration' },
+      nonCritical: true,
+    })
+    state = connectSteps(state, nodeIdOf('step-1'), nodeIdOf('step-2'), 'next')
+    state = connectSteps(state, nodeIdOf('step-2'), END_NODE, 'next')
+    expect(state.issues).toEqual([])
+    const list = (): unknown =>
+      call(ui, 'ListEditor', {
+        state,
+        onSelect: () => {},
+        onDefinitionPatch: (patch: Record<string, unknown>) => {
+          state = patchDefinition(state, patch)
+        },
+        onPatch: (id: string, patch: Record<string, unknown>) => {
+          state = patchStep(state, id, patch)
+        },
+        onConnect: (source: string, target: string, kind: 'start' | 'next') => {
+          state = connectSteps(state, source, target, kind)
+        },
+        onDelete: (id: string) => {
+          state = deleteStep(state, id)
+        },
+      })
+    const select = (label: string): Element | undefined =>
+      elements(list()).find(
+        (element) => element.type === 'select' && element.props['aria-label'] === label,
+      )
+    fire(
+      elements(list()).find(
+        (element) => element.type === 'input' && element.props['aria-label'] === 'Trigger kind',
+      ),
+      'onChange',
+      'turn.stopping',
+    )
+    expect(state.document.definition.trigger.kind).toBe('turn.stopping')
+    fire(select('Start step'), 'onChange', nodeIdOf('step-2'))
+    expect(state.document.definition.steps[0]?.id).toBe('step-2')
+    state = deleteStep(state, nodeIdOf('step-2'))
+    expect(state.issues.some((issue) => issue.message.includes('trigger has no first step'))).toBe(
+      true,
+    )
+    fire(select('Start step'), 'onChange', nodeIdOf('step-1'))
+    fire(select('next target of step-1'), 'onChange', END_NODE)
+    expect(state.issues).toEqual([])
+    expect(state.document.definition.steps[0]?.id).toBe('step-1')
+    expect(validateDefinition(state.document.definition).steps.map((step) => step.id)).toEqual([
+      'step-1',
+    ])
   })
 })
 

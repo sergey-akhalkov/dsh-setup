@@ -62,6 +62,7 @@ describe('mode and fallback', () => {
       fallback: jsx(ui.ListEditor as never, {
         state,
         onSelect: () => {},
+        onDefinitionPatch: () => {},
         onPatch: (id: string) => patches.push(id),
         onConnect: () => {},
         onDelete: () => {},

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { connectChoices, currentTarget, EDGE_LABELS } from './edges.ts'
 import type { EditorState } from './editor.ts'
 import type { EdgeKind, GraphStep } from './graph.ts'
+import { TRIGGER_NODE } from './graph.ts'
 
 /**
  * The List mode: the same state and save path as the canvas, with every step
@@ -9,13 +10,14 @@ import type { EdgeKind, GraphStep } from './graph.ts'
  * the canvas cannot render and an equal editor, never a read-only mirror.
  */
 
-const EXECUTORS = ['main', 'branch', 'loop', 'human'] as const
+const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
 const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
 
 export interface ListEditorProps {
   readonly state: EditorState
   readonly selected?: string
   readonly onSelect: (nodeId: string) => void
+  readonly onDefinitionPatch: (patch: Readonly<Record<string, unknown>>) => void
   readonly onPatch: (stepId: string, patch: Readonly<Record<string, unknown>>) => void
   readonly onConnect: (source: string, target: string, kind: EdgeKind) => void
   readonly onDelete: (stepId: string) => void
@@ -117,8 +119,73 @@ export function patchListField(
 
 export function ListEditor(props: ListEditorProps): ReactNode {
   const steps = props.state.document.definition.steps
+  const trigger = props.state.document.definition.trigger
+  const startTarget = currentTarget(props.state.diagram.edges, TRIGGER_NODE, 'start')
+  const stepTargets = props.state.diagram.nodes.filter((node) => node.step !== undefined)
   return (
     <div className="dsh-wf-list-wrap" data-tab-group="list">
+      <section className="dsh-wf-list-trigger" data-tab-group="trigger">
+        <h4>Trigger</h4>
+        <label>
+          Kind
+          <input
+            value={typeof trigger.kind === 'string' ? trigger.kind : ''}
+            aria-label="Trigger kind"
+            onChange={(event) =>
+              props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
+            }
+          />
+        </label>
+        <label>
+          Mode
+          <select
+            value={typeof trigger.mode === 'string' ? trigger.mode : 'shadow'}
+            aria-label="Trigger mode"
+            onChange={(event) =>
+              props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } })
+            }
+          >
+            <option value="shadow">shadow</option>
+            <option value="active">active</option>
+          </select>
+        </label>
+        <label>
+          Dedupe
+          <select
+            value={typeof trigger.dedupe === 'string' ? trigger.dedupe : 'turn'}
+            aria-label="Dedupe policy"
+            onChange={(event) =>
+              props.onDefinitionPatch({
+                trigger: { ...trigger, dedupe: event.currentTarget.value },
+              })
+            }
+          >
+            {['none', 'turn', 'path+content-hash', 'callId', 'name'].map((policy) => (
+              <option key={policy} value={policy}>
+                {policy}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Start step
+          <select
+            value={startTarget ?? ''}
+            aria-label="Start step"
+            onChange={(event) => {
+              const target = event.currentTarget.value
+              if (target !== '') props.onConnect(TRIGGER_NODE, target, 'start')
+            }}
+          >
+            <option value="">(unconnected)</option>
+            {stepTargets.map((node) => (
+              <option key={node.id} value={node.id}>
+                {node.title} ({node.step?.id ?? node.id})
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
       <table className="dsh-wf-list" aria-label="Definition steps">
         <thead>
           <tr>

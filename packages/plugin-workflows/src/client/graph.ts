@@ -25,6 +25,7 @@ export interface GraphStep {
   readonly next?: string
   readonly branch?: GraphBranch
   readonly loop?: GraphLoop
+  readonly human?: { readonly timeoutAction?: string }
   readonly [field: string]: unknown
 }
 

@@ -25,6 +25,7 @@ import {
   reconcileCopy,
   reconcileSave,
   reload,
+  renameStepId,
   renameToNextId,
   save,
   saveAsCopy,
@@ -382,6 +383,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
               state={editor}
               {...(selected === undefined ? {} : { selected })}
               onSelect={setSelected}
+              onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
               onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
               onConnect={(source, target, kind) =>
                 apply(connectSteps(editor, source, target, kind))
@@ -399,6 +401,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
                     state={editor}
                     {...(selected === undefined ? {} : { selected })}
                     onSelect={setSelected}
+                    onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
                     onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
                     onConnect={(source, target, kind) =>
                       apply(connectSteps(editor, source, target, kind))
@@ -434,6 +437,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
             onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
             onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
             onConnect={(source, target, kind) => apply(connectSteps(editor, source, target, kind))}
+            onRename={(nodeId, nextId) => apply(renameStepId(editor, nodeId, nextId))}
             onDelete={(stepId) => {
               apply(deleteStep(editor, stepId))
               setSelected(undefined)

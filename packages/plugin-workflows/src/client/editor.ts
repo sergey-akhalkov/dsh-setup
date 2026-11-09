@@ -350,6 +350,7 @@ function normalizeExecutor(step: GraphStep, executor: string): GraphStep {
   const next: Record<string, unknown> = { ...step, executor }
   for (const key of EXECUTOR_FIELDS) delete next[key]
   if (executor === 'branch') {
+    // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
     next.branch = { predicate: {}, then: 'end', else: 'end' }
   } else if (executor === 'loop') {
     next.loop = { maxIterations: 3, stop: {}, next: 'end' }
@@ -448,8 +449,12 @@ export function patchStep(
 ): EditorState {
   const node = state.diagram.nodes.find((entry) => entry.id === id)
   if (node === undefined || node.step === undefined) return state
-  if (patch.executor !== undefined && patch.executor !== node.step.executor) {
-    const step = normalizeExecutor(node.step, String(patch.executor))
+  // The graph node keeps the step as it was projected; connection edits update
+  // only the definition, so always normalize from the authoritative step.
+  const current =
+    state.document.definition.steps.find((entry) => entry.id === node.step?.id) ?? node.step
+  if (patch.executor !== undefined && patch.executor !== current.executor) {
+    const step = normalizeExecutor(current, String(patch.executor))
     const definition = {
       ...state.document.definition,
       steps: state.document.definition.steps.map((entry) => (entry.id === step.id ? step : entry)),
@@ -458,11 +463,54 @@ export function patchStep(
   }
   const nodes = state.diagram.nodes.map((entry) => {
     if (entry.id !== id || entry.step === undefined) return entry
-    const step = { ...entry.step, ...patch } as GraphStep
+    const step = { ...current, ...patch } as GraphStep
     const kind = nodeKindOf(step.executor)
     return { ...entry, kind, step, title: step.title }
   })
   return updateGraph(state, nodes, state.diagram.edges)
+}
+
+/** Rename one step id and every connection that references it. */
+export function renameStepId(state: EditorState, nodeId: string, nextId: string): EditorState {
+  const node = state.diagram.nodes.find((entry) => entry.id === nodeId)
+  if (node?.step === undefined) return state
+  const trimmed = nextId.trim()
+  const oldId = node.step.id
+  if (trimmed === '' || trimmed === 'end' || trimmed === oldId) return state
+  if (state.document.definition.steps.some((step) => step.id === trimmed)) return state
+  const steps = state.document.definition.steps.map((step) => {
+    const renamed = step.id === oldId ? { ...step, id: trimmed } : step
+    const next = renamed.next === oldId ? trimmed : renamed.next
+    const branch =
+      renamed.branch === undefined
+        ? undefined
+        : {
+            ...renamed.branch,
+            // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+            ...(renamed.branch.then === oldId ? { then: trimmed } : {}),
+            ...(renamed.branch.else === oldId ? { else: trimmed } : {}),
+          }
+    const loop =
+      renamed.loop === undefined
+        ? undefined
+        : { ...renamed.loop, ...(renamed.loop.next === oldId ? { next: trimmed } : {}) }
+    return {
+      ...renamed,
+      ...(next === undefined ? {} : { next }),
+      ...(branch === undefined ? {} : { branch }),
+      ...(loop === undefined ? {} : { loop }),
+    }
+  })
+  const rebuilt = rebuildDiagram(state, { ...state.document.definition, steps })
+  return {
+    ...rebuilt,
+    diagram: {
+      ...rebuilt.diagram,
+      nodes: rebuilt.diagram.nodes.map((entry) =>
+        entry.step?.id === trimmed ? { ...entry, position: node.position } : entry,
+      ),
+    },
+  }
 }
 
 /** Patch definition-level fields (name, trigger, settings); steps stay as nodes. */

@@ -10522,8 +10522,9 @@ window.__ModuleLoader__.load({
     function patchStep(state, id2, patch) {
       const node = state.diagram.nodes.find((entry) => entry.id === id2);
       if (node === void 0 || node.step === void 0) return state;
-      if (patch.executor !== void 0 && patch.executor !== node.step.executor) {
-        const step = normalizeExecutor(node.step, String(patch.executor));
+      const current = state.document.definition.steps.find((entry) => entry.id === node.step?.id) ?? node.step;
+      if (patch.executor !== void 0 && patch.executor !== current.executor) {
+        const step = normalizeExecutor(current, String(patch.executor));
         const definition = {
           ...state.document.definition,
           steps: state.document.definition.steps.map((entry) => entry.id === step.id ? step : entry)
@@ -10532,11 +10533,46 @@ window.__ModuleLoader__.load({
       }
       const nodes = state.diagram.nodes.map((entry) => {
         if (entry.id !== id2 || entry.step === void 0) return entry;
-        const step = { ...entry.step, ...patch };
+        const step = { ...current, ...patch };
         const kind = nodeKindOf(step.executor);
         return { ...entry, kind, step, title: step.title };
       });
       return updateGraph(state, nodes, state.diagram.edges);
+    }
+    function renameStepId(state, nodeId, nextId2) {
+      const node = state.diagram.nodes.find((entry) => entry.id === nodeId);
+      if (node?.step === void 0) return state;
+      const trimmed = nextId2.trim();
+      const oldId = node.step.id;
+      if (trimmed === "" || trimmed === "end" || trimmed === oldId) return state;
+      if (state.document.definition.steps.some((step) => step.id === trimmed)) return state;
+      const steps = state.document.definition.steps.map((step) => {
+        const renamed = step.id === oldId ? { ...step, id: trimmed } : step;
+        const next = renamed.next === oldId ? trimmed : renamed.next;
+        const branch = renamed.branch === void 0 ? void 0 : {
+          ...renamed.branch,
+          // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+          ...renamed.branch.then === oldId ? { then: trimmed } : {},
+          ...renamed.branch.else === oldId ? { else: trimmed } : {}
+        };
+        const loop = renamed.loop === void 0 ? void 0 : { ...renamed.loop, ...renamed.loop.next === oldId ? { next: trimmed } : {} };
+        return {
+          ...renamed,
+          ...next === void 0 ? {} : { next },
+          ...branch === void 0 ? {} : { branch },
+          ...loop === void 0 ? {} : { loop }
+        };
+      });
+      const rebuilt = rebuildDiagram(state, { ...state.document.definition, steps });
+      return {
+        ...rebuilt,
+        diagram: {
+          ...rebuilt.diagram,
+          nodes: rebuilt.diagram.nodes.map(
+            (entry) => entry.step?.id === trimmed ? { ...entry, position: node.position } : entry
+          )
+        }
+      };
     }
     function patchDefinition(state, patch) {
       const definition = { ...state.document.definition, ...patch };
@@ -11010,7 +11046,7 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/list.tsx
     var import_jsx_runtime4 = require("react/jsx-runtime");
-    var EXECUTORS = ["main", "branch", "loop", "human"];
+    var EXECUTORS = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS = ["file", "record", "tool", "check", "human", "all", "declaration"];
     function outputsFor(step) {
       if (step.branch !== void 0) return ["true", "false"];
@@ -11079,121 +11115,192 @@ window.__ModuleLoader__.load({
     }
     function ListEditor(props) {
       const steps = props.state.document.definition.steps;
-      return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "dsh-wf-list-wrap", "data-tab-group": "list", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("table", { className: "dsh-wf-list", "aria-label": "Definition steps", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("tr", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Step" }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Title" }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Executor" }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Evidence kind" }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Connections" }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", {})
-        ] }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("tbody", { children: steps.map((step) => {
-          const values = listRowModel(props.state, step);
-          const graphId = graphIdOfStep(props.state, step.id);
-          const selected2 = props.selected === graphId;
-          return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
-            "tr",
-            {
-              "data-step": step.id,
-              "data-selected": selected2 ? "true" : void 0,
-              onClick: () => props.onSelect(graphId),
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("code", { children: step.id }) }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("td", { children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                    "input",
-                    {
-                      value: values.title ?? "",
-                      "aria-label": `Title of ${step.id}`,
-                      onChange: (event) => patchListField(
-                        graphId,
-                        step,
-                        "title",
-                        event.currentTarget.value,
-                        props.onPatch
-                      )
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                    "input",
-                    {
-                      value: values.prompt ?? "",
-                      "aria-label": `Prompt of ${step.id}`,
-                      placeholder: "Prompt",
-                      onChange: (event) => patchListField(
-                        graphId,
-                        step,
-                        "prompt",
-                        event.currentTarget.value,
-                        props.onPatch
-                      )
-                    }
-                  )
-                ] }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                  "select",
-                  {
-                    value: values.executor ?? "main",
-                    "aria-label": `Executor of ${step.id}`,
-                    onChange: (event) => patchListField(
-                      graphId,
-                      step,
-                      "executor",
-                      event.currentTarget.value,
-                      props.onPatch
+      const trigger = props.state.document.definition.trigger;
+      const startTarget = currentTarget(props.state.diagram.edges, TRIGGER_NODE, "start");
+      const stepTargets = props.state.diagram.nodes.filter((node) => node.step !== void 0);
+      return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dsh-wf-list-wrap", "data-tab-group": "list", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "dsh-wf-list-trigger", "data-tab-group": "trigger", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h4", { children: "Trigger" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Kind",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+              "input",
+              {
+                value: typeof trigger.kind === "string" ? trigger.kind : "",
+                "aria-label": "Trigger kind",
+                onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Mode",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+              "select",
+              {
+                value: typeof trigger.mode === "string" ? trigger.mode : "shadow",
+                "aria-label": "Trigger mode",
+                onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "shadow", children: "shadow" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "active", children: "active" })
+                ]
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Dedupe",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+              "select",
+              {
+                value: typeof trigger.dedupe === "string" ? trigger.dedupe : "turn",
+                "aria-label": "Dedupe policy",
+                onChange: (event) => props.onDefinitionPatch({
+                  trigger: { ...trigger, dedupe: event.currentTarget.value }
+                }),
+                children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: policy, children: policy }, policy))
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            "Start step",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+              "select",
+              {
+                value: startTarget ?? "",
+                "aria-label": "Start step",
+                onChange: (event) => {
+                  const target = event.currentTarget.value;
+                  if (target !== "") props.onConnect(TRIGGER_NODE, target, "start");
+                },
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(unconnected)" }),
+                  stepTargets.map((node) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("option", { value: node.id, children: [
+                    node.title,
+                    " (",
+                    node.step?.id ?? node.id,
+                    ")"
+                  ] }, node.id))
+                ]
+              }
+            )
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("table", { className: "dsh-wf-list", "aria-label": "Definition steps", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Step" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Title" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Executor" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Evidence kind" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Connections" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", {})
+          ] }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("tbody", { children: steps.map((step) => {
+            const values = listRowModel(props.state, step);
+            const graphId = graphIdOfStep(props.state, step.id);
+            const selected2 = props.selected === graphId;
+            return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+              "tr",
+              {
+                "data-step": step.id,
+                "data-selected": selected2 ? "true" : void 0,
+                onClick: () => props.onSelect(graphId),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("code", { children: step.id }) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("td", { children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                      "input",
+                      {
+                        value: values.title ?? "",
+                        "aria-label": `Title of ${step.id}`,
+                        onChange: (event) => patchListField(
+                          graphId,
+                          step,
+                          "title",
+                          event.currentTarget.value,
+                          props.onPatch
+                        )
+                      }
                     ),
-                    children: EXECUTORS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: executor, children: executor }, executor))
-                  }
-                ) }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
-                  "select",
-                  {
-                    value: values.evidenceKind ?? "",
-                    "aria-label": `Evidence kind of ${step.id}`,
-                    onChange: (event) => patchListField(
-                      graphId,
-                      step,
-                      "evidenceKind",
-                      event.currentTarget.value,
-                      props.onPatch
-                    ),
-                    children: [
-                      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(none)" }),
-                      EVIDENCE_KINDS.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: kind, children: kind }, kind))
-                    ]
-                  }
-                ) }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: listConnectionChoices(props.state, step).map((choice) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { "data-connection": choice.kind, children: [
-                  EDGE_LABELS[choice.kind],
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                      "input",
+                      {
+                        value: values.prompt ?? "",
+                        "aria-label": `Prompt of ${step.id}`,
+                        placeholder: "Prompt",
+                        onChange: (event) => patchListField(
+                          graphId,
+                          step,
+                          "prompt",
+                          event.currentTarget.value,
+                          props.onPatch
+                        )
+                      }
+                    )
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                     "select",
                     {
-                      value: values[`connection:${choice.kind}`] ?? "",
-                      "aria-label": `${EDGE_LABELS[choice.kind]} target of ${step.id}`,
-                      onChange: (event) => {
-                        const target = event.currentTarget.value;
-                        if (target !== "") props.onConnect(graphId, target, choice.kind);
-                      },
+                      value: values.executor ?? "main",
+                      "aria-label": `Executor of ${step.id}`,
+                      onChange: (event) => patchListField(
+                        graphId,
+                        step,
+                        "executor",
+                        event.currentTarget.value,
+                        props.onPatch
+                      ),
+                      children: EXECUTORS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: executor, children: executor }, executor))
+                    }
+                  ) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+                    "select",
+                    {
+                      value: values.evidenceKind ?? "",
+                      "aria-label": `Evidence kind of ${step.id}`,
+                      onChange: (event) => patchListField(
+                        graphId,
+                        step,
+                        "evidenceKind",
+                        event.currentTarget.value,
+                        props.onPatch
+                      ),
                       children: [
-                        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(unconnected)" }),
-                        choice.targets.map((target) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("option", { value: target.id, children: [
-                          target.title,
-                          " (",
-                          target.id,
-                          ")"
-                        ] }, target.id))
+                        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(none)" }),
+                        EVIDENCE_KINDS.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: kind, children: kind }, kind))
                       ]
                     }
-                  )
-                ] }, choice.kind)) }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", onClick: () => props.onDelete(graphId), children: "Delete" }) })
-              ]
-            },
-            step.id
-          );
-        }) })
-      ] }) });
+                  ) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: listConnectionChoices(props.state, step).map((choice) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { "data-connection": choice.kind, children: [
+                    EDGE_LABELS[choice.kind],
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+                      "select",
+                      {
+                        value: values[`connection:${choice.kind}`] ?? "",
+                        "aria-label": `${EDGE_LABELS[choice.kind]} target of ${step.id}`,
+                        onChange: (event) => {
+                          const target = event.currentTarget.value;
+                          if (target !== "") props.onConnect(graphId, target, choice.kind);
+                        },
+                        children: [
+                          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(unconnected)" }),
+                          choice.targets.map((target) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("option", { value: target.id, children: [
+                            target.title,
+                            " (",
+                            target.id,
+                            ")"
+                          ] }, target.id))
+                        ]
+                      }
+                    )
+                  ] }, choice.kind)) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", onClick: () => props.onDelete(graphId), children: "Delete" }) })
+                ]
+              },
+              step.id
+            );
+          }) })
+        ] })
+      ] });
     }
 
     // packages/plugin-workflows/src/client/overlay.ts
@@ -11322,7 +11429,7 @@ window.__ModuleLoader__.load({
     function jsonText(value2) {
       return value2 === void 0 ? "" : JSON.stringify(value2);
     }
-    var EXECUTORS2 = ["main", "branch", "loop", "human"];
+    var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
     function selectTarget(props, node, kind) {
       const current = currentTarget(props.state.diagram.edges, node.id, kind);
@@ -11368,6 +11475,48 @@ window.__ModuleLoader__.load({
           )
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Step id",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              defaultValue: step.id,
+              "aria-label": "Step id",
+              disabled: props.onRename === void 0,
+              onBlur: (event) => props.onRename?.(node.id, event.currentTarget.value)
+            },
+            `id:${step.id}`
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "Flags" }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                type: "checkbox",
+                checked: step.nonCritical === true,
+                "aria-label": "Non-critical step",
+                onChange: (event) => props.onPatch(node.id, { nonCritical: event.currentTarget.checked })
+              }
+            ),
+            "non-critical"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                type: "checkbox",
+                checked: step.blockTurnClose === true,
+                "aria-label": "Blocks turn close",
+                onChange: (event) => props.onPatch(node.id, {
+                  ...event.currentTarget.checked ? { blockTurnClose: true } : { blockTurnClose: void 0 }
+                })
+              }
+            ),
+            "blocks turn close"
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Executor",
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "select",
@@ -11409,7 +11558,7 @@ window.__ModuleLoader__.load({
                 if (parsed.ok) props.onPatch(node.id, { evidence: parsed.value });
               }
             },
-            `evidence:${node.id}`
+            `evidence:${node.id}:${jsonText(step.evidence)}`
           )
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
@@ -11425,6 +11574,55 @@ window.__ModuleLoader__.load({
                 EVIDENCE_KINDS2.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: kind, children: kind }, kind))
               ]
             }
+          )
+        ] }),
+        step.human === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Human timeout",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: step.human.timeoutAction ?? "block",
+              "aria-label": "Human timeout action",
+              onChange: (event) => props.onPatch(node.id, {
+                human: { ...step.human, timeoutAction: event.currentTarget.value }
+              }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "block", children: "block" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "cancel", children: "cancel" })
+              ]
+            }
+          )
+        ] }),
+        step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Tool config (JSON)",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "textarea",
+            {
+              defaultValue: jsonText(step.tool),
+              "aria-label": "Tool config JSON",
+              rows: 2,
+              onChange: (event) => {
+                const parsed = parseJsonField(event.currentTarget.value);
+                if (parsed.ok) props.onPatch(node.id, { tool: parsed.value });
+              }
+            },
+            `tool:${node.id}:${jsonText(step.tool)}`
+          )
+        ] }),
+        step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+          "Subagent config (JSON)",
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "textarea",
+            {
+              defaultValue: jsonText(step.subagent),
+              "aria-label": "Subagent config JSON",
+              rows: 2,
+              onChange: (event) => {
+                const parsed = parseJsonField(event.currentTarget.value);
+                if (parsed.ok) props.onPatch(node.id, { subagent: parsed.value });
+              }
+            },
+            `subagent:${node.id}:${jsonText(step.subagent)}`
           )
         ] }),
         branch === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
@@ -11443,7 +11641,7 @@ window.__ModuleLoader__.load({
                   }
                 }
               },
-              `predicate:${node.id}`
+              `predicate:${node.id}:${jsonText(branch.predicate)}`
             )
           ] }),
           selectTarget(props, node, "true"),
@@ -11478,7 +11676,7 @@ window.__ModuleLoader__.load({
                   if (parsed.ok) props.onPatch(node.id, { loop: { ...loop, stop: parsed.value } });
                 }
               },
-              `stop:${node.id}`
+              `stop:${node.id}:${jsonText(loop.stop)}`
             )
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
@@ -11491,6 +11689,23 @@ window.__ModuleLoader__.load({
                 onChange: (event) => props.onPatch(node.id, {
                   loop: { ...loop, list: event.currentTarget.value }
                 })
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Loop cap",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+              "select",
+              {
+                value: loop.cap ?? "blocked",
+                "aria-label": "Loop cap",
+                onChange: (event) => props.onPatch(node.id, {
+                  loop: { ...loop, cap: event.currentTarget.value }
+                }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "blocked", children: "blocked" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "failed", children: "failed" })
+                ]
               }
             )
           ] }),
@@ -11558,7 +11773,7 @@ window.__ModuleLoader__.load({
                 if (parsed.ok) props.onDefinitionPatch({ trigger: { ...trigger, match: parsed.value } });
               }
             },
-            `match:${props.state.document.definition.id}`
+            `match:${props.state.document.definition.id}:${jsonText(match ?? {})}`
           )
         ] }),
         triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind))
@@ -11919,6 +12134,7 @@ window.__ModuleLoader__.load({
                 state: editor,
                 ...selected2 === void 0 ? {} : { selected: selected2 },
                 onSelect: setSelected,
+                onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
                 onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
                 onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
                 onDelete: (stepId) => {
@@ -11935,6 +12151,7 @@ window.__ModuleLoader__.load({
                     state: editor,
                     ...selected2 === void 0 ? {} : { selected: selected2 },
                     onSelect: setSelected,
+                    onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
                     onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
                     onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
                     onDelete: (stepId) => {
@@ -11969,6 +12186,7 @@ window.__ModuleLoader__.load({
                 onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
                 onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
                 onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
+                onRename: (nodeId, nextId2) => apply2(renameStepId(editor, nodeId, nextId2)),
                 onDelete: (stepId) => {
                   apply2(deleteStep(editor, stepId));
                   setSelected(void 0);

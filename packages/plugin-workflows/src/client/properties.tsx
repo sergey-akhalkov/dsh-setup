@@ -23,7 +23,7 @@ export function jsonText(value: unknown): string {
   return value === undefined ? '' : JSON.stringify(value)
 }
 
-const EXECUTORS = ['main', 'branch', 'loop', 'human'] as const
+const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
 const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
 
 export interface PropertiesProps {
@@ -33,6 +33,7 @@ export interface PropertiesProps {
   readonly onPatch: (stepId: string, patch: Readonly<Record<string, unknown>>) => void
   readonly onConnect: (source: string, target: string, kind: EdgeKind) => void
   readonly onDelete: (stepId: string) => void
+  readonly onRename?: (nodeId: string, nextId: string) => void
 }
 
 function selectTarget(props: PropertiesProps, node: DiagramNode, kind: EdgeKind): ReactNode {
@@ -75,6 +76,45 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
         />
       </label>
       <label>
+        Step id
+        <input
+          key={`id:${step.id}`}
+          defaultValue={step.id}
+          aria-label="Step id"
+          disabled={props.onRename === undefined}
+          onBlur={(event) => props.onRename?.(node.id, event.currentTarget.value)}
+        />
+      </label>
+      <label>
+        <span>Flags</span>
+        <label>
+          <input
+            type="checkbox"
+            checked={step.nonCritical === true}
+            aria-label="Non-critical step"
+            onChange={(event) =>
+              props.onPatch(node.id, { nonCritical: event.currentTarget.checked })
+            }
+          />
+          non-critical
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={step.blockTurnClose === true}
+            aria-label="Blocks turn close"
+            onChange={(event) =>
+              props.onPatch(node.id, {
+                ...(event.currentTarget.checked
+                  ? { blockTurnClose: true }
+                  : { blockTurnClose: undefined }),
+              })
+            }
+          />
+          blocks turn close
+        </label>
+      </label>
+      <label>
         Executor
         <select
           value={step.executor}
@@ -100,7 +140,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
       <label>
         Evidence (JSON)
         <textarea
-          key={`evidence:${node.id}`}
+          key={`evidence:${node.id}:${jsonText(step.evidence)}`}
           defaultValue={jsonText(step.evidence)}
           aria-label="Evidence JSON"
           rows={3}
@@ -136,12 +176,59 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           ))}
         </select>
       </label>
+      {step.human === undefined ? null : (
+        <label>
+          Human timeout
+          <select
+            value={step.human.timeoutAction ?? 'block'}
+            aria-label="Human timeout action"
+            onChange={(event) =>
+              props.onPatch(node.id, {
+                human: { ...step.human, timeoutAction: event.currentTarget.value },
+              })
+            }
+          >
+            <option value="block">block</option>
+            <option value="cancel">cancel</option>
+          </select>
+        </label>
+      )}
+      {step.tool === undefined ? null : (
+        <label>
+          Tool config (JSON)
+          <textarea
+            key={`tool:${node.id}:${jsonText(step.tool)}`}
+            defaultValue={jsonText(step.tool)}
+            aria-label="Tool config JSON"
+            rows={2}
+            onChange={(event) => {
+              const parsed = parseJsonField(event.currentTarget.value)
+              if (parsed.ok) props.onPatch(node.id, { tool: parsed.value })
+            }}
+          />
+        </label>
+      )}
+      {step.subagent === undefined ? null : (
+        <label>
+          Subagent config (JSON)
+          <textarea
+            key={`subagent:${node.id}:${jsonText(step.subagent)}`}
+            defaultValue={jsonText(step.subagent)}
+            aria-label="Subagent config JSON"
+            rows={2}
+            onChange={(event) => {
+              const parsed = parseJsonField(event.currentTarget.value)
+              if (parsed.ok) props.onPatch(node.id, { subagent: parsed.value })
+            }}
+          />
+        </label>
+      )}
       {branch === undefined ? null : (
         <>
           <label>
             Branch predicate (JSON)
             <textarea
-              key={`predicate:${node.id}`}
+              key={`predicate:${node.id}:${jsonText(branch.predicate)}`}
               defaultValue={jsonText(branch.predicate)}
               aria-label="Branch predicate JSON"
               rows={2}
@@ -176,7 +263,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           <label>
             Loop stop (JSON)
             <textarea
-              key={`stop:${node.id}`}
+              key={`stop:${node.id}:${jsonText(loop.stop)}`}
               defaultValue={jsonText(loop.stop)}
               aria-label="Loop stop JSON"
               rows={2}
@@ -197,6 +284,21 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
                 })
               }
             />
+          </label>
+          <label>
+            Loop cap
+            <select
+              value={loop.cap ?? 'blocked'}
+              aria-label="Loop cap"
+              onChange={(event) =>
+                props.onPatch(node.id, {
+                  loop: { ...loop, cap: event.currentTarget.value as 'blocked' | 'failed' },
+                })
+              }
+            >
+              <option value="blocked">blocked</option>
+              <option value="failed">failed</option>
+            </select>
           </label>
           {selectTarget(props, node, 'exit')}
         </>
@@ -263,7 +365,7 @@ function triggerFields(props: PropertiesProps): ReactNode {
       <label>
         Trigger match (JSON)
         <textarea
-          key={`match:${props.state.document.definition.id}`}
+          key={`match:${props.state.document.definition.id}:${jsonText(match ?? {})}`}
           defaultValue={jsonText(match ?? {})}
           aria-label="Trigger match JSON"
           rows={2}
