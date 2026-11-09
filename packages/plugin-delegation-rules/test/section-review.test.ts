@@ -270,6 +270,14 @@ describe('section selector resolution', () => {
         section: '1',
       }),
     ).rejects.toThrow(/ambiguous/)
+    // A title selector cannot disambiguate two sections that share a key.
+    await expect(
+      second.harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: 'Second',
+      }),
+    ).rejects.toThrow(/shared by 2 sections/)
     expect(second.agents.startCalls).toBe(0)
   })
 
@@ -417,13 +425,36 @@ describe('one section run, one verdict', () => {
     )
     expect(await harness.waitForRun(run)).toContain('state=completed')
     expect(agents.startCalls).toBe(1)
-    expect(agents.runs[0]?.prompt).toContain('Add parser')
+    expect(agents.runs[0]?.prompt).toContain('2.1 Run regression tests')
+    expect(agents.runs[0]?.prompt).toContain('2.2 Add parser')
     const section = await readJson(sectionRecordPath(root, '2'))
     expect(section.verdict).toBe('PASS')
     const shared = taskIdFor('Run regression tests')
     expect(await exists(portablePath(dir, shared))).toBe(true)
     expect(await exists(portablePath(dir, taskIdFor('Add parser')))).toBe(true)
     expect(await exists(localTaskPath(root, taskIdFor('Add parser')))).toBe(true)
+  })
+
+  it('covers a repeated task text occurrence by its number', async () => {
+    const repeated = `# Tasks
+
+## 1. First (lane 1, owns \`one/**\`)
+
+- [ ] 1.1 Run regression tests
+- [x] 1.2 Run regression tests
+`
+    const { agents, harness } = await fixture(repeated)
+    const run = runIdFrom(
+      await harness.toolText('delegate', { rule: 'task-review', change: 'change-a', section: '1' }),
+    )
+    expect(await harness.waitForRun(run)).toContain('state=completed')
+    const prompt = agents.runs[0]?.prompt ?? ''
+    const scope = prompt.slice(
+      prompt.indexOf('Checked tasks in scope'),
+      prompt.indexOf('Out of scope'),
+    )
+    expect(scope).toContain('1.2 Run regression tests')
+    expect(scope).not.toContain('1.1 Run regression tests')
   })
 
   it('accepts one FINDINGS verdict that names the affected task and publishes no approval', async () => {

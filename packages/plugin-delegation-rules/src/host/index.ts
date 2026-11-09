@@ -2878,6 +2878,15 @@ function resolveSectionArgument(
     )
   }
   const lane = matches[0] as TaskLane
+  const key = sectionKeyOf(lane.title)
+  const sameKey = lanes.filter((entry) => sectionKeyOf(entry.title) === key)
+  if (sameKey.length > 1) {
+    fail(
+      `section "${wanted}" resolves to key "${key}", shared by ${sameKey.length} sections in change "${change.name}"; rename one heading so the key is unique. Available sections: ${lanes
+        .map((entry) => sectionLabel(entry))
+        .join('; ')}`,
+    )
+  }
   if (lane.tasks.length === 0) {
     fail(
       `section "${wanted}" in change "${change.name}" has no numbered tasks; available sections: ${lanes
@@ -2894,7 +2903,7 @@ function resolveSectionArgument(
     )
   }
   return {
-    key: sectionKeyOf(lane.title),
+    key,
     title: lane.title,
     tasks: lane.tasks,
     covered,
@@ -2935,7 +2944,11 @@ async function frozenSection(
   }
   const covered: TaskInfo[] = []
   for (const selected of section.covered) {
-    const current = lane.tasks.find((entry) => entry.id === selected.id)
+    // Task ids hash only the text; matching the number too preserves a repeated
+    // task text as two distinct checked occurrences in the section.
+    const current = lane.tasks.find(
+      (entry) => entry.id === selected.id && entry.number === selected.number,
+    )
     if (current === undefined) {
       fail(
         `task "${selected.number} ${selected.text}" changed while the section review snapshot was prepared in change "${change.name}"; re-run the review`,
@@ -4285,7 +4298,9 @@ class DelegationEngine {
       }
       const covered: TaskInfo[] = []
       for (const selected of section.covered) {
-        const current = lane.tasks.find((entry) => entry.id === selected.id)
+        const current = lane.tasks.find(
+          (entry) => entry.id === selected.id && entry.number === selected.number,
+        )
         if (current === undefined || !current.checked) {
           fail(
             `task "${selected.number} ${selected.text}" selected for section "${section.key}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
