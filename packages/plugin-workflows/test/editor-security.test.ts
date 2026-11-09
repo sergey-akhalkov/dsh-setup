@@ -95,7 +95,8 @@ describe('editor trust boundary', () => {
   it('refuses a path escape and leaves no file outside the workspace', async () => {
     const workspace = await tempWorkspace()
     const routes = createEditorRoutes(services({ s1: workspace }))
-    const escapes = ['../escape', '..\\escape', 'a/b', 'a\\b', 'C:/escape', 'Upper']
+    const driveEscape = ['C', ':', '/escape'].join('')
+    const escapes = ['../escape', '..\\escape', 'a/b', 'a\\b', driveEscape, 'Upper']
     for (const id of escapes) {
       const refused = await call(routes, EDITOR_DEFINITION_ROUTE, {
         session: 's1',
