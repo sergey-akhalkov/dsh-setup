@@ -9865,6 +9865,9 @@ window.__ModuleLoader__.load({
         id: edge2.id,
         source: edge2.source,
         target: edge2.target,
+        // The node views expose one handle id per edge kind, so the edge must name
+        // it; otherwise React Flow attaches every edge to the first source handle.
+        sourceHandle: edge2.kind,
         ...edge2.label === void 0 ? {} : { label: edge2.label },
         data: { kind: edge2.kind }
       }));
@@ -11575,6 +11578,8 @@ window.__ModuleLoader__.load({
     .dsh-wf-canvas .react-flow__handle-bottom { bottom: -4px; left: 50%; transform: translate(-50%, 0); }
     .dsh-wf-canvas .react-flow__handle-left { left: -4px; top: 50%; transform: translate(0, -50%); }
     .dsh-wf-canvas .react-flow__handle-right { right: -4px; top: 50%; transform: translate(0, -50%); }
+    .dsh-wf-canvas .react-flow__edges { position: absolute; }
+    .dsh-wf-canvas .react-flow__edges svg { overflow: visible; position: absolute; pointer-events: none; }
     .dsh-wf-canvas .react-flow__edge { pointer-events: visibleStroke; }
     .dsh-wf-canvas .react-flow__edge-path { stroke: var(--xy-edge-stroke, var(--xy-edge-stroke-default)); stroke-width: var(--xy-edge-stroke-width, var(--xy-edge-stroke-width-default)); fill: none; }
     .dsh-wf-canvas .react-flow__edge.selected .react-flow__edge-path { stroke: var(--xy-edge-stroke-selected, var(--xy-edge-stroke-selected-default)); }

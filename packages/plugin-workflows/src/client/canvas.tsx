@@ -187,6 +187,7 @@ export interface FlowEdge {
   readonly id: string
   readonly source: string
   readonly target: string
+  readonly sourceHandle?: string
   readonly label?: string
   readonly data: { readonly kind: EdgeKind }
 }
@@ -233,6 +234,9 @@ export function toFlowEdges(
     id: edge.id,
     source: edge.source,
     target: edge.target,
+    // The node views expose one handle id per edge kind, so the edge must name
+    // it; otherwise React Flow attaches every edge to the first source handle.
+    sourceHandle: edge.kind,
     ...(edge.label === undefined ? {} : { label: edge.label }),
     data: { kind: edge.kind },
   }))

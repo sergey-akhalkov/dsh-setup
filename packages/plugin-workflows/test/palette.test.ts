@@ -111,14 +111,32 @@ describe('canvas node rendering', () => {
     expect(outputKinds('loop')).toEqual(['exit'])
   })
 
-  it('converts graph edges to labelled canvas edges', () => {
+  it('converts graph edges to labelled canvas edges attached to their handles', () => {
     const graph = definitionToGraph(DEFINITION)
-    const flow = (ui.toFlowEdges as (edges: unknown) => { id: string; label?: string }[])(
-      graph.edges,
-    )
+    const flow = (
+      ui.toFlowEdges as (edges: unknown) => { id: string; label?: string; sourceHandle?: string }[]
+    )(graph.edges)
     for (const edge of graph.edges) {
-      expect(flow.find((entry) => entry.id === edge.id)?.label).toBe(edge.label)
+      const converted = flow.find((entry) => entry.id === edge.id)
+      expect(converted?.label).toBe(edge.label)
+      expect(converted?.sourceHandle).toBe(edge.kind)
     }
+    const converted = (ui.toFlowEdges as (edges: unknown) => { sourceHandle?: string }[])(
+      ['start', 'next', 'true', 'false', 'body', 'exit'].map((kind) => ({
+        id: `n:${kind}`,
+        source: 'a',
+        target: 'b',
+        kind,
+      })),
+    )
+    expect(converted.map((edge) => edge.sourceHandle)).toEqual([
+      'start',
+      'next',
+      'true',
+      'false',
+      'body',
+      'exit',
+    ])
   })
 
   it('exposes focusable nodes and edges on the canvas', () => {

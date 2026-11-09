@@ -50,6 +50,8 @@ export const FLOW_CSS = `
 .dsh-wf-canvas .react-flow__handle-bottom { bottom: -4px; left: 50%; transform: translate(-50%, 0); }
 .dsh-wf-canvas .react-flow__handle-left { left: -4px; top: 50%; transform: translate(0, -50%); }
 .dsh-wf-canvas .react-flow__handle-right { right: -4px; top: 50%; transform: translate(0, -50%); }
+.dsh-wf-canvas .react-flow__edges { position: absolute; }
+.dsh-wf-canvas .react-flow__edges svg { overflow: visible; position: absolute; pointer-events: none; }
 .dsh-wf-canvas .react-flow__edge { pointer-events: visibleStroke; }
 .dsh-wf-canvas .react-flow__edge-path { stroke: var(--xy-edge-stroke, var(--xy-edge-stroke-default)); stroke-width: var(--xy-edge-stroke-width, var(--xy-edge-stroke-width-default)); fill: none; }
 .dsh-wf-canvas .react-flow__edge.selected .react-flow__edge-path { stroke: var(--xy-edge-stroke-selected, var(--xy-edge-stroke-selected-default)); }
