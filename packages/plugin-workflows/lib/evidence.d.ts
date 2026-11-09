@@ -28,6 +28,8 @@ export interface ToolCallObservation {
     readonly arguments: Readonly<Record<string, unknown>>;
     readonly ok: boolean;
     readonly at?: number;
+    /** The turn the call was observed in; absent on older in-memory entries. */
+    readonly turn?: number;
 }
 /** One completed foreground shell result the verifier may match against. */
 export interface ShellResultObservation {

@@ -1,7 +1,7 @@
 {
   "v": 1,
   "change": "retire-legacy-gates",
-  "at": "2026-11-09T13:39:24.168Z",
+  "at": "2026-11-09T13:45:52.670Z",
   "templates": {
     "retro": "sha256-e4df72e46947fb54cad338495b65489155da181bb77130158360ae549e1a8566",
     "task-review": "sha256-b8ca66b7e34b43ff569948bb18566c7b0c756537734f72e4abc06b0f3a819e9b",
@@ -30,7 +30,7 @@
   },
   "gates": {
     "checkpoint": {
-      "cases": 6,
+      "cases": 8,
       "mismatches": 0,
       "status": "pass"
     },

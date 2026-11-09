@@ -237,6 +237,53 @@ export const PARITY_CASES: readonly ParityCase[] = [
       }),
   },
   {
+    id: 'checkpoint-worker-bottleneck-unexecuted',
+    gate: 'checkpoint',
+    legacy: REFUSE,
+    workflow: () =>
+      checkpointWorkflow({
+        record: {
+          outcome: 'continue',
+          lanes: [{}],
+          bottleneck: {
+            id: 'split',
+            owner: 'lead',
+            action: 'worker_start',
+            blockingLanes: ['host'],
+          },
+        },
+        observations: [],
+      }),
+  },
+  {
+    id: 'checkpoint-worker-bottleneck-executed',
+    gate: 'checkpoint',
+    legacy: ALLOW,
+    workflow: () =>
+      checkpointWorkflow({
+        record: {
+          outcome: 'continue',
+          lanes: [{}],
+          bottleneck: {
+            id: 'split',
+            owner: 'lead',
+            action: 'worker_start',
+            blockingLanes: ['host'],
+          },
+        },
+        observations: [
+          {
+            toolName: 'subagent',
+            arguments: {
+              checkpoint: 'checkpoint-1-aaaaaaaa',
+              bottleneck: 'split',
+            },
+            ok: true,
+          },
+        ],
+      }),
+  },
+  {
     id: 'checkpoint-aged-bottleneck',
     gate: 'checkpoint',
     legacy: REFUSE,

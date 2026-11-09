@@ -1361,6 +1361,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           arguments: args,
           ok: isShellTool ? shellOutcome.ok : !result.isError,
           at: journal.time(),
+          ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -1743,6 +1744,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           arguments: { ...request.arguments },
           ok: true,
           at: journal.time(),
+          ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -1800,7 +1802,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     if (definition.trigger.applicability === 'code-write') {
       // The verify definition observes only a turn that wrote code; a
       // documentation-only or inspection turn completes the run as inapplicable.
-      const calls = sessionToolCalls.get(String(agent.session.id)) ?? []
+      const calls = (sessionToolCalls.get(String(agent.session.id)) ?? []).filter(
+        (call) => call.turn === undefined || call.turn === turn,
+      )
       if (lastCodeWriteAt(calls) === undefined) {
         const completed = completeNotApplicable(run, journal.time())
         await writeRun(workspace, completed, auth)
