@@ -613,23 +613,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
   /** The checked task ids last seen per session and change, for the delta. */
   const checkedTasksSeen = new Map<string, ReadonlySet<string>>()
-  /** The newest newly-checked task id for a tasks.md change, or undefined. */
+  /** Every newly-checked task id for a tasks.md change, newest last. */
   const checkedTaskDelta = (
     workspace: string,
     session: string,
     change: string,
     path: string,
-  ): string | undefined => {
+  ): string[] => {
     try {
       const markdown = readFileSync(join(workspace, path), 'utf8')
       const ids = checkedTaskIds(markdown)
       const key = `${session}\u0000${change}`
       const previous = checkedTasksSeen.get(key)
       checkedTasksSeen.set(key, new Set(ids))
-      if (previous === undefined) return undefined
-      return ids.filter((id) => !previous.has(id)).at(-1)
+      if (previous === undefined) return []
+      return ids.filter((id) => !previous.has(id))
     } catch {
-      return undefined
+      return []
     }
   }
   /** The goal-continuity session key: a SHA-256 prefix of the session id. */
@@ -741,33 +741,50 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         event.kind === 'fs.change'
           ? /^openspec\/changes\/([^/]+)\//u.exec(event.subject)?.[1]
           : undefined
-      const taskReviewTaskId =
+      const taskReviewTaskIds =
         changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
           ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
-          : undefined
+          : []
       const definitionRows = definitionEventsOf(input, event, workspace).flatMap(
         (definitionEvent) =>
           evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
             isDuplicate: (key) => sessionSeen.has(key),
             markKey: (key) => sessionSeen.set(key, input.at),
             startRun: (definition, matched) => {
-              const full =
+              const limited = (): boolean =>
                 storedAuth !== undefined &&
                 (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
-              if (definition.id === 'task-review' && taskReviewTaskId === undefined) {
-                return { ok: false, reason: 'no newly checked task in this tasks.md change' }
+              if (definition.id === 'task-review') {
+                // The watcher coalesces writes, so every newly checked task
+                // gets its own observational run.
+                if (taskReviewTaskIds.length === 0) {
+                  return { ok: false, reason: 'no newly checked task in this tasks.md change' }
+                }
+                let first: StartRunOutcome | undefined
+                for (const taskId of taskReviewTaskIds) {
+                  const outcome = startDefinitionRun(workspace, definition, matched, limited(), {
+                    taskId,
+                  })
+                  if (outcome.ok) startedThisEvent += 1
+                  first ??= outcome
+                }
+                return first ?? { ok: false, reason: 'the observational run was not started' }
               }
               const extraContext =
-                definition.id === 'task-review' && taskReviewTaskId !== undefined
-                  ? { taskId: taskReviewTaskId }
-                  : definition.id === 'retro' &&
-                      matched.turn !== undefined &&
-                      matched.session !== undefined
-                    ? {
-                        checkpoint: `.dsh/work-checkpoints/${sessionHash(String(matched.session))}/${String(matched.turn)}.json`,
-                      }
-                    : {}
-              const outcome = startDefinitionRun(workspace, definition, matched, full, extraContext)
+                definition.id === 'retro' &&
+                matched.turn !== undefined &&
+                matched.session !== undefined
+                  ? {
+                      checkpoint: `.dsh/work-checkpoints/${sessionHash(String(matched.session))}/${String(matched.turn)}.json`,
+                    }
+                  : {}
+              const outcome = startDefinitionRun(
+                workspace,
+                definition,
+                matched,
+                limited(),
+                extraContext,
+              )
               if (outcome.ok) startedThisEvent += 1
               return outcome
             },

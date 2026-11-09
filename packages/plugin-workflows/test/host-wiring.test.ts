@@ -491,14 +491,16 @@ describe('task-review runtime from a tasks.md change', () => {
     await mkdir(join(workspace, 'openspec', 'changes', 'aaa-incomplete'), { recursive: true })
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
     await mkdir(join(changeDir, 'reviews'), { recursive: true })
-    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n- [ ] 1.2 Second task\n', 'utf8')
     const { taskIdOf } = await import('../src/host/tasks.ts')
-    const taskId = taskIdOf('Task')
-    await writeFile(
-      join(changeDir, 'reviews', `${taskId}.json`),
-      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
-      'utf8',
-    )
+    const taskIds = [taskIdOf('Task'), taskIdOf('Second task')]
+    for (const taskId of taskIds) {
+      await writeFile(
+        join(changeDir, 'reviews', `${taskId}.json`),
+        `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+        'utf8',
+      )
+    }
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -518,30 +520,32 @@ describe('task-review runtime from a tasks.md change', () => {
         })
         .filter((row) => row.id === 'definition:task-review')
 
-    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n- [x] 1.2 Second task\n', 'utf8')
     host.fireFs()
     await waitFor(async () => (await rows()).some((row) => row.reason === 'run-created'))
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const created = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-      (entry) => entry.definition === 'task-review',
-    )
-    expect(created?.context).toMatchObject({ name: 'auth', taskId })
+    const taskRuns = async (): Promise<Array<{ id: string; context: Record<string, unknown> }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth))
+        .filter((entry) => entry.definition === 'task-review')
+        .map((entry) => ({ id: entry.id, context: entry.context }))
+    await waitFor(async () => (await taskRuns()).length === 2)
+    const created = await taskRuns()
+    expect(created.map((run) => run.context.taskId).sort()).toEqual([...taskIds].sort())
+    expect(created.every((run) => run.context.name === 'auth')).toBe(true)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    const settled = await runs.readAuthenticatedRun(workspace, created?.id ?? '', auth)
-    expect(settled?.steps[0]?.state).toBe('done')
+    for (const run of created) {
+      const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+      expect(settled?.steps[0]?.state).toBe('done')
+    }
     expect(host.steers).toHaveLength(0)
 
     // An edit that checks nothing starts no second observational run.
     await writeFile(join(changeDir, 'tasks.md'), '# Notes\n\n- [x] 1.1 Task\n', 'utf8')
     host.fireFs()
     await waitFor(async () => (await rows()).some((row) => row.reason === 'run-suppressed'))
-    expect(
-      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-        (entry) => entry.definition === 'task-review',
-      ),
-    ).toHaveLength(1)
+    expect(await taskRuns()).toHaveLength(2)
   })
 })
 
