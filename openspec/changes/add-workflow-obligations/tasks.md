@@ -50,7 +50,7 @@ The engine spans one Host package plus its Client view; lanes 1-4 own disjoint H
 
 ## 8. Deferred task-review and retro (lane 3, owns `assets/definitions/task-review.json`, `assets/definitions/retro.json`, `test/deferred.test.ts`)
 
-- [ ] 8.1 Implement the `task-review` definition as active with `gateOwnership: defer`: `tasks.md` checked-task trigger, read the existing review record, mark the step done, create an observational run, and never steer. Verify a PASS record, a missing record blocked, and no second steer beside the legacy gate.
+- [x] 8.1 Implement the `task-review` definition as active with `gateOwnership: defer`: `tasks.md` checked-task trigger, read the existing review record, mark the step done, create an observational run, and never steer. Verify a PASS record, a missing record blocked, and no second steer beside the legacy gate.
 - [ ] 8.2 Implement the `retro` definition as active with `gateOwnership: defer` and applicability-gated: use the installed goal-continuity `checkpointRequired` decision (`minToolCalls`, last tool, `requireWrite` with writes/workers) before creating a run; a non-applicable turn records `not-applicable` and creates no run; an existing non-applicable run becomes `completed` and prunable; an applicable run reads the checkpoint record and never steers. Verify repeated short, read-only, and question-ending turns create no blocked runs and consume no run capacity, and a fresh checkpoint, a missing checkpoint blocked, and a non-applicable terminal run.
 - [ ] 8.3 Verify both deferred definitions refuse to load beside a missing legacy source, create visible runs in the Workflows view projection for applicable events only, and add no steer.
 
