@@ -14,6 +14,7 @@ import {
   type EditorListEntry,
   type EditorState,
   idsOf,
+  leaveEditor,
   moveStep,
   openDocument,
   openDraft,
@@ -23,11 +24,11 @@ import {
   reconcileCopy,
   reconcileSave,
   reload,
+  renameToNextId,
   save,
   saveAsCopy,
   setMode,
   type TemplateEntry,
-  unsavedChanges,
 } from './editor.ts'
 import { fetchEditorApi } from './editor-client.ts'
 import type { EdgeKind, NodeKind } from './graph.ts'
@@ -282,12 +283,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
 
   const useNextId = (): void => {
     if (editor?.conflict?.nextId === undefined) return
-    const definition = { ...editor.document.definition, id: editor.conflict.nextId }
-    setEditor({
-      ...openNew(definition),
-      mode: editor.mode,
-      document: { definition, revision: null, source: 'local' },
-    })
+    setEditor(renameToNextId(editor, editor.conflict.nextId))
     setMessage(undefined)
   }
 
@@ -299,13 +295,10 @@ export function DesignMode(props: DesignModeProps): ReactNode {
 
   /** An action that replaces the open document warns before discarding edits. */
   const guard = (action: () => void): void => {
-    if (
-      unsavedChanges(editor) &&
+    const confirmed = (): boolean =>
       typeof window !== 'undefined' &&
-      !window.confirm('Discard the unsaved changes to this definition?')
-    ) {
-      return
-    }
+      window.confirm('Discard the unsaved changes to this definition?')
+    if (!leaveEditor(editor, confirmed)) return
     action()
   }
 

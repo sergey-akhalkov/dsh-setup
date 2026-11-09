@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   addStep,
   blankDefinition,
@@ -9,6 +9,7 @@ import {
   type EditorApi,
   type EditorState,
   installDraft,
+  leaveEditor,
   moveStep,
   nextCopyId,
   nextFreeId,
@@ -19,6 +20,7 @@ import {
   reconcileCopy,
   reconcileSave,
   renameDefinition,
+  renameToNextId,
   type SaveResult,
   savable,
   save,
@@ -416,6 +418,60 @@ describe('revision contract', () => {
     const second = await save(merged, { api, taken: TAKEN })
     expect(calls.saveLayout.at(-1)?.expected).toBe('layout-3')
     expect(second.status).toBe('saved')
+  })
+
+  it('keeps a dirty draft when the discard confirmation is declined', () => {
+    const { store, calls } = fakeApi()
+    const dirty = patchStep(opened(), nodeIdOf('one'), { title: 'Mine' })
+    const declined = vi.fn(() => false)
+    expect(leaveEditor(dirty, declined)).toBe(false)
+    expect(declined).toHaveBeenCalledTimes(1)
+    expect(dirty.dirty).toBe(true)
+    expect(dirty.document.definition.steps[0]?.title).toBe('Mine')
+    // Declining leaves the draft and writes neither the definition nor the layout.
+    expect(calls.saveDefinition).toHaveLength(0)
+    expect(calls.saveLayout).toHaveLength(0)
+    expect(store.definitions.get('demo')?.definition).toEqual(definition)
+    // Accepting, a clean document, and no document all allow the leave.
+    expect(
+      leaveEditor(
+        dirty,
+        vi.fn(() => true),
+      ),
+    ).toBe(true)
+    expect(leaveEditor(opened(), declined)).toBe(true)
+    expect(leaveEditor(undefined, declined)).toBe(true)
+  })
+
+  it('preserves positions when recovering with the next free id', () => {
+    const dirty = moveStep(opened(), nodeIdOf('one'), { x: 999, y: 888 })
+    const next = renameToNextId(dirty, 'demo-2')
+    expect(next.document.definition.id).toBe('demo-2')
+    expect(next.document.revision).toBeNull()
+    expect(next.layoutRevision).toBeNull()
+    expect(next.layout.id).toBe('demo-2')
+    expect(next.diagram.nodes.find((node) => node.step?.id === 'one')?.position).toEqual({
+      x: 999,
+      y: 888,
+    })
+    expect(next.dirty).toBe(true)
+  })
+
+  it('keeps a failed save conflict when reconciling an in-flight edit', () => {
+    const captured = opened()
+    const current = patchStep(captured, nodeIdOf('one'), { title: 'During save' })
+    const failed: EditorState = {
+      ...captured,
+      dirty: true,
+      status: 'error',
+      conflict: { kind: 'create', currentRevision: 'rev-1', nextId: 'demo-copy' },
+      message: 'the id already exists',
+    }
+    const merged = reconcileSave(captured, current, failed)
+    expect(merged.dirty).toBe(true)
+    expect(merged.conflict).toMatchObject({ kind: 'create', nextId: 'demo-copy' })
+    expect(merged.message).toContain('already exists')
+    expect(merged.document.definition.steps[0]?.title).toBe('During save')
   })
 
   it('keeps newer edits in the original draft when a copy completes', async () => {

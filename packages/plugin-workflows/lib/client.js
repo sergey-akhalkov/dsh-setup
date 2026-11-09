@@ -10541,7 +10541,9 @@ window.__ModuleLoader__.load({
         layoutRevision: saved.status === "saved" ? saved.layoutRevision : current.layoutRevision,
         dirty: true,
         status: "dirty",
-        conflict: void 0,
+        // A failed save keeps the conflict so the next-id / save-as-copy actions
+        // survive an edit made while the request was in flight.
+        conflict: saved.status === "error" ? saved.conflict : void 0,
         message: saved.status === "error" ? saved.message : void 0
       };
     }
@@ -10748,6 +10750,23 @@ window.__ModuleLoader__.load({
     }
     function unsavedChanges(state) {
       return state !== void 0 && state.dirty;
+    }
+    function leaveEditor(state, confirmDiscard) {
+      return !unsavedChanges(state) || confirmDiscard();
+    }
+    function renameToNextId(state, nextId2) {
+      const definition = { ...state.document.definition, id: nextId2 };
+      return {
+        ...state,
+        document: { ...state.document, definition, revision: null },
+        diagram: { ...state.diagram, definition },
+        layout: { ...state.layout, id: nextId2 },
+        layoutRevision: null,
+        dirty: true,
+        status: "dirty",
+        conflict: void 0,
+        message: void 0
+      };
     }
 
     // packages/plugin-workflows/src/client/editor-client.ts
@@ -11733,12 +11752,7 @@ window.__ModuleLoader__.load({
       };
       const useNextId = () => {
         if (editor?.conflict?.nextId === void 0) return;
-        const definition = { ...editor.document.definition, id: editor.conflict.nextId };
-        setEditor({
-          ...openNew(definition),
-          mode: editor.mode,
-          document: { definition, revision: null, source: "local" }
-        });
+        setEditor(renameToNextId(editor, editor.conflict.nextId));
         setMessage(void 0);
       };
       const apply2 = (next) => {
@@ -11747,9 +11761,8 @@ window.__ModuleLoader__.load({
         if (next.issues.length === 0 && next.status !== "error") setMessage(void 0);
       };
       const guard = (action) => {
-        if (unsavedChanges(editor) && typeof window !== "undefined" && !window.confirm("Discard the unsaved changes to this definition?")) {
-          return;
-        }
+        const confirmed = () => typeof window !== "undefined" && window.confirm("Discard the unsaved changes to this definition?");
+        if (!leaveEditor(editor, confirmed)) return;
         action();
       };
       if (sessionId === void 0) {

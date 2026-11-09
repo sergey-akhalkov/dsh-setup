@@ -488,7 +488,9 @@ export function reconcileSave(
     layoutRevision: saved.status === 'saved' ? saved.layoutRevision : current.layoutRevision,
     dirty: true,
     status: 'dirty',
-    conflict: undefined,
+    // A failed save keeps the conflict so the next-id / save-as-copy actions
+    // survive an edit made while the request was in flight.
+    conflict: saved.status === 'error' ? saved.conflict : undefined,
     message: saved.status === 'error' ? saved.message : undefined,
   }
 }
@@ -747,6 +749,33 @@ export function idsOf(entries: readonly EditorListEntry[]): Set<string> {
 /** Whether the document has edits the user has not saved yet. */
 export function unsavedChanges(state: EditorState | undefined): boolean {
   return state !== undefined && state.dirty
+}
+
+/**
+ * Whether the editor may leave the open document. A dirty document asks first;
+ * a declined confirmation keeps the draft and writes nothing.
+ */
+export function leaveEditor(
+  state: EditorState | undefined,
+  confirmDiscard: () => boolean,
+): boolean {
+  return !unsavedChanges(state) || confirmDiscard()
+}
+
+/** Change the open definition id (the next free id after a create conflict). */
+export function renameToNextId(state: EditorState, nextId: string): EditorState {
+  const definition = { ...state.document.definition, id: nextId }
+  return {
+    ...state,
+    document: { ...state.document, definition, revision: null },
+    diagram: { ...state.diagram, definition },
+    layout: { ...state.layout, id: nextId },
+    layoutRevision: null,
+    dirty: true,
+    status: 'dirty',
+    conflict: undefined,
+    message: undefined,
+  }
 }
 
 /** Whether the graph can be saved without a host round trip. */
