@@ -19,11 +19,14 @@ export interface CheckpointApplicabilityConfig {
     readonly requireWrite?: boolean;
     /** Consecutive checkpoints a bottleneck may persist before a route change; default 2. */
     readonly bottleneckAge?: number;
+    /** Steps after the latest checkpoint before it is stale; default 40. */
+    readonly stepInterval?: number;
 }
 export interface ResolvedCheckpointApplicability {
     readonly minToolCalls: number;
     readonly requireWrite: boolean;
     readonly bottleneckAge: number;
+    readonly stepInterval: number;
 }
 export declare const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability;
 /**

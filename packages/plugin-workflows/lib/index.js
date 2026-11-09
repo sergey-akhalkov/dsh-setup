@@ -235,6 +235,7 @@ export const DEFAULT_CHECKPOINT_APPLICABILITY = Object.freeze({
     minToolCalls: 4,
     requireWrite: true,
     bottleneckAge: 2,
+    stepInterval: 40,
 });
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
 function resolveCheckpointApplicability(raw) {
@@ -245,7 +246,10 @@ function resolveCheckpointApplicability(raw) {
     }
     const record = raw;
     for (const key of Object.keys(record)) {
-        if (key !== 'minToolCalls' && key !== 'requireWrite' && key !== 'bottleneckAge') {
+        if (key !== 'minToolCalls' &&
+            key !== 'requireWrite' &&
+            key !== 'bottleneckAge' &&
+            key !== 'stepInterval') {
             throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`);
         }
     }
@@ -269,10 +273,19 @@ function resolveCheckpointApplicability(raw) {
             bottleneckAge > 1000)) {
         throw new Error('workflows checkpointApplicability.bottleneckAge must be an integer between 1 and 1000');
     }
+    const stepInterval = record.stepInterval;
+    if (stepInterval !== undefined &&
+        (typeof stepInterval !== 'number' ||
+            !Number.isSafeInteger(stepInterval) ||
+            stepInterval < 1 ||
+            stepInterval > 10_000)) {
+        throw new Error('workflows checkpointApplicability.stepInterval must be an integer between 1 and 10000');
+    }
     return {
         minToolCalls: minToolCalls ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
         requireWrite: requireWrite ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
         bottleneckAge: bottleneckAge ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
+        stepInterval: stepInterval ?? DEFAULT_CHECKPOINT_APPLICABILITY.stepInterval,
     };
 }
 export function apply(ctx, config = {}) {

@@ -368,18 +368,22 @@ export interface CheckpointApplicabilityConfig {
   readonly requireWrite?: boolean
   /** Consecutive checkpoints a bottleneck may persist before a route change; default 2. */
   readonly bottleneckAge?: number
+  /** Steps after the latest checkpoint before it is stale; default 40. */
+  readonly stepInterval?: number
 }
 
 export interface ResolvedCheckpointApplicability {
   readonly minToolCalls: number
   readonly requireWrite: boolean
   readonly bottleneckAge: number
+  readonly stepInterval: number
 }
 
 export const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability = Object.freeze({
   minToolCalls: 4,
   requireWrite: true,
   bottleneckAge: 2,
+  stepInterval: 40,
 })
 
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
@@ -390,7 +394,12 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
   }
   const record = raw as Record<string, unknown>
   for (const key of Object.keys(record)) {
-    if (key !== 'minToolCalls' && key !== 'requireWrite' && key !== 'bottleneckAge') {
+    if (
+      key !== 'minToolCalls' &&
+      key !== 'requireWrite' &&
+      key !== 'bottleneckAge' &&
+      key !== 'stepInterval'
+    ) {
       throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`)
     }
   }
@@ -422,6 +431,18 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
       'workflows checkpointApplicability.bottleneckAge must be an integer between 1 and 1000',
     )
   }
+  const stepInterval = record.stepInterval
+  if (
+    stepInterval !== undefined &&
+    (typeof stepInterval !== 'number' ||
+      !Number.isSafeInteger(stepInterval) ||
+      stepInterval < 1 ||
+      stepInterval > 10_000)
+  ) {
+    throw new Error(
+      'workflows checkpointApplicability.stepInterval must be an integer between 1 and 10000',
+    )
+  }
   return {
     minToolCalls:
       (minToolCalls as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
@@ -429,6 +450,8 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
       (requireWrite as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
     bottleneckAge:
       (bottleneckAge as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
+    stepInterval:
+      (stepInterval as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.stepInterval,
   }
 }
 

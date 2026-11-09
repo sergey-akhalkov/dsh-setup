@@ -642,6 +642,26 @@ describe('owned task-review definition', () => {
       'utf8',
     )
     expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    for (const extra of [{ session: 's' }, { runId: 'r' }, { worktreeDigest: 'invalid' }]) {
+      await writeFile(
+        join(changeDir, 'reviews', `${id}.json`),
+        JSON.stringify({
+          rule: 'task-review',
+          change: 'auth',
+          scope: 'task',
+          taskId: id,
+          digest: 'a'.repeat(64),
+          verdict: 'PASS',
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-11-08T00:00:00.000Z',
+          ...extra,
+        }),
+        'utf8',
+      )
+      expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+      expect(taskReviewCompletion(workspace, 'auth')?.ok).toBe(false)
+    }
     await rm(workspace, { recursive: true, force: true })
   })
 

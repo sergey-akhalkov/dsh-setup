@@ -1861,6 +1861,9 @@ describe('intent engine opt-in', () => {
       [{ checkpointApplicability: { requireWrite: 'yes' } }, /requireWrite/u],
       [{ checkpointApplicability: { unknown: true } }, /unknown field/u],
       [{ checkpointApplicability: 'on' }, /must be an object/u],
+      [{ checkpointApplicability: { stepInterval: 0 } }, /stepInterval/u],
+      [{ checkpointApplicability: { stepInterval: 10_001 } }, /stepInterval/u],
+      [{ checkpointApplicability: { stepInterval: 1.5 } }, /stepInterval/u],
     ] as const) {
       const workspace = await tempWorkspace()
       const host = fakeHost(workspace)

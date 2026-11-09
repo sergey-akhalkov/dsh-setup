@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Definition } from './definitions.js'
-import { portableRecordError } from './projection.js'
 
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -391,6 +390,55 @@ interface PortableApproval {
   readonly target?: { readonly provider?: unknown; readonly model?: unknown }
 }
 
+const PORTABLE_KEYS = new Set([
+  'rule',
+  'change',
+  'scope',
+  'taskId',
+  'digest',
+  'worktreeDigest',
+  'verdict',
+  'findings',
+  'target',
+  'time',
+])
+const PORTABLE_TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort'])
+/**
+ * The committed portable schema; unknown fields (session, runId, phase) and an
+ * invalid optional worktreeDigest can never approve a completion or archive.
+ */
+function strictPortableApprovalError(record: Record<string, unknown>): string | undefined {
+  for (const key of Object.keys(record)) {
+    if (!PORTABLE_KEYS.has(key)) return `unsupported field "${key}"`
+  }
+  if (record.scope !== 'task') return 'scope must be "task"'
+  if (typeof record.taskId !== 'string' || !/^[0-9a-f]{16}$/u.test(record.taskId)) {
+    return 'taskId must be 16 lowercase hex characters'
+  }
+  if (typeof record.digest !== 'string' || !/^[0-9a-f]{64}$/u.test(record.digest)) {
+    return 'digest must be 64 hex characters'
+  }
+  if (
+    record.worktreeDigest !== undefined &&
+    (typeof record.worktreeDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(record.worktreeDigest))
+  ) {
+    return 'worktreeDigest must be 64 hex characters when present'
+  }
+  if (record.verdict !== 'PASS') return 'a portable approval must be a PASS'
+  if (!Array.isArray(record.findings) || record.findings.length !== 0) {
+    return 'a portable approval must have zero findings'
+  }
+  if (!isRecord(record.target)) return 'target must be an object'
+  for (const key of Object.keys(record.target)) {
+    if (!PORTABLE_TARGET_KEYS.has(key)) return `unsupported target field "${key}"`
+  }
+  if (typeof record.target.provider !== 'string' || record.target.provider === '') {
+    return 'target must carry a provider'
+  }
+  if (typeof record.time !== 'string' || record.time === '') return 'time must be non-empty'
+  return undefined
+}
+
 function readPortableApproval(
   workspace: string,
   change: string,
@@ -404,7 +452,7 @@ function readPortableApproval(
       ),
     ) as unknown
     if (!isRecord(raw)) return undefined
-    return portableRecordError(raw) === undefined ? (raw as PortableApproval) : undefined
+    return strictPortableApprovalError(raw) === undefined ? (raw as PortableApproval) : undefined
   } catch {
     return undefined
   }
