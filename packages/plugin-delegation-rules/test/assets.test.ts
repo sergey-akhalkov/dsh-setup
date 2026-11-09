@@ -193,6 +193,28 @@ describe('bundled prompts', () => {
     expect(text).toMatch(/exactly one fenced ```json block/)
   })
 
+  it('documents section-scoped review in the prompt, the skill, and the docs', () => {
+    const prompt = read('review-task.md').replace(/\s+/gu, ' ')
+    const skill = read('SKILL.md').replace(/\s+/gu, ' ')
+    const docs = readFileSync(docsPath, 'utf8').replace(/\s+/gu, ' ')
+    expect(prompt).toContain('every checked task in scope')
+    expect(prompt).toContain('unchecked tasks that are out of scope')
+    expect(prompt).toContain('name its number')
+    expect(prompt).toContain('never review an unchecked task')
+    for (const text of [skill, docs]) {
+      expect(text).toContain('section: "1"')
+      expect(text).toContain('1.x')
+      expect(text).toContain('unchecked tasks')
+      expect(text).toContain('per-task')
+      expect(text).toContain('newly checked task')
+      expect(text).toContain('mutually exclusive')
+    }
+    expect(docs).toContain('the archive gate are unchanged')
+    expect(docs).toContain('installs the regenerated setup')
+    expect(toolDescriptions.delegate).toContain('section')
+    expect(toolDescriptions.delegate).toContain('1.x')
+  })
+
   it('carries the whole-worktree integration review rules', () => {
     const text = read('review-integration.md')
     expect(text).toContain('whole')

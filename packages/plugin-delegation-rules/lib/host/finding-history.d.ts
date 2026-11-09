@@ -20,6 +20,10 @@ export interface HistoryRunEntry {
     rule: string;
     change: string;
     taskId?: string;
+    /** Section key in place of a single task id for a section-scope review. */
+    section?: string;
+    /** Covered checked task ids for a section-scope review. */
+    taskIds?: string[];
     verdict: 'PASS' | 'FINDINGS';
     digest: string;
     findings: HistoryFinding[];

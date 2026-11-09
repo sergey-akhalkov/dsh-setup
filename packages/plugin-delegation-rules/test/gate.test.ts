@@ -401,6 +401,118 @@ describe('task review gate', () => {
   })
 })
 
+describe('section review gate', () => {
+  const sectionPlan = `# Tasks
+
+## 1. Engine (lane 1, owns \`packages/engine/**\`)
+
+- [x] 1.1 First task
+- [x] 1.2 Second task
+- [ ] 1.3 Later task
+`
+
+  async function sectionFixture() {
+    const root = await workspace()
+    const dir = await writeChange(root, 'change-a', [])
+    await writeFile(join(dir, 'tasks.md'), sectionPlan, 'utf8')
+    const subagents = registered()
+    const harness = harnessFor(root, taskOnly(), subagents)
+    return { root, dir, subagents, harness }
+  }
+
+  it('accepts covered checked tasks after a section PASS', async () => {
+    const { harness } = await sectionFixture()
+    const run = runIdFrom(
+      await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: '1',
+      }),
+    )
+    await harness.waitForRun(run)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+  })
+
+  it('points a pending section run at its record instead of starting another run', async () => {
+    const { subagents, harness } = await sectionFixture()
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    subagents.respond = async (run) => {
+      await gate
+      return passResponder(run)
+    }
+    const run = runIdFrom(
+      await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: '1',
+      }),
+    )
+    await harness.turnStopping(1)
+    const steer = steerTexts(harness.agent).join('\n')
+    expect(steer).toContain(`review run ${run} is running`)
+    expect(steer).toContain('instead of starting another run')
+    expect(subagents.startCalls).toBe(1)
+    release()
+    await harness.waitForRun(run)
+  })
+
+  it('closes on a section ERROR and reports only the unapproved task for archive', async () => {
+    const { root, dir, subagents, harness } = await sectionFixture()
+    const firstId = taskIdFor('First task')
+    const portablePath = join(dir, 'reviews', `${firstId}.json`)
+    await mkdir(join(dir, 'reviews'), { recursive: true })
+    await writeFile(
+      portablePath,
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'change-a',
+        scope: 'task',
+        taskId: firstId,
+        digest: 'a'.repeat(64),
+        worktreeDigest: 'b'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-10-29T08:55:43.317Z',
+      }),
+      'utf8',
+    )
+    const approved = await readFile(portablePath, 'utf8')
+    subagents.respond = () => ({
+      output: [{ type: 'text', text: 'prose only' }],
+      stopReason: 'completed',
+    })
+    const run = runIdFrom(
+      await harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        section: '1',
+      }),
+    )
+    await harness.waitForRun(run)
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent)).toHaveLength(0)
+    const local = JSON.parse(
+      await readFile(
+        join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks', `${firstId}.json`),
+        'utf8',
+      ),
+    ) as { verdict: string; failureClass: string }
+    expect(local.verdict).toBe('ERROR')
+    expect(local.failureClass).toBe('invalid-output')
+    expect(await readFile(portablePath, 'utf8')).toBe(approved)
+    const status = await harness.toolText('delegation_status', {})
+    expect(status).toContain('task-review PASS 1/2')
+    expect(status).toContain('missing 1')
+    expect(status).toContain('missing 1.2 "Second task"')
+    expect(status).not.toContain('1.1 First task')
+  })
+})
+
 describe('implementation-work gate', () => {
   it('steers when a code-changing turn has neither a ticked-and-reviewed task nor a note', async () => {
     const root = await workspace()

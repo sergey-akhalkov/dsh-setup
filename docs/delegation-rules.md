@@ -156,10 +156,12 @@ one fenced JSON verdict that echoes the digest, validates the severities, and wr
 record under `.dsh/delegation/<rule>/<change>/`:
 
 - whole scope: `<phase>.json`;
-- task scope: `tasks/<taskId>.json`, with the task id derived from the normalized task text.
+- task scope: `tasks/<taskId>.json`, with the task id derived from the normalized task text;
+- section scope: `sections/<hash>.json` for the one section verdict, plus a `tasks/<taskId>.json`
+  for every covered checked task.
 
 A task-scope `PASS` additionally writes the committed [portable approval](#portable-task-approvals)
-inside the change.
+inside the change. A section-scope `PASS` writes one portable approval per covered checked task.
 
 A `PASS` requires zero P0/P1 findings. `FINDINGS` and `ERROR` records are reported but do not
 satisfy a strict gate. A matching `PASS` is reused without another run; a `FINDINGS` record is
@@ -199,6 +201,51 @@ guard, and its run detail names the bounded cause (`live worktree: <reason>`); a
 ignore rule is named with the fix. The reviewed change's `reviews/` approval directory is engine
 output and is never a reviewed input, so a portable task approval written by one review does not
 invalidate another.
+
+### Section-scoped task review
+
+A task-review `delegate` call may pass `section` instead of `task`; they are mutually exclusive
+and either one is rejected on a non-review or whole-scope rule before a target starts. The
+selector is a `tasks.md` level-2 heading:
+
+- its number — `section: "1"`;
+- its wildcard form — `section: "1.x"` (equivalent to `"1"`);
+- its normalized title, or `untitled` for tasks before the first heading.
+
+An unknown, empty, ambiguous, or unchecked-only section is rejected with the available sections.
+The level-2 heading shape is the same one the lane guidance asks for:
+
+```markdown
+## 1. Section review engine (lane 1, owns `packages/plugin-delegation-rules/**`)
+
+- [x] 1.1 Add the selector
+```
+
+One call starts one run over every checked task in that section: one prompt naming the section
+title, each checked task, and the unchecked tasks as out of scope; one frozen worktree snapshot;
+and one PASS/FINDINGS/ERROR verdict. The reviewer instruction asks every finding to name the
+affected task. A section PASS publishes the existing per-task
+`openspec/changes/<change>/reviews/<taskId>.json` approval for each covered checked task, so
+`pnpm reviews:check` and the archive gate are unchanged: one PASS per checked task, and unchecked
+tasks are never approved. A matching approval is kept byte-identical; the publication writes all
+temporaries before any rename and restores every replaced destination byte-identically on failure,
+so a failed publication approves nothing. Per-task and section publications share the
+rule/change publication lock: the later completion discards when an authoritative PASS exists,
+and a superseded section identity discards its whole publication.
+
+The section identity is rule + change + section key + digest + reviewer; the digest covers the
+section key and title, the sorted checked task ids and normalized texts, the frozen change-artifact
+digest, and the snapshot content tree. An unchanged section reuses a FINDINGS record; a newly
+checked task, an unchecked task, or a changed covered task text changes the digest and requires a
+new section or task review. A section ERROR writes a local ERROR record for each covered task with the
+failure class preserved and publishes no new approval; existing valid approvals remain, so the
+archive gate reports only covered tasks without one. While a section run is queued or running, the
+turn gate points at that run instead of starting duplicate per-task reviews.
+
+Limits: a section review is only as precise as its prompt, so use it for related tasks and keep a
+risky task on its own per-task review; sections are bounded by the author's `tasks.md` grouping.
+The live profile only gets the mode after the owner installs the regenerated setup, because it
+runs the installed engine, not this checkout.
 
 ### Review queue contract
 
@@ -548,6 +595,11 @@ The gate exists to make incremental review the normal path:
    working. Keep implementing an independent task while the run uses a frozen snapshot. When the run
    reports the live worktree, a write can discard its verdict: restore snapshot support and re-run,
    or defer writes until the run settles. No blocking sleep.
+   For a related group of tasks, tick the whole section and run it once with
+   `delegate(rule: "task-review", change: "<change>", section: "1")` (or `"1.x"`, the normalized
+   title, or `untitled`). One verdict covers every checked task in the section and publishes one
+   per-task approval each; unchecked tasks stay out of scope, and a task checked after the PASS
+   needs a new section or task review.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`.
 5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call
    `task_progress` for that task instead of ticking it; otherwise the goal-continuity
@@ -780,14 +832,15 @@ for the soft `failure-streak` rule it marks the consultation attempt and does no
 The plugin adds no always-on prompt text. Its model-facing policy is the three tool descriptions
 plus the skill catalog line, and the full workflow is loaded only when the skill is invoked.
 
-- Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
-  (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 20063 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: three tool descriptions plus the skill catalog description are 2750 + 285 = 3035 UTF-8
+  bytes (~759 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
+- Measured: the skill body is 21208 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
-  Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
-  integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
-  targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays for the strong model;
-  override those targets for cheaper routine reviews and leave `advisor` on `codex-astra`.
+  Per-task reviews multiply runs, so keep tasks sized for one review; a section review covers a
+  related group in one run; set the optional integration review to `soft` or `none` if it adds
+  noise. The shipped `codex` and `codex-write` targets select `gpt-6-astra` at `xhigh`, so every
+  default Codex rule pays for the strong model; override those targets for cheaper routine reviews
+  and leave `advisor` on `codex-astra`.
 - The engine validates rule ids, change names, task ids, and record paths before effects; git is
   invoked with fixed arguments; target output is untrusted data, parsed for the declared contract
   and never executed. Patch results stay isolated until a human or agent reviews and applies
