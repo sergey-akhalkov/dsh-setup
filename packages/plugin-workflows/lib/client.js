@@ -12011,6 +12011,9 @@ window.__ModuleLoader__.load({
     function createRunSelection(read) {
       let request = 0;
       return {
+        invalidate() {
+          request += 1;
+        },
         async load(definitionId, onChange) {
           request += 1;
           const token = request;
@@ -12272,6 +12275,11 @@ window.__ModuleLoader__.load({
         setLoading(true);
         try {
           const result = await saveAsCopy(editor, { api, taken });
+          if (result.status === "saved") {
+            runSelection.invalidate();
+            setRuns([]);
+            setRunId(void 0);
+          }
           setEditor((current) => {
             if (current === void 0) return result;
             if (current === editor) return result;

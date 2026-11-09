@@ -254,4 +254,20 @@ describe('run overlay', () => {
     // Both loads clear first; only the latest definition's response lands.
     expect(applied).toEqual([[], [], ['beta-run']])
   })
+
+  it('invalidates an in-flight run load when the document changes', async () => {
+    let resolveAlpha: ((runs: string[]) => void) | undefined
+    const selection = createRunSelection<string>(
+      () =>
+        new Promise((resolve) => {
+          resolveAlpha = resolve
+        }),
+    )
+    const applied: (readonly string[])[] = []
+    const alpha = selection.load('alpha', (next) => applied.push(next))
+    selection.invalidate()
+    resolveAlpha?.(['alpha-run'])
+    await alpha
+    expect(applied).toEqual([[]])
+  })
 })

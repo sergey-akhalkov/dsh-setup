@@ -4,6 +4,8 @@
  */
 export interface RunSelection<T> {
   load(definitionId: string, onChange: (runs: readonly T[]) => void): Promise<void>
+  /** Drop any in-flight load; its response will not be applied. */
+  invalidate(): void
 }
 
 export function createRunSelection<T>(
@@ -11,6 +13,9 @@ export function createRunSelection<T>(
 ): RunSelection<T> {
   let request = 0
   return {
+    invalidate() {
+      request += 1
+    },
     async load(definitionId, onChange) {
       request += 1
       const token = request

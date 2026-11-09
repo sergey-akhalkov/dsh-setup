@@ -268,6 +268,13 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setLoading(true)
     try {
       const result = await saveAsCopy(editor, { api, taken })
+      if (result.status === 'saved') {
+        // The copy becomes the open document now; drop the original's runs
+        // before the library refresh, not after it.
+        runSelection.invalidate()
+        setRuns([])
+        setRunId(undefined)
+      }
       setEditor((current) => {
         if (current === undefined) return result
         if (current === editor) return result
