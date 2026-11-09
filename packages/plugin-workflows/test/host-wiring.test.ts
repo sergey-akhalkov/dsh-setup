@@ -426,6 +426,61 @@ describe('retro applicability through the journal path', () => {
   })
 })
 
+describe('retro fresh checkpoint', () => {
+  it('reads the checkpoint for an applicable turn and never steers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const { createHash } = await import('node:crypto')
+    const sessionKey = createHash('sha256').update('session-1').digest('hex').slice(0, 16)
+    const checkpointDir = join(workspace, '.dsh', 'work-checkpoints', sessionKey)
+    await mkdir(checkpointDir, { recursive: true })
+    await writeFile(
+      join(checkpointDir, '2.json'),
+      `${JSON.stringify({ outcome: 'done', turn: 2, lanes: [], next: 'continue' })}\n`,
+      'utf8',
+    )
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 2,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    for (const name of ['read', 'read', 'read', 'read', 'write']) {
+      await host.emit(
+        'tools/result',
+        { agent: host.agent, callId: `call-${name}`, name, arguments: {} },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let retroRun: { id: string } | undefined
+    await waitFor(async () => {
+      retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'retro',
+      )
+      return retroRun !== undefined
+    })
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
+      return stored?.steps[0]?.state === 'done'
+    })
+    expect(host.steers).toHaveLength(0)
+  })
+})
+
 describe('task-review runtime from a tasks.md change', () => {
   it('names the change and the task from the path and checked delta and never steers', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

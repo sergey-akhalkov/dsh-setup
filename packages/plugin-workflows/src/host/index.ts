@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
@@ -632,6 +632,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return undefined
     }
   }
+  /** The goal-continuity session key: a SHA-256 prefix of the session id. */
+  const sessionHash = (session: string): string =>
+    createHash('sha256').update(session).digest('hex').slice(0, 16)
   /** Seed the checked-task baselines from the current workspace changes. */
   const seedCheckedTasks = (workspace: string, session: string): void => {
     let changes: string[]
@@ -754,15 +757,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               if (definition.id === 'task-review' && taskReviewTaskId === undefined) {
                 return { ok: false, reason: 'no newly checked task in this tasks.md change' }
               }
-              const outcome = startDefinitionRun(
-                workspace,
-                definition,
-                matched,
-                full,
+              const extraContext =
                 definition.id === 'task-review' && taskReviewTaskId !== undefined
                   ? { taskId: taskReviewTaskId }
-                  : {},
-              )
+                  : definition.id === 'retro' &&
+                      matched.turn !== undefined &&
+                      matched.session !== undefined
+                    ? {
+                        checkpoint: `.dsh/work-checkpoints/${sessionHash(String(matched.session))}/${String(matched.turn)}.json`,
+                      }
+                    : {}
+              const outcome = startDefinitionRun(workspace, definition, matched, full, extraContext)
               if (outcome.ok) startedThisEvent += 1
               return outcome
             },
