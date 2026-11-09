@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 import { isInside } from './fs-change.js';
-import { taskReviewCoverage } from './parity.js';
+import { reviewerBinding, taskReviewCoverage } from './parity.js';
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js';
 /** A validated checkpoint record path a host-computed context value may carry. */
 const CHECKPOINT_PATH = /^\.dsh\/work-checkpoints\/[a-f0-9]{16}\/[0-9]+\.json$/u;
@@ -485,6 +485,21 @@ async function recordCheck(evidence, context, item) {
             : [evidence.verdict];
     if (accepted.length === 0 || !accepted.includes(String(record.verdict))) {
         return mismatch(`the record verdict "${String(record.verdict)}" is not one of: ${accepted.join(', ')}`, path.text, item);
+    }
+    // The marker's reviewer binding applies to intermediate PASS and ERROR
+    // records too: an old record from another reviewer is not this review.
+    if (evidence.rule === 'task-review') {
+        const binding = reviewerBinding(context.workspace);
+        if (binding?.invalid !== undefined) {
+            return mismatch(`${binding.invalid}; fix openspec/review-approval.json`, path.text, item);
+        }
+        const target = (record.target ?? {});
+        if (binding?.provider !== undefined && target.provider !== binding.provider) {
+            return mismatch(`the record target provider "${String(target.provider)}" is not the bound "${binding.provider}"`, path.text, item);
+        }
+        if (binding?.model !== undefined && target.model !== binding.model) {
+            return mismatch(`the record target model "${String(target.model)}" is not the bound "${binding.model}"`, path.text, item);
+        }
     }
     // Legacy ERROR exclusions: a queue fault or a discarded-input verdict is not
     // a usable review; finish the writes and re-run.

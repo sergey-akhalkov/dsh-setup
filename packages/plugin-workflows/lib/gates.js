@@ -84,6 +84,7 @@ export function evaluateTurnClose(input) {
             evidenceContext: input.evidenceContext,
             turn: input.turn,
             maxAttempts: input.maxBlocks,
+            ...(ownedText === undefined ? {} : { note: ownedText }),
             now: at,
         });
         const run = incrementTurnBlocks(steered.run, at);

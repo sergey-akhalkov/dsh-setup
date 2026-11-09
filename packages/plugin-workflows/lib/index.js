@@ -1460,8 +1460,16 @@ export function apply(ctx, config = {}) {
                     agent,
                 });
                 const first = batch.results[0];
-                const outcome = shellOutcomeOf(first?.result);
-                if (first === undefined || outcome.background === true || !outcome.ok) {
+                if (first === undefined) {
+                    return { ok: false, error: `the ${request.name} tool call failed` };
+                }
+                const isShellTool = request.name === 'pwsh' || request.name === 'bash' || request.name === 'terminal_send';
+                const shell = isShellTool ? shellOutcomeOf(first.result) : undefined;
+                if (shell !== undefined && (shell.background === true || !shell.ok)) {
+                    return { ok: false, error: `the ${request.name} tool call failed` };
+                }
+                if (shell === undefined &&
+                    first.result?.isError === true) {
                     return { ok: false, error: `the ${request.name} tool call failed` };
                 }
                 // The host already observed its own dispatch; record it for evidence
@@ -1487,11 +1495,11 @@ export function apply(ctx, config = {}) {
                         command,
                         at: journal.time(),
                         foreground: true,
-                        exitCode: outcome.exitCode,
-                        ...(outcome.timedOut === true ? { timedOut: true } : {}),
-                        ...(outcome.signal === undefined ? {} : { signal: outcome.signal }),
-                        ...(outcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
-                        ...(outcome.cwd === undefined ? {} : { cwd: outcome.cwd }),
+                        exitCode: shell?.exitCode ?? 0,
+                        ...(shell?.timedOut === true ? { timedOut: true } : {}),
+                        ...(shell?.signal === undefined ? {} : { signal: shell.signal }),
+                        ...(shell?.sandboxDenied === true ? { sandboxDenied: true } : {}),
+                        ...(shell?.cwd === undefined ? {} : { cwd: shell.cwd }),
                     });
                     if (results.length > 50)
                         results.shift();

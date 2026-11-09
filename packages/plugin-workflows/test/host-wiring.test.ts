@@ -167,20 +167,22 @@ function fakeHost(
                 isError: true,
                 content: [{ type: 'text', text: decision?.reason ?? 'denied' }],
               }
-            : {
-                isError: false,
-                value: {
-                  kind: 'foreground',
-                  cwd: workspace,
-                  exitCode: 0,
-                  signal: null,
-                  timedOut: false,
-                  aborted: false,
-                  timeoutMs: 120_000,
-                  stdout: { text: '', truncated: false },
-                  stderr: { text: '', truncated: false },
+            : call.name === 'delegate'
+              ? { isError: false, value: { text: 'rule "task-review" review started' } }
+              : {
+                  isError: false,
+                  value: {
+                    kind: 'foreground',
+                    cwd: workspace,
+                    exitCode: 0,
+                    signal: null,
+                    timedOut: false,
+                    aborted: false,
+                    timeoutMs: 120_000,
+                    stdout: { text: '', truncated: false },
+                    stderr: { text: '', truncated: false },
+                  },
                 },
-              },
         })
       }
       return { results }

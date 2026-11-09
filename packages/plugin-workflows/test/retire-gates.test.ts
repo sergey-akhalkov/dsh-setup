@@ -675,6 +675,109 @@ describe('owned task-review definition', () => {
     expect(outcome.kind).toBe('refuse')
     expect(steers).toHaveLength(1)
     expect(steers[0]).toContain('coverage')
+    expect(steers[0]).toContain('1.1 Foreign')
+    expect(steers[0]).toContain('has no portable PASS')
+  })
+
+  it('applies the reviewer binding to intermediate records and refuses an invalid marker', async () => {
+    const taskId = '0123456789abcdef'
+    const awaitEvidence = shipped('task-review').steps.find(
+      (step) => step.id === 'await-review',
+    )?.evidence
+    const workspace = await workspaceWithRecords({ [taskId]: 'PASS' })
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Pass task\n', 'utf8')
+    const portableId = (await import('../src/host/tasks.ts')).taskIdOf('Pass task')
+    await writeFile(
+      join(changeDir, 'reviews', `${portableId}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: portableId,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-08T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    const marker = join(workspace, 'openspec', 'review-approval.json')
+    await writeFile(
+      marker,
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(true)
+    expect(
+      (
+        await verifyEvidence(awaitEvidence as never, {
+          workspace,
+          values: { name: 'auth', taskId },
+        })
+      ).ok,
+    ).toBe(true)
+    await writeFile(
+      marker,
+      JSON.stringify({
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: 'other-provider',
+      }),
+      'utf8',
+    )
+    expect(
+      (
+        await verifyEvidence(awaitEvidence as never, {
+          workspace,
+          values: { name: 'auth', taskId },
+        })
+      ).ok,
+    ).toBe(false)
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    await writeFile(marker, '{ not json', 'utf8')
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    await writeFile(
+      marker,
+      JSON.stringify({
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: 42,
+      }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    await rm(workspace, { recursive: true, force: true })
+  })
+
+  it('rejects an unnumbered checked line instead of skipping it', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n- [x] Foreign task\n', 'utf8')
+    const id = (await import('../src/host/tasks.ts')).taskIdOf('Task')
+    await writeFile(
+      join(changeDir, 'reviews', `${id}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: id,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-08T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    expect(taskReviewCompletion(workspace, 'auth')?.ok).toBe(false)
+    await rm(workspace, { recursive: true, force: true })
   })
 
   it('requires portable PASS coverage for every checked task at completion', async () => {

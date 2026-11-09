@@ -123,6 +123,8 @@ export interface MainStepRequest {
   readonly turn: number
   readonly maxAttempts?: number
   readonly now?: number
+  /** A host-computed refusal detail prepended to the step steer. */
+  readonly note?: string
 }
 
 export type MainStepResult =
@@ -153,12 +155,13 @@ export function requestMainStep(input: MainStepRequest): MainStepResult {
   // requested, so the run never holds an open step no steer can describe.
   let text: string
   try {
-    text = renderMainSteer({
+    const rendered = renderMainSteer({
       run: input.run,
       definition: input.definition,
       step: input.step,
       evidenceContext: input.evidenceContext,
     })
+    text = input.note === undefined ? rendered : `${input.note.slice(0, 600)}\n\n${rendered}`
   } catch (error) {
     return {
       steered: false,

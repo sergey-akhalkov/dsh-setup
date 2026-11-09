@@ -306,24 +306,35 @@ function readPortableApproval(workspace, change, taskId) {
         return undefined;
     }
 }
-/** The marker-pinned reviewer, when the workspace declares one. */
-function reviewerBinding(workspace) {
+/** The marker-pinned reviewer, or an error when the marker exists but is invalid. */
+export function reviewerBinding(workspace) {
+    let raw;
     try {
-        const raw = JSON.parse(readFileSync(join(workspace, 'openspec', 'review-approval.json'), 'utf8'));
-        if (!isRecord(raw))
-            return undefined;
-        const provider = typeof raw.reviewerProvider === 'string' ? raw.reviewerProvider : undefined;
-        const model = typeof raw.reviewerModel === 'string' ? raw.reviewerModel : undefined;
-        if (provider === undefined && model === undefined)
-            return undefined;
-        return {
-            ...(provider === undefined ? {} : { provider }),
-            ...(model === undefined ? {} : { model }),
-        };
+        raw = JSON.parse(readFileSync(join(workspace, 'openspec', 'review-approval.json'), 'utf8'));
     }
-    catch {
+    catch (error) {
+        // An absent marker means no binding; an unreadable or malformed marker is
+        // a configuration error that must not silently drop the binding.
+        return error.code === 'ENOENT'
+            ? undefined
+            : { invalid: 'openspec/review-approval.json is unreadable or not valid JSON' };
+    }
+    if (!isRecord(raw))
+        return { invalid: 'openspec/review-approval.json is not a JSON object' };
+    const provider = raw.reviewerProvider;
+    const model = raw.reviewerModel;
+    if (provider !== undefined && (typeof provider !== 'string' || provider.trim() === '')) {
+        return { invalid: 'reviewerProvider must be a non-empty string' };
+    }
+    if (model !== undefined && (typeof model !== 'string' || model.trim() === '')) {
+        return { invalid: 'reviewerModel must be a non-empty string' };
+    }
+    if (provider === undefined && model === undefined)
         return undefined;
-    }
+    return {
+        ...(provider === undefined ? {} : { provider }),
+        ...(model === undefined ? {} : { model }),
+    };
 }
 /**
  * The owned completion/archive coverage: every checked task needs a portable
@@ -342,7 +353,20 @@ export function taskReviewCoverage(workspace, change) {
         };
     }
     const reviewer = reviewerBinding(workspace);
+    if (reviewer?.invalid !== undefined) {
+        return {
+            ok: false,
+            gaps: [`${reviewer.invalid}; fix openspec/review-approval.json before completing`],
+        };
+    }
     const gaps = [];
+    // A checked line the task parser cannot read is an unapproved checked task,
+    // not an absent one; refuse the completion instead of silently skipping it.
+    for (const line of markdown.split('\n')) {
+        if (/^\s*-\s*\[[xX]\]\s+/u.test(line) && !/^\s*-\s*\[[xX]\]\s+\d+(?:\.\d+)*\s+\S/u.test(line)) {
+            gaps.push(`checked task line "${line.trim()}" is not a numbered task; fix tasks.md so its review can be matched`);
+        }
+    }
     for (const task of checkedTaskLines(markdown)) {
         const record = readPortableApproval(workspace, change, task.id);
         const mismatch = [];

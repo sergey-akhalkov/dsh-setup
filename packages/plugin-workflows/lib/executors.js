@@ -98,12 +98,13 @@ export function requestMainStep(input) {
     // requested, so the run never holds an open step no steer can describe.
     let text;
     try {
-        text = renderMainSteer({
+        const rendered = renderMainSteer({
             run: input.run,
             definition: input.definition,
             step: input.step,
             evidenceContext: input.evidenceContext,
         });
+        text = input.note === undefined ? rendered : `${input.note.slice(0, 600)}\n\n${rendered}`;
     }
     catch (error) {
         return {

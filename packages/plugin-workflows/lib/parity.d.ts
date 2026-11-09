@@ -69,6 +69,12 @@ export interface TaskLine {
 }
 /** Checked numbered tasks from a tasks.md body. */
 export declare function checkedTaskLines(markdown: string): TaskLine[];
+/** The marker-pinned reviewer, or an error when the marker exists but is invalid. */
+export declare function reviewerBinding(workspace: string): {
+    provider?: string;
+    model?: string;
+    invalid?: string;
+} | undefined;
 export interface TaskReviewCoverage {
     readonly ok: boolean;
     /** One line per checked task without a valid portable PASS. */
