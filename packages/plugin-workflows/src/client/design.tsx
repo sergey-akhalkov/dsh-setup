@@ -165,6 +165,13 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     })
   }
 
+  /** Drop the runs of the previous document, including any in-flight response. */
+  const clearRuns = (): void => {
+    runSelection.invalidate()
+    setRuns([])
+    setRunId(undefined)
+  }
+
   const open = async (id: string): Promise<void> => {
     if (id === '') return
     setLoading(true)
@@ -234,8 +241,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       setConfirmDelete(false)
       if (outcome.deleted) {
         setSelected(undefined)
-        setRuns([])
-        setRunId(undefined)
+        clearRuns()
         await refreshLibrary()
       }
     } catch (error) {
@@ -249,8 +255,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     const next = openNew(blankDefinition(taken))
     setEditor({ ...next, mode: defaultSurface() })
     setSelected(undefined)
-    setRuns([])
-    setRunId(undefined)
+    clearRuns()
     setCanvasFailed(false)
     setMessage(undefined)
   }
@@ -261,8 +266,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     const copy = copyDefinition(template.definition, taken)
     setEditor({ ...openNew(copy), mode: defaultSurface() })
     setSelected(undefined)
-    setRuns([])
-    setRunId(undefined)
+    clearRuns()
     setCanvasFailed(false)
   }
 
@@ -273,8 +277,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       const definition = await api.readDraft(draftName)
       setEditor({ ...openDraft(draftName, definition), mode: defaultSurface() })
       setSelected(undefined)
-      setRuns([])
-      setRunId(undefined)
+      clearRuns()
       setCanvasFailed(false)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
@@ -295,9 +298,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       const nextId = next.document.definition.id
       const documentChanged = nextId !== editor.document.definition.id
       if (documentChanged) {
-        runSelection.invalidate()
-        setRuns([])
-        setRunId(undefined)
+        clearRuns()
       }
       setEditor(next)
       if (documentChanged) {

@@ -203,8 +203,14 @@ describe('canvas node rendering', () => {
     const nodeChanges = flow?.props.onNodesChange as (
       changes: readonly { type: string; id: string; selected: boolean }[],
     ) => void
-    nodeChanges([{ type: 'select', id: nodeIdOf('architecture'), selected: true }])
+    nodeChanges([
+      { type: 'select', id: nodeIdOf('architecture'), selected: true },
+      { type: 'select', id: nodeIdOf('requirements'), selected: false },
+    ])
     expect(selectedId).toBe(nodeIdOf('architecture'))
+    // Deselecting without selecting another node clears the selection.
+    nodeChanges([{ type: 'select', id: nodeIdOf('architecture'), selected: false }])
+    expect(selectedId).toBeUndefined()
     const selection = flow?.props.onSelectionChange as (value: { nodes: { id: string }[] }) => void
     selection({ nodes: [{ id: nodeIdOf('approval') }] })
     expect(selectedId).toBe(nodeIdOf('approval'))

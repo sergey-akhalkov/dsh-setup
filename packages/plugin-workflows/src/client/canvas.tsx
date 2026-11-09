@@ -295,11 +295,14 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
       // Controlled nodes only change selection through onNodesChange; the
       // bundled keyboard handler reports Enter/Space that way, not as a click.
       onNodesChange={(changes: readonly { type: string; id?: string; selected?: boolean }[]) => {
-        for (const change of changes) {
-          if (change.type === 'select' && change.id !== undefined) {
-            props.onSelect(change.selected === true ? change.id : undefined)
-          }
-        }
+        const selects = changes.filter(
+          (change) => change.type === 'select' && change.id !== undefined,
+        )
+        if (selects.length === 0) return
+        // React Flow emits the newly selected node before deselecting the old
+        // one; prefer the new selection instead of the last change in the batch.
+        const selected = selects.filter((change) => change.selected === true).at(-1)?.id
+        props.onSelect(selected)
       }}
       // Keyboard selection inside React Flow changes its selection without a
       // node click; report it so the property panel and C follow the focus.

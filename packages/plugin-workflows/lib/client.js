@@ -9909,11 +9909,12 @@ window.__ModuleLoader__.load({
           onNodeClick: (_event, node) => props.onSelect(node.id),
           onPaneClick: () => props.onSelect(void 0),
           onNodesChange: (changes) => {
-            for (const change of changes) {
-              if (change.type === "select" && change.id !== void 0) {
-                props.onSelect(change.selected === true ? change.id : void 0);
-              }
-            }
+            const selects = changes.filter(
+              (change) => change.type === "select" && change.id !== void 0
+            );
+            if (selects.length === 0) return;
+            const selected2 = selects.filter((change) => change.selected === true).at(-1)?.id;
+            props.onSelect(selected2);
           },
           onSelectionChange: (selection2) => {
             const first = selection2.nodes?.[0];
@@ -12208,6 +12209,11 @@ window.__ModuleLoader__.load({
           setRunId(next[0]?.id);
         });
       };
+      const clearRuns = () => {
+        runSelection.invalidate();
+        setRuns([]);
+        setRunId(void 0);
+      };
       const open = async (id2) => {
         if (id2 === "") return;
         setLoading(true);
@@ -12273,8 +12279,7 @@ window.__ModuleLoader__.load({
           setConfirmDelete(false);
           if (outcome.deleted) {
             setSelected(void 0);
-            setRuns([]);
-            setRunId(void 0);
+            clearRuns();
             await refreshLibrary();
           }
         } catch (error) {
@@ -12287,8 +12292,7 @@ window.__ModuleLoader__.load({
         const next = openNew(blankDefinition(taken));
         setEditor({ ...next, mode: defaultSurface() });
         setSelected(void 0);
-        setRuns([]);
-        setRunId(void 0);
+        clearRuns();
         setCanvasFailed(false);
         setMessage(void 0);
       };
@@ -12298,8 +12302,7 @@ window.__ModuleLoader__.load({
         const copy = copyDefinition(template.definition, taken);
         setEditor({ ...openNew(copy), mode: defaultSurface() });
         setSelected(void 0);
-        setRuns([]);
-        setRunId(void 0);
+        clearRuns();
         setCanvasFailed(false);
       };
       const startDraft = async () => {
@@ -12309,8 +12312,7 @@ window.__ModuleLoader__.load({
           const definition = await api.readDraft(draftName);
           setEditor({ ...openDraft(draftName, definition), mode: defaultSurface() });
           setSelected(void 0);
-          setRuns([]);
-          setRunId(void 0);
+          clearRuns();
           setCanvasFailed(false);
         } catch (error) {
           setMessage(error instanceof Error ? error.message : String(error));
@@ -12328,9 +12330,7 @@ window.__ModuleLoader__.load({
           const nextId2 = next.document.definition.id;
           const documentChanged = nextId2 !== editor.document.definition.id;
           if (documentChanged) {
-            runSelection.invalidate();
-            setRuns([]);
-            setRunId(void 0);
+            clearRuns();
           }
           setEditor(next);
           if (documentChanged) {
