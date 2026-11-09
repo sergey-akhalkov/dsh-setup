@@ -18,9 +18,17 @@ import { connectChoices, EDGE_LABELS } from '../src/client/edges.ts'
 import { addStep, blankDefinition, connectSteps, openNew, save } from '../src/client/editor.ts'
 import { END_NODE, type GraphDefinition } from '../src/client/graph.ts'
 import { overlayFor } from '../src/client/overlay.ts'
-import { call, elements, fire, loadClientModules, packageDir } from './client-harness.ts'
+import {
+  call,
+  elements,
+  fire,
+  jsx,
+  loadClientModules,
+  packageDir,
+  shallowRender,
+} from './client-harness.ts'
 
-const ui = loadClientModules(['canvas.tsx', 'palette.tsx'])
+const ui = loadClientModules(['canvas.tsx', 'palette.tsx', 'list.tsx', 'design.tsx'])
 
 const DEFINITION = JSON.parse(
   readFileSync(join(packageDir, 'assets', 'definitions', 'change-intake.json'), 'utf8'),
@@ -31,12 +39,45 @@ describe('mode and fallback', () => {
     expect(NARROW_WIDTH).toBe(720)
     expect(defaultMode(600)).toBe('list')
     expect(defaultMode(1200)).toBe('canvas')
-    expect(resolveSurface('canvas', false, 600)).toBe('list')
-    expect(resolveSurface('canvas', false, 1200)).toBe('canvas')
-    expect(resolveSurface('canvas', true, 1200)).toBe('list')
-    expect(resolveSurface('list', false, 1200)).toBe('list')
+    // The width picks the initial mode; an explicit canvas choice at 600px is
+    // honored, and only a canvas render failure forces the list.
+    expect(resolveSurface('canvas', false)).toBe('canvas')
+    expect(resolveSurface('list', false)).toBe('list')
+    expect(resolveSurface('canvas', true)).toBe('list')
     expect(fallbackNotice(true)).toContain('list editor is showing')
     expect(fallbackNotice(false)).toBeUndefined()
+  })
+
+  it('renders the list editor when a throwing canvas child is caught', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const state = openNew(blankDefinition(new Set(['new-workflow'])))
+    const patches: string[] = []
+    const onError = vi.fn()
+    const ThrowingCanvas = (): never => {
+      throw new Error('React Flow failed to render')
+    }
+    const tree = jsx(ui.CanvasBoundary as never, {
+      onError,
+      children: jsx(ThrowingCanvas, {}),
+      fallback: jsx(ui.ListEditor as never, {
+        state,
+        onSelect: () => {},
+        onPatch: (id: string) => patches.push(id),
+        onConnect: () => {},
+        onDelete: () => {},
+      }),
+    })
+    const rendered = shallowRender(tree)
+    const renderedElements = elements(rendered)
+    const title = renderedElements.find(
+      (element) => element.type === 'input' && element.props['aria-label'] === 'Title of step-1',
+    )
+    expect(title).toBeDefined()
+    fire(title, 'onChange', 'Edited in the fallback')
+    expect(patches).toEqual(['step-1'])
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect((ui.canvasFailedState as (state: unknown) => { mode: string })(state).mode).toBe('list')
+    errors.mockRestore()
   })
 
   it('renders the list when the canvas render throws, with a bounded notice', () => {

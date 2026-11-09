@@ -161,3 +161,46 @@ export function fire(element: Element | undefined, handler: string, value?: unkn
     preventDefault: () => {},
   })
 }
+
+/**
+ * A minimal shallow renderer for the one React contract this project relies on
+ * without a DOM: a class error boundary catches a throwing child, applies
+ * `getDerivedStateFromError`, calls `componentDidCatch`, and renders its
+ * fallback. Function components are invoked; host elements keep their props.
+ */
+export function shallowRender(node: unknown): unknown {
+  if (node === null || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(shallowRender)
+  const element = node as Element
+  const type = element.type
+  if (typeof type !== 'function') {
+    const props: Record<string, unknown> = { ...element.props }
+    if ('children' in props) props.children = shallowRender(props.children)
+    return { type, props }
+  }
+  const prototype = (type as { prototype?: { render?: unknown } }).prototype
+  if (prototype !== undefined && typeof prototype.render === 'function') {
+    const instance = new (
+      type as new (
+        props: Record<string, unknown>,
+      ) => {
+        props: Record<string, unknown>
+        state?: Record<string, unknown>
+        render: () => unknown
+        componentDidCatch?: (error: unknown) => void
+      }
+    )(element.props)
+    try {
+      return shallowRender(instance.render())
+    } catch (error) {
+      const derived = (
+        type as { getDerivedStateFromError?: (error: unknown) => Record<string, unknown> }
+      ).getDerivedStateFromError
+      if (derived === undefined) throw error
+      instance.state = { ...(instance.state ?? {}), ...derived(error) }
+      instance.componentDidCatch?.(error)
+      return shallowRender(instance.render())
+    }
+  }
+  return shallowRender((type as (props: Record<string, unknown>) => unknown)(element.props))
+}

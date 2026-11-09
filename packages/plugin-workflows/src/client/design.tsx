@@ -61,6 +61,15 @@ function defaultSurface(): 'canvas' | 'list' {
   return defaultMode(windowWidth())
 }
 
+/**
+ * The recovery action a canvas render failure takes: the editor switches to
+ * the list surface and keeps the definition editable. Exported so the fallback
+ * wiring is covered without a DOM renderer.
+ */
+export function canvasFailedState(editor: EditorState): EditorState {
+  return setMode(editor, 'list')
+}
+
 export function DesignMode(props: DesignModeProps): ReactNode {
   const { sessionId, t } = props
   const api = useMemo(() => fetchEditorApi(sessionId ?? ''), [sessionId])
@@ -266,8 +275,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     editor === undefined
       ? overlayFor(undefined, blankDefinition(new Set()))
       : overlayFor(runs.find((run) => run.id === runId) ?? runs[0], editor.document.definition)
-  const surface =
-    editor === undefined ? 'list' : resolveSurface(editor.mode, canvasFailed, windowWidth())
+  const surface = editor === undefined ? 'list' : resolveSurface(editor.mode, canvasFailed)
   const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected)
   const choices =
     editor === undefined || selected === undefined
@@ -363,7 +371,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
                 }
                 onError={() => {
                   setCanvasFailed(true)
-                  setEditor(setMode(editor, 'list'))
+                  setEditor(canvasFailedState(editor))
                 }}
               >
                 <DesignCanvas

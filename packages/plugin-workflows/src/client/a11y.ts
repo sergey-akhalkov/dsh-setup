@@ -22,15 +22,14 @@ export function defaultMode(width: number): 'canvas' | 'list' {
   return width > 0 && width < NARROW_WIDTH ? 'list' : 'canvas'
 }
 
-/** A canvas render failure or an unavailable container falls back to the list. */
-export function resolveSurface(
-  requested: 'canvas' | 'list',
-  canvasFailed: boolean,
-  width: number,
-): Surface {
+/**
+ * A canvas render failure always falls back to the list. The width only picks
+ * the initial mode (see `defaultMode`); it never overrides an explicit choice,
+ * so a narrow window can still display the canvas when the user asks for it.
+ */
+export function resolveSurface(requested: 'canvas' | 'list', canvasFailed: boolean): Surface {
   if (canvasFailed) return 'list'
-  if (requested === 'list') return 'list'
-  return defaultMode(width)
+  return requested
 }
 
 export function fallbackNotice(canvasFailed: boolean): string | undefined {
