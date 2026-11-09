@@ -587,7 +587,8 @@ describe('owned checkpoint decisions', () => {
         lanes: [],
         bottleneck: {
           id: 'guard',
-          owner: 'lead',          action: 'lead_action',
+          owner: 'lead',
+          action: 'lead_action',
           blockingLanes: ['edit'],
           targets: ['../shared'],
         },
@@ -604,6 +605,30 @@ describe('owned checkpoint decisions', () => {
       workspace: '/repo/app',
     })
     expect(external).toBeUndefined()
+    const rootTarget = checkpointCloseIssue({
+      record: {
+        outcome: 'continue',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'lead',
+          action: 'lead_action',
+          blockingLanes: ['edit'],
+          targets: ['/'],
+        },
+      },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        { toolName: 'write', arguments: { file_path: 'src/app.ts' }, ok: true, at: 300 },
+      ],
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+      workspace: '/repo/app',
+    })
+    expect(rootTarget).toBeUndefined()
     const sibling = checkpointCloseIssue({
       record,
       checkpointId: 'checkpoint-1-aaaaaaaa',

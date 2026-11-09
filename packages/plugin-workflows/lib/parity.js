@@ -546,7 +546,10 @@ function targetMatches(targets, destination, workspace) {
     const path = normalize(destination);
     return targets.some((target) => {
         const wanted = normalize(target);
-        return wanted === '' || path === wanted || path.startsWith(`${wanted}/`);
+        // A filesystem-root target already ends in '/', so its prefix is treated
+        // as-is instead of producing a double separator.
+        const prefix = wanted.endsWith('/') ? wanted : `${wanted}/`;
+        return wanted === '' || path === wanted || path.startsWith(prefix);
     });
 }
 function delegateStarted(detail) {
