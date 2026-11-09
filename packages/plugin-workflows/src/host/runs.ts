@@ -380,6 +380,14 @@ export async function listAuthenticatedRuns(
   )
 }
 
+/** The structured evidence shape persisted on a step: kind plus a reference. */
+function withEvidenceRef(evidence: RunEvidence): RunEvidence {
+  if (evidence.ref !== undefined) return evidence
+  const reference =
+    evidence.path ?? evidence.callId ?? evidence.detail ?? evidence.answer ?? evidence.digest
+  return reference === undefined ? evidence : { ...evidence, ref: reference }
+}
+
 /** Replace one step's state and stamp the run. Pure. */
 export function settleStep(
   run: WorkflowRun,
@@ -396,6 +404,7 @@ export function settleStep(
     throw new Error(`run "${run.id}" has no step "${stepId}"`)
   }
   const at = patch.at ?? Date.now()
+  const evidence = patch.evidence === undefined ? undefined : withEvidenceRef(patch.evidence)
   const failureClass =
     state === 'blocked' || state === 'failed'
       ? (patch.failureClass ?? classifyFailure(patch.reason))
@@ -409,7 +418,7 @@ export function settleStep(
             ...step,
             state,
             at,
-            ...(patch.evidence === undefined ? {} : { evidence: patch.evidence }),
+            ...(evidence === undefined ? {} : { evidence }),
             ...(patch.reason === undefined ? {} : { reason: patch.reason }),
             ...(failureClass === undefined ? {} : { failureClass }),
           }

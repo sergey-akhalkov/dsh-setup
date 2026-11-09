@@ -138,6 +138,12 @@ describe('run provenance record', () => {
       at: 1_250,
     })
     await writeRun(workspace, settled, auth())
+    // The persisted record carries the structured evidence contract itself.
+    expect(settled.steps[0]?.evidence).toMatchObject({
+      kind: 'file',
+      ref: '.dsh/workflows/drafts/demo/requirements.md',
+      at: 1_050,
+    })
     const view = (await engineRuns(workspace))[0]
     const first = view?.steps.find((step) => step.id === 'one')
     expect(first?.evidenceRef).toEqual({
