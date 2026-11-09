@@ -20,6 +20,7 @@ import {
   savable,
   save,
   saveAsCopy,
+  unsavedChanges,
 } from '../src/client/editor.ts'
 import { type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
@@ -231,6 +232,12 @@ describe('definition lifecycle', () => {
 })
 
 describe('draft, dirty tracking, and save', () => {
+  it('reports unsaved changes only while the document is dirty', () => {
+    expect(unsavedChanges(opened())).toBe(false)
+    expect(unsavedChanges(patchStep(opened(), nodeIdOf('one'), { title: 'Mine' }))).toBe(true)
+    expect(unsavedChanges(undefined)).toBe(false)
+  })
+
   it('tracks dirty state and bumps the version on save', async () => {
     const { api, calls } = fakeApi()
     const state = opened()

@@ -132,7 +132,8 @@ type Resolved = { readonly workspace: string } | { readonly response: Response }
 function resolveSession(services: EditorApiServices, request: Request): Resolved {
   const session = new URL(request.url).searchParams.get('session')
   if (session === null || session === '') {
-    return { response: json(400, { error: 'a session id is required' }) }
+    // No session at all is unauthenticated; an unknown session is a bad request.
+    return { response: json(401, { error: 'a session id is required' }) }
   }
   const agent = services.agents.get(session)
   if (agent === undefined) {

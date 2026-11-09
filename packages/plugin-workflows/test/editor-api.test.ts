@@ -170,6 +170,9 @@ describe('editor read API', () => {
     const refused = await call(routes, EDITOR_DEFINITIONS_ROUTE, { session: 'foreign' })
     expect(refused.status).toBe(400)
     expect(refused.body).toMatchObject({ error: expect.stringContaining('not live') })
+    const unauthenticated = await call(routes, EDITOR_DEFINITIONS_ROUTE, { session: '' })
+    expect(unauthenticated.status).toBe(401)
+    expect(unauthenticated.body).toMatchObject({ error: expect.stringContaining('session id') })
   })
 })
 

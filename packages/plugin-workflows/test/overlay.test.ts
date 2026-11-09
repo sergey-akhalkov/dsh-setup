@@ -58,6 +58,43 @@ describe('run overlay', () => {
     expect(overlay.recordedVersion).toBe(1)
   })
 
+  it('maps every recorded step state verbatim', () => {
+    const states = overlayFor(
+      run({
+        status: 'failed',
+        steps: [
+          { id: 'requirements', title: 'requirements', state: 'running' },
+          {
+            id: 'architecture',
+            title: 'architecture',
+            state: 'failed',
+            failureClass: 'check-failed',
+          },
+        ],
+      }),
+      DEFINITION,
+    )
+    expect(states.run?.status).toBe('failed')
+    expect(states.steps.requirements?.state).toBe('running')
+    expect(states.steps.architecture).toMatchObject({
+      state: 'failed',
+      failureClass: 'check-failed',
+    })
+    const completed = overlayFor(
+      run({
+        status: 'done',
+        steps: [
+          { id: 'requirements', title: 'requirements', state: 'done' },
+          { id: 'architecture', title: 'architecture', state: 'done' },
+        ],
+        violations: [],
+      }),
+      DEFINITION,
+    )
+    expect(completed.run?.status).toBe('done')
+    expect(completed.steps.architecture?.failureClass).toBeUndefined()
+  })
+
   it('leaves a definition step missing from the run without a state and marks orphans', () => {
     const overlay = overlayFor(
       run({

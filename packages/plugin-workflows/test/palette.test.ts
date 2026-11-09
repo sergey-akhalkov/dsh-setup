@@ -121,6 +121,24 @@ describe('canvas node rendering', () => {
     }
   })
 
+  it('exposes focusable nodes and edges on the canvas', () => {
+    const graph = definitionToGraph(DEFINITION)
+    const tree = call(ui, 'DesignCanvas', {
+      nodes: graph.nodes,
+      edges: graph.edges,
+      focusKey: 'test',
+      onSelect: () => {},
+      onMove: () => {},
+      onConnectNode: () => {},
+    })
+    const flow = elements(tree).find((element) => element.type === 'reactflow')
+    expect(flow?.props.nodesFocusable).toBe(true)
+    expect(flow?.props.edgesFocusable).toBe(true)
+    expect(Array.isArray(flow?.props.nodes)).toBe(true)
+    const nodes = flow?.props.nodes as { id: string; type: string }[]
+    expect(nodes.some((node) => node.type === 'step')).toBe(true)
+  })
+
   it('shows the overlay state, failure class, evidence, and violation on a node', () => {
     const rendered = call(ui, 'StepNodeView', {
       data: {

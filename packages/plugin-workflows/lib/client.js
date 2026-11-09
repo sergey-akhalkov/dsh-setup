@@ -10647,6 +10647,9 @@ window.__ModuleLoader__.load({
     function idsOf(entries) {
       return new Set(entries.map((entry) => entry.id));
     }
+    function unsavedChanges(state) {
+      return state !== void 0 && state.dirty;
+    }
 
     // packages/plugin-workflows/src/client/editor-client.ts
     var EDITOR_BASE = "/api/workflows/editor";
@@ -11614,6 +11617,12 @@ window.__ModuleLoader__.load({
         setEditor(next);
         if (next.issues.length === 0 && next.status !== "error") setMessage(void 0);
       };
+      const guard = (action) => {
+        if (unsavedChanges(editor) && typeof window !== "undefined" && !window.confirm("Discard the unsaved changes to this definition?")) {
+          return;
+        }
+        action();
+      };
       if (sessionId === void 0) {
         return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "dsh-wf-design", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
       }
@@ -11633,7 +11642,7 @@ window.__ModuleLoader__.load({
         if (editor === void 0) {
           return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("section", { className: "dsh-wf-section", "data-section": "editor-library", children: [
             /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("design.intro") }),
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-runs", children: library.definitions.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("button", { type: "button", onClick: () => void open(entry.id), children: [
+            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-runs", children: library.definitions.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("button", { type: "button", onClick: () => guard(() => void open(entry.id)), children: [
               entry.name,
               " (",
               entry.id,
@@ -11780,14 +11789,14 @@ window.__ModuleLoader__.load({
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("style", { children: FLOW_CSS }),
         /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("strong", { children: t("design.title") }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => props.onClose?.(), children: t("design.close") }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: startBlank, disabled: loading, children: t("design.new") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => guard(() => props.onClose?.()), children: t("design.close") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => guard(startBlank), disabled: loading, children: t("design.new") }),
           /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
             "select",
             {
               "aria-label": t("design.open"),
               value: editor?.document.definition.id ?? "",
-              onChange: (event) => void open(event.currentTarget.value),
+              onChange: (event) => guard(() => void open(event.currentTarget.value)),
               disabled: loading,
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "", children: t("design.open") }),
@@ -11819,7 +11828,15 @@ window.__ModuleLoader__.load({
               ]
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: takeTemplate, disabled: templateName === "" || loading, children: t("design.copyTemplate") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+            "button",
+            {
+              type: "button",
+              onClick: () => guard(takeTemplate),
+              disabled: templateName === "" || loading,
+              children: t("design.copyTemplate")
+            }
+          ),
           /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
             "select",
             {
@@ -11844,7 +11861,7 @@ window.__ModuleLoader__.load({
             "button",
             {
               type: "button",
-              onClick: () => void startDraft(),
+              onClick: () => guard(() => void startDraft()),
               disabled: draftName === "" || loading,
               children: t("design.openDraft")
             }
@@ -11862,7 +11879,7 @@ window.__ModuleLoader__.load({
             "button",
             {
               type: "button",
-              onClick: () => void reloadCurrent(),
+              onClick: () => guard(() => void reloadCurrent()),
               disabled: editor === void 0 || loading,
               children: t("design.reload")
             }
@@ -11871,7 +11888,7 @@ window.__ModuleLoader__.load({
             "button",
             {
               type: "button",
-              onClick: () => void removeCurrent(),
+              onClick: () => guard(() => void removeCurrent()),
               disabled: editor === void 0 || editor.document.revision === null || loading,
               children: confirmDelete ? t("design.confirmDelete") : t("design.delete")
             }
@@ -11908,7 +11925,7 @@ window.__ModuleLoader__.load({
         message === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-issue", children: message }),
         conflict === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", role: "alert", "data-conflict": conflict.kind, children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { children: editor?.message ?? t("design.conflict") }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => void reloadCurrent(), children: t("design.reload") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => guard(() => void reloadCurrent()), children: t("design.reload") }),
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => void copyCurrent(), children: t("design.saveCopy") }),
           conflict.nextId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("button", { type: "button", onClick: useNextId, children: [
             t("design.useId"),

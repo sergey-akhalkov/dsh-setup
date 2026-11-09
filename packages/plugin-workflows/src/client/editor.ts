@@ -639,6 +639,11 @@ export function idsOf(entries: readonly EditorListEntry[]): Set<string> {
   return new Set(entries.map((entry) => entry.id))
 }
 
+/** Whether the document has edits the user has not saved yet. */
+export function unsavedChanges(state: EditorState | undefined): boolean {
+  return state !== undefined && state.dirty
+}
+
 /** Whether the graph can be saved without a host round trip. */
 export function savable(state: EditorState): boolean {
   return state.issues.length === 0

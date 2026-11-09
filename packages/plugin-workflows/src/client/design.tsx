@@ -25,6 +25,7 @@ import {
   saveAsCopy,
   setMode,
   type TemplateEntry,
+  unsavedChanges,
 } from './editor.ts'
 import { fetchEditorApi } from './editor-client.ts'
 import type { EdgeKind, NodeKind } from './graph.ts'
@@ -263,6 +264,18 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     if (next.issues.length === 0 && next.status !== 'error') setMessage(undefined)
   }
 
+  /** An action that replaces the open document warns before discarding edits. */
+  const guard = (action: () => void): void => {
+    if (
+      unsavedChanges(editor) &&
+      typeof window !== 'undefined' &&
+      !window.confirm('Discard the unsaved changes to this definition?')
+    ) {
+      return
+    }
+    action()
+  }
+
   if (sessionId === undefined) {
     return (
       <div className="dsh-wf-design" data-state="no-session">
@@ -298,7 +311,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           <ul className="dsh-wf-runs">
             {library.definitions.map((entry) => (
               <li key={entry.id}>
-                <button type="button" onClick={() => void open(entry.id)}>
+                <button type="button" onClick={() => guard(() => void open(entry.id))}>
                   {entry.name} ({entry.id}) v{entry.version} · {entry.source} ·{' '}
                   {String(entry.stepCount)} steps
                 </button>
@@ -454,16 +467,16 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       <style>{FLOW_CSS}</style>
       <div className="dsh-wf-design-bar">
         <strong>{t('design.title')}</strong>
-        <button type="button" onClick={() => props.onClose?.()}>
+        <button type="button" onClick={() => guard(() => props.onClose?.())}>
           {t('design.close')}
         </button>
-        <button type="button" onClick={startBlank} disabled={loading}>
+        <button type="button" onClick={() => guard(startBlank)} disabled={loading}>
           {t('design.new')}
         </button>
         <select
           aria-label={t('design.open')}
           value={editor?.document.definition.id ?? ''}
-          onChange={(event) => void open(event.currentTarget.value)}
+          onChange={(event) => guard(() => void open(event.currentTarget.value))}
           disabled={loading}
         >
           <option value="">{t('design.open')}</option>
@@ -486,7 +499,11 @@ export function DesignMode(props: DesignModeProps): ReactNode {
             </option>
           ))}
         </select>
-        <button type="button" onClick={takeTemplate} disabled={templateName === '' || loading}>
+        <button
+          type="button"
+          onClick={() => guard(takeTemplate)}
+          disabled={templateName === '' || loading}
+        >
           {t('design.copyTemplate')}
         </button>
         <select
@@ -504,7 +521,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         </select>
         <button
           type="button"
-          onClick={() => void startDraft()}
+          onClick={() => guard(() => void startDraft())}
           disabled={draftName === '' || loading}
         >
           {t('design.openDraft')}
@@ -518,14 +535,14 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         </button>
         <button
           type="button"
-          onClick={() => void reloadCurrent()}
+          onClick={() => guard(() => void reloadCurrent())}
           disabled={editor === undefined || loading}
         >
           {t('design.reload')}
         </button>
         <button
           type="button"
-          onClick={() => void removeCurrent()}
+          onClick={() => guard(() => void removeCurrent())}
           disabled={editor === undefined || editor.document.revision === null || loading}
         >
           {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
@@ -564,7 +581,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       {conflict === undefined ? null : (
         <div className="dsh-wf-design-bar" role="alert" data-conflict={conflict.kind}>
           <span>{editor?.message ?? t('design.conflict')}</span>
-          <button type="button" onClick={() => void reloadCurrent()}>
+          <button type="button" onClick={() => guard(() => void reloadCurrent())}>
             {t('design.reload')}
           </button>
           <button type="button" onClick={() => void copyCurrent()}>

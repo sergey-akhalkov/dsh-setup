@@ -60,7 +60,8 @@ export function definitionErrors(error) {
 function resolveSession(services, request) {
     const session = new URL(request.url).searchParams.get('session');
     if (session === null || session === '') {
-        return { response: json(400, { error: 'a session id is required' }) };
+        // No session at all is unauthenticated; an unknown session is a bad request.
+        return { response: json(401, { error: 'a session id is required' }) };
     }
     const agent = services.agents.get(session);
     if (agent === undefined) {

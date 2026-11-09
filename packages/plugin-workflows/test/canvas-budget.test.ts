@@ -121,6 +121,7 @@ describe('canvas styles', () => {
     expect(styles).toContain('--dsw-alias-state-error-primary')
     expect(styles).toContain('--dsw-alias-state-success-primary')
     expect(styles).toContain('.react-flow__node')
+    expect(styles).toContain(':focus-visible')
     // The selection fill and the connection preview both follow theme tokens,
     // never a literal colour that would ignore the theme.
     expect(styles).toContain('--xy-selection-background-color-default: var(--dsw-alias-border-l2)')
