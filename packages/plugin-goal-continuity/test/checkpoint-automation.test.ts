@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-harness.js'
 
@@ -8,10 +11,14 @@ import { CheckpointHarness, type CheckpointHarnessOptions } from './checkpoint-h
  */
 
 let cleanup: (() => Promise<void>) | undefined
+const sharedWorkspaces: string[] = []
 
 afterEach(async () => {
   if (cleanup !== undefined) await cleanup()
   cleanup = undefined
+  for (const directory of sharedWorkspaces.splice(0)) {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 async function create(options: CheckpointHarnessOptions = {}): Promise<CheckpointHarness> {
@@ -76,5 +83,35 @@ describe('checkpoint.automation: true', () => {
     expect(harness.steers).toHaveLength(1)
     for (let step = 0; step < 10; step += 1) await harness.preStep()
     expect(harness.steers.length).toBeGreaterThan(1)
+  })
+
+  it('keeps an existing checkpoint record across true -> false -> true on one workspace', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-goal-automation-'))
+    sharedWorkspaces.push(workspace)
+    const shared = { workspace, sessionId: 'session-shared' } as const
+
+    const enabled = await create(shared)
+    workingTurn(enabled)
+    await enabled.checkpoint({ outcome: 'done', verified: ['done'], next: 'report' })
+    const recordPath = enabled.recordPath(1)
+    const bytes = await readFile(recordPath, 'utf8')
+    expect(bytes).toContain('"outcome": "done"')
+
+    // The disabled provider reuses the workspace: the record is untouched and
+    // the close gate is silent.
+    const disabled = await create({ ...shared, config: { checkpoint: { automation: false } } })
+    disabled.turnStart()
+    addWorkingCalls(disabled)
+    await disabled.turnStopping()
+    expect(disabled.steers).toHaveLength(0)
+    expect(await readFile(recordPath, 'utf8')).toBe(bytes)
+    expect((await disabled.readRecord(1)).checkpoint).toBe((JSON.parse(bytes) as { checkpoint: string }).checkpoint)
+
+    // Rollback: the same record still satisfies the revived close gate.
+    const rolledBack = await create(shared)
+    workingTurn(rolledBack)
+    await rolledBack.turnStopping()
+    expect(rolledBack.steers).toHaveLength(1)
+    expect(await readFile(recordPath, 'utf8')).toBe(bytes)
   })
 })

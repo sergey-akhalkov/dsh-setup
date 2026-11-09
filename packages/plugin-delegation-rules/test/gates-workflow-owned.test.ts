@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   type BundleConfigLike,
@@ -78,6 +78,22 @@ async function fixture(workflowOwned: boolean) {
   return { root: workspace.root, dir, agents, harness }
 }
 
+/** Every file under one directory, keyed by relative path, for no-rewrite checks. */
+async function snapshotFiles(directory: string): Promise<Map<string, Buffer>> {
+  const files = new Map<string, Buffer>()
+  const walk = async (current: string): Promise<void> => {
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      const path = join(current, entry.name)
+      if (entry.isDirectory()) await walk(path)
+      else files.set(relative(directory, path), await readFile(path))
+    }
+  }
+  await walk(directory)
+  return files
+}
+
+
 describe('delegation.gates.workflowOwned: false', () => {
   it('stops the task-review and archive gates but keeps the spec-review rule', async () => {
     const { root, dir, harness } = await fixture(false)
@@ -89,11 +105,27 @@ describe('delegation.gates.workflowOwned: false', () => {
       '# Proposal\n\nWhy.\n',
       '# Proposal\n\nWhy changed.\n',
     )
+    await harness.writeResult(join(dir, 'tasks.md'), planUnchecked, plan)
     await writeFile(join(dir, 'proposal.md'), '# Proposal\n\nWhy changed.\n', 'utf8')
+    await writeFile(join(dir, 'tasks.md'), plan, 'utf8')
     await harness.turnStopping(1)
     const steer = steerTexts(harness.agent).join('\n')
     expect(steer).toContain('whole-spec review')
+    // Checked tasks without a record, including the completed list, are silent.
     expect(steer).not.toContain('requires its task-scoped review')
+    expect(steer).not.toContain('fully checked')
+
+    // An unapproved checked task is archived because the workflow owns the guard.
+    await writeFile(
+      join(root, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
+      'utf8',
+    )
+    const decision = await harness.preExecute('pwsh', {
+      command: 'openspec archive change-a',
+    })
+    expect(decision.kind).toBe('allow')
+    expect(decision.nextCalled).toBe(true)
   })
 
   it('keeps the review runtime, the queue, and the records', async () => {
@@ -124,8 +156,8 @@ describe('delegation.gates.workflowOwned: false', () => {
     expect(record.verdict).toBe('PASS')
   })
 
-  it('keeps the task-progress gate steering and the switch silent on archive', async () => {
-    const { root, dir, harness } = await fixture(false)
+  it('keeps the task-progress gate steering, including a stale note', async () => {
+    const { dir, harness } = await fixture(false)
     await harness.preStep(1)
     await harness.writeResult(
       join(dir, 'proposal.md'),
@@ -137,17 +169,25 @@ describe('delegation.gates.workflowOwned: false', () => {
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent).join('\n')).toContain('changed implementation files')
 
-    // The approval marker opts in, but this switch means the legacy guard is off.
-    await writeFile(
-      join(root, 'openspec', 'review-approval.json'),
-      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
-      'utf8',
-    )
-    const decision = await harness.preExecute('pwsh', {
-      command: 'openspec archive change-a',
+    // A fresh note satisfies the gate; a later write makes it stale again.
+    const noted = await harness.toolText('task_progress', {
+      task: '2.1 Doc task',
+      status: 'in-progress',
+      reason: 'writing the docs',
     })
-    expect(decision.kind).toBe('allow')
-    expect(decision.nextCalled).toBe(true)
+    expect(noted).toContain('progress note written')
+    const stale = await fixture(false)
+    await stale.harness.preStep(1)
+    harness.git.status = ' M packages/engine/src/engine.ts\0'
+    await stale.harness.toolText('task_progress', {
+      task: '2.1 Doc task',
+      status: 'in-progress',
+      reason: 'writing the docs',
+    })
+    stale.harness.git.status = ' M packages/engine/src/engine.ts\0 M docs/a.md\0'
+    stale.harness.git.diff = 'diff --git a/docs/a.md b/docs/a.md'
+    await stale.harness.turnStopping(1)
+    expect(steerTexts(stale.harness.agent).join('\n')).toContain('task_progress')
   })
 
   it('keeps the lane-assignment gate steering', async () => {
@@ -158,7 +198,62 @@ describe('delegation.gates.workflowOwned: false', () => {
     await harness.turnStopping(1)
     expect(steerTexts(harness.agent).join('\n')).toContain('lane assignment is missing')
   })
+
+  it('toggles true -> false over existing records and notes without rewriting them', async () => {
+    const disabled = await fixture(false)
+    await writeFile(join(disabled.dir, 'tasks.md'), plan, 'utf8')
+    const recordRun = runIdFrom(
+      await disabled.harness.toolText('delegate', {
+        rule: 'task-review',
+        change: 'change-a',
+        task: taskIdFor('First task'),
+      }),
+    )
+    await disabled.harness.waitForRun(recordRun)
+    await disabled.harness.toolText('task_progress', {
+      task: '2.1 Doc task',
+      status: 'in-progress',
+      reason: 'docs in progress',
+    })
+    const records = join(disabled.root, '.dsh', 'delegation')
+    const before = await snapshotFiles(records)
+
+    // The same workspace under the enabled switch: the archive guard refuses,
+    // the existing records and notes are byte-identical, and the note still
+    // satisfies the progress gate.
+    const second = new Harness({
+      cwd: disabled.root,
+      config: configWith(true),
+      agents: providers(),
+    })
+    const taskTwo = plan.replace('- [ ] 2.1 Doc task', '- [x] 2.1 Doc task')
+    await writeFile(join(disabled.dir, 'tasks.md'), taskTwo, 'utf8')
+    await writeFile(
+      join(disabled.root, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
+      'utf8',
+    )
+    const denied = await second.preExecute('pwsh', { command: 'openspec archive change-a' })
+    expect(denied.kind).toBe('deny')
+    expect(await snapshotFiles(records)).toEqual(before)
+
+    // Rollback: the disabled switch allows the archive and leaves the records.
+    const third = new Harness({
+      cwd: disabled.root,
+      config: configWith(false),
+      agents: providers(),
+    })
+    const allowed = await third.preExecute('pwsh', { command: 'openspec archive change-a' })
+    expect(allowed.kind).toBe('allow')
+    expect(await snapshotFiles(records)).toEqual(before)
+  })
 })
+
+function providers(): FakeSubagents {
+  const agents = new FakeSubagents()
+  agents.addProvider('codex-subagent')
+  return agents
+}
 
 describe('delegation.gates.workflowOwned: true', () => {
   it('restores the task-review and archive gates', async () => {

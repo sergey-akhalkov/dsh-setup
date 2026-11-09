@@ -24,6 +24,8 @@ export interface CheckpointHarnessOptions {
   readonly snapshotError?: boolean
   /** A fake active goal the supervisor may read; goal mutations are recorded. */
   readonly goal?: Record<string, unknown>
+  /** Reuse an existing workspace instead of creating a throwaway one. */
+  readonly workspace?: string
 }
 
 /**
@@ -137,12 +139,13 @@ export class CheckpointHarness {
     harness: CheckpointHarness
     cleanup: () => Promise<void>
   }> {
-    const workspace = await mkdtemp(join(tmpdir(), 'dsh-goal-checkpoint-'))
+    const workspace = options.workspace ?? (await mkdtemp(join(tmpdir(), 'dsh-goal-checkpoint-')))
     const harness = new CheckpointHarness(workspace, options)
     return {
       harness,
       cleanup: async () => {
-        await rm(workspace, { recursive: true, force: true })
+        // A shared workspace belongs to the caller; only a scratch one is removed.
+        if (options.workspace === undefined) await rm(workspace, { recursive: true, force: true })
       },
     }
   }
