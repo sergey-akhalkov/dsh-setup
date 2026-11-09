@@ -1509,6 +1509,32 @@ export function apply(ctx, config = {}) {
         };
     };
     /** A host-owned tool dispatch through the registered tool service, if present. */
+    /**
+     * The bounded failure message of one tool result. The host puts it on
+     * `error.message` and repeats it as text content; either names the cause.
+     */
+    const toolFailureDetail = (result) => {
+        if (typeof result !== 'object' || result === null)
+            return undefined;
+        const record = result;
+        const error = record.error;
+        if (typeof error === 'object' && error !== null) {
+            const message = error.message;
+            if (typeof message === 'string' && message.trim() !== '')
+                return message.slice(0, 200);
+        }
+        const content = record.content;
+        if (!Array.isArray(content))
+            return undefined;
+        for (const block of content) {
+            if (typeof block !== 'object' || block === null)
+                continue;
+            const text = block.text;
+            if (typeof text === 'string' && text.trim() !== '')
+                return text.slice(0, 200);
+        }
+        return undefined;
+    };
     const liveToolRunner = (agent) => {
         const tools = ctx.get('tools');
         if (typeof tools?.execute !== 'function')
@@ -1517,22 +1543,36 @@ export function apply(ctx, config = {}) {
         return {
             async call(request) {
                 const batch = await execute({
-                    calls: [{ id: request.callId, name: request.name, arguments: request.arguments }],
+                    // The host executor takes model-shaped tool-call blocks: a `type` and
+                    // the JSON string the model would send, not a decoded object.
+                    calls: [
+                        {
+                            type: 'tool-call',
+                            id: request.callId,
+                            name: request.name,
+                            arguments: JSON.stringify(request.arguments),
+                        },
+                    ],
                     signal: AbortSignal.timeout(60_000),
                     agent,
                 });
                 const first = batch.results[0];
                 if (first === undefined) {
-                    return { ok: false, error: `the ${request.name} tool call failed` };
+                    return { ok: false, error: `the ${request.name} tool call failed: no result` };
                 }
                 const isShellTool = request.name === 'pwsh' || request.name === 'bash' || request.name === 'terminal_send';
                 const shell = isShellTool ? shellOutcomeOf(first.result) : undefined;
+                const failure = toolFailureDetail(first.result);
+                const failed = (detail) => ({
+                    ok: false,
+                    error: `the ${request.name} tool call failed${detail === undefined ? '' : `: ${detail}`}`,
+                });
                 if (shell !== undefined && (shell.background === true || !shell.ok)) {
-                    return { ok: false, error: `the ${request.name} tool call failed` };
+                    return failed(failure ?? `exit code ${String(shell.exitCode)}`);
                 }
                 if (shell === undefined &&
                     first.result?.isError === true) {
-                    return { ok: false, error: `the ${request.name} tool call failed` };
+                    return failed(failure);
                 }
                 // The host already observed its own dispatch; record it for evidence
                 // verification even if the result event is delivered later.

@@ -156,11 +156,17 @@ function fakeHost(
   }
   if (options.toolExecute === true) {
     tools.execute = async (input: {
-      calls: ReadonlyArray<{ id: string; name: string; arguments: Record<string, unknown> }>
+      calls: ReadonlyArray<{ type: 'tool-call'; id: string; name: string; arguments: string }>
     }) => {
       const results: Array<{ callId: string; result: Record<string, unknown> }> = []
       for (const call of input.calls) {
-        toolExecutions.push({ id: call.id, name: call.name, arguments: call.arguments })
+        // The host executor takes model-shaped tool-call blocks, so a decoded
+        // object or a missing `type` is a contract violation, not a call.
+        if (call.type !== 'tool-call' || typeof call.arguments !== 'string') {
+          throw new Error('the tool batch is not a model-shaped tool-call block')
+        }
+        const args = JSON.parse(call.arguments) as Record<string, unknown>
+        toolExecutions.push({ id: call.id, name: call.name, arguments: args })
         // Route the host's own dispatch through the real pre-execute gate so an
         // unowned call would be refused exactly as in the live pipeline.
         let decision: { kind?: string; reason?: string } | undefined
@@ -170,13 +176,13 @@ function fakeHost(
               agent,
               callId: call.id,
               name: call.name,
-              arguments: call.arguments,
+              arguments: args,
             },
             async () => ({ kind: 'continue' }),
           )) as { kind?: string; reason?: string } | undefined
         }
         const denied = decision?.kind === 'deny'
-        const command = typeof call.arguments.command === 'string' ? call.arguments.command : ''
+        const command = typeof args.command === 'string' ? args.command : ''
         if (!denied && command.startsWith('openspec new change ')) {
           const name = command.slice('openspec new change '.length)
           const change = join(workspace, 'openspec', 'changes', name)

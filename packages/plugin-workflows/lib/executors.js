@@ -804,6 +804,12 @@ export async function runToolStep(input) {
         }
         Object.assign(rawArguments, resolved.args);
     }
+    // The harness shell tool requires a UI description with every call; a
+    // definition names a command, not a sentence, so the step supplies one.
+    if ((hostName === 'pwsh' || hostName === 'bash') &&
+        typeof rawArguments.description !== 'string') {
+        rawArguments.description = `workflow: ${input.step.title}`;
+    }
     const callId = newOwnedCallId(input.run, input.step);
     input.owned.add(callId);
     let outcome;
