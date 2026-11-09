@@ -1512,6 +1512,73 @@ describe('intent engine opt-in', () => {
       /allowIntent must be a boolean/u,
     )
   })
+
+  it('validates checkpointApplicability and applies the defaults and an override', async () => {
+    const defaults = await tempWorkspace()
+    const defaultHost = fakeHost(defaults)
+    expect(() => apply(defaultHost.ctx as never, {})).not.toThrow()
+    for (const [config, field] of [
+      [{ checkpointApplicability: { minToolCalls: 0 } }, /minToolCalls/u],
+      [{ checkpointApplicability: { minToolCalls: 1001 } }, /minToolCalls/u],
+      [{ checkpointApplicability: { minToolCalls: '4' } }, /minToolCalls/u],
+      [{ checkpointApplicability: { requireWrite: 'yes' } }, /requireWrite/u],
+      [{ checkpointApplicability: { unknown: true } }, /unknown field/u],
+      [{ checkpointApplicability: 'on' }, /must be an object/u],
+    ] as const) {
+      const workspace = await tempWorkspace()
+      const host = fakeHost(workspace)
+      expect(() => apply(host.ctx as never, config as never), JSON.stringify(config)).toThrow(field)
+    }
+
+    // An explicit override changes applicability: five calls with a write are
+    // below minToolCalls 10 and start no retro run.
+    const override = await tempWorkspace()
+    const overrideHost = fakeHost(override)
+    apply(overrideHost.ctx as never, { checkpointApplicability: { minToolCalls: 10 } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const journalFile = join(override, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const retroRows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(journalFile, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:retro')
+    await overrideHost.emit(
+      'agent/pre-step',
+      {
+        agent: overrideHost.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    for (let index = 0; index < 5; index += 1) {
+      await overrideHost.emit(
+        'tools/result',
+        {
+          agent: overrideHost.agent,
+          callId: `call-${String(index)}`,
+          name: index === 0 ? 'write' : 'read',
+          arguments: index === 0 ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await overrideHost.emit('agent/turn-stopping', { agent: overrideHost.agent, turn: 1 })
+    await waitFor(async () => (await retroRows()).some((row) => row.reason === 'not-applicable'))
+    expect((await retroRows()).some((row) => row.reason === 'run-created')).toBe(false)
+  })
 })
 
 describe('retention at boot', () => {

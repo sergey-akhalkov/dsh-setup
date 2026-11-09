@@ -344,6 +344,60 @@ function toolSummary(name: string, isError: boolean, text: string): string {
   return `${tool} ${isError ? 'failed' : 'ok'}; output omitted`
 }
 
+/** The row-level retro applicability settings; they mirror the goal-continuity row. */
+export interface CheckpointApplicabilityConfig {
+  /** Minimum tool calls in a turn before a checkpoint is required; default 4. */
+  readonly minToolCalls?: number
+  /** Require a write or a started worker; default true. */
+  readonly requireWrite?: boolean
+}
+
+export interface ResolvedCheckpointApplicability {
+  readonly minToolCalls: number
+  readonly requireWrite: boolean
+}
+
+export const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability = Object.freeze({
+  minToolCalls: 4,
+  requireWrite: true,
+})
+
+/** Validate the row's checkpoint applicability fail-loud, naming the field. */
+function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplicability {
+  if (raw === undefined) return DEFAULT_CHECKPOINT_APPLICABILITY
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('workflows checkpointApplicability must be an object')
+  }
+  const record = raw as Record<string, unknown>
+  for (const key of Object.keys(record)) {
+    if (key !== 'minToolCalls' && key !== 'requireWrite') {
+      throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`)
+    }
+  }
+  const minToolCalls = record.minToolCalls
+  if (
+    minToolCalls !== undefined &&
+    (typeof minToolCalls !== 'number' ||
+      !Number.isSafeInteger(minToolCalls) ||
+      minToolCalls < 1 ||
+      minToolCalls > 1000)
+  ) {
+    throw new Error(
+      'workflows checkpointApplicability.minToolCalls must be an integer between 1 and 1000',
+    )
+  }
+  const requireWrite = record.requireWrite
+  if (requireWrite !== undefined && typeof requireWrite !== 'boolean') {
+    throw new Error('workflows checkpointApplicability.requireWrite must be a boolean')
+  }
+  return {
+    minToolCalls:
+      (minToolCalls as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
+    requireWrite:
+      (requireWrite as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
+  }
+}
+
 /**
  * Register the recorder. Every listener is observe-only: it never calls
  * `agent.steer`, `agent.inject`, or a tool, and a thrown observation is
@@ -354,6 +408,8 @@ export interface WorkflowsConfig {
   readonly allowIntent?: boolean
   /** The open-run limit for every admission path; default 20. */
   readonly maxRuns?: number
+  /** The retro applicability settings; must mirror the goal-continuity row. */
+  readonly checkpointApplicability?: CheckpointApplicabilityConfig
 }
 
 export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
@@ -365,6 +421,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   const engineAllowIntent = config.allowIntent === true
   const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS
+  const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability)
   // A malformed shipped trigger refuses the plugin load, naming the field.
   const triggers = loadCatalog()
   // A malformed or duplicate shipped definition refuses the plugin load too.
@@ -822,6 +879,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
                 written: current?.written ?? 0,
                 workers: current?.workers ?? 0,
+                minToolCalls: checkpointApplicability.minToolCalls,
+                requireWrite: checkpointApplicability.requireWrite,
               })
             },
           }).map((row) => ({
@@ -1556,6 +1615,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...(current?.lastTool === undefined ? {} : { lastTool: current.lastTool }),
         written: current?.written ?? 0,
         workers: current?.workers ?? 0,
+        minToolCalls: checkpointApplicability.minToolCalls,
+        requireWrite: checkpointApplicability.requireWrite,
       })
       if (!applicable) {
         const completed = completeNotApplicable(run, journal.time())
