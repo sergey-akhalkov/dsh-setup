@@ -2989,6 +2989,109 @@ describe('/workflows adopt from the real command invocation', () => {
   })
 })
 
+describe('/workflows command starts and resumes work', () => {
+  it('names the tab, steers the pending step for run and resume, and advances at turn close', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const definition = {
+      v: 1,
+      id: 'demo',
+      name: 'Demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'demo.json'), `${JSON.stringify(definition)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'demo.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    if (command === undefined) return
+    const invoke = (rawInput: string): Promise<{ kind?: string; text?: string }> =>
+      command.handler({
+        agent: host.agent,
+        commandId: 'cmd-start',
+        rawInput,
+        attachments: [],
+        signal: new AbortController().signal,
+      })
+
+    const display = await invoke('')
+    expect(display.kind).toBe('success')
+    expect(display.text).toContain('Workflows tab')
+    expect(host.steers).toHaveLength(0)
+
+    const started = await invoke(' run demo')
+    expect(started.kind).toBe('success')
+    expect(host.steers).toHaveLength(1)
+    expect(JSON.stringify(host.steers[0])).toContain('Observe')
+    const run = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'demo',
+    )
+    expect(run).toBeDefined()
+    await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const completed = await runs.readAuthenticatedRun(workspace, run?.id ?? '', auth)
+    expect(completed?.status).toBe('completed')
+
+    // Resume after a restart continues the persisted interrupted run.
+    const base = runs.createRun({
+      definition: 'demo',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['observe'],
+      id: 'run-resume-demo',
+      now: 2_000,
+    })
+    await runs.writeRun(workspace, runs.setRunStatus(base, 'interrupted', 2_100), auth)
+    const restarted = fakeHost(workspace)
+    apply(restarted.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const restartedCommand = restarted.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(restartedCommand).toBeDefined()
+    const resumed = await restartedCommand?.handler({
+      agent: restarted.agent,
+      commandId: 'cmd-resume',
+      rawInput: ' resume run-resume-demo',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(resumed?.kind).toBe('success')
+    expect(restarted.steers).toHaveLength(1)
+    await restarted.emit('agent/turn-stopping', { agent: restarted.agent, turn: 1 })
+    const resumedRun = await runs.readAuthenticatedRun(workspace, 'run-resume-demo', auth)
+    expect(resumedRun?.status).toBe('completed')
+  })
+})
+
 describe('workflows tool live wiring', () => {
   it('registers the six actions and verifies observed evidence through the real tool', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

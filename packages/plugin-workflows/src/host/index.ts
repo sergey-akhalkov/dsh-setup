@@ -29,6 +29,7 @@ import {
   adaptUserQuestions,
   type DshUserQuestions,
   OwnedCalls,
+  requestMainStep,
   type ToolRunner,
 } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
@@ -2399,22 +2400,57 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     : typeof invocation.text === 'string'
                       ? invocation.text
                       : ''
+              // An idle driver starts a turn from steer; request the pending
+              // main step so the turn-close gate can advance the run.
+              const steerPending = async (agent: Agent, runId: string): Promise<void> => {
+                const run = await readAuthenticatedRun(workspace, runId, auth)
+                if (run === undefined) return
+                const definition = definitions.find((entry) => entry.id === run.definition)
+                if (definition === undefined) return
+                const pending = run.steps.find(
+                  (step) => step.state === 'open' || step.state === 'blocked',
+                )
+                const step = definition.steps.find((entry) => entry.id === pending?.id)
+                if (step === undefined) return
+                const steered = requestMainStep({
+                  run,
+                  definition,
+                  step,
+                  agent: {
+                    steer: (text: string) =>
+                      agent.steer({
+                        id: randomUUID(),
+                        role: 'user',
+                        content: [{ type: 'text', text }],
+                        source: { kind: 'workflows-gate' },
+                      } as never),
+                  },
+                  evidenceContext: { workspace, values: run.context },
+                  turn: turns.get(String(agent.session.id)) ?? 0,
+                  maxAttempts: definition.settings.maxBlocks,
+                  now: journal.time(),
+                })
+                if (steered.run !== run) await writeRun(workspace, steered.run, auth)
+              }
               const host: WorkflowCommandHost = {
                 workspace,
                 session: sessionId,
                 ...(userQuestions === undefined ? {} : { questions: userQuestions }),
-                openView: () => 'The Workflows view is available in the Workflows tab.',
+                openView: () =>
+                  'The Workflows tab is the entry point; a Host command result cannot open a client view.',
                 run: async (definitionId) => {
                   await recoverIfNeeded(workspace)
                   const definition = definitions.find((entry) => entry.id === definitionId)
                   if (definition === undefined) throw new Error(`no definition "${definitionId}"`)
                   const run = await startRunFor(workspace, sessionId, auth, definition)
+                  await steerPending(invocation.agent, run.id)
                   return { runId: run.id, firstStep: definition.steps[0]?.id ?? 'end' }
                 },
                 resume: async (runId) => {
                   await recoverIfNeeded(workspace)
                   const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
                   await writeRun(workspace, resumed.run, auth)
+                  await steerPending(invocation.agent, runId)
                   return { stepId: resumed.stepId }
                 },
                 install: async (path) => {
