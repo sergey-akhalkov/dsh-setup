@@ -166,7 +166,7 @@ budget, and the `work_checkpoint` observability attribution (19 tasks, 18/19 por
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
-was written (2026-11-07). Read the entry's `proposal.md` and `design.md` for what it changed, and its
+was written (2026-11-09). Read the entry's `proposal.md` and `design.md` for what it changed, and its
 `tasks.md` for the open boxes.
 
 | Change                                                   | Recorded tasks |
@@ -221,6 +221,7 @@ was written (2026-11-07). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-07-harden-review-queue`                         | 17/17          |
 | `2026-11-07-add-openspec-live-list`                      | 7/7            |
 | `2026-11-07-learn-from-review-findings`                  | 23/23          |
+| `2026-11-09-add-workflow-obligations`                    | 36/36          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -649,4 +650,20 @@ report) and bounded prompt injection. Their serial integration regenerated the s
 are unit-tested; the desktop Fetch carrier and browser admission matrix needs a throwaway installed
 host) and 7.3 live Workflows view smoke; `harden-review-queue` live queue-under-shortage smoke;
 `add-openspec-live-list` owner smoke on the installed setup; `learn-from-review-findings` one real
-classed review plus `/review-retro` acceptance. `add-workflow-obligations` remains active.
+classed review plus `/review-retro` acceptance.
+
+On 2026-11-09 `add-workflow-obligations` added the `workflows` engine to
+`@dsh-setup/plugin-workflows` and extended `workflow-observability`: stored JSON definitions with
+host-signed approvals, a durable run store, deterministic triggers evaluated through the same journal,
+the `main`, `subagent`, `tool`, `human`, `branch` and `loop` executors, file/record/tool/check/human
+and recursive `all` evidence, turn-close and pre-execute gates, host-authenticated receipts, the
+`workflows` tool and the `/workflows` command family, the shipped `change-intake` definition, and the
+deferred `task-review`/`retro` definitions. Its serial integration regenerated the setup, passed the
+full gate (135 files / 2576 tests, build with no diff, `gen:check` 404 files, `validate:repo`,
+`validate:composition`, `validate:installer`, `openspec validate --strict`), and normalized 15 legacy
+portable review records to the portable schema (verdicts and digests unchanged). Open owner
+follow-ups: install the generated setup in a throwaway profile and exercise the refusal -> draft ->
+create-change -> strict spec -> whole-spec review -> approval receipt path, adopt a pre-existing
+change, restart after `create-change` without recreating the directory, and confirm the deferred
+`task-review`/`retro` definitions add no second steer; the live 5.1-style carrier check for the
+workflow routes remains owner scope.

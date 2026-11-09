@@ -80,14 +80,22 @@ paths, an unreadable `tasks.md`, and a ticked task that no longer appears in it 
 - **review** — computes a scope digest, runs the target with the bundled P0/P1 prompt, accepts
   exactly one fenced JSON verdict that echoes the digest, and writes an atomic record under
   `.dsh/delegation/<rule>/<change>/` (`<phase>.json` for whole scope, `tasks/<taskId>.json` for
-  task scope). A task-scope review reads a frozen worktree snapshot taken when the call is made
-  (`add-snapshot-task-review`), so a write after it starts does not invalidate it; a whole-scope
-  review keeps the live-input guard.
+  task scope, `sections/<hash>.json` for a section). A task-scope review reads a frozen worktree
+  snapshot taken when the call is made (`add-snapshot-task-review`), so a write after it starts
+  does not invalidate it; a whole-scope review keeps the live-input guard.
   `PASS` needs zero P0/P1 findings; `FINDINGS` and `ERROR` are reported but do not
   pass a strict gate. A matching `PASS` is reused without another run; a `FINDINGS` record is
   reused only while the digest is unchanged; an `ERROR` is retried. Any session may run a review:
   the call attributes the change to that session, the record names the reviewing session, and
   records stay workspace-global.
+  A task-scope review also accepts `section`: the `tasks.md` level-2 heading number (`1`), its
+  `1.x` form, the normalized title, or `untitled`. One run then reviews every checked task in that
+  section with one prompt, one frozen snapshot, and one verdict, and publishes the existing
+  per-task `reviews/<taskId>.json` approvals for each covered task. `task` and `section` are
+  mutually exclusive; unchecked tasks are out of scope and are never approved; a newly checked
+  task changes the section digest and needs a new section or task review. Every section finding
+  names the affected task's number or text, so the one verdict is still actionable per task. A
+  section `ERROR` writes an ERROR record for each covered task and publishes no approval.
 - **answer** — read-only prompt for a blocker, research, or advisor question; returns the answer
   with evidence and, for research, sources, and, for an advisor, a recommendation, the strongest
   counterargument, risks, a next action, and confidence. Writes no gate record. A failed answer is
@@ -109,8 +117,13 @@ This is the intended loop for an OpenSpec change:
    task while the run uses a frozen snapshot. When the run reports the live worktree, a write can
    discard its verdict: restore snapshot support and re-run, or defer writes until the run settles.
    No blocking sleep.
-4. Fix every P0/P1 finding and re-run until the record is `PASS`. A task-scoped `PASS` is a
-   historical snapshot: later tasks do not invalidate it.
+   For a group of related tasks, implement the whole `tasks.md` section, tick its tasks, then run
+   `delegate(rule: "task-review", change: "<change>", section: "1")` once (or `section: "1.x"`, the
+   normalized title, or `untitled`). The run covers every checked task in that section with one
+   verdict and publishes one per-task approval each; unchecked tasks stay out of scope, and a task
+   checked after the PASS needs a new section or task review.
+4. Fix every P0/P1 finding and re-run until the record is `PASS`. A task- or section-scoped `PASS`
+   is a historical snapshot: later tasks do not invalidate it.
 5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call
    `task_progress` for that task instead of ticking it. The note records the current worktree
    digest and authorizes the close only while it still matches.

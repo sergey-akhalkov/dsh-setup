@@ -67,6 +67,15 @@ function parseHistoryEntry(value) {
         return undefined;
     if (value.taskId !== undefined && typeof value.taskId !== 'string')
         return undefined;
+    if (value.section !== undefined && (typeof value.section !== 'string' || value.section === '')) {
+        return undefined;
+    }
+    if (value.taskIds !== undefined) {
+        if (!Array.isArray(value.taskIds) ||
+            !value.taskIds.every((id) => typeof id === 'string' && /^[0-9a-f]{16}$/.test(id))) {
+            return undefined;
+        }
+    }
     if (value.verdict !== 'PASS' && value.verdict !== 'FINDINGS')
         return undefined;
     if (typeof value.digest !== 'string' || !/^[0-9a-f]{64}$/.test(value.digest))
@@ -82,6 +91,8 @@ function parseHistoryEntry(value) {
         rule: value.rule,
         change: value.change,
         ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
+        ...(value.section === undefined ? {} : { section: value.section }),
+        ...(value.taskIds === undefined ? {} : { taskIds: value.taskIds }),
         verdict: value.verdict,
         digest: value.digest,
         findings,
