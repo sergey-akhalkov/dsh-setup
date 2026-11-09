@@ -67,8 +67,6 @@ export interface WorkflowRun {
     readonly violations: readonly RunViolation[];
     /** The trigger identity that produced this run, for dedupe after reload. */
     readonly dedupeKey?: string;
-    /** The turn the current turnBlocks budget belongs to. */
-    readonly turnBlocksTurn?: number;
 }
 /** The run directory for one workspace. */
 export declare function runsDirectory(workspace: string): string;
@@ -86,8 +84,6 @@ export interface CreateRunInput {
     readonly now?: number;
     readonly id?: string;
     readonly dedupeKey?: string;
-    /** The turn the current turnBlocks budget belongs to. */
-    readonly turnBlocksTurn?: number;
 }
 /** Build a new running run with every step open. */
 export declare function createRun(input: CreateRunInput): WorkflowRun;

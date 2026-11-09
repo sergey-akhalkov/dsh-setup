@@ -2233,13 +2233,10 @@ export function apply(ctx, config = {}) {
                 definitionOf.set(run.id, definition);
             }
             for (const run of ordered) {
-                let current = advanced.get(run.id);
+                const current = advanced.get(run.id);
                 const definition = definitionOf.get(run.id);
                 if (current === undefined || definition === undefined)
                     continue;
-                if (current.turnBlocksTurn !== undefined && current.turnBlocksTurn !== payload.turn) {
-                    current = { ...current, turnBlocks: 0, turnBlocksTurn: undefined };
-                }
                 const sessionCalls = sessionToolCalls.get(sessionId) ?? [];
                 const observations = sessionCalls.map((call) => ({
                     toolName: call.name,
@@ -2294,11 +2291,8 @@ export function apply(ctx, config = {}) {
                     ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
                     onError: (error) => publishListenerError(workspace, error),
                 });
-                const settledRun = outcome.run.turnBlocks === undefined || outcome.run.turnBlocks === 0
-                    ? outcome.run
-                    : { ...outcome.run, turnBlocksTurn: payload.turn };
-                if (settledRun !== current)
-                    await writeRun(workspace, settledRun, auth);
+                if (outcome.run !== current)
+                    await writeRun(workspace, outcome.run, auth);
                 // Keep the session's main-step owner until its step settles; a
                 // second run may take over only after that.
                 if (outcome.kind !== 'allow') {
@@ -2325,10 +2319,7 @@ export function apply(ctx, config = {}) {
                     const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3;
                     const alreadyUnchecked = (currentRetro.violations ?? []).some((violation) => violation.detail?.includes('checkpoint freshness refused') === true);
                     if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
-                        await writeRun(workspace, {
-                            ...incrementTurnBlocks(currentRetro, journal.time()),
-                            turnBlocksTurn: payload.turn,
-                        }, auth);
+                        await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth);
                         payload.agent.steer({
                             id: randomUUID(),
                             role: 'user',
