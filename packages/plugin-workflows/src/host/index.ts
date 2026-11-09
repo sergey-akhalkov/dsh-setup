@@ -2527,7 +2527,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               ...completedVerify,
               status: 'running',
               updatedAt: journal.time(),
-              turnBlocks: 0,
               steps: completedVerify.steps.map((step) => ({
                 ...(Object.fromEntries(
                   Object.entries(step).filter(([key]) => key !== 'evidence' && key !== 'reason'),

@@ -90,6 +90,9 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     // let the run terminal-allow before the review retry path is used.
     const blocksForTurn = (run: typeof input.run): number =>
       run.turnBlocksTurn === input.turn ? (run.turnBlocks ?? 0) : 0
+    // A new turn starts from zero, not from the previous turn's count.
+    const budgetRun = (run: typeof input.run): typeof input.run =>
+      run.turnBlocksTurn === input.turn ? run : { ...run, turnBlocks: 0 }
     const markTurn = (run: typeof input.run): typeof input.run => ({
       ...run,
       turnBlocksTurn: input.turn,
@@ -156,7 +159,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       }
       return {
         kind: 'refuse',
-        run: markTurn(incrementTurnBlocks(input.run, at)),
+        run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
         stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
         text: ownedText,
       }
@@ -180,7 +183,9 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     // previous turn's attempts would hit the request bound before the fresh
     // maxBlocks budget could steer.
     const steeringRun =
-      input.run.turnBlocksTurn === input.turn ? input.run : resetStepAttempts(input.run, step.id)
+      input.run.turnBlocksTurn === input.turn
+        ? input.run
+        : resetStepAttempts(budgetRun(input.run), step.id)
     const steered = requestMainStep({
       run: steeringRun,
       definition: input.definition,
