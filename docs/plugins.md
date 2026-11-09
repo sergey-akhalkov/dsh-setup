@@ -457,6 +457,89 @@ shipped map in `packages/setup/defaults.yml`:
     hypotheses: []
 ```
 
+## Workflows view
+
+[`packages/plugin-workflows`](../packages/plugin-workflows) adds a **Workflows** conversation view
+(order 30, directly after Observability) and a read-only Host recorder. It answers what the process did
+in this session: which shadow trigger was evaluated, which checkpoint, delegation or review run
+existed, why a trigger did not fire, and whether the listeners are alive. It never steers, injects,
+blocks, or runs a workflow.
+
+The Host records `agent/pre-step`, `agent/turn-stopping`, `tools/result`, `subagent/start` and
+`subagent/end` events as one bounded JSONL record per event under
+`.dsh/workflows/events/<sessionId>.jsonl`. A record is capped at 4 KB with a 600-character summary;
+secret-shaped keys, bearer tokens and private-key blocks are redacted, and the append is atomic. The
+workspace keeps at most 30 days and 50 MB total, pruning the oldest sessions first. A session file
+rotates to `<sessionId>.jsonl.1` at 5 MiB and the rotation is retained beside the current file until a
+later write prunes it; a failed write leaves the previous records intact. The shipped shadow catalog
+lives in
+`packages/plugin-workflows/assets/triggers/` (turn start/stop, delegate result, subagent start/end,
+OpenSpec `tasks.md`, review record, change created and archive move) and is evaluated by a pure
+function whose reasons are exactly `would-fire`, `event-mismatch`, `filter-mismatch`, `dedupe`,
+`disabled`, `not-ready` and `error`. `matched` means the trigger would have fired in shadow mode; it
+does not mean anything acted.
+
+The view projects existing records without copying them: checkpoints from
+`.dsh/work-checkpoints/<sha256(session) first 16 hex>/<turn>.json`, delegation runs and settled review
+records from `.dsh/delegation/`, and portable `openspec/changes/*/reviews/<taskId>.json` approvals,
+merged into one time-ordered run timeline with explicit session attribution (`unattributed` when no
+session resolves). Those files are read, never modified. The tabs are Triggers, Session, Runs, Why-not
+and Health; a run detail shows step state, time, decision summary, evidence link and error.
+
+The read API is carrier-neutral and GET-only: `GET /api/workflows/events?session=<id>`,
+`GET /api/workflows/runs?session=<id>`, `GET /api/workflows/triggers?session=<id>`,
+`GET /api/workflows/health?session=<id>` and
+`GET /api/workflows/evidence?session=<id>&path=<relative>` for redacted record links. Every route
+resolves the workspace from the session, scopes reads to it, refuses a path outside the workspace, and
+returns a bounded error body; a non-GET method is 405. The `events` and `runs` routes accept `limit`
+(default 50, max 200) and a `cursor`; `triggers`, `health` and `evidence` return one unpaginated
+response. A host without the connection fetch registry registers no API.
+
+`health.json` beside the journal carries the listener count (5 expected), last event time, journal
+writability, trigger count and last error. A 60-second self-check writes it, and the view distinguishes
+`healthy`, `waiting` (no event yet), `listener-down` (heartbeat older than 10 minutes) and
+`journal-readonly`, so silence is never mistaken for success. The plugin is inert when the
+conversation, resources, locale or filesystem services are absent: it registers nothing and reports one
+bounded diagnostic. It writes only under `.dsh/workflows/`, never steers a turn and never changes
+`openspec/`; disabling the `dsh-setup-workflows` row removes the view and the recorder together.
+
+## Workflow engine
+
+The same bundle also hosts the obligation engine added by `add-workflow-obligations`. It stores JSON
+definitions, runs them from a durable run store, evaluates deterministic triggers through the same
+journal, executes `main`, `subagent`, `tool`, `human`, `branch` and `loop` steps, verifies file, record,
+tool, check, human and recursive `all` evidence, and enforces the turn-close and pre-execute gates.
+Every action comes from an owned or explicitly deferred definition step; shadow triggers never steer.
+A local definition or override is active only with a host-signed approval in
+`.dsh/workflows/approved.json`; the host key is held outside `.dsh` and gives tamper-evidence against
+model-mediated writes, while a hostile same-user shell is outside the threat model. Completed intake
+and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The shipped definitions are
+`change-intake` (active), and `task-review` and `retro` (active, `defer` until `retire-legacy-gates`).
+The `workflows` tool exposes list, start, resume, status, evidence and cancel, and the `/workflows`
+command family covers run, resume, install, adopt and status. The Workflows view gains Definitions, a
+run detail with step state, evidence, failure class and violations, and receipts; the bundle also
+contributes a bounded `workflows-active-runs` system-prompt context (at most five lines, and no section
+when none). The engine is inert without its host
+services. Its configuration includes `checkpointApplicability` (`minToolCalls` default 4,
+`requireWrite` default true) for the deferred `retro` definition; the operator must mirror the installed
+`goal-continuity` checkpoint settings because one plugin row cannot read another's config. The setup
+default row is `- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates,
+intake/adoption flow and migration are documented in [workflows](workflows.md).
+
+### Editor and Design mode
+
+The Workflows view also gains a Design mode behind the same tab: a React Flow canvas bundled into the
+single client artifact, an equivalent List form editor, templates and local definitions opened through
+the revision-checked host write API, a layout sidecar, and the run overlay (the latest run per
+definition with step state, structured evidence references, failure class, violations, and an orphan
+badge; the recorded definition name/version, evidence, failure class and violations stay readable after
+the definition changes or is deleted). The graph stays a
+projection of the definition: create is create-only, updates and deletes send the revision from the
+last read, a mismatch returns 409 and leaves the file unchanged (reload or save-as-copy), and every
+save goes through the host-signed install/approve path, so an editor save is an authorized install.
+Keyboard editing, focus order, a screen-reader summary, and the List fallback cover the canvas; the
+editor is inert without the host write API.
+
 ## OpenSpec apply picker
 
 [`packages/plugin-openspec`](../packages/plugin-openspec) adds one Client command, `/openspec-apply`.
@@ -533,6 +616,16 @@ bounded read-only `git log` in the Host; when the workspace is not a git reposit
 unavailable, rows and details render without commit facts and no error is shown. The DSH component
 library is consumed as a host-provided external module, and a host without the right-sidebar services
 registers no panel and keeps the picker and the six skills.
+
+The `Changes` segment also follows its rows while it is open: for every active row it watches the
+proposal, design, tasks and delta spec files through the same host file observation, and a version
+bump schedules exactly one list re-read 300 ms after the last change, so task counts, artifact kinds
+and the last-modified fact move without reopening the tab. Archived rows contribute no watch and the
+`Archive` segment stays manual; a change created in the selected workspace while `Changes` is open is
+not discovered through file observation alone and needs the native refresh or a hidden-to-visible
+re-read to appear, and no polling timer or plugin-owned watcher exists. Leaving `Changes` disposes the
+batch and cancels a pending debounce; returning with the same address set schedules one reconciliation
+read.
 
 An open change or capability view also follows its files through the host's shipped file observation:
 the client `file` resource provider over the Host's `workspaceFiles.changes` feed. A change watches

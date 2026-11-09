@@ -286,7 +286,7 @@ The patch contract SHALL run a write-capable target in an isolated git worktree,
 
 ### Requirement: Turn-stopping gate
 
-For every gated rule, the engine SHALL refuse a turn close unless a matching `PASS` or `ERROR` record exists for the rule and digest; it MUST steer with the rule id, digest, record path, and exact delegate call and MUST NOT accept a text claim. A soft rule MUST steer once per failure streak; a failed delegation MUST be reported and MUST NOT trap the turn. A stale record MUST never authorize a handoff. A change-scoped review rule MUST apply only in a session that created or modified the change. The engine MUST separate a worktree-level git failure from a per-change artifact problem: a missing or unreadable planning file in a change attributed to the current session (for example `tasks.md`) MUST NOT be reported as a worktree digest failure and MUST instead produce a distinct issue that names the change and the session, or treat the change as not review-ready.
+For every gated rule, the engine SHALL refuse a turn close unless a matching `PASS` or `ERROR` record exists for the rule and digest; it MUST steer with the rule id, digest, record path, and exact delegate call and MUST NOT accept a text claim. A soft rule MUST steer once per failure streak; a failed delegation MUST be reported and MUST NOT trap the turn. A stale record MUST never authorize a handoff. A change-scoped review rule MUST apply only in a session that created or modified the change. The engine MUST separate a worktree-level git failure from a per-change artifact problem: a missing or unreadable planning file in a change attributed to the current session (for example `tasks.md`) MUST NOT be reported as a worktree digest failure and MUST instead produce a distinct issue that names the change and the session, or treat the change as not review-ready. When `delegation.gates.workflowOwned` is false, the engine MUST NOT enforce or steer the task-review rule and MUST NOT refuse a close for a missing task review; the whole-spec `spec-review` rule, the task-progress gate, and the lane-assignment/lane-boundary gates MUST remain in force. A `defer` task-review definition MUST be refused in that mode.
 
 #### Scenario: Strict rule unsatisfied
 
@@ -327,6 +327,11 @@ For every gated rule, the engine SHALL refuse a turn close unless a matching `PA
 
 - **WHEN** the git status or diff command needed for the worktree digest fails
 - **THEN** the gate reports the worktree digest failure and the git command to re-run
+
+#### Scenario: Workflow-owned task-review is silent
+
+- **WHEN** `gates.workflowOwned` is false and a checked task lacks a review
+- **THEN** this engine does not steer or refuse the close for the task-review rule
 
 ### Requirement: Delegate tool and status
 
@@ -489,31 +494,41 @@ The generic bundle SHALL be installable on its own with any registered DSH subag
 
 ### Requirement: Asynchronous review runs
 
-A review delegation SHALL validate the rule, target, and change (and an explicit task when supplied), start the target, and return a run id before the target completes. The run MUST continue in the background, MUST write the rule's digest-bound `PASS`/`FINDINGS`/`ERROR` record when it finishes, and MUST be visible in `delegation_status` while running and after completion. Multiple review runs MUST be able to proceed concurrently. The answer and patch contracts MUST remain synchronous.
+A review delegation SHALL validate the rule, target, and change (and an explicit task when supplied), admit the run through the review queue, and return a run id before the target completes. The run MUST start when the queue admits it, MUST continue in the background, MUST write the rule's digest-bound `PASS`/`FINDINGS`/`ERROR` record when it finishes, and MUST be visible in `delegation_status` while queued, running, and after completion. Multiple review runs MUST be able to proceed concurrently up to the configured queue limit. The answer and patch contracts MUST remain synchronous.
 
 #### Scenario: Review starts and returns
 
-- **WHEN** the agent calls delegate for a review rule
-- **THEN** the tool returns a run id and record path after the target starts, and the turn can continue
+- **WHEN** the agent calls delegate for a review rule while the queue has capacity
+- **THEN** the tool returns a run id and record path after admission, and the turn can continue
 
 #### Scenario: Concurrent reviews
 
 - **WHEN** the agent starts several reviews for different tasks or changes
-- **THEN** the runs proceed concurrently and each writes its own record
+- **THEN** the runs proceed concurrently up to the configured limit and each writes its own record
 
 #### Scenario: Failed run
 
-- **WHEN** a background review run fails
-- **THEN** an `ERROR` record with the failure is written and the status reports it
+- **WHEN** a background review run fails after its retries
+- **THEN** an `ERROR` record with the failure class is written and the status reports it
+
+#### Scenario: Queued run returns before the target starts
+
+- **WHEN** the queue is at capacity and a review is admitted to the waiting list
+- **THEN** the tool returns the run id while the target has not started, and the status reports the queue position
 
 ### Requirement: Pending review handling
 
-A duplicate review request MUST be identified by the rule, the change, and the task/phase. A second request for the same identity while pending MUST return the existing run handle and MUST NOT start a duplicate. Distinct rules reviewing the same change/task MUST share the conversation key but queue as separate runs and write each rule's own record. Runs sharing a conversation key MUST be serialized, and a superseded or late completion MUST NOT replace the authoritative record.
+A duplicate review request MUST be identified by the rule, the change, the task/phase, the prepared digest, and the resolved reviewer. A second request with the same identity while pending MUST return the existing run handle and MUST NOT start a duplicate. A changed digest or reviewer MUST be a distinct run and MUST NOT join the old handle. Distinct rules reviewing the same change/task MUST share the conversation key but queue as separate runs and write each rule's own record. Runs sharing a conversation key MUST be serialized, and a superseded or late completion MUST NOT replace the authoritative record.
 
 #### Scenario: Duplicate pending request
 
-- **WHEN** a review is already pending for the same rule/change/task and delegate is called again
+- **WHEN** a review is already pending for the same rule/change/task/digest and delegate is called again
 - **THEN** the existing run handle is returned and no second target starts
+
+#### Scenario: Changed digest is distinct
+
+- **WHEN** a review request has the same rule/change/task but a different prepared digest
+- **THEN** a new run is created and the old handle is not joined
 
 #### Scenario: Different rules, same task
 
@@ -925,7 +940,7 @@ The engine SHALL compute approval over every checked task in `tasks.md`, indepen
 
 ### Requirement: Archive approval gate
 
-In a workspace whose tracked `openspec/review-approval.json` sets `archiveGate: true`, the engine SHALL refuse the archive operation before it runs unless every checked task has a portable task-review PASS. The refusal MUST name the change, the missing tasks, and the exact review calls, and MUST leave the change active. The guard MUST fail closed on an unreadable change, record, or task rule. A workspace without the marker MUST be unchanged.
+In a workspace whose tracked `openspec/review-approval.json` sets `archiveGate: true`, the engine SHALL refuse the archive operation before it runs unless every checked task has a portable task-review PASS. The refusal MUST name the change, the missing tasks, and the exact review calls, and MUST leave the change active. The guard MUST fail closed on an unreadable change, record, or task rule. A workspace without the marker MUST be unchanged. When `delegation.gates.workflowOwned` is false, this legacy archive guard MUST NOT run; the workflow archive gate is the only archive enforcement, and the switch is valid only when the `task-review` definition is `own` and the tracked parity report passes.
 
 #### Scenario: Missing approval
 
@@ -956,6 +971,11 @@ In a workspace whose tracked `openspec/review-approval.json` sets `archiveGate: 
 
 - **WHEN** `tasks.md` or a required portable record cannot be read
 - **THEN** the archive is refused with the path and the failure
+
+#### Scenario: Legacy guard is off
+
+- **WHEN** `gates.workflowOwned` is false and a checked task has no portable PASS
+- **THEN** this engine does not refuse the archive and the workflow archive gate owns the check
 
 ### Requirement: PASS-only approval boundary
 
@@ -1613,3 +1633,426 @@ When a task lane is assigned to a tagged worker, a `continue` checkpoint lane co
 
 - **WHEN** the checkpoint lanes or the task lane plan cannot be read
 - **THEN** the rule fails open and the other gates still evaluate their own evidence
+
+### Requirement: Review queue admission
+
+Every review run SHALL pass through one per-profile FIFO queue before its target starts. The queue SHALL enforce a configurable concurrency limit (default 2) and a configurable waiting-list cap (default 16). A run admitted while at capacity waits; a run that cannot be admitted within the wait timeout SHALL settle as a bounded `ERROR` in its run record and settlement observer, with the queue state, and no target SHALL start. The tool has already returned the queued handle.
+
+#### Scenario: Capacity is available
+
+- **WHEN** a review is admitted while the active count is below the concurrency limit
+- **THEN** the target starts and the run reports `running`
+
+#### Scenario: Capacity is exhausted
+
+- **WHEN** a review is admitted while the active count is at the limit and the waiting list has room
+- **THEN** the run reports `queued` with its position and starts when a slot frees
+
+#### Scenario: Admission timeout
+
+- **WHEN** the waiting list is full or the wait exceeds `waitTimeoutMs`
+- **THEN** the run settles as `ERROR` with `queue-full` or `queue-timeout`, the status and observer report it, and no target starts
+
+### Requirement: Review queue identity and dedupe
+
+An admitted review SHALL be identified by rule, change, task id or phase, digest, provider, and model. A same-identity request MUST join the existing run; a different digest or rule MUST be a distinct run. Re-preparation SHALL replace the identity atomically: a free identity keeps the queue position; an occupied one settles the re-preparing run as `discarded` without a target while the incumbent proceeds. A discarded key head SHALL promote its next follower.
+
+#### Scenario: Duplicate identity joins
+
+- **WHEN** a second review request has the same identity as a queued or running run
+- **THEN** the existing run handle is returned and no duplicate target starts
+
+#### Scenario: Re-preparation collides
+
+- **WHEN** a queued run re-prepares to an identity that already exists
+- **THEN** the re-preparing run settles as `discarded` without starting a target and the incumbent remains authoritative
+
+#### Scenario: D1 converges to an existing D2
+
+- **WHEN** queued run A prepared from D1 re-prepares to D2 while admitted run B already holds D2
+- **THEN** only B starts a target and publishes the record, the handles for A and B each settle exactly once, and A's settlement observer fires once
+
+#### Scenario: Changed digest is distinct
+
+- **WHEN** a review request has the same rule and task but a different digest
+- **THEN** a new run is queued and the earlier run is not reused
+
+#### Scenario: Different rules stay separate
+
+- **WHEN** two rules review the same change and task
+- **THEN** both runs are queued and each writes its own record
+
+### Requirement: Review failure classification and retry
+
+The queue SHALL classify a failed start or run as transient (`child-limit`, `provider-not-started`, `timeout`) or permanent (`invalid-output`, `config`, `permission`, `reviewed-inputs-changed`). Transient classes SHALL retry up to `maxAttempts` (default 3) with bounded exponential backoff and jitter. Before a queued run starts, the queue SHALL re-check its prepared inputs and re-prepare once when they changed. A permanent class MUST NOT retry.
+
+#### Scenario: Child limit retries
+
+- **WHEN** a start fails with the active-child-limit error
+- **THEN** the run waits with backoff, retries, and records the attempt and class
+
+#### Scenario: Timeout retries
+
+- **WHEN** a review run times out
+- **THEN** it retries within the attempt budget or settles as `ERROR` with `timeout`
+
+#### Scenario: Queued inputs are re-checked
+
+- **WHEN** a queued run's prepared inputs change before a slot frees
+- **THEN** the queue re-prepares once before starting and records the new digest
+
+#### Scenario: In-run input change is terminal
+
+- **WHEN** a run reports that its reviewed inputs changed during the run
+- **THEN** it settles as `ERROR` with `reviewed-inputs-changed`, no retry starts, and the gate asks to finish the writes and re-run
+
+#### Scenario: Permanent failure is not retried
+
+- **WHEN** the target returns an invalid verdict or the configuration is invalid
+- **THEN** the run settles as `ERROR` with the permanent class and no retry starts
+
+### Requirement: Review queue record integrity
+
+A retry MUST NOT create two authoritative records for one identity. Only the settled attempt MAY publish a verdict; an earlier attempt MUST NOT. A never-started queued run SHALL re-inspect the authoritative record once start-eligible after its predecessor settles, and use that snapshot as its publication baseline: a record at that baseline MUST NOT discard its completion, a later record MUST. A superseded or late completion MUST NOT replace the authoritative record.
+
+#### Scenario: Failed attempt writes no verdict
+
+- **WHEN** an attempt fails with a transient class
+- **THEN** no `PASS` or `FINDINGS` record is written for that attempt
+
+#### Scenario: Superseded run does not publish
+
+- **WHEN** a new digest supersedes a queued or running predecessor and the predecessor later completes
+- **THEN** the predecessor is discarded and the successor's record is unchanged
+
+#### Scenario: One authoritative record
+
+- **WHEN** a retry succeeds after one or more failed attempts
+- **THEN** exactly one record is written for the identity and it carries the settled verdict
+
+#### Scenario: Late duplicate is discarded
+
+- **WHEN** a duplicate run completes after the authoritative record exists
+- **THEN** its result is reported as discarded and the record is unchanged
+
+#### Scenario: Settled predecessor does not discard successor
+
+- **WHEN** a D1 predecessor publishes a record while a queued D2 successor waits, and the D2 run then starts
+- **THEN** the D2 run publishes its own verdict and is not discarded
+
+#### Scenario: Retry does not adopt a later record
+
+- **WHEN** an authoritative record is published while a retry waits
+- **THEN** the retry is discarded and the record is unchanged
+
+### Requirement: Review queue settlement
+
+The optional settlement observer SHALL fire exactly once after the run leaves the queue and all retries have settled, with the run id and terminal state. Queue wait and retry delay are not settlement. An admission timeout, a permanent failure, and a cancelled run SHALL settle with a recorded terminal state, and the observer MUST NOT change records, gates, concurrency, or targets.
+
+#### Scenario: Queued run settles once
+
+- **WHEN** an observer is supplied and a queued run reaches a terminal state
+- **THEN** the observer is called once after the final attempt settles
+
+#### Scenario: Admission timeout settles
+
+- **WHEN** a run cannot be admitted within the timeout
+- **THEN** the observer is called once with the timeout terminal state and no record is published as a PASS
+
+#### Scenario: No observer
+
+- **WHEN** no settlement observer is supplied
+- **THEN** queueing, retries, records, gates, and status behave exactly as before
+
+### Requirement: Review queue visibility
+
+`delegation_status` SHALL report queue depth, active runs, queued runs, and each run's queue position, wait time, attempts, and failure class. The run record SHALL carry the same bounded fields. The values MUST be local, MUST NOT contain credentials or machine paths, and MUST be available to the existing observability surface.
+
+#### Scenario: Status shows the queue
+
+- **WHEN** one review runs and two wait
+- **THEN** the status reports one active, two queued, and each queued run's position
+
+#### Scenario: Record carries the attempt facts
+
+- **WHEN** a review settles after a retry
+- **THEN** its record reports the attempt count and the final failure class when it failed
+
+### Requirement: Review queue configuration and off switch
+
+The review queue SHALL be configured by `reviewQueue` with `enabled` (default true), `concurrency` (default 2), `maxQueued` (default 16), `maxAttempts` (default 3), `baseDelayMs`, `maxDelayMs`, and `waitTimeoutMs`. Invalid values SHALL fail plugin load with the field. `enabled: false` SHALL restore direct target start while keeping the review gate and records unchanged.
+
+#### Scenario: Defaults apply
+
+- **WHEN** the row omits `reviewQueue`
+- **THEN** the queue is enabled with concurrency 2 and the documented defaults
+
+#### Scenario: Invalid configuration
+
+- **WHEN** `concurrency` is zero or `maxAttempts` is negative
+- **THEN** plugin load fails with the field name and the accepted range
+
+#### Scenario: Off switch
+
+- **WHEN** `reviewQueue.enabled` is false
+- **THEN** review runs start directly as before and the gate still evaluates their records
+
+### Requirement: Review queue failure isolation
+
+An internal queue error MUST NOT trap the turn or lose the review. The queue SHALL record a bounded `queue-internal-error`, start the target directly once when direct start is possible, and otherwise return an `ERROR` with the next action. The review gate SHALL still evaluate the resulting record, and a queue error MUST NOT be treated as a PASS.
+
+#### Scenario: Internal error falls back
+
+- **WHEN** the queue throws before admission and direct start is available
+- **THEN** the target starts directly, the run records `queue-internal-error`, and the review proceeds
+
+#### Scenario: Internal error without fallback
+
+- **WHEN** the queue throws and no target can start
+- **THEN** the tool returns an `ERROR` with the next action and the gate does not treat it as a PASS
+
+#### Scenario: Gate still evaluates
+
+- **WHEN** a queue failure produces an `ERROR` record
+- **THEN** the task and archive gates report the task as unapproved, exactly as for any other `ERROR`
+
+### Requirement: Restart reconciliation
+
+On load, a durable review run with a matching authoritative record SHALL be reconciled to the terminal state for its verdict, and the record MUST NOT be invalidated by the run-file state or recovery. Approval SHALL be evaluated only through the existing verdict, scope, digest, and reviewer checks: a PASS approves only when those checks accept it; FINDINGS and ERROR are preserved but never approve archive or push. A run with no matching record SHALL be marked interrupted, never a PASS.
+
+#### Scenario: Crash after publication
+
+- **WHEN** a run file is left `running` and its authoritative record is a current PASS after a restart
+- **THEN** the run is reconciled as completed and the gate treats the task as approved
+
+#### Scenario: FINDINGS is not approval
+
+- **WHEN** the authoritative record is FINDINGS
+- **THEN** the run is reconciled as completed but the gate still treats the task as unapproved
+
+#### Scenario: ERROR is not approval
+
+- **WHEN** the authoritative record is ERROR
+- **THEN** the run is reconciled as failed, the ERROR may close the turn, and the gate refuses archive or push
+
+#### Scenario: Stale PASS is not approval
+
+- **WHEN** the authoritative record is a whole-scope PASS whose digest differs from the current change digest
+- **THEN** the run is reconciled as completed but the gate requires a fresh review
+
+#### Scenario: Crash before publication
+
+- **WHEN** a run file is left `running` and no authoritative record exists
+- **THEN** the run is marked interrupted, no PASS is synthesized, and the gate asks for a fresh review
+
+#### Scenario: Record is not invalidated
+
+- **WHEN** recovery marks a run interrupted after a record was published
+- **THEN** the published record remains readable and authoritative
+
+### Requirement: Review finding classification
+
+Every review finding SHALL carry a class from the fixed vocabulary `spec-ambiguity`, `missing-test`, `path-boundary`, `state-persistence`, `stale-input`, `api-contract`, `plan-shape`, `docs-drift`, `security`, and `other`. The bundled review instructions SHALL request it, and the verdict parser SHALL store a valid class, normalize an absent or unknown class to `other`, and MUST NOT reject a verdict for a malformed class.
+
+#### Scenario: Class is stored
+
+- **WHEN** a review returns a finding with class `path-boundary`
+- **THEN** the local review record carries that class with the finding
+
+#### Scenario: Absent class is normalized
+
+- **WHEN** a finding has no class field
+- **THEN** the record stores `other` and the verdict is still accepted
+
+#### Scenario: Unknown class is normalized
+
+- **WHEN** a finding names a class outside the vocabulary
+- **THEN** the record stores `other` and the verdict is still accepted
+
+#### Scenario: PASS is unaffected
+
+- **WHEN** a review returns PASS with no findings
+- **THEN** the portable approval record is unchanged and still satisfies the gate
+
+### Requirement: Section-scoped task review
+
+A task-review `delegate` call MAY name a section selector: the `tasks.md` level-2 heading number (`1`, `1.x`) or its normalized title. One run SHALL review all checked tasks in that section in one frozen worktree snapshot with one prompt and one verdict; unchecked tasks MUST be excluded and never covered. The section selector and an explicit task id are mutually exclusive.
+
+#### Scenario: Section review covers checked tasks
+
+- **WHEN** delegate names section `1` and it has several checked tasks
+- **THEN** one run reviews all of them against one snapshot and writes one section verdict
+
+#### Scenario: Unchecked tasks are not covered
+
+- **WHEN** a section contains an unchecked task
+- **THEN** the review excludes it and the task remains unapproved and unrecorded
+
+#### Scenario: Task and section are exclusive
+
+- **WHEN** a task-review call names both a task id and a section
+- **THEN** the tool rejects the call before starting a target and names the accepted selectors
+
+#### Scenario: Unknown section
+
+- **WHEN** the selector matches no `tasks.md` section
+- **THEN** the tool rejects the call and names the available sections
+
+### Requirement: Section run identity
+
+The section run identity SHALL include the rule, change, section key, the sorted checked task ids and texts, the frozen change-artifact digest, and the snapshot content tree; unchanged content MUST reuse a FINDINGS record. Checking or unchecking a task, or changing a covered task's text, MUST change the digest and require a new section or task review.
+
+#### Scenario: Unchanged section reuses FINDINGS
+
+- **WHEN** the same section is delegated again with unchanged content and a FINDINGS record exists
+- **THEN** that record is reused without another paid run
+
+#### Scenario: Newly checked task needs a new review
+
+- **WHEN** a task is checked after the section PASS
+- **THEN** the section digest changes and the task is covered only by a new section or task review
+
+#### Scenario: Changed task text needs a new review
+
+- **WHEN** a covered task's normalized text changes after the section PASS
+- **THEN** the digest changes and the task is covered only by a new review
+
+### Requirement: Section approval publication
+
+A section PASS SHALL publish the existing per-task portable `reviews/<taskId>.json` PASS for every covered checked task whose current record does not satisfy the approval checks, with the same rule, verdict, target, time, and digests. A record that satisfies the current approval checks MUST stay byte-identical; a nonmatching record SHALL be replaced only by the publication transaction, and unchecked tasks MUST NOT receive a record.
+
+#### Scenario: Missing approvals are published
+
+- **WHEN** a section review returns PASS and its checked tasks have no portable PASS
+- **THEN** each covered task gets its per-task portable PASS with the section evidence
+
+#### Scenario: Matching approval is preserved
+
+- **WHEN** a covered task already has a PASS that satisfies the current approval checks
+- **THEN** that record stays byte-identical and the section publishes only the remaining records
+
+#### Scenario: Nonmatching approval is replaced
+
+- **WHEN** a covered task has a PASS from a reviewer that does not satisfy the current checks
+- **THEN** the section PASS replaces it transactionally and the task becomes validly approved
+
+#### Scenario: Unchecked task is not approved
+
+- **WHEN** a covered unchecked task has no record
+- **THEN** the section publishes no record for it
+
+### Requirement: Section publication transaction
+
+A section publication SHALL write all covered records under the existing publication lock, creating temporaries before any rename. On failure it MUST restore every replaced or removed destination byte-identically and remove only destinations it created; no approval survives. Overlapping section and per-task runs MUST serialize: the later discards when an authoritative PASS exists and MUST NOT overwrite it; a superseded section identity discards the whole publication.
+
+#### Scenario: Partial replacement is rolled back
+
+- **WHEN** a publication fails after replacing one destination that already had a record
+- **THEN** the original record is restored byte-identically and no new approval survives
+
+#### Scenario: Per-task run wins the race
+
+- **WHEN** a per-task review for a covered task publishes before the section run
+- **THEN** the section keeps that task's valid PASS and publishes the remaining covered tasks or discards wholly on a stale identity
+
+#### Scenario: Section run wins the race
+
+- **WHEN** the section run publishes before an overlapping per-task review
+- **THEN** the per-task review discards because an authoritative PASS exists
+
+#### Scenario: Superseded section identity
+
+- **WHEN** a newer identity for the section exists when the run would publish
+- **THEN** the section discards the entire publication and approves no task
+
+### Requirement: Section gate and status behavior
+
+A per-task PASS written by a section review SHALL satisfy the turn-stopping and archive checks exactly like a per-task review. While a section run is queued or running, the gate MUST suggest waiting for its record instead of starting per-task runs, and the status and review audit MUST count the covered tasks from their portable records. Section runs MUST respect the review queue identity, dedupe, retry, and settlement rules.
+
+#### Scenario: Gate accepts the covered task
+
+- **WHEN** a section PASS wrote the task's portable approval
+- **THEN** the turn gate accepts that checked task and the archive gate reports it approved
+
+#### Scenario: Pending section run
+
+- **WHEN** a section review is queued or running and the turn needs a review
+- **THEN** the gate suggests waiting for the section record and starts no duplicate run
+
+#### Scenario: Status reports coverage
+
+- **WHEN** status or the review audit runs after a section PASS
+- **THEN** the PASS count includes the covered tasks and the missing list names none of them
+
+#### Scenario: Duplicate section identity joins
+
+- **WHEN** two calls name the same section with the same digest
+- **THEN** one target starts and both calls observe the same run
+
+### Requirement: Section failure visibility
+
+A settled section ERROR SHALL be visible to each covered checked task's turn-gate evaluation as an ERROR record with the section's failure class preserved, so an eligible section ERROR MAY close the turn like a task ERROR. It MUST publish no new approval: existing valid approvals remain, and the archive gate reports as missing only covered tasks that lack a valid prior approval.
+
+#### Scenario: Section ERROR closes the turn
+
+- **WHEN** a section review settles ERROR with an eligible failure class
+- **THEN** the turn may close with the error visible and no new task approval is granted
+
+#### Scenario: Mixed coverage after ERROR
+
+- **WHEN** one covered task had a valid approval before the section ERROR and another did not
+- **THEN** the archive gate keeps the first approved and reports only the second as missing
+
+#### Scenario: Failure class is preserved
+
+- **WHEN** the section target fails with a classified failure
+- **THEN** the covered tasks' gate state names that failure class and the retry policy still applies
+
+### Requirement: Gate-only retirement switch
+
+The review engine SHALL support `gates.workflowOwned: false`, which disables only the task-review turn-stopping rule and the archive gate. It keeps the `delegate` tool, queue, runs, records, `task_progress` notes, rule data, the whole-spec `spec-review` rule, and the task-progress and lane-assignment/lane-boundary gates. A `defer` `task-review` definition MUST then be refused, while a `defer` `spec-review` step remains valid.
+
+#### Scenario: Review runtime remains
+
+- **WHEN** `gates.workflowOwned` is false and a task review is delegated
+- **THEN** the review still queues, runs, and writes its record
+
+#### Scenario: Workflow-owned gates are silent
+
+- **WHEN** the switch is false and a checked task lacks a review
+- **THEN** the delegation-rules task-review and archive gates do not steer or refuse
+
+#### Scenario: Spec-review rule remains
+
+- **WHEN** the switch is false and a change in this session's scope has no matching whole-spec review
+- **THEN** the legacy `spec-ready` rule still refuses the close and steers the spec review
+
+#### Scenario: Task-progress gate remains
+
+- **WHEN** the switch is false and a code-changing turn has neither a newly checked reviewed task nor a matching progress note
+- **THEN** the task-progress gate still refuses the close and steers to a note or a reviewed tick
+
+#### Scenario: Stale note is rejected
+
+- **WHEN** the switch is false and the worktree changes after a progress note
+- **THEN** the task-progress gate still refuses the close because the note is stale
+
+#### Scenario: Lane-assignment gate remains
+
+- **WHEN** the switch is false and completing one lane leaves a single unchecked unassigned lane, or an implementation turn below the checkpoint threshold leaves an unassigned lane
+- **THEN** the lane-assignment gate still reports the lane and names the tagged worker or serial-note call
+
+#### Scenario: Workflow owns the gate
+
+- **WHEN** `gates.workflowOwned` is false and the `task-review` definition is `own`
+- **THEN** the workflow starts the review, refuses the close on FINDINGS or a missing record, allows an ERROR to close an intermediate turn without approving, requires a portable PASS for every checked task when the tick completes the list, and refuses the archive until a PASS exists
+
+#### Scenario: Records are unchanged
+
+- **WHEN** the switch changes
+- **THEN** existing review records, queue state, and `task_progress` notes remain readable and are not rewritten
+
+#### Scenario: Rollback
+
+- **WHEN** `gates.workflowOwned` is true again
+- **THEN** the task-review and archive gates steer again, the `task-review` definition MUST return to `defer`, and the spec-review, progress, and lane gates are unaffected

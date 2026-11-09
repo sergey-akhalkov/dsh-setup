@@ -26,6 +26,7 @@ export const DEFAULT_BLOCK_REVIEW_CONFIG = Object.freeze({
 });
 /** Documented work-checkpoint defaults; the composition fragment repeats them. */
 export const DEFAULT_CHECKPOINT_CONFIG = Object.freeze({
+    automation: true,
     enabled: true,
     minToolCalls: 4,
     requireWrite: true,
@@ -182,6 +183,7 @@ function resolveCheckpoint(raw) {
         return value;
     };
     return Object.freeze({
+        automation: boolean('automation'),
         enabled: boolean('enabled'),
         minToolCalls: integer('minToolCalls'),
         requireWrite: boolean('requireWrite'),
@@ -2462,6 +2464,10 @@ function installCheckpointTool(ctx, stateFor) {
 }
 /** Install the periodic mid-turn checkpoint trigger and the turn-close gates. */
 function installCheckpointGate(ctx, config, stateFor) {
+    // Gate-only retirement: the tool and its record stay; every listener that
+    // steers or refuses a turn close is off. A false switch is a hard no-op.
+    if (!config.automation)
+        return;
     // A running root turn gets one request at each step interval, never a wake.
     ctx.on('agent/pre-step', (payload, next) => {
         try {
@@ -2651,6 +2657,17 @@ function installReviewerPresetHiding(ctx) {
         });
     });
 }
+/** Provide the ownership status once; an older host or a test double may lack provide(). */
+function provideStatus(ctx, name, value) {
+    try {
+        if (typeof ctx.get === 'function' && ctx.get(name) !== undefined)
+            return;
+        ctx.provide(name, value);
+    }
+    catch {
+        // The switch is still read from this plugin's own config.
+    }
+}
 /**
  * Install the continuity supervisor, the block-review gate, and the work
  * checkpoint. The configuration is validated at load, so a bad profile fails
@@ -2658,6 +2675,11 @@ function installReviewerPresetHiding(ctx) {
  */
 export function apply(ctx, config) {
     const resolved = resolveConfig(config);
+    // The workflow engine resolves per-signal legacy ownership from this status:
+    // `automation: false` means the checkpoint gates will not steer.
+    provideStatus(ctx, 'goalContinuityStatus', Object.freeze({
+        automation: resolved.enabled && resolved.checkpoint.enabled && resolved.checkpoint.automation,
+    }));
     if (!resolved.enabled)
         return;
     if (resolved.blockReview.enabled) {

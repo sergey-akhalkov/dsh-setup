@@ -116,3 +116,11 @@ rows:
         answer: 300000
         patch: 1800000
       failureStreak: 3
+      # Local review learning: classed findings, a bounded lesson store, and a
+      # deterministic retro. The defaults are restated here so a profile patch
+      # that replaces the whole config can copy them. `window` bounds the retro
+      # and the finding history; `maxLessons` bounds the lesson store.
+      reviewLearning:
+        enabled: true
+        window: 50
+        maxLessons: 200

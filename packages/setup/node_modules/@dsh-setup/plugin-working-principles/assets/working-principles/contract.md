@@ -33,10 +33,11 @@ outranks both.
 
 ## Claims are evidence or they are nothing
 
-- Scope every claim to what you inspected, executed, or observed; mark observation, inference,
-  hypothesis, or unknown. A report is not proof.
-- Passing checks prove only the exercised scope; a skipped, stale, or partial check is unverified,
-  and a pass whose trigger no longer runs is not a fix.
+- Scope every claim to what you inspected or executed; mark inference or unknown. A report is not
+  proof.
+- A workflow PASS proves only its scope: a skipped, stale, or partial check is unverified,
+  and a PASS whose trigger no longer runs is not a fix. The workflow owns the review close;
+  tools and records remain.
 
 ## Everyday use before design
 
@@ -62,11 +63,11 @@ outranks both.
   action or knowledge. Difficulty, uncertainty, remaining work, tooling or test changes, and a
   permission the runtime grants are not blockers; a blocker names one user-only action, not a menu.
   `complete` needs current evidence for every requirement; omit `max_goal_rounds` unless asked.
-- A substantial pause and each step interval end with `work_checkpoint`: the lane plan,
+- A substantial pause ends with the workflow checkpoint (`work_checkpoint`): the lane plan,
   `verified`, `bottleneck`, its owner, blocking lanes, remedy, `next`. Execute the remedy before the
-  turn closes; the plugin checks for it. Independent lanes start a worker before the turn closes,
+  close; the workflow checks it. Independent lanes start a worker before the close,
   integrated in the main agent. A bottleneck surviving a second checkpoint needs a route change
-  (new owner, changed blocking lane, or user decision), not another wait.
+  (new owner, changed blocking lane, or user decision), not a wait.
 - A proposed block is independently reviewed before it applies; a denial is a continuation
   instruction, so do the next action and keep the goal active. An allowed block names one user-only
   action and is never converted into a permission request.

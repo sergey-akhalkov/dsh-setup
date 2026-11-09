@@ -30,6 +30,7 @@ const BLOCK_REVIEW_DEFAULTS = {
 }
 
 const CHECKPOINT_DEFAULTS = {
+  automation: true,
   enabled: true,
   minToolCalls: 4,
   requireWrite: true,
@@ -91,6 +92,7 @@ describe('goal continuity configuration', () => {
           onExhausted: 'allow',
         },
         checkpoint: {
+          automation: false,
           enabled: false,
           minToolCalls: 1,
           requireWrite: false,
@@ -125,6 +127,7 @@ describe('goal continuity configuration', () => {
         onExhausted: 'allow',
       },
       checkpoint: {
+        automation: false,
         enabled: false,
         minToolCalls: 1,
         requireWrite: false,
@@ -199,13 +202,21 @@ describe('goal continuity configuration', () => {
         /blockReview\.reviewQuestions/u,
       )
     }
-    for (const field of ['enabled', 'requireWrite', 'enforceParallel']) {
+    for (const field of ['automation', 'enabled', 'requireWrite', 'enforceParallel']) {
       for (const value of ['yes', 1, 0, null]) {
         expect(() => resolveConfig({ checkpoint: { [field]: value } })).toThrow(
           new RegExp(`checkpoint\\.${field}`, 'u'),
         )
       }
     }
+  })
+
+  it('accepts the gate-only checkpoint.automation switch and defaults it true', () => {
+    expect(resolveConfig({ checkpoint: { automation: false } }).checkpoint.automation).toBe(false)
+    expect(resolveConfig({}).checkpoint.automation).toBe(true)
+    expect(() => resolveConfig({ checkpoint: { automation: 'off' } })).toThrow(
+      /checkpoint\.automation/u,
+    )
   })
 
   it('rejects every invalid user-stop policy value', () => {

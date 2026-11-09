@@ -122,9 +122,36 @@ export function unparseableCheckedLines(markdown: string): UnparseableCheckedLin
   return lines
 }
 
+/** The fixed learning vocabulary; a finding is counted by its class. */
+export const FINDING_CLASSES = [
+  'spec-ambiguity',
+  'missing-test',
+  'path-boundary',
+  'state-persistence',
+  'stale-input',
+  'api-contract',
+  'plan-shape',
+  'docs-drift',
+  'security',
+  'other',
+] as const
+
+export type FindingClass = (typeof FINDING_CLASSES)[number]
+
+const FINDING_CLASS_SET: ReadonlySet<string> = new Set(FINDING_CLASSES)
+
+/** A valid class passes through; an absent or unknown one is the safe `other`. */
+export function normalizeFindingClass(value: unknown): FindingClass {
+  return typeof value === 'string' && FINDING_CLASS_SET.has(value)
+    ? (value as FindingClass)
+    : 'other'
+}
+
 /** One review finding; the engine and the portable record share this shape. */
 export interface ReviewFinding {
   severity: 'P0' | 'P1'
+  /** Optional so records written before classification stay readable. */
+  class?: FindingClass
   title: string
   evidence: string
   fix: string
@@ -183,13 +210,51 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 /** A field value that could leak the reviewing machine into a committed record. */
-function hasMachinePath(text: string): boolean {
+export function hasMachinePath(text: string): boolean {
   return (
     /[A-Za-z]:[\\/]/.test(text) ||
     /\\\\/.test(text) ||
-    /(?:^|[\s"'([{<])\/[^\s"'`)\]}>]+/.test(text) ||
-    /(?:^|[\s"'([{<])~[/\\]/.test(text)
+    /file:\/\//i.test(text) ||
+    /(?:^|[\s"'=([{<`])\/[^\s"'`)\]}>]+/.test(text) ||
+    /(?:^|[\s"'=([{<`])~[/\\]/.test(text)
   )
+}
+
+/** Default bound for one redacted field; callers pass a smaller bound when needed. */
+export const MAX_SANITIZE_CHARS = 2_000
+
+/**
+ * Header values may contain quoted or escaped secrets, so redact the remainder
+ * of the line. The delimiter requirement keeps ordinary prose intact.
+ */
+const AUTHORIZATION_HEADER_PATTERN = /\bauthorization(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi
+const COOKIE_HEADER_PATTERN = /\b(?:cookie|set-cookie)(?:\\?["'])?\s*[=:][\s\S]*?(?=\r?\n|$)/gi
+
+/** Redact machine paths and credentials, then bound the result. */
+export function sanitizeText(text: string, maximum = MAX_SANITIZE_CHARS): string {
+  const redacted = text
+    .replace(AUTHORIZATION_HEADER_PATTERN, '[secret]')
+    .replace(COOKIE_HEADER_PATTERN, '[secret]')
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1[secret]@')
+    .replace(/\bfile:\/\/[^\s"'`)]*/gi, '[path]')
+    .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
+    .replace(/\\\\[^\s"'`)]+/g, '[path]')
+    .replace(/~[/\\][^\s"'`)]*/g, '[path]')
+    .replace(/(^|[\s"'=([{<`])\/[^\s"'`)\]}<>]+/g, '$1[path]')
+    .replace(
+      /\b[A-Za-z0-9_.-]*(?:token|password|passwd|secret|passphrase|api[_-]?key|apikey|private[_-]?key|cookie|session)[A-Za-z0-9_.-]*(?:\\?["'])?\s*[=:]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\\"(?:[^"\\]|\\.)*?\\"|\\'(?:[^'\\]|\\.)*?\\'|[^\s"',;}]+)/gi,
+      '[secret]',
+    )
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[secret]')
+    .replace(
+      /\b(?:sk-[A-Za-z0-9_-]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g,
+      '[secret]',
+    )
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+      '[secret]',
+    )
+  return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`
 }
 
 function isCleanString(value: unknown): value is string {
@@ -200,6 +265,8 @@ export function isReviewFinding(value: unknown): value is ReviewFinding {
   if (!isRecord(value)) return false
   return (
     (value.severity === 'P0' || value.severity === 'P1') &&
+    (value.class === undefined ||
+      (typeof value.class === 'string' && FINDING_CLASS_SET.has(value.class))) &&
     isNonEmptyString(value.title) &&
     isNonEmptyString(value.evidence) &&
     isNonEmptyString(value.fix)
@@ -841,4 +908,42 @@ export function portableRecordFromLocal(input: ExportRecordInput): {
     return { error: checked.error ?? 'the sanitized record is not valid' }
   }
   return { record: checked.record }
+}
+
+/** The legacy intermediate-review predicate: PASS/ERROR only, identified. */
+export interface LegacyReviewRecordLike {
+  readonly change: string
+  readonly scope: string
+  readonly verdict: string
+  readonly taskId?: string
+  readonly digest?: string
+  readonly error?: string
+  readonly failureClass?: string
+}
+
+/**
+ * The real legacy gate match, extracted unchanged: a queue fault or a
+ * discarded-input ERROR is not a usable review.
+ */
+export function legacyRecordSatisfies(
+  record: LegacyReviewRecordLike,
+  change: string,
+  scope: string,
+  digest?: string,
+  taskId?: string,
+): boolean {
+  if (record.change !== change || record.scope !== scope) return false
+  if (record.verdict !== 'PASS' && record.verdict !== 'ERROR') return false
+  if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error') === true) {
+    return false
+  }
+  if (
+    record.verdict === 'ERROR' &&
+    (record.failureClass === 'reviewed-inputs-changed' ||
+      record.error?.includes('reviewed inputs changed') === true)
+  ) {
+    return false
+  }
+  if (scope === 'task' && record.taskId !== taskId) return false
+  return digest === undefined || record.digest === digest
 }

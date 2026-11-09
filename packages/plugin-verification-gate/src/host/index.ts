@@ -248,6 +248,18 @@ function shellOutcome(value: unknown): ShellOutcome {
   return 'failure'
 }
 
+/** The legacy close decision for one stop: allow, refuse, or the capped notice. */
+export type LegacyVerifyDecision = 'allow' | 'refuse' | 'unverified'
+
+export function decideVerifyClose(
+  dirty: boolean,
+  blocks: number,
+  maxBlocks: number,
+): LegacyVerifyDecision {
+  if (!dirty) return 'allow'
+  return blocks >= maxBlocks ? 'unverified' : 'refuse'
+}
+
 /** Build the refusal text for one stop attempt. */
 function refusalText(configured: readonly string[], state: AgentState): string {
   const commands = configured.map((command) => `"${clean(command, 240)}"`).join(', ')
@@ -281,12 +293,32 @@ function unverifiedText(configured: readonly string[], state: AgentState): strin
   )
 }
 
+/** Provide the ownership status once; an older host or a test double may lack provide(). */
+function provideStatus(ctx: Context, name: string, value: unknown): void {
+  try {
+    if (typeof ctx.get === 'function' && ctx.get(name) !== undefined) return
+    ctx.provide(name, value)
+  } catch {
+    // The row configuration remains the source of truth.
+  }
+}
+
 /**
  * Install the gate. Configuration is validated first; an empty command list
  * registers nothing, so the shipped default changes no behavior.
  */
 export function apply(ctx: Context, config?: Config): void {
   const resolved = resolveConfig(config)
+  // The workflow engine resolves per-signal legacy ownership from this status:
+  // an inert row (no command) does not count as an enabled legacy source.
+  provideStatus(
+    ctx,
+    'verificationGateStatus',
+    Object.freeze({
+      steering: resolved.commands.length > 0,
+      maxBlocks: resolved.maxBlocks,
+    }),
+  )
   if (resolved.commands.length === 0) return
 
   const states = new WeakMap<Agent, AgentState>()
@@ -356,8 +388,10 @@ export function apply(ctx: Context, config?: Config): void {
     if (isSubagent(agent)) return
     const state = stateFor(agent)
     beginTurn(state, turn)
-    if (!state.dirty || state.allowedAnyway) return
-    if (state.blocks >= resolved.maxBlocks) {
+    if (state.allowedAnyway) return
+    const decision = decideVerifyClose(state.dirty, state.blocks, resolved.maxBlocks)
+    if (decision === 'allow') return
+    if (decision === 'unverified') {
       state.allowedAnyway = true
       try {
         agent.inject(

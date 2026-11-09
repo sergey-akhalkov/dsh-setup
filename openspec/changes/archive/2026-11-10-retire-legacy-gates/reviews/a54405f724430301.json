@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "retire-legacy-gates",
+  "scope": "task",
+  "taskId": "a54405f724430301",
+  "digest": "0b94c5c447ae23b168f7fcf915cdd11b72335b3e5e872614a9f7d2bc563fa2bd",
+  "worktreeDigest": "d1754e8b347678a03642b517af10a907492c162209629f41e11ac3f73197d140",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-09T21:10:18.444Z"
+}

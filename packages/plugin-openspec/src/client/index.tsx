@@ -47,6 +47,7 @@ import {
   capabilityAddress,
   capabilitySpecPath,
   changeAddress,
+  changeListWatchAddresses,
   changeWatchPaths,
   type Delta,
   type DeltaSpec,
@@ -469,6 +470,7 @@ export function OpenSpecTab(props: TabBodyProps): ReactNode {
         draft={draft}
         open={open}
         storage={props.storage}
+        useResource={props.useResource}
       />
     )
   } else if (target.view === 'change') {
@@ -727,6 +729,34 @@ interface RootBodyProps extends DraftAndOpen {
   readonly tab: TabFace
   readonly initialSegment: 'changes' | 'specs'
   readonly storage?: SegmentStorage
+  readonly useResource?: UseResource
+}
+
+/**
+ * One hidden watch per file of the Changes segment's active rows.
+ *
+ * It is a component of its own so leaving Changes or unmounting the body
+ * disposes the batch and cancels a pending debounce.
+ */
+export function ChangeListObservation(props: {
+  readonly sessionId: string
+  readonly rows: readonly ChangeRow[]
+  readonly useResource: UseResource
+  reload(): void
+}): ReactNode {
+  const notify = useLiveReload(props.reload)
+  const observation = useObservation(notify)
+  const addresses = changeListWatchAddresses(props.sessionId, props.rows)
+  observation.add(addresses)
+  return addresses.map((address) => (
+    <FileWatch
+      key={address}
+      address={address}
+      useResource={props.useResource}
+      settle={observation.settle}
+      change={observation.change}
+    />
+  ))
 }
 
 /** Root container: one change-list read for totals and the archive, lazy Specs. */
@@ -740,6 +770,11 @@ export function RootBody(props: RootBodyProps): ReactNode {
   const [archiveQuery, setArchiveQuery] = useState('')
   const changes = useRead<ChangeListResponse>(() => requestChangeList(sessionId))
   const capabilities = useRead<CapabilitySummary[]>(() => requestCapabilities(sessionId))
+  // A list reload renders the loading state; keep the last ready rows so the
+  // watches stay mounted through it.
+  const knownRows = useRef<readonly ChangeRow[]>([])
+  if (changes.state.phase === 'ready') knownRows.current = changes.state.value.changes
+  const useResource = props.useResource ?? noResource
   const started = useRef({ specs: false })
   const loadSpecs = (): void => {
     started.current.specs = true
@@ -764,33 +799,43 @@ export function RootBody(props: RootBodyProps): ReactNode {
     if (next === 'specs' && !started.current.specs) loadSpecs()
   }
   return (
-    <RootView
-      segment={segment}
-      changes={changes.state}
-      capabilities={capabilities.state}
-      specQuery={specQuery}
-      archiveQuery={archiveQuery}
-      t={t}
-      onSegment={choose}
-      onSpecQuery={setSpecQuery}
-      onArchiveQuery={setArchiveQuery}
-      specOrder={specOrder}
-      onSpecOrder={setSpecOrder}
-      onRetry={() => {
-        if (segment === 'specs') loadSpecs()
-        else changes.reload()
-      }}
-      onOpenChange={(name, archived) =>
-        open(archived ? archivedChangeAddress(name) : changeAddress(name))
-      }
-      onOpenArtifact={(name, archived, artifact) =>
-        open(archived ? archivedChangeAddress(name, artifact) : changeAddress(name, artifact))
-      }
-      onOpenCapability={(id) => open(capabilityAddress(id))}
-      onExplore={() => draft(EXPLORE_DRAFT)}
-      onPropose={() => draft(PROPOSE_DRAFT)}
-      onSeeArchive={() => choose('archive')}
-    />
+    <>
+      {segment === 'changes' ? (
+        <ChangeListObservation
+          sessionId={sessionId}
+          rows={knownRows.current}
+          useResource={useResource}
+          reload={changes.reload}
+        />
+      ) : null}
+      <RootView
+        segment={segment}
+        changes={changes.state}
+        capabilities={capabilities.state}
+        specQuery={specQuery}
+        archiveQuery={archiveQuery}
+        t={t}
+        onSegment={choose}
+        onSpecQuery={setSpecQuery}
+        onArchiveQuery={setArchiveQuery}
+        specOrder={specOrder}
+        onSpecOrder={setSpecOrder}
+        onRetry={() => {
+          if (segment === 'specs') loadSpecs()
+          else changes.reload()
+        }}
+        onOpenChange={(name, archived) =>
+          open(archived ? archivedChangeAddress(name) : changeAddress(name))
+        }
+        onOpenArtifact={(name, archived, artifact) =>
+          open(archived ? archivedChangeAddress(name, artifact) : changeAddress(name, artifact))
+        }
+        onOpenCapability={(id) => open(capabilityAddress(id))}
+        onExplore={() => draft(EXPLORE_DRAFT)}
+        onPropose={() => draft(PROPOSE_DRAFT)}
+        onSeeArchive={() => choose('archive')}
+      />
+    </>
   )
 }
 

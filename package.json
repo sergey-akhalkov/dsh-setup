@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "node scripts/build.ts",
+    "workflows:parity": "node scripts/workflows-parity.ts",
     "build:watch": "node scripts/build.ts --watch",
     "typecheck": "tsc -p tsconfig.check.json",
     "lint": "biome check .",

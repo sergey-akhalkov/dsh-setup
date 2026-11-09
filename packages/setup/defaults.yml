@@ -235,3 +235,162 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
+# The workflows engine owns the checkpoint, task-review and verification closes
+# in this release; the verification-gate row stays installed but disabled for
+# one release. The verify definition has no shipped commands, matching the
+# inert legacy row, until a profile configures them.
+- id: dsh-setup-workflows
+  config:
+    checkpointApplicability:
+      minToolCalls: 4
+      requireWrite: true
+      bottleneckAge: 2
+      stepInterval: 40
+      enforceParallel: true
+    verify:
+      commands: []
+      maxBlocks: 8
+- id: dsh-setup-verification-gate
+  disabled: true
+
+# The retired gates are switched off only for the setup bundle; standalone
+# plugin installs keep their legacy enforcement.
+- id: dsh-setup-goal-continuity
+  config:
+    enabled: true
+    resumeAfterRestart: false
+    resumeAfterUserStop: non-goal
+    maxSessionResumes: 20
+    roundExtension: 1000
+    maxRoundExtensions: 2
+    hardMaxGoalRounds: 5000
+    blockReview:
+      enabled: true
+      reviewQuestions: true
+      provider: spawn
+      model: deepseek-flash
+      reasoningEffort: max
+      reviewerPreset: goal-reviewer
+      blockedAfterConsecutiveRounds: 3
+      timeoutMs: 300000
+      maxReviewsPerGoal: 3
+      onReviewError: deny
+      onUnavailable: allow
+      onExhausted: deny
+    checkpoint:
+      enabled: true
+      minToolCalls: 4
+      requireWrite: true
+      maxBlocks: 3
+      enforceParallel: true
+      maxMessageChars: 1200
+      stepInterval: 40
+      bottleneckAge: 2
+      laneStaleCheckpoints: 2
+      automation: false
+- id: dsh-setup-delegation-rules
+  config:
+    targets:
+      codex:
+        provider: codex-subagent
+        model: gpt-6-astra
+        reasoningEffort: xhigh
+      codex-write:
+        provider: codex-subagent-write
+        write: true
+        model: gpt-6-astra
+        reasoningEffort: xhigh
+      codex-astra:
+        provider: codex-subagent
+        model: gpt-6-astra
+        reasoningEffort: xhigh
+      worker-fast:
+        provider: spawn
+        reasoningEffort: high
+      worker-deep:
+        provider: spawn
+        reasoningEffort: max
+    rules:
+      - id: spec-review
+        when: spec-ready
+        to: codex
+        contract: review
+        phase: spec
+        scope: whole
+        gate: strict
+        instruction: bundled:review-spec
+      - id: task-review
+        when: spec-task-ready
+        to: codex
+        contract: review
+        scope: task
+        gate: strict
+        instruction: bundled:review-task
+      - id: blocker
+        when: failure-streak
+        to: codex
+        contract: answer
+        gate: soft
+        instruction: bundled:consult
+      - id: research
+        when: manual
+        to: codex
+        contract: answer
+        gate: none
+        instruction: bundled:research
+      - id: advisor
+        when: manual
+        to: codex-astra
+        contract: answer
+        gate: none
+        instruction: bundled:advisor
+      - id: worker-fast
+        when: manual
+        to: worker-fast
+        contract: answer
+        gate: none
+        instruction: bundled:research
+      - id: worker-deep
+        when: manual
+        to: worker-deep
+        contract: answer
+        gate: none
+        instruction: bundled:research
+      - id: bug-fix
+        when: manual
+        to: codex-write
+        contract: patch
+        gate: none
+        instruction: bundled:fix
+        isolation: worktree
+      - id: integration-review
+        when: implementation-complete
+        to: codex
+        contract: review
+        phase: integration
+        scope: whole
+        gate: soft
+        instruction: bundled:review-integration
+      - id: lane-fanout
+        when: lane-assignment
+        contract: note
+        gate: strict
+      - id: task-progress
+        when: implementation-work
+        contract: note
+        gate: strict
+      - id: lane-boundary
+        when: lane-boundary
+        contract: note
+        gate: strict
+    timeouts:
+      review: 600000
+      answer: 300000
+      patch: 1800000
+    failureStreak: 3
+    reviewLearning:
+      enabled: true
+      window: 50
+      maxLessons: 200
+    gates:
+      workflowOwned: false

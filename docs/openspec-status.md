@@ -166,7 +166,7 @@ budget, and the `work_checkpoint` observability attribution (19 tasks, 18/19 por
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
-was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for what it changed, and its
+was written (2026-11-10). Read the entry's `proposal.md` and `design.md` for what it changed, and its
 `tasks.md` for the open boxes.
 
 | Change                                                   | Recorded tasks |
@@ -217,6 +217,14 @@ was written (2026-10-31). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-05-add-openspec-panel`                          | 18/18          |
 | `2026-11-05-widen-dsh-support-to-engine-range`           | 5/5            |
 | `2026-11-05-redesign-openspec-panel`                     | 14/14          |
+| `2026-11-07-add-workflow-observability`                  | 23/25          |
+| `2026-11-07-harden-review-queue`                         | 17/17          |
+| `2026-11-07-add-openspec-live-list`                      | 7/7            |
+| `2026-11-07-learn-from-review-findings`                  | 23/23          |
+| `2026-11-09-add-workflow-obligations`                    | 36/36          |
+| `2026-11-09-add-section-scoped-task-review`              | 10/10          |
+| `2026-11-09-add-workflow-editor`                         | 24/27          |
+| `2026-11-10-retire-legacy-gates`                         | 17/21          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -628,3 +636,75 @@ moved together, and the vendored setup was regenerated. The gate was green befor
 0.2.2-rc.1, whose composed profile contains every shipped bundle. Open owner follow-up: run the
 installer on the second machine from an external PowerShell with the app closed and confirm the
 Experimental plugins page shows the same on/off set.
+
+On 2026-11-07 four planned changes were archived together. `add-workflow-observability` created the
+`workflow-observability` capability and shipped `@dsh-setup/plugin-workflows`: a read-only Workflows
+conversation view, a bounded per-session event journal with redaction and retention, a shadow trigger
+catalog with a fixed Why-not vocabulary, a unified checkpoint/delegation/review timeline, and listener
+health. `harden-review-queue` added the queue, typed failure classification and retries, timeout
+quarantine, restart reconciliation and queue facts to `delegation-rules`. `add-openspec-live-list` made
+the OpenSpec panel's Changes segment follow its active rows' files through the shipped observation with
+one 300 ms debounced re-read. `learn-from-review-findings` added finding classes, the bounded finding
+history, the `review-learning` capability (lesson store, user-approved decisions, deterministic retro
+report) and bounded prompt injection. Their serial integration regenerated the setup and passed
+`pnpm check` (2247 tests), `pnpm build` with no diff, `pnpm gen:check` (365 files), `validate:repo`,
+`validate:composition` and `validate:installer`; the archived task counts are 23/25, 17/17, 7/7 and
+23/23. Open owner follow-ups: `add-workflow-observability` 5.1 real-carrier verification (the routes
+are unit-tested; the desktop Fetch carrier and browser admission matrix needs a throwaway installed
+host) and 7.3 live Workflows view smoke; `harden-review-queue` live queue-under-shortage smoke;
+`add-openspec-live-list` owner smoke on the installed setup; `learn-from-review-findings` one real
+classed review plus `/review-retro` acceptance.
+
+On 2026-11-09 `add-workflow-obligations` added the `workflows` engine to
+`@dsh-setup/plugin-workflows` and extended `workflow-observability`: stored JSON definitions with
+host-signed approvals, a durable run store, deterministic triggers evaluated through the same journal,
+the `main`, `subagent`, `tool`, `human`, `branch` and `loop` executors, file/record/tool/check/human
+and recursive `all` evidence, turn-close and pre-execute gates, host-authenticated receipts, the
+`workflows` tool and the `/workflows` command family, the shipped `change-intake` definition, and the
+deferred `task-review`/`retro` definitions. Its serial integration regenerated the setup, passed the
+full gate (135 files / 2576 tests, build with no diff, `gen:check` 404 files, `validate:repo`,
+`validate:composition`, `validate:installer`, `openspec validate --strict`), and normalized 15 legacy
+portable review records to the portable schema (verdicts and digests unchanged). Open owner
+follow-ups: install the generated setup in a throwaway profile and exercise the refusal -> draft ->
+create-change -> strict spec -> whole-spec review -> approval receipt path, adopt a pre-existing
+change, restart after `create-change` without recreating the directory, and confirm the deferred
+`task-review`/`retro` definitions add no second steer; the live 5.1-style carrier check for the
+workflow routes remains owner scope.
+
+On 2026-11-09 `add-section-scoped-task-review` added section-scoped task review to `delegation-rules`:
+a `delegate` call can name a `tasks.md` section (for example `1` or `1.x`), one run reviews all its
+checked tasks in one frozen snapshot with one prompt and verdict, and a PASS publishes the existing
+per-task portable approvals transactionally — matching approvals preserved byte-identically,
+nonmatching ones replaced, failures rolled back, and section/per-task publications serialized under
+the shared lock. A section ERROR is visible to the turn gate but grants no approval, and the archive
+gate is unchanged. The change's six requirements were added to `delegation-rules`; per-task review
+remains the live gate until the owner installs the regenerated setup, and the workflow follow-up runs
+one real section review on an installed profile.
+
+On 2026-11-09 `add-workflow-editor` added the Design mode to `@dsh-setup/plugin-workflows`: a React Flow
+canvas bundled into the single client artifact (pinned 12.12.1, single-artifact budget documented and
+enforced at 539,493 B bundle / 591,739 B artifact), an equivalent List form editor, templates and local
+definitions through the revision-checked host write API, a layout sidecar, the run overlay with the
+recorded definition name/version, structured evidence, failure class, violations and an orphan badge,
+and keyboard/screen-reader support. Every save goes through the host-signed install/approve path, create
+is create-only, and a conflict returns 409 without a write. The `workflows` spec gained 10 requirements;
+the serial integration passed the full gate (146 files / 2750 tests, build with no diff, `gen:check`
+407 files, validators, strict OpenSpec validation) and archived 24/27. Open owner follow-ups: the
+rendered DesignMode accessibility interaction check (7.1/7.2 are covered by pure logic until the 8.4
+owner browser pass) and the live visual check (8.4); the client bundle budget is documented as the
+single-artifact trade-off.
+
+On 2026-11-10 `retire-legacy-gates` switched the shipped setup to the workflow-owned gates: the setup
+defaults disable the task-review and archive legacy signals, turn off the checkpoint automation, and
+keep the verification-gate row installed but disabled, while the retained spec-review, task-progress
+and lane-boundary rules stay strict. The workflow definitions `task-review`, `retro` and `verify` load
+from the tracked parity report (all gate cases pass; `pnpm workflows:parity --check` runs after every
+build in both CI workflows), the verify settings accept profile command/cap overrides (including a
+cap above 128), and the verification-gate capability spec was retired. The serial integration passed
+the full gate (153 files / 2840 tests, gen 411, validators, strict validation) and archived 17/21.
+Open owner follow-ups: the four held gaps — bottleneck-target normalization (4.2), preserving a
+pending verification obligation across turns (5.1), and the installed-runtime activation test with
+the lane-fanout assertion (6.2/6.5) — plus the one-release owner steps: install the release into a
+throwaway DSH_HOME, exercise the retired and retained gates, delete the legacy verification row
+after one release, and use the documented per-signal switch to roll back. The gates are switched on
+by default in this release, so the throwaway-DSH_HOME check is the first post-install verification.

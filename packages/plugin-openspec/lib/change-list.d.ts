@@ -42,6 +42,8 @@ export interface WorkspaceChange extends WorkspaceChangeRow {
     readonly why?: string | null;
     /** Requirement headings across the change's delta spec files. */
     readonly requirementCount: number;
+    /** Capability ids of the change's delta spec files; the client watches them. */
+    readonly deltaCapabilities: readonly string[];
     readonly commit: CommitFact | null;
     readonly presence: ChangePresence;
 }
@@ -151,8 +153,11 @@ export interface DeltaSpecFile {
 }
 /** The delta spec files under one change directory, sorted by capability. */
 export declare function deltaSpecFiles(root: string, changeDirectory: string): DeltaSpecFile[];
-/** The artifacts one change directory already carries. */
-export declare function presenceAt(workspace: string, directory: string): ChangePresence;
+/**
+ * The artifacts one change directory already carries.
+ * @param deltaFiles - an already computed delta walk to reuse; absent walks once here.
+ */
+export declare function presenceAt(workspace: string, directory: string, deltaFiles?: readonly DeltaSpecFile[]): ChangePresence;
 /**
  * List the active and archived change rows `openspec list --all --json` reports.
  * @param workspace - absolute session working directory.

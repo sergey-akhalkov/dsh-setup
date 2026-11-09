@@ -93,6 +93,16 @@ snapshot support and re-run, or defer writes until the run settles. No blocking 
 with `task_progress` instead of ticking. The gate refuses a code-changing turn without the record;
 see [docs/delegation-rules.md](docs/delegation-rules.md).
 
+**Workflow-owned gates (`retire-legacy-gates`).** The `workflows` definitions own the checkpoint
+(`retro`), task-review, and verification closes; `checkpoint.automation: false` and
+`delegation.gates.workflowOwned: false` are the gate-only retirement switches that keep the tools and
+records. The whole-spec `spec-review` rule and the task-progress and lane-assignment/lane-boundary
+gates stay enabled; a `defer` task-review/retro definition beside its disabled switch is refused at
+load. A legacy behavior moves to `own` only after the tracked parity report
+(`packages/plugin-workflows/assets/parity/retire-legacy-gates.json`) passes; `--check` must be wired
+into the release gate. Rollback is one config flip per signal: re-enable the switch and return the
+definition to `defer`. The legacy rows stay installed for one release.
+
 A checked task is approved only by a committed `openspec/changes/<change>/reviews/<taskId>.json`
 task-review PASS. When `openspec/review-approval.json` sets `archiveGate: true`, the engine refuses
 `openspec archive` and `mv`/`Move-Item`/`git mv` into `changes/archive/` until every checked task has

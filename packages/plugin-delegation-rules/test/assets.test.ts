@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { inject, skillDescription, toolDescriptions } from '../lib/index.js'
+import { inject, skillDescription, toolDescriptions } from '../src/index.js'
+import { FINDING_CLASSES } from '../src/shared/approval.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const assets = join(packageDir, 'assets', 'delegation-rules')
@@ -192,11 +193,62 @@ describe('bundled prompts', () => {
     expect(text).toMatch(/exactly one fenced ```json block/)
   })
 
+  it('documents section-scoped review in the prompt, the skill, and the docs', () => {
+    const prompt = read('review-task.md').replace(/\s+/gu, ' ')
+    const skill = read('SKILL.md').replace(/\s+/gu, ' ')
+    const docs = readFileSync(docsPath, 'utf8').replace(/\s+/gu, ' ')
+    expect(prompt).toContain('every checked task in scope')
+    expect(prompt).toContain('unchecked tasks that are out of scope')
+    expect(prompt).toContain('name its number')
+    expect(prompt).toContain('never review an unchecked task')
+    for (const text of [skill, docs]) {
+      expect(text).toContain('section: "1"')
+      expect(text).toContain('1.x')
+      expect(text).toContain('unchecked tasks')
+      expect(text).toContain('per-task')
+      expect(text).toContain('newly checked task')
+      expect(text).toContain('mutually exclusive')
+    }
+    expect(docs).toContain('the archive gate are unchanged')
+    expect(docs).toContain('installs the regenerated setup')
+    expect(skill).toContain('Every section finding names the affected task')
+    expect(toolDescriptions.delegate).toContain('section')
+    expect(toolDescriptions.delegate).toContain('1.x')
+  })
+
   it('carries the whole-worktree integration review rules', () => {
     const text = read('review-integration.md')
     expect(text).toContain('whole')
     expect(text).toContain('worktree')
     expect(text).toMatch(/exactly one fenced ```json block/)
+  })
+
+  it('documents the review-learning vocabulary, store paths, bounds, and opt-out', () => {
+    const docs = readFileSync(docsPath, 'utf8')
+    for (const text of [
+      'review_retro',
+      'review_lesson',
+      '/review-retro',
+      '.dsh/review-learning/',
+      'reviewLearning.enabled',
+      'reviewLearning.window',
+      'reviewLearning.maxLessons',
+      '1200 characters',
+      '4000 characters',
+      'spec-ambiguity',
+      'path-boundary',
+      'security',
+    ]) {
+      expect(docs).toContain(text)
+    }
+  })
+
+  it('requests the finding class vocabulary in all three review instructions', () => {
+    for (const name of ['review-spec.md', 'review-task.md', 'review-integration.md']) {
+      const text = read(name)
+      expect(text).toContain('"class"')
+      for (const findingClass of FINDING_CLASSES) expect(text).toContain(findingClass)
+    }
   })
 
   it('shapes a blocker consultation with recommendation, evidence, and next action', () => {

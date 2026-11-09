@@ -107,7 +107,9 @@ describe('setup lazy MCP configuration', () => {
     const patch = readFileSync(join(repoRoot, 'packages', 'setup', 'cordis.patch.yml'), 'utf8')
     for (const { guidanceRowId } of FIXTURES) expect(patch).toContain(guidanceRowId)
     expect(patch).not.toContain('@deepseek-ai/dsh-mcp-client')
-    expect(patch).not.toContain('disabled:')
+    // Only the retired verification gate is disabled in this release.
+    expect(patch).toContain('- id: dsh-setup-verification-gate')
+    expect(patch.match(/disabled:/g)?.length).toBe(1)
     expect(patch).toContain('serverName: nuphus-mcp')
     expect(patch).toContain('serverName: serena')
   })

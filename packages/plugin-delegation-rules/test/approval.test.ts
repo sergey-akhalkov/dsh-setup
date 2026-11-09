@@ -6,10 +6,14 @@ import {
   type ApprovalRecordState,
   approvalSummaryLine,
   computeApprovalCoverage,
+  FINDING_CLASSES,
   formatApprovalGapLines,
+  hasMachinePath,
+  isReviewFinding,
   laneOfTask,
   localTaskRecordPath,
   normalizeCheckboxes,
+  normalizeFindingClass,
   type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
   parseReviewApprovalMarker,
@@ -20,6 +24,7 @@ import {
   recognizeArchiveCommands,
   reviewerBindingOf,
   reviewerMatches,
+  sanitizeText,
   taskIdOf,
   unparseableCheckedLines,
 } from '../src/shared/approval.ts'
@@ -44,6 +49,8 @@ const DIGEST_B = 'b'.repeat(64)
 // Composed at runtime so the repository machine-path scan does not flag the fixtures.
 const WINDOWS_MODEL_PATH = ['C:', 'models', 'x'].join('\\')
 const WINDOWS_TAG_PATH = ['C:', 'tag'].join('/')
+const POSIX_HOME = ['', 'home', 'owner', 'private'].join('/')
+const TILDE_HOME = ['~', '.config', 'service', 'credentials.json'].join('/')
 
 function recordFor(
   taskText: string,
@@ -63,6 +70,38 @@ function recordFor(
     ...overrides,
   }
 }
+
+describe('finding classification', () => {
+  it('accepts the fixed vocabulary and normalizes everything else to other', () => {
+    expect(FINDING_CLASSES).toHaveLength(10)
+    expect(normalizeFindingClass('path-boundary')).toBe('path-boundary')
+    expect(normalizeFindingClass('security')).toBe('security')
+    expect(normalizeFindingClass(undefined)).toBe('other')
+    expect(normalizeFindingClass('made-up')).toBe('other')
+    expect(normalizeFindingClass(7)).toBe('other')
+  })
+
+  it('keeps a record with no class readable and rejects an invalid stored class', () => {
+    const finding = { severity: 'P1', title: 't', evidence: 'e', fix: 'f' }
+    expect(isReviewFinding(finding)).toBe(true)
+    expect(isReviewFinding({ ...finding, class: 'missing-test' })).toBe(true)
+    expect(isReviewFinding({ ...finding, class: 'made-up' })).toBe(false)
+  })
+
+  it('redacts backtick paths, file URLs, and home-relative machine paths from finding text', () => {
+    const text =
+      `See \`${POSIX_HOME}/config.json:12\`, file://${POSIX_HOME}/a.json, ` +
+      `${TILDE_HOME}, [${POSIX_HOME}/b.json], ` +
+      `<${POSIX_HOME}/c.json:9> and {${POSIX_HOME}/d.json}`
+    const sanitized = sanitizeText(text)
+    expect(sanitized).not.toContain(POSIX_HOME)
+    expect(sanitized).not.toContain(TILDE_HOME)
+    expect(sanitized).not.toContain('file://')
+    expect(sanitized).toContain('[path]')
+    expect(hasMachinePath(text)).toBe(true)
+    expect(hasMachinePath('src/file.ts:12')).toBe(false)
+  })
+})
 
 describe('numbered task parser', () => {
   it('parses checked, unchecked, and nested numbers with normalized text', () => {

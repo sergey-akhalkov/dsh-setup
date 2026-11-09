@@ -1,0 +1,15 @@
+# Generated from cordis.fragment.yml by scripts/generate.ts; do not edit.
+# Bundle layer for @dsh-setup/plugin-workflows.
+- insert:
+    - id: dsh-setup-workflows
+      name: "@dsh-setup/plugin-workflows"
+      config:
+        checkpointApplicability:
+          minToolCalls: 4
+          requireWrite: true
+          bottleneckAge: 2
+          stepInterval: 40
+          enforceParallel: true
+        verify:
+          commands: []
+          maxBlocks: 8

@@ -33,6 +33,9 @@ export interface ResolvedConfig {
  * @throws when a field is unknown, mistyped, or outside its accepted shape.
  */
 export declare function resolveConfig(raw: unknown): ResolvedConfig;
+/** The legacy close decision for one stop: allow, refuse, or the capped notice. */
+export type LegacyVerifyDecision = 'allow' | 'refuse' | 'unverified';
+export declare function decideVerifyClose(dirty: boolean, blocks: number, maxBlocks: number): LegacyVerifyDecision;
 /**
  * Install the gate. Configuration is validated first; an empty command list
  * registers nothing, so the shipped default changes no behavior.

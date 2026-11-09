@@ -2,7 +2,7 @@ import { rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
-import { apply, type BundleConfig } from '../lib/index.js'
+import { apply, type BundleConfig } from '../src/index.js'
 import { FakeGit, FakeSubagents, makeWorkspace, writeChange } from './helpers.js'
 
 const cleanups: Array<() => Promise<void>> = []

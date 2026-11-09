@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-workflow-editor",
+  "scope": "task",
+  "taskId": "4293e2f34f2834eb",
+  "digest": "39214500044098c40666cddf5aa2b49da1944cf968f29ad3f3a02ad1dbc7a479",
+  "worktreeDigest": "d76df1a3c5193e0abca582c2621aaf49320e03a39fc4ef34118f7633371247ed",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-09T16:34:11.749Z"
+}

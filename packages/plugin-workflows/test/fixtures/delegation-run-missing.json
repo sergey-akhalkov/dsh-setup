@@ -1,0 +1,9 @@
+{
+  "id": "run-mw6abcde-55555555",
+  "rule": "task-review",
+  "change": "add-workflow-observability",
+  "key": "k",
+  "identity": "i",
+  "record": ".dsh/delegation/task-review/add-workflow-observability/tasks/x.json",
+  "startedAt": "2026-11-07T10:05:00.000Z"
+}

@@ -30,6 +30,7 @@
     "@dsh-setup/plugin-rust": "0.28.0",
     "@dsh-setup/plugin-serena": "0.28.0",
     "@dsh-setup/plugin-verification-gate": "0.28.0",
+    "@dsh-setup/plugin-workflows": "0.28.0",
     "@dsh-setup/plugin-working-principles": "0.28.0",
     "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
     "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.1",
@@ -56,6 +57,7 @@
     "@dsh-setup/plugin-rust",
     "@dsh-setup/plugin-serena",
     "@dsh-setup/plugin-verification-gate",
+    "@dsh-setup/plugin-workflows",
     "@dsh-setup/plugin-working-principles"
   ],
   "dsh": {

@@ -75,6 +75,8 @@ export interface ChangeRow {
   readonly why?: string | null
   /** Requirement headings across the change's delta spec files. */
   readonly requirementCount?: number
+  /** Delta capability ids the row's spec files cover; absent on an older host. */
+  readonly deltaCapabilities?: readonly string[]
   readonly modified?: string | null
   readonly commit?: CommitFact | null
 }
@@ -331,6 +333,17 @@ export function changeWatchPaths(name: string, capabilities: readonly string[]):
     changeArtifactPath(name, 'tasks'),
     ...capabilities.map((capability) => deltaSpecPath(name, capability)),
   ]
+}
+
+/** Every file address the Changes segment observes for its active rows. */
+export function changeListWatchAddresses(sessionId: string, rows: readonly ChangeRow[]): string[] {
+  return rows
+    .filter((row) => row.archived !== true)
+    .flatMap((row) =>
+      changeWatchPaths(row.name, row.deltaCapabilities ?? []).map((path) =>
+        fileAddress(sessionId, path),
+      ),
+    )
 }
 
 /** Derived status of one row; an explicit host `phase` wins. */
@@ -644,12 +657,20 @@ function decodePhase(value: unknown): Phase | undefined {
     : undefined
 }
 
+/** Additive delta capability ids; a malformed value falls back to the fixed artifacts. */
+function decodeDeltaCapabilities(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '')
+}
+
 function decodeChangeRow(value: unknown): ChangeRow | undefined {
   if (!isRecord(value) || typeof value.name !== 'string' || value.name.trim() === '')
     return undefined
   const completedTasks = integer(value.completedTasks) ?? 0
   const totalTasks = integer(value.totalTasks) ?? 0
   const phase = decodePhase(value.phase)
+  const deltaCapabilities = decodeDeltaCapabilities(value.deltaCapabilities)
   return {
     name: value.name,
     completedTasks,
@@ -664,6 +685,7 @@ function decodeChangeRow(value: unknown): ChangeRow | undefined {
     ...(value.requirementCount === undefined
       ? {}
       : { requirementCount: integer(value.requirementCount) ?? 0 }),
+    ...(deltaCapabilities === undefined ? {} : { deltaCapabilities }),
     ...(value.modified === undefined ? {} : { modified: stringOrNull(value.modified) }),
     ...(value.commit === undefined ? {} : { commit: decodeCommit(value.commit) }),
   }

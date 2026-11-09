@@ -95,6 +95,7 @@ import {
   CapabilityView,
   type CapabilityViewProps,
   ChangeBody,
+  ChangeListObservation,
   ChangeView,
   type ChangeViewProps,
   createHandoff,
@@ -125,6 +126,7 @@ import {
   canOpenOpenSpec,
   capabilityAddress,
   changeAddress,
+  changeListWatchAddresses,
   type Delta,
   derivePhase,
   fileAddress,
@@ -933,6 +935,18 @@ function changeProps(overrides: Record<string, unknown> = {}): Record<string, un
   }
 }
 
+function rootBodyProps(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    tab: fakeTab(ROOT_ADDRESS).tab,
+    initialSegment: 'changes',
+    sessionId: 's1',
+    t,
+    draft: () => {},
+    open: () => {},
+    ...overrides,
+  }
+}
+
 function changeViewProps(overrides: Partial<ChangeViewProps> = {}): ChangeViewProps {
   return {
     change: FULL,
@@ -1051,6 +1065,7 @@ describe('OpenSpec panel data layer', () => {
     expect(phaseOf(decoded.changes[0] as ChangeRow)).toBe('applying')
     expect(decoded.archived).toEqual([])
     expect(decoded.counts).toEqual({ active: 1, archived: 0, capabilities: 0 })
+    expect(decoded.changes[0]?.deltaCapabilities).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledWith(
       `${CHANGES_PATH}?session=s1`,
       expect.objectContaining({ credentials: 'same-origin' }),
@@ -1062,7 +1077,12 @@ describe('OpenSpec panel data layer', () => {
       'fetch',
       vi.fn(async () =>
         response({
-          changes: [row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, { phase: 'applying' })],
+          changes: [
+            row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+              phase: 'applying',
+              deltaCapabilities: ['auth', 'identity/auth'],
+            }),
+          ],
           archived: [ARCHIVED_ROW],
           counts: { active: 2, archived: 34, capabilities: 19 },
         }),
@@ -1070,11 +1090,36 @@ describe('OpenSpec panel data layer', () => {
     )
     const decoded = await requestChangeList('s1')
     expect(decoded.changes).toHaveLength(1)
+    expect(decoded.changes[0]?.deltaCapabilities).toEqual(['auth', 'identity/auth'])
     expect(decoded.archived[0]?.name).toBe(ARCHIVED_ROW.name)
     expect(decoded.archived[0]?.archivedAt).toBe('2026-10-27')
     expect(decoded.archived[0]?.summary).toBe('Add the admin indicator to the app.')
     expect(decoded.archived[0]?.commit).toEqual(COMMIT)
     expect(decoded.counts).toEqual({ active: 2, archived: 34, capabilities: 19 })
+  })
+
+  it('builds the root watch addresses from a row and its delta capabilities', () => {
+    const active = row('add-auth', 'in-progress', 4, 12, EMPTY_PRESENCE, {
+      deltaCapabilities: ['auth', 'identity/auth'],
+    })
+    expect(changeListWatchAddresses('s1', [active])).toEqual([
+      fileAddress('s1', 'openspec/changes/add-auth/proposal.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/design.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/tasks.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/specs/auth/spec.md'),
+      fileAddress('s1', 'openspec/changes/add-auth/specs/identity/auth/spec.md'),
+    ])
+    expect(changeListWatchAddresses('s1', [active])[0]).toBe(
+      'dsh-resource://file/session/s1/openspec/changes/add-auth/proposal.md',
+    )
+    // An older host omits the field: only the three fixed artifacts are observed.
+    expect(changeListWatchAddresses('s1', [row('older', 'in-progress')])).toEqual([
+      fileAddress('s1', 'openspec/changes/older/proposal.md'),
+      fileAddress('s1', 'openspec/changes/older/design.md'),
+      fileAddress('s1', 'openspec/changes/older/tasks.md'),
+    ])
+    // Archived rows contribute no address.
+    expect(changeListWatchAddresses('s1', [ARCHIVED_ROW])).toEqual([])
   })
 
   it('derives every phase and prefers an explicit host phase', () => {
@@ -2977,6 +3022,351 @@ describe('OpenSpec live observation', () => {
   }
 
   const liveV1 = (): ResourceFacts => ({ status: 'live', value: { version: 'v1' } })
+
+  function observationOf(tree: unknown): Found {
+    const found = nodes(tree).find((node) => node.type === ChangeListObservation)
+    if (found === undefined) throw new Error('change-list observation missing')
+    return found
+  }
+
+  it('mounts one watch per file of the active rows and none outside the Changes segment', async () => {
+    const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+      deltaCapabilities: ['auth', 'identity/auth'],
+    })
+    const archivedRow = row('mixed-archived', 'complete', 1, 1, EMPTY_PRESENCE, {
+      archived: true,
+      deltaCapabilities: ['old'],
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          changes: [activeRow, archivedRow],
+          archived: [ARCHIVED_ROW],
+          counts: { active: 2, archived: 1, capabilities: 0 },
+        }),
+      ),
+    )
+    const body = mount(RootBody as never, rootBodyProps() as never)
+    body.render()
+    await settle()
+    body.render()
+    const mounted = mount(ChangeListObservation as never, observationOf(body.tree).props as never)
+    mounted.render()
+    const addresses = watchesOf(mounted.tree).map((watch) => watch.props.address)
+    expect(addresses).toEqual(changeListWatchAddresses('s1', [activeRow]))
+    expect(addresses).toHaveLength(5)
+    expect(addresses).not.toContain(
+      fileAddress('s1', 'openspec/changes/mixed-archived/proposal.md'),
+    )
+    ;(
+      segmented(RootView(viewProps(body.tree, RootView) as never)).props.onChange as (
+        next: string,
+      ) => void
+    )('specs')
+    body.render()
+    expect(nodes(body.tree).some((node) => node.type === ChangeListObservation)).toBe(false)
+    ;(
+      segmented(RootView(viewProps(body.tree, RootView) as never)).props.onChange as (
+        next: string,
+      ) => void
+    )('archive')
+    body.render()
+    expect(nodes(body.tree).some((node) => node.type === ChangeListObservation)).toBe(false)
+    mounted.destroy()
+    body.destroy()
+  })
+
+  it('forwards the tab resource hook through the root body to the list watches', async () => {
+    const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+      deltaCapabilities: ['auth'],
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response({
+          changes: [activeRow],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+        }),
+      ),
+    )
+    const resource = vi.fn((_address: string): ResourceFacts => ({ status: 'none' }))
+    const tree = OpenSpecTab({
+      useTabInfo: () => ({ tab: fakeTab(ROOT_ADDRESS).tab }),
+      sessionId: 's1',
+      t,
+      handoff: { draft: () => {}, open: () => {} },
+      useResource: resource,
+    } as never)
+    const root = nodes(tree).find((node) => node.type === RootBody)
+    if (root === undefined) throw new Error('root body missing')
+    expect(root.props.useResource).toBe(resource)
+    const body = mount(RootBody as never, root.props as never)
+    body.render()
+    await settle()
+    body.render()
+    const observation = observationOf(body.tree)
+    expect(observation.props.useResource).toBe(resource)
+    const mounted = mount(ChangeListObservation as never, observation.props as never)
+    mounted.render()
+    const addresses: string[] = []
+    for (const element of watchesOf(mounted.tree)) {
+      expect(element.props.useResource).toBe(resource)
+      const watch = mount(FileWatch as never, element.props as never)
+      watch.render()
+      addresses.push(element.props.address as string)
+      watch.destroy()
+    }
+    expect(addresses).toEqual(changeListWatchAddresses('s1', [activeRow]))
+    expect(resource.mock.calls.map(([address]) => address)).toEqual(addresses)
+    mounted.destroy()
+    body.destroy()
+  })
+
+  it('keeps the observation alive across a list re-read loading render', async () => {
+    vi.useFakeTimers()
+    try {
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+        deltaCapabilities: ['auth'],
+      })
+      const fetchMock = vi.fn(async () =>
+        response({
+          changes: [activeRow],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+        }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(RootBody as never, rootBodyProps() as never)
+      body.render()
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const mounted = mount(ChangeListObservation as never, observationOf(body.tree).props as never)
+      mounted.render()
+      const watches = new Map<string, WatchMount>()
+      syncWatches(mounted.tree, watches, liveV1)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(300)
+      // The list is now loading; the observation and its retained rows stay mounted.
+      body.render()
+      expect(observationOf(body.tree).props.rows).toEqual([activeRow])
+      expect(watchesOf(mounted.tree)).toHaveLength(4)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      const ready = observationOf(body.tree)
+      expect(ready.props.rows).toEqual([activeRow])
+      mounted.render(ready.props as never)
+      syncWatches(mounted.tree, watches, liveV1)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      mounted.destroy()
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('re-reads the change list once per observed file change and never polls', async () => {
+    vi.useFakeTimers()
+    try {
+      const interval = vi.spyOn(globalThis, 'setInterval')
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+        deltaCapabilities: ['auth'],
+      })
+      const fetchMock = vi.fn(async () =>
+        response({
+          changes: [activeRow],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+        }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(RootBody as never, rootBodyProps() as never)
+      body.render()
+      await settle()
+      body.render()
+      const mounted = mount(ChangeListObservation as never, observationOf(body.tree).props as never)
+      mounted.render()
+      const tasksAddress = fileAddress('s1', 'openspec/changes/add-auth/tasks.md')
+      let files: Record<string, ResourceFacts> = {}
+      const useResource = (address: string): ResourceFacts =>
+        files[address] ?? { status: 'live', value: { version: 'v1' } }
+      const watches = new Map<string, WatchMount>()
+      syncWatches(mounted.tree, watches, useResource)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      // The first settlement of the initial set schedules one reconciliation read.
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      // An unchanged version schedules nothing.
+      mounted.render(observationOf(body.tree).props as never)
+      syncWatches(mounted.tree, watches, useResource)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      // One version bump on tasks.md schedules exactly one re-read after 300 ms.
+      files = { [tasksAddress]: { status: 'live', value: { version: 'v2' } } }
+      syncWatches(mounted.tree, watches, useResource)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(299)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(1)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(vi.getTimerCount()).toBe(0)
+      // An observed absence and a later appearance each schedule one re-read.
+      files = { [tasksAddress]: { status: 'failed' } }
+      syncWatches(mounted.tree, watches, useResource)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+      files = { [tasksAddress]: { status: 'live', value: { version: 'v3' } } }
+      syncWatches(mounted.tree, watches, useResource)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+      expect(vi.getTimerCount()).toBe(0)
+      // No polling timer exists; an idle segment issues no request.
+      expect(interval).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1500)
+      await settle()
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+      expect(vi.getTimerCount()).toBe(0)
+      mounted.destroy()
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ends the observation when Changes is left and reconciles once on return', async () => {
+    vi.useFakeTimers()
+    try {
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+        deltaCapabilities: ['auth'],
+      })
+      const fetchMock = vi.fn(async () =>
+        response({
+          changes: [activeRow],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+        }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(RootBody as never, rootBodyProps() as never)
+      body.render()
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const mounted = mount(ChangeListObservation as never, observationOf(body.tree).props as never)
+      mounted.render()
+      const watches = new Map<string, WatchMount>()
+      syncWatches(mounted.tree, watches, liveV1)
+      expect(vi.getTimerCount()).toBe(1)
+      const leave = (segment: string): void => {
+        ;(
+          segmented(RootView(viewProps(body.tree, RootView) as never)).props.onChange as (
+            next: string,
+          ) => void
+        )(segment)
+        body.render()
+      }
+      leave('archive')
+      expect(nodes(body.tree).some((node) => node.type === ChangeListObservation)).toBe(false)
+      // Leaving Changes unmounts the observation: its pending debounce is cancelled.
+      mounted.destroy()
+      expect(vi.getTimerCount()).toBe(0)
+      vi.advanceTimersByTime(300)
+      await settle()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      // Returning reconciles once even though the address set did not change.
+      leave('changes')
+      const again = mount(ChangeListObservation as never, observationOf(body.tree).props as never)
+      again.render()
+      const returned = new Map<string, WatchMount>()
+      syncWatches(again.tree, returned, liveV1)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersByTime(300)
+      await settle()
+      body.render()
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+      again.destroy()
+      body.destroy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('disposes the change-list observation and its subscriptions with the body', async () => {
+    vi.useFakeTimers()
+    try {
+      const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
+        deltaCapabilities: ['auth'],
+      })
+      const fetchMock = vi.fn(async () =>
+        response({
+          changes: [activeRow],
+          archived: [],
+          counts: { active: 1, archived: 0, capabilities: 0 },
+        }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const body = mount(RootBody as never, rootBodyProps() as never)
+      body.render()
+      await settle()
+      body.render()
+      const subscribed = new Set<string>()
+      const observed: string[] = []
+      const useResource = (address: string): ResourceFacts => {
+        observed.push(address)
+        registerEffect(() => {
+          subscribed.add(address)
+          return () => {
+            subscribed.delete(address)
+          }
+        }, [address])
+        return { status: 'live', value: { version: 'v1' } }
+      }
+      const mounted = mount(ChangeListObservation as never, observationOf(body.tree).props as never)
+      mounted.render()
+      const watches = new Map<string, WatchMount>()
+      syncWatches(mounted.tree, watches, useResource, mounted)
+      const expected = changeListWatchAddresses('s1', [activeRow])
+      expect([...subscribed].sort()).toEqual([...expected].sort())
+      expect(vi.getTimerCount()).toBe(1)
+      const captured = watchesOf(mounted.tree).map((element) => element.props)
+      body.destroy()
+      mounted.destroy()
+      expect(subscribed.size).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+      for (const props of captured) {
+        ;(props.change as () => void)()
+        ;(props.settle as (address: string, observable: boolean) => void)(
+          props.address as string,
+          true,
+        )
+      }
+      expect(vi.getTimerCount()).toBe(0)
+      vi.advanceTimersByTime(300)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it('settles the first observation, then reports changes, absences, and appearances', () => {
     const address = 'dsh-resource://file/session/s1/openspec/changes/add-auth/tasks.md'

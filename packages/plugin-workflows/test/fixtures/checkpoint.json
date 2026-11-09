@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "checkpoint": "checkpoint-2-a1b2c3d4",
+  "revision": 1,
+  "turn": 2,
+  "outcome": "continue",
+  "verified": ["the parser test passes"],
+  "lanes": [
+    {
+      "id": "lane-a",
+      "owner": "lead",
+      "scope": ["packages/plugin-workflows"],
+      "state": "running",
+      "blockedBy": []
+    }
+  ],
+  "laneAges": [{ "id": "lane-a", "checkpoints": 1 }],
+  "bottleneck": {
+    "id": "lane-a",
+    "owner": "lead",
+    "action": "lead_action",
+    "blockingLanes": [],
+    "targets": ["packages/plugin-workflows"]
+  },
+  "bottleneckKey": "e2d946de2649d514",
+  "derivedRemaining": ["lane-a"],
+  "parallelComputed": false,
+  "next": "finish the projection test",
+  "time": "2026-11-07T10:00:00.000Z",
+  "session": "[REDACTED]"
+}

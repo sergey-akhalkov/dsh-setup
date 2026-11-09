@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "id": "verify",
+  "name": "Verification check",
+  "version": 1,
+  "trigger": {
+    "kind": "turn.stopping",
+    "match": {},
+    "mode": "active",
+    "dedupe": "turn",
+    "applicability": "code-write"
+  },
+  "settings": {
+    "allowModelStart": false,
+    "risk": "low",
+    "gateOwnership": "own",
+    "maxBlocks": 8,
+    "allowIntent": false,
+    "legacy": { "plugin": "verification-gate", "signal": "verification-gate" }
+  },
+  "steps": [
+    {
+      "id": "check",
+      "title": "Run the configured verification command",
+      "executor": "main",
+      "prompt": "This turn wrote code. Run the configured verification command now and let it finish with exit code 0; the workflow reads the foreground shell result and never runs the command itself. A failed, timed-out, background, or sandbox-denied run does not satisfy the check.",
+      "evidence": { "kind": "check", "source": "verify-settings" },
+      "next": "end",
+      "blockTurnClose": true
+    }
+  ]
+}

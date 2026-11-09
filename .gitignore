@@ -12,6 +12,7 @@ node_modules/
 # Local validation state
 .tmp/
 coverage/
+.vitest/
 
 # Workspace-local Harness state (skills installed into this checkout)
 .dsh/

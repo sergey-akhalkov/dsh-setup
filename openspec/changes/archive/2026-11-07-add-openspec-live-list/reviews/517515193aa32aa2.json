@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-openspec-live-list",
+  "scope": "task",
+  "taskId": "517515193aa32aa2",
+  "digest": "df9dd712a3f1d39fb48fcbfcf93f7b89c8d7b37ba1590f05ca99e1627ec48074",
+  "worktreeDigest": "2185a5c78fd211887b79401518b66e038c522ab2e5f78b1e8af22d5ea588ac67",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-07T11:34:57.536Z"
+}

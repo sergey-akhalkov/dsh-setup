@@ -44,8 +44,10 @@ import {
   formatApprovalGapLines,
   isReviewFinding,
   laneOfTask,
+  legacyRecordSatisfies,
   type NumberedTask,
   normalizeCheckboxes,
+  normalizeFindingClass,
   normalizeTaskText,
   type PortableTaskReviewRecord,
   parsePortableTaskReviewRecord,
@@ -62,11 +64,35 @@ import {
   reviewerBindingOf,
   reviewerMatches,
   type ShellToken,
+  sanitizeText,
   shellSegments,
   TASK_ID_PATTERN,
   type TaskLane,
   unparseableCheckedLines,
 } from '../shared/approval.js'
+import {
+  appendFindingHistory,
+  DEFAULT_HISTORY_WINDOW,
+  MAX_HISTORY_WINDOW,
+} from './finding-history.js'
+import type { UserQuestionsService } from './learning-tools.js'
+import { executeReviewLesson, REVIEW_LESSON_DESCRIPTION } from './learning-tools.js'
+import {
+  changeCapabilities,
+  DEFAULT_MAX_LESSONS,
+  type Lesson,
+  matchingLessons,
+  readLessons,
+} from './lesson-store.js'
+import { executeReviewRetro, REVIEW_RETRO_DESCRIPTION } from './retro.js'
+import {
+  type Admission,
+  classifyFailure,
+  type FailureClass,
+  QueueInternalError,
+  type QueueTimeoutInfo,
+  ReviewQueue,
+} from './review-queue.js'
 
 /**
  * Delegation-rules plugin: a model-agnostic engine where rules, targets,
@@ -80,7 +106,7 @@ import {
 /** Cordis plugin name, equal to the package name. */
 export const name = '@dsh-setup/plugin-delegation-rules'
 
-/** Services the registrations depend on. */
+/** Services the registrations depend on; the learning surfaces attach when present. */
 export const inject = ['tools', 'subagents', 'skills', 'workingDirectory']
 
 /** Skill name advertised in the catalog and loaded on demand. */
@@ -110,7 +136,7 @@ export const skillDescription =
  */
 export const toolDescriptions = {
   delegate:
-    'Run one configured delegation rule through its target. Manual tasks: `research` answers a question with evidence and sources; `advisor` gives a manual second opinion from the strong target on one decision; pass the exact question, constraints, and decisive evidence, and use it only for expensive-to-reverse, cross-module, security/data-integrity, or repeated-failure decisions - never routine edits, syntax, lookups, or locally verifiable facts, and at most three times per session; `blocker` consults on a stuck plan when the failure-streak hint appears; `bug-fix` runs a write target in an isolated git worktree and returns the diff and test report (never auto-merged). Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record; `integration-review` is the optional whole-worktree check. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. The `answer` contract writes no gate record. Only a matching record satisfies the turn-stopping gate: a text claim does not. A missing or incompatible target is reported with the target id, provider name, and next action.',
+    'Run one configured delegation rule through its target. Manual tasks: `research` answers a question with evidence and sources; `advisor` gives a manual second opinion from the strong target on one decision; pass the exact question, constraints, and decisive evidence, and use it only for expensive-to-reverse, cross-module, security/data-integrity, or repeated-failure decisions - never routine edits, syntax, lookups, or locally verifiable facts, and at most three times per session; `blocker` consults on a stuck plan when the failure-streak hint appears; `bug-fix` runs a write target in an isolated git worktree and returns the diff and test report (never auto-merged). Gate rules: `spec-review` reviews the whole active OpenSpec change before implementation; `task-review` reviews the next checked task without a PASS/ERROR record, or one `section` (a tasks.md level-2 heading number such as `1`, its `1.x` form, or the normalized title) with every checked task of that section in one run; `integration-review` is the optional whole-worktree check. One section run writes one verdict and publishes one per-task approval per covered checked task; `task` and `section` are mutually exclusive, unchecked tasks are out of scope, and a newly checked task needs a new review. The engine validates the rule, starts the configured DSH subagent provider, parses the contract result, and writes a digest-bound record under `.dsh/delegation`; a review PASS needs zero P0/P1 findings, FINDINGS/ERROR are reported but do not pass a strict gate, and a matching PASS is reused without another run. The `answer` contract writes no gate record. Only a matching record satisfies the turn-stopping gate: a text claim does not. A missing or incompatible target is reported with the target id, provider name, and next action.',
   task_progress:
     'Record an explicit in-progress or blocked note for one unchecked task, with the reason and the current worktree digest. Use it when a task spans turns instead of ticking `tasks.md`: it runs no model and costs nothing. The note lets a code-changing turn close only while the worktree still matches it; after any further change it is stale and a fresh note or the tick plus `delegate` task review is required. A checked task never accepts a note, and a note never counts as a task-review PASS.',
   delegation_status:
@@ -147,8 +173,27 @@ const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'wo
 
 const DEFAULT_TIMEOUTS: TimeoutConfig = { review: 1_200_000, answer: 300_000, patch: 1_800_000 }
 const DEFAULT_FAILURE_STREAK = 3
+
+/** Queue defaults stay well below the DSH active-child limit so workers keep room. */
+export const DEFAULT_REVIEW_QUEUE: Readonly<ReviewQueueConfig> = {
+  enabled: true,
+  concurrency: 2,
+  maxQueued: 16,
+  maxAttempts: 3,
+  baseDelayMs: 5_000,
+  maxDelayMs: 60_000,
+  waitTimeoutMs: 300_000,
+}
+const REVIEW_QUEUE_KEYS = new Set([
+  'enabled',
+  'concurrency',
+  'maxQueued',
+  'maxAttempts',
+  'baseDelayMs',
+  'maxDelayMs',
+  'waitTimeoutMs',
+])
 const MAX_ANSWER_CHARS = 12_000
-const MAX_FINDING_CHARS = 2_000
 const MAX_ERROR_CHARS = 4_000
 const MAX_REASON_CHARS = 2_000
 
@@ -206,12 +251,53 @@ export interface TimeoutConfig {
   patch: number
 }
 
+/** Per-profile review queue limits and retry policy. */
+export interface ReviewQueueConfig {
+  /** Off restores the direct target start. */
+  enabled: boolean
+  /** Live review targets allowed at once; below the DSH active-child limit. */
+  concurrency: number
+  /** Unique waiting runs allowed before admission is refused. */
+  maxQueued: number
+  /** Original attempt plus retries. */
+  maxAttempts: number
+  baseDelayMs: number
+  maxDelayMs: number
+  waitTimeoutMs: number
+}
+
+/** Per-profile review-learning limits. */
+export interface ReviewLearningConfig {
+  /** Off: no retro/lesson tool, no command, and no lesson injection. */
+  enabled: boolean
+  /** Settled reviews read by the retro and kept in the finding history. */
+  window: number
+  /** Lesson store cap; the byte cap still applies. */
+  maxLessons: number
+}
+
+/** The documented defaults; `window` and `maxLessons` also bound their stores. */
+export const DEFAULT_REVIEW_LEARNING: Readonly<ReviewLearningConfig> = {
+  enabled: true,
+  window: DEFAULT_HISTORY_WINDOW,
+  maxLessons: DEFAULT_MAX_LESSONS,
+}
+
 /** Row configuration accepted by {@link apply}. */
 export interface BundleConfig {
   targets?: Record<string, TargetConfig>
   rules?: RuleConfig[]
   timeouts?: Partial<TimeoutConfig>
   failureStreak?: number
+  reviewQueue?: Partial<ReviewQueueConfig>
+  reviewLearning?: Partial<ReviewLearningConfig>
+  /** Gate-only retirement switch (default `workflowOwned: true`). */
+  gates?: { workflowOwned?: boolean }
+}
+
+/** Resolved gate ownership: false moves the task-review and archive gates to the workflow. */
+export interface GatesConfig {
+  readonly workflowOwned: boolean
 }
 
 /** Test seams; production uses the filesystem, git, and the wall clock. */
@@ -220,6 +306,16 @@ export interface ApplyOptions {
   now?: () => Date
   /** Called once per review run after it settles; the run is no longer pending. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
+  /** Test seam: observes each published review record. */
+  onPublished?: (runId: string, record: ReviewRecord) => void
+  /** Test seam: throws before admission to simulate an internal queue failure. */
+  queueFault?: () => void
+  /** Test seam: delays the once-per-workspace recovery scan. */
+  recoverDelay?: () => Promise<void>
+  /** Test seam: runs inside the publication lock before any record is written. */
+  publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
+  /** Test seam: runs after admission and before a target starts. */
+  startHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
 }
 
 /** Terminal review-run states reported to the settlement observer. */
@@ -241,12 +337,75 @@ interface EngineConfig {
   rules: RuleConfig[]
   timeouts: TimeoutConfig
   failureStreak: number
+  reviewQueue: ReviewQueueConfig
+  reviewLearning: ReviewLearningConfig
+  gates: GatesConfig
 }
 
 class DelegationError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'DelegationError'
+  }
+}
+
+/** A rule/target/provider configuration problem; never transient. */
+class ConfigError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConfigError'
+  }
+}
+
+/** The provider rejected a start before any child existed; retryable. */
+class ProviderStartError extends DelegationError {
+  constructor(
+    message: string,
+    /** The provider's own text, separated from rule/target identifiers. */
+    readonly providerMessage: string,
+    /** A provider-supplied retry-after hint, preserved for the queue policy. */
+    readonly retryAfterMs?: number,
+  ) {
+    super(message)
+    this.name = 'ProviderStartError'
+  }
+}
+
+/** The review target did not finish inside its contract timeout. */
+class TimeoutError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TimeoutError'
+  }
+}
+
+/** A timeout whose child could not be confirmed cancelled; quarantine it. */
+class UnconfirmedTimeoutError extends TimeoutError {
+  constructor(
+    message: string,
+    readonly activation: SubagentActivation,
+  ) {
+    super(message)
+    this.name = 'UnconfirmedTimeoutError'
+  }
+}
+
+/** The reviewed inputs were written during the run; terminal, never retried. */
+class InputMutationError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InputMutationError'
+  }
+}
+
+/** The provider returned an unsuccessful result; classify its diagnostic alone. */
+class ProviderResultError extends DelegationError {
+  constructor(
+    message: string,
+    readonly providerMessage: string,
+  ) {
+    super(message)
+    this.name = 'ProviderResultError'
   }
 }
 
@@ -296,6 +455,7 @@ const RULE_KEYS = new Set([
 const TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'agentOptions', 'write'])
 const AGENT_OPTION_KEYS = new Set(['provider', 'model', 'reasoningEffort', 'maxTokens'])
 const TIMEOUT_KEYS = new Set(['review', 'answer', 'patch'])
+const REVIEW_LEARNING_KEYS = new Set(['enabled', 'window', 'maxLessons'])
 
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
@@ -306,10 +466,21 @@ export function validateConfig(raw: unknown): EngineConfig {
   if (raw === undefined || raw === null) raw = {}
   if (!isRecord(raw)) fail('configuration must be a mapping')
 
-  const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'failureStreak']))
+  const unknownTop = unknownKeys(
+    raw,
+    new Set([
+      'targets',
+      'rules',
+      'timeouts',
+      'failureStreak',
+      'reviewQueue',
+      'reviewLearning',
+      'gates',
+    ]),
+  )
   if (unknownTop.length > 0) {
     fail(
-      `unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, or failureStreak`,
+      `unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning, or gates`,
     )
   }
 
@@ -424,7 +595,126 @@ export function validateConfig(raw: unknown): EngineConfig {
     failureStreak = raw.failureStreak
   }
 
-  return { targets, rules, timeouts, failureStreak }
+  const reviewQueue = validateReviewQueue(raw.reviewQueue)
+  const reviewLearning = validateReviewLearning(raw.reviewLearning)
+  const gates = validateGates(raw.gates)
+
+  return { targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning, gates }
+}
+
+/** Validate the gate-only retirement switch fail-loud with its field and shape. */
+export function validateGates(raw: unknown): GatesConfig {
+  if (raw === undefined) return { workflowOwned: true }
+  if (!isRecord(raw)) {
+    fail('gates must be a mapping; accepted shape: { workflowOwned?: boolean }')
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== 'workflowOwned') {
+      fail(`gates: unknown field "${key}"; accepted shape: { workflowOwned?: boolean }`)
+    }
+  }
+  const workflowOwned = raw.workflowOwned
+  if (workflowOwned !== undefined && typeof workflowOwned !== 'boolean') {
+    fail('gates.workflowOwned must be a boolean')
+  }
+  return { workflowOwned: workflowOwned ?? true }
+}
+
+/**
+ * Validate the review-learning block. The defaults bound the lesson store and
+ * the retro window; an invalid field fails plugin load with its range.
+ */
+export function validateReviewLearning(raw: unknown): ReviewLearningConfig {
+  const learning: ReviewLearningConfig = { ...DEFAULT_REVIEW_LEARNING }
+  if (raw === undefined) return learning
+  if (!isRecord(raw)) fail('reviewLearning must be a mapping')
+  const unknown = unknownKeys(raw, REVIEW_LEARNING_KEYS)
+  if (unknown.length > 0) {
+    fail(
+      `reviewLearning: unknown field(s) ${unknown.join(', ')}; use enabled, window, or maxLessons`,
+    )
+  }
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') fail('reviewLearning.enabled must be true or false')
+    learning.enabled = raw.enabled
+  }
+  const window = raw.window
+  if (window !== undefined) {
+    if (
+      typeof window !== 'number' ||
+      !Number.isSafeInteger(window) ||
+      window < 1 ||
+      window > MAX_HISTORY_WINDOW
+    ) {
+      fail(
+        `reviewLearning.window must be a whole number from 1 to ${MAX_HISTORY_WINDOW}; it bounds the retro window and the finding history`,
+      )
+    }
+    learning.window = window
+  }
+  const maxLessons = raw.maxLessons
+  if (maxLessons !== undefined) {
+    if (
+      typeof maxLessons !== 'number' ||
+      !Number.isSafeInteger(maxLessons) ||
+      maxLessons < 1 ||
+      maxLessons > 1_000
+    ) {
+      fail('reviewLearning.maxLessons must be a whole number from 1 to 1000')
+    }
+    learning.maxLessons = maxLessons
+  }
+  return learning
+}
+
+/**
+ * Validate the review queue block. An omitted block enables the documented
+ * defaults; an invalid field fails plugin load with the field and its range.
+ */
+export function validateReviewQueue(raw: unknown): ReviewQueueConfig {
+  const queue: ReviewQueueConfig = { ...DEFAULT_REVIEW_QUEUE }
+  if (raw === undefined) return queue
+  if (!isRecord(raw)) fail('reviewQueue must be a mapping')
+  const unknown = unknownKeys(raw, REVIEW_QUEUE_KEYS)
+  if (unknown.length > 0) {
+    fail(
+      `reviewQueue: unknown field(s) ${unknown.join(', ')}; use enabled, concurrency, maxQueued, maxAttempts, baseDelayMs, maxDelayMs, or waitTimeoutMs`,
+    )
+  }
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') fail('reviewQueue.enabled must be true or false')
+    queue.enabled = raw.enabled
+  }
+  type NumericField =
+    | 'concurrency'
+    | 'maxQueued'
+    | 'maxAttempts'
+    | 'baseDelayMs'
+    | 'maxDelayMs'
+    | 'waitTimeoutMs'
+  const integer = (field: NumericField, minimum: number, maximum?: number): void => {
+    const value = raw[field]
+    if (value === undefined) return
+    const range = maximum === undefined ? `at least ${minimum}` : `from ${minimum} to ${maximum}`
+    if (
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      value < minimum ||
+      (maximum !== undefined && value > maximum)
+    ) {
+      fail(
+        `reviewQueue.${field} must be a whole number ${range}; use ${JSON.stringify(queue[field])}`,
+      )
+    }
+    queue[field] = value
+  }
+  integer('concurrency', 1, 4)
+  integer('maxQueued', 1)
+  integer('maxAttempts', 1)
+  integer('baseDelayMs', 1)
+  integer('maxDelayMs', 1)
+  integer('waitTimeoutMs', 1)
+  return queue
 }
 
 function validateRule(raw: unknown, index: number, targets: Map<string, TargetConfig>): RuleConfig {
@@ -670,6 +960,20 @@ interface GitServices {
 
 type TaskInfo = NumberedTask
 
+/** One resolved `tasks.md` section: a level-2 heading and the tasks it covers. */
+interface SectionInfo {
+  /** Stable identity: heading number, normalized title, or `untitled`. */
+  key: string
+  /** Heading title without `##`; empty for the untitled leading group. */
+  title: string
+  /** Every numbered task under the heading at resolution time. */
+  tasks: TaskInfo[]
+  /** The checked tasks this run reviews, in heading order. */
+  covered: TaskInfo[]
+  /** The tasks excluded because they are unchecked. */
+  unchecked: TaskInfo[]
+}
+
 interface ChangeInfo {
   name: string
   dir: string
@@ -700,9 +1004,25 @@ interface ReviewRecord {
   runId?: string
   time: string
   error?: string
+  /** Section key for a section-scope review; absent on per-task and whole records. */
+  section?: string
+  /** Section heading title, kept beside the key for readability. */
+  sectionTitle?: string
+  /** Covered checked task ids for a section-scope review, in review order. */
+  taskIds?: string[]
+  /** Classified failure for a failed section run, preserved on each covered task's record. */
+  failureClass?: FailureClass
 }
 
-type RunState = 'queued' | 'running' | 'completed' | 'failed' | 'discarded'
+type RunState =
+  | 'queued'
+  | 'starting'
+  | 'running'
+  | 'retry-wait'
+  | 'completed'
+  | 'failed'
+  | 'discarded'
+  | 'interrupted'
 
 /** Durable, model-facing state of one asynchronous review run. */
 interface RunFile {
@@ -710,6 +1030,8 @@ interface RunFile {
   rule: string
   change: string
   taskId?: string
+  /** Section key for a section-scope review. */
+  section?: string
   key: string
   identity: string
   state: RunState
@@ -717,6 +1039,13 @@ interface RunFile {
   record: string
   startedAt: string
   detail?: string
+  /** Bounded queue facts; absent for runs that bypassed the queue. */
+  queuePosition?: number
+  queuedAt?: string
+  waitMs?: number
+  attempts?: number
+  failureClass?: FailureClass
+  lastRetryAt?: string
 }
 
 interface ManagedRun {
@@ -726,10 +1055,30 @@ interface ManagedRun {
   existingFingerprint?: string
   /** Disposable checkout this run reviews; absent when it reviews the live worktree. */
   snapshot?: ReviewSnapshot
+  /** Prepared digest and inputs; set before admission. */
+  prepared?: ReviewPreparation
+  /** Section submission order; a newer submission supersedes an older identity. */
+  identitySeq?: number
+  /** Authoritative record fingerprint at preparation, before any queue wait. */
+  admissionFingerprint?: string
+  /** Publication baseline captured once, immediately before the first start. */
+  baselineCaptured?: boolean
+  /** The run waited in the admission queue before its first start. */
+  waitedInQueue?: boolean
+  /** A queued run re-prepared exactly once when its source inputs moved. */
+  reprepared?: boolean
+  /** A direct start used after a queue-internal fault. */
+  fallback?: boolean
+  /** Bounded queue-fault evidence kept through the fallback run. */
+  queueFaultDetail?: string
+  /** Cached-record text returned instead of a target start. */
+  reusedText?: string
   context: {
     rule: RuleConfig
     change: ChangeInfo
     task?: TaskInfo
+    /** Resolved section for a section-scope review; `task` stays absent. */
+    section?: SectionInfo
     agent: Agent
     cwd: string
     args: DelegateArguments
@@ -743,6 +1092,8 @@ interface ReviewPreparation {
   path: string
   /** Live inputs to guard; absent for a frozen snapshot review. */
   signature?: InputSignature
+  /** Source-input signature a queued run re-checks before it starts. */
+  queueSignature: string
   /** Working directory the reviewer runs in; defaults to the session worktree. */
   reviewCwd?: string
   /** Content tree the snapshot digest binds to; absent in live mode. */
@@ -812,6 +1163,15 @@ function hashParts(parts: Array<string | Buffer>): string {
     hash.update('\0')
   }
   return hash.digest('hex')
+}
+
+/** Stable hash of the source input set a queued review re-checks before start. */
+function signatureHash(signature: InputSignature): string {
+  const entries = [...signature.entries].sort(([left], [right]) => left.localeCompare(right))
+  return hashParts([
+    'queue-signature-v1',
+    ...entries.map(([path, value]) => `${path}\u0000${value}`),
+  ])
 }
 
 async function readTasks(changeDir: string): Promise<TaskInfo[]> {
@@ -1457,35 +1817,73 @@ async function captureSnapshot(
   return snapshot
 }
 
-function sanitizeText(text: string, maximum = MAX_FINDING_CHARS): string {
-  const redacted = text
-    .replace(/\b[A-Za-z]:[\\/][^\s"'`)]*/g, '[path]')
-    .replace(/\\\\[^\s"'`)]+/g, '[path]')
-    .replace(/(?:^|\s)\/(?:Users|home)\/[^\s"'`)]+/g, ' [path]')
-    .replace(
-      /\b(?:sk-[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}|ghp_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})\b/g,
-      '[secret]',
-    )
-    .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-      '[secret]',
-    )
-  return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum - 1)}…`
+/** One-line, redacted, bounded text for a public error message. */
+function boundedMessage(error: unknown, maximum = MAX_ERROR_CHARS): string {
+  return sanitizeText(errorMessage(error), maximum).replace(/\s+/g, ' ').trim()
 }
 
 function relativePath(cwd: string, path: string): string {
   return relative(cwd, path).split(sep).join('/')
 }
 
-function recordPath(cwd: string, rule: RuleConfig, change: string, taskId?: string): string {
+/** Stable path segment for a section key; keeps paths safe and bounded. */
+function sectionRecordId(key: string): string {
+  return createHash('sha256').update(key).digest('hex').slice(0, 16)
+}
+
+function recordPath(
+  cwd: string,
+  rule: RuleConfig,
+  change: string,
+  taskId?: string,
+  sectionKey?: string,
+): string {
   if (rule.scope === 'task') {
+    if (sectionKey !== undefined) {
+      return join(
+        cwd,
+        DELEGATION_DIR,
+        rule.id,
+        change,
+        'sections',
+        `${sectionRecordId(sectionKey)}.json`,
+      )
+    }
     if (taskId === undefined || !TASK_ID_PATTERN.test(taskId)) {
-      fail(`rule "${rule.id}": a task-scoped record needs a stable task id`)
+      fail(`rule "${rule.id}": a task-scoped record needs a stable task id or a section key`)
     }
     return join(cwd, DELEGATION_DIR, rule.id, change, 'tasks', `${taskId}.json`)
   }
   if (rule.phase === undefined) fail(`rule "${rule.id}": a whole-scope record needs a phase`)
   return join(cwd, DELEGATION_DIR, rule.id, change, `${rule.phase}.json`)
+}
+
+/**
+ * Selector syntax is static, but the labels are not: remember the sections last
+ * inspected so the delegate tool description can name them before a call. One
+ * bounded catalog (the most recently inspected change); the rejection itself
+ * always names the selected change's sections.
+ */
+let sectionCatalog = ''
+const MAX_SECTION_CATALOG_CHARS = 400
+
+function rememberSections(change: string, lanes: readonly TaskLane[]): void {
+  if (lanes.length === 0) {
+    sectionCatalog = ''
+    return
+  }
+  sectionCatalog = ` Available sections in change "${change}": ${lanes
+    .map((lane) => sectionLabel(lane))
+    .join('; ')}`.slice(0, MAX_SECTION_CATALOG_CHARS)
+}
+
+function sectionCatalogNote(): string {
+  return sectionCatalog
+}
+
+/** One lock per rule/change publication: per-task and section writes serialize. */
+function publicationLockPath(cwd: string, rule: RuleConfig, change: string): string {
+  return join(cwd, DELEGATION_DIR, rule.id, change, '.publication')
 }
 
 function notePath(cwd: string, change: string): string {
@@ -2001,11 +2399,105 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+    await writeFile(temporary, jsonText(value), 'utf8')
     await rename(temporary, path)
   } finally {
     // A failed write or rename must not leave the temporary file behind.
     await unlink(temporary).catch(() => undefined)
+  }
+}
+
+/** One JSON document's serialized form; every record writer uses this shape. */
+function jsonText(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`
+}
+
+/** The sanitized committed approval subset of a per-task PASS record. */
+function portableRecordOf(record: ReviewRecord, taskId: string): PortableTaskReviewRecord {
+  return {
+    rule: record.rule,
+    change: record.change,
+    scope: 'task',
+    taskId,
+    digest: record.digest,
+    ...(record.worktreeDigest === undefined ? {} : { worktreeDigest: record.worktreeDigest }),
+    verdict: 'PASS',
+    findings: [],
+    target: record.target,
+    time: record.time,
+  }
+}
+
+interface PublishFile {
+  path: string
+  body: string
+}
+
+/**
+ * Publish several record files as one transaction: all temporaries are written
+ * before any rename, and a failure restores every destination it replaced
+ * byte-identically while removing only files this transaction created. A
+ * destination that was never renamed is left untouched.
+ */
+async function publishFilesTransaction(files: readonly PublishFile[]): Promise<void> {
+  const unique: PublishFile[] = []
+  const seen = new Set<string>()
+  for (const file of files) {
+    if (seen.has(file.path)) continue
+    seen.add(file.path)
+    unique.push(file)
+  }
+  const originals = new Map<string, Buffer | undefined>()
+  const temporary = new Map<string, string>()
+  const renamed = new Set<string>()
+  try {
+    for (const file of unique) {
+      await mkdir(dirname(file.path), { recursive: true })
+      try {
+        originals.set(file.path, await readFile(file.path))
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && code !== 'EISDIR') throw error
+        originals.set(file.path, undefined)
+      }
+    }
+    for (const file of unique) {
+      const path = `${file.path}.${randomUUID()}.tmp`
+      await writeFile(path, file.body, 'utf8')
+      temporary.set(file.path, path)
+    }
+    for (const file of unique) {
+      await rename(temporary.get(file.path) as string, file.path)
+      renamed.add(file.path)
+    }
+  } catch (error) {
+    const failures: string[] = []
+    for (const path of renamed) {
+      const original = originals.get(path)
+      try {
+        if (original === undefined) {
+          await unlink(path)
+          continue
+        }
+        const restore = `${path}.${randomUUID()}.restore`
+        await writeFile(restore, original)
+        try {
+          await rename(restore, path)
+        } finally {
+          await unlink(restore).catch(() => undefined)
+        }
+      } catch (restoreError) {
+        failures.push(sanitizeText(errorMessage(restoreError), 200))
+      }
+    }
+    if (failures.length > 0) {
+      throw new DelegationError(
+        `${errorMessage(error)}; restoring the previous records failed: ${failures.join('; ')}`,
+      )
+    }
+    throw error
+  } finally {
+    for (const path of temporary.values()) await unlink(path).catch(() => undefined)
   }
 }
 
@@ -2021,18 +2513,43 @@ function reviewConversationKey(
   change: string,
   task: TaskInfo | undefined,
   rule: RuleConfig,
+  sectionKey?: string,
 ): string {
+  if (sectionKey !== undefined) return `${change}\u0000section\u0000${sectionKey}`
   return task !== undefined
     ? `${change}\u0000task\u0000${task.id}`
     : `${change}\u0000whole\u0000${rule.phase ?? 'review'}`
 }
 
-function reviewIdentity(rule: RuleConfig, change: string, task: TaskInfo | undefined): string {
-  return `${rule.id}\u0000${change}\u0000${task?.id ?? rule.phase ?? 'whole'}`
+/** The prepared-review identity: rule, change, task/phase or section, digest, and reviewer. */
+function reviewIdentity(
+  rule: RuleConfig,
+  change: string,
+  task: TaskInfo | undefined,
+  digest: string,
+  reviewer: string,
+  sectionKey?: string,
+): string {
+  const scope =
+    sectionKey !== undefined ? `section:${sectionKey}` : (task?.id ?? rule.phase ?? 'whole')
+  return `${rule.id}\u0000${change}\u0000${scope}\u0000${digest}\u0000${reviewer}`
+}
+
+/** The resolved reviewer identity a dedupe key binds: provider, model, and effort. */
+function reviewerLabel(target: TargetConfig): string {
+  const model = target.model ?? target.agentOptions?.model ?? ''
+  const effort = target.reasoningEffort ?? target.agentOptions?.reasoningEffort ?? ''
+  return `${target.provider}/${model}@${effort}`
 }
 
 /** Human/provider-readable key marker; a provider may resume one conversation per key. */
-function reviewKeyForPrompt(change: string, task: TaskInfo | undefined, rule: RuleConfig): string {
+function reviewKeyForPrompt(
+  change: string,
+  task: TaskInfo | undefined,
+  rule: RuleConfig,
+  sectionKey?: string,
+): string {
+  if (sectionKey !== undefined) return `review:${change}:section:${sectionKey}`
   return task !== undefined
     ? `review:${change}:task:${task.id}`
     : `review:${change}:whole:${rule.phase ?? 'review'}`
@@ -2041,35 +2558,107 @@ function reviewKeyForPrompt(change: string, task: TaskInfo | undefined, rule: Ru
 function isRunState(value: unknown): value is RunState {
   return (
     value === 'queued' ||
+    value === 'starting' ||
     value === 'running' ||
+    value === 'retry-wait' ||
     value === 'completed' ||
     value === 'failed' ||
-    value === 'discarded'
+    value === 'discarded' ||
+    value === 'interrupted'
   )
+}
+
+const RUN_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/
+const RUN_ID = /^[a-z0-9][a-z0-9-]{0,80}$/
+const FAILURE_CLASSES: ReadonlySet<string> = new Set<FailureClass>([
+  'child-limit',
+  'provider-not-started',
+  'timeout',
+  'reviewed-inputs-changed',
+  'invalid-output',
+  'config',
+  'permission',
+  'unknown',
+  'queue-full',
+  'queue-timeout',
+  'queue-internal-error',
+])
+
+function isFailureClass(value: unknown): value is FailureClass {
+  return typeof value === 'string' && FAILURE_CLASSES.has(value)
+}
+
+function isActiveRunState(state: RunState): boolean {
+  return state === 'queued' || state === 'starting' || state === 'running' || state === 'retry-wait'
+}
+
+function isRunTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && RUN_TIMESTAMP.test(value)
+}
+
+/** A normalized workspace-relative record path; nested session roots are valid. */
+function isSafeRecordPath(value: string): boolean {
+  if (value === '' || value.startsWith('/') || /^[A-Za-z]:/.test(value) || value.includes('\\')) {
+    return false
+  }
+  const segments = value.split('/')
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return false
+  }
+  return segments.includes('.dsh') && segments.includes('delegation')
 }
 
 function parseRunFile(value: unknown): RunFile | undefined {
   if (!isRecord(value)) return undefined
   if (
     typeof value.id !== 'string' ||
-    value.id === '' ||
+    !RUN_ID.test(value.id) ||
     typeof value.rule !== 'string' ||
     typeof value.change !== 'string' ||
     typeof value.key !== 'string' ||
     typeof value.identity !== 'string' ||
     !isRunState(value.state) ||
     typeof value.record !== 'string' ||
+    !isSafeRecordPath(value.record) ||
     typeof value.startedAt !== 'string'
   ) {
     return undefined
   }
   if (value.taskId !== undefined && typeof value.taskId !== 'string') return undefined
-  if (value.detail !== undefined && typeof value.detail !== 'string') return undefined
+  if (value.section !== undefined && typeof value.section !== 'string') return undefined
+  if (value.detail !== undefined) {
+    if (typeof value.detail !== 'string') return undefined
+    // Normalize rather than discard an otherwise valid run: the engine bounds
+    // details to 4000 characters, the status shows a shorter excerpt.
+    value.detail = sanitizeText(value.detail, 500)
+  }
+  if (value.queuePosition !== undefined) {
+    if (typeof value.queuePosition !== 'number' || !Number.isSafeInteger(value.queuePosition)) {
+      return undefined
+    }
+  }
+  if (value.queuedAt !== undefined && !isRunTimestamp(value.queuedAt)) return undefined
+  if (value.waitMs !== undefined) {
+    if (typeof value.waitMs !== 'number' || !Number.isFinite(value.waitMs) || value.waitMs < 0) {
+      return undefined
+    }
+  }
+  if (value.attempts !== undefined) {
+    if (typeof value.attempts !== 'number' || !Number.isSafeInteger(value.attempts))
+      return undefined
+  }
+  if (value.failureClass !== undefined && !isFailureClass(value.failureClass)) return undefined
+  if (value.lastRetryAt !== undefined && !isRunTimestamp(value.lastRetryAt)) return undefined
   return value as unknown as RunFile
 }
 
 /** Recent review runs for one workspace, newest first; unreadable run files are ignored. */
 async function listRunFiles(workspaceRoot: string): Promise<RunFile[]> {
+  return (await listAllRunFiles(workspaceRoot)).slice(0, 30)
+}
+
+/** Every durable run, for reconciliation; status presentation applies its own limit. */
+async function listAllRunFiles(workspaceRoot: string): Promise<RunFile[]> {
   let names: string[]
   try {
     names = await readdir(runsDirectory(workspaceRoot))
@@ -2083,12 +2672,13 @@ async function listRunFiles(workspaceRoot: string): Promise<RunFile[]> {
       const run = parseRunFile(
         JSON.parse(await readFile(join(runsDirectory(workspaceRoot), name), 'utf8')),
       )
-      if (run !== undefined) runs.push(run)
+      // The durable id must match its file name so recovery can rewrite it safely.
+      if (run !== undefined && `${run.id}.json` === name) runs.push(run)
     } catch {
       // A stale/partial run file is scratch; ignore it in the status view.
     }
   }
-  return runs.sort((left, right) => right.startedAt.localeCompare(left.startedAt)).slice(0, 30)
+  return runs.sort((left, right) => right.startedAt.localeCompare(left.startedAt))
 }
 
 /** One owned review completion lost to an already-authoritative record. */
@@ -2267,6 +2857,163 @@ function checkedTaskList(tasks: TaskInfo[]): string {
     .join(', ')
 }
 
+/** The leading heading number (`1`, `2.1`) of a level-2 lane title, when it has one. */
+function sectionNumber(title: string): string | undefined {
+  return /^(\d+(?:\.\d+)*)\.?(?:\s|$)/u.exec(title)?.[1]
+}
+
+/** The stable section key: heading number, normalized title, or `untitled`. */
+function sectionKeyOf(title: string): string {
+  const number = sectionNumber(title)
+  if (number !== undefined) return number
+  return title === '' ? 'untitled' : normalizeTaskText(title)
+}
+
+/** One-line description of one lane's selectors, for the rejection message. */
+function sectionLabel(lane: TaskLane): string {
+  const title = normalizeTaskText(lane.title)
+  const number = sectionNumber(title)
+  if (number === undefined) return title === '' ? 'untitled (untitled)' : `${title.slice(0, 80)}`
+  const bare = normalizeTaskText(title.slice(number.length).replace(/^\./u, ''))
+  return `${number} ${bare.slice(0, 80)}`
+}
+
+/**
+ * Resolve a section selector against the level-2 task groups: the heading number
+ * (`1`), its wildcard form (`1.x`), the normalized title, or `untitled`.
+ */
+function resolveSectionArgument(
+  change: ChangeInfo,
+  lanes: readonly TaskLane[],
+  wanted: string,
+): SectionInfo {
+  const needle = normalizeTaskText(wanted)
+  const lower = needle.toLowerCase()
+  const wildcard = /^(\d+(?:\.\d+)*)\.(?:x|\*)$/iu.exec(needle)
+  const matches = lanes.filter((lane) => {
+    const number = sectionNumber(lane.title)
+    const title = normalizeTaskText(lane.title)
+    const bare =
+      number === undefined
+        ? title
+        : normalizeTaskText(title.slice(number.length).replace(/^\./u, ''))
+    return (
+      (title !== '' && title.toLowerCase() === lower) ||
+      (title !== '' && bare.toLowerCase() === lower) ||
+      (number !== undefined && number === needle) ||
+      (number !== undefined && wildcard?.[1] === number) ||
+      (title === '' && lower === 'untitled')
+    )
+  })
+  if (matches.length === 0) {
+    fail(
+      `section "${wanted}" was not found in change "${change.name}"; available sections: ${
+        lanes.map((lane) => sectionLabel(lane)).join('; ') || '(none)'
+      }`,
+    )
+  }
+  if (matches.length > 1) {
+    fail(
+      `section "${wanted}" is ambiguous in change "${change.name}"; it matches: ${matches
+        .map((lane) => sectionLabel(lane))
+        .join('; ')} - pass the heading number instead`,
+    )
+  }
+  const lane = matches[0] as TaskLane
+  const key = sectionKeyOf(lane.title)
+  const sameKey = lanes.filter((entry) => sectionKeyOf(entry.title) === key)
+  if (sameKey.length > 1) {
+    fail(
+      `section "${wanted}" resolves to key "${key}", shared by ${sameKey.length} sections in change "${change.name}"; rename one heading so the key is unique. Available sections: ${lanes
+        .map((entry) => sectionLabel(entry))
+        .join('; ')}`,
+    )
+  }
+  if (lane.tasks.length === 0) {
+    fail(
+      `section "${wanted}" in change "${change.name}" has no numbered tasks; available sections: ${lanes
+        .map((entry) => sectionLabel(entry))
+        .join('; ')}`,
+    )
+  }
+  const covered = lane.tasks.filter((task) => task.checked)
+  if (covered.length === 0) {
+    fail(
+      `section "${wanted}" in change "${change.name}" has no checked task; tick the completed tasks, then run the section review. Unchecked tasks: ${lane.tasks
+        .map((task) => `${task.number} ${task.text}`)
+        .join('; ')}`,
+    )
+  }
+  return {
+    key,
+    title: lane.title,
+    tasks: lane.tasks,
+    covered,
+    unchecked: lane.tasks.filter((task) => !task.checked),
+  }
+}
+
+/** The section digest: key, sorted covered ids, numbers, texts, artifact digest, and tree. */
+function sectionDigest(
+  version: string,
+  section: SectionInfo,
+  artifactDigest: string,
+  tree: string,
+): string {
+  const covered = [...section.covered].sort((left, right) =>
+    `${left.id}\u0000${left.number}`.localeCompare(`${right.id}\u0000${right.number}`),
+  )
+  return hashParts([
+    version,
+    section.key,
+    section.title,
+    ...covered.flatMap((task) => [task.id, task.number, task.text]),
+    artifactDigest,
+    tree,
+  ])
+}
+
+/** Re-resolve the section against the frozen snapshot copy and validate coverage. */
+async function frozenSection(
+  snapshotChangeDir: string,
+  section: SectionInfo,
+  change: ChangeInfo,
+): Promise<SectionInfo> {
+  const lanes = parseTaskLanes(await readFile(join(snapshotChangeDir, 'tasks.md'), 'utf8'))
+  const lane = lanes.find((entry) => sectionKeyOf(entry.title) === section.key)
+  if (lane === undefined) {
+    fail(
+      `section "${section.key}" is no longer present in the frozen snapshot of change "${change.name}"; re-run the review`,
+    )
+  }
+  const covered: TaskInfo[] = []
+  for (const selected of section.covered) {
+    // Task ids hash only the text; matching the number too preserves a repeated
+    // task text as two distinct checked occurrences in the section.
+    const current = lane.tasks.find(
+      (entry) => entry.id === selected.id && entry.number === selected.number,
+    )
+    if (current === undefined) {
+      fail(
+        `task "${selected.number} ${selected.text}" changed while the section review snapshot was prepared in change "${change.name}"; re-run the review`,
+      )
+    }
+    if (!current.checked) {
+      fail(
+        `task "${current.number} ${current.text}" is not checked in the frozen snapshot of change "${change.name}"; re-run the review`,
+      )
+    }
+    covered.push(current)
+  }
+  return {
+    key: section.key,
+    title: lane.title,
+    tasks: lane.tasks,
+    covered,
+    unchecked: lane.tasks.filter((task) => !task.checked),
+  }
+}
+
 /** Resolve an explicit task id/text for one task-scoped review. */
 function resolveTaskArgument(change: ChangeInfo, tasks: TaskInfo[], wanted: string): TaskInfo {
   const normalized = normalizeTaskText(wanted)
@@ -2308,7 +3055,26 @@ function parseRecord(value: unknown): ReviewRecord | undefined {
     return undefined
   }
   if (value.taskId !== undefined && typeof value.taskId !== 'string') return undefined
-  if (value.scope === 'task' && typeof value.taskId !== 'string') return undefined
+  if (
+    value.scope === 'task' &&
+    typeof value.taskId !== 'string' &&
+    typeof value.section !== 'string'
+  ) {
+    return undefined
+  }
+  if (value.section !== undefined && (typeof value.section !== 'string' || value.section === '')) {
+    return undefined
+  }
+  if (value.sectionTitle !== undefined && typeof value.sectionTitle !== 'string') return undefined
+  if (value.taskIds !== undefined) {
+    if (
+      !Array.isArray(value.taskIds) ||
+      !value.taskIds.every((id) => typeof id === 'string' && TASK_ID_PATTERN.test(id))
+    ) {
+      return undefined
+    }
+  }
+  if (value.failureClass !== undefined && !isFailureClass(value.failureClass)) return undefined
   if (value.target.model !== undefined && typeof value.target.model !== 'string') return undefined
   if (
     value.target.reasoningEffort !== undefined &&
@@ -2357,8 +3123,16 @@ function recordIdentifies(
   return rule.scope !== 'task' || record.taskId === taskId
 }
 
+/** A run whose reviewed inputs moved cannot satisfy a task review; the writes must finish. */
+function reviewedInputsChanged(record: ReviewRecord): boolean {
+  return (
+    record.failureClass === 'reviewed-inputs-changed' ||
+    record.error?.includes('reviewed inputs changed') === true
+  )
+}
+
 /** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
-function recordSatisfies(
+export function recordSatisfies(
   state: RecordState,
   change: string,
   scope: ReviewScope,
@@ -2366,11 +3140,7 @@ function recordSatisfies(
   taskId?: string,
 ): boolean {
   if (state.kind !== 'record') return false
-  const record = state.record
-  if (record.change !== change || record.scope !== scope) return false
-  if (record.verdict !== 'PASS' && record.verdict !== 'ERROR') return false
-  if (scope === 'task' && record.taskId !== taskId) return false
-  return digest === undefined || record.digest === digest
+  return legacyRecordSatisfies(state.record, change, scope, digest, taskId)
 }
 
 async function inspectNote(
@@ -2542,8 +3312,26 @@ interface ParsedVerdict {
   findings: Finding[]
 }
 
+/** A reviewer result that cannot be accepted as a verdict. */
+class InvalidOutputError extends DelegationError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidOutputError'
+  }
+}
+
 /** Accept exactly one fenced JSON verdict that echoes the requested digest. */
-function parseVerdict(text: string, expectedDigest: string): ParsedVerdict {
+export function parseVerdict(text: string, expectedDigest: string): ParsedVerdict {
+  try {
+    return parseVerdictInner(text, expectedDigest)
+  } catch (error) {
+    // Every rejection here is the reviewer's output, never a transient target
+    // failure: the classifier must not read keywords out of the payload.
+    throw new InvalidOutputError(errorMessage(error))
+  }
+}
+
+function parseVerdictInner(text: string, expectedDigest: string): ParsedVerdict {
   const blocks: string[] = []
   const fence = /```[ \t]*[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)```/g
   for (const match of text.matchAll(fence)) {
@@ -2576,6 +3364,7 @@ function parseVerdict(text: string, expectedDigest: string): ParsedVerdict {
     }
     return {
       severity: finding.severity,
+      class: normalizeFindingClass(finding.class),
       title: sanitizeText(requireNonEmpty(finding.title, `finding #${index + 1}.title`)),
       evidence: sanitizeText(requireNonEmpty(finding.evidence, `finding #${index + 1}.evidence`)),
       fix: sanitizeText(requireNonEmpty(finding.fix, `finding #${index + 1}.fix`)),
@@ -2790,9 +3579,21 @@ interface EngineServices {
   state: DelegationState
   git: GitServices
   now: () => Date
+  /** Direct-user-answer service; absent means a lesson cannot be accepted or applied. */
+  userQuestions?: UserQuestionsService
   timeoutsFor(rule: RuleConfig): number
   /** Test seam: fired once per review run after it leaves the pending set. */
   onRunSettled?: (runId: string, state: SettledRunState) => void
+  /** Test seam: observes each published review record. */
+  onPublished?: (runId: string, record: ReviewRecord) => void
+  /** Test seam: throws before admission to simulate an internal queue failure. */
+  queueFault?: () => void
+  /** Test seam: delays the once-per-workspace recovery scan. */
+  recoverDelay?: () => Promise<void>
+  /** Test seam: runs inside the publication lock before any record is written. */
+  publishHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
+  /** Test seam: runs after admission and before a target starts. */
+  startHold?: (info: { rule: string; change: string; section?: string }) => Promise<void> | void
   /** Set by the engine after construction so the gate can see pending review runs. */
   pendingReview?: (
     workspaceRoot: string,
@@ -2899,13 +3700,13 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
   const provider: SubagentProvider | undefined = services.subagents.getProvider(target.provider)
   if (provider === undefined) {
     const registered = services.subagents.list()
-    fail(
+    throw new ConfigError(
       `rule "${rule.id}": target "${rule.to}" names provider "${target.provider}", which is not registered; install or enable that provider, or point the rule's target at one of: ${registered.join(', ') || '(none registered)'}`,
     )
   }
   const agentOptions = resolveAgentOptions(target)
   if (agentOptions !== undefined && provider.capabilities.agentOptions !== true) {
-    fail(
+    throw new ConfigError(
       `rule "${rule.id}": target "${rule.to}" requests model/agent options, but provider "${provider.name}" does not support them; remove model/reasoningEffort/agentOptions from the target or choose a provider with agentOptions support`,
     )
   }
@@ -2925,8 +3726,15 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
       delivery: 'caller',
     })
   } catch (error) {
-    fail(
-      `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${errorMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
+    // Classify the untruncated cause; expose only the bounded, redacted text.
+    const providerMessage = errorMessage(error)
+    const hint = isRecord(error) ? (error.retryAfterMs ?? error.retryAfter) : undefined
+    const retryAfterMs =
+      typeof hint === 'number' && Number.isFinite(hint) && hint > 0 ? Math.round(hint) : undefined
+    throw new ProviderStartError(
+      `rule "${rule.id}": target "${rule.to}" on provider "${provider.name}" could not start: ${boundedMessage(error)}; check targets.${rule.to} options against provider "${provider.name}", or run delegation_status for the next action`,
+      providerMessage,
+      retryAfterMs,
     )
   }
   const model = target.model ?? agentOptions?.model
@@ -2946,34 +3754,81 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
 async function finishTarget(started: StartedTarget): Promise<RunResult> {
   const { rule, target } = started
   let timer: ReturnType<typeof setTimeout> | undefined
-  let result: SubagentResult
+  let graceTimer: ReturnType<typeof setTimeout> | undefined
+  let result: SubagentResult | undefined
+  let raceError: unknown
+  let disposeConfirmed = true
+  let disposePending = false
   try {
     result = await Promise.race([
       started.activation.result,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           reject(
-            new DelegationError(
+            new TimeoutError(
               `rule "${rule.id}": target "${targetLabel(target)}" did not finish within ${started.timeoutMs} ms; widen timeouts.${rule.contract} or narrow the task`,
             ),
           )
         }, started.timeoutMs)
       }),
     ])
+  } catch (error) {
+    raceError = error
   } finally {
     if (timer !== undefined) clearTimeout(timer)
-    await started.activation.dispose().catch(() => undefined)
+    // Cancellation gets a bounded grace: an unresponsive dispose must not hold
+    // the run open forever; it becomes an unconfirmed timeout instead.
+    const disposal = started.activation.dispose().then(
+      () => undefined,
+      () => {
+        disposeConfirmed = false
+      },
+    )
+    const graceMs = Math.min(30_000, started.timeoutMs)
+    await Promise.race([
+      disposal,
+      new Promise<void>((resolve) => {
+        graceTimer = setTimeout(() => {
+          disposePending = true
+          resolve()
+        }, graceMs)
+      }),
+    ])
+    if (graceTimer !== undefined) clearTimeout(graceTimer)
   }
-  if (result.stopReason !== 'completed') {
+  // Classify the failure that will be thrown; any timeout class (local timer,
+  // rejected result, or provider diagnostic) needs confirmed cancellation.
+  let candidate: unknown = raceError
+  if (candidate === undefined && result !== undefined && result.stopReason !== 'completed') {
+    const providerMessage =
+      result.diagnostic === undefined
+        ? `stopped with "${result.stopReason}"`
+        : `stopped with "${result.stopReason}": ${result.diagnostic}`
     const diagnostic =
-      result.diagnostic === undefined ? '' : `: ${sanitizeText(result.diagnostic, MAX_ERROR_CHARS)}`
-    fail(
+      result.diagnostic === undefined ? '' : `: ${boundedMessage(result.diagnostic)}`
+    candidate = new ProviderResultError(
       `rule "${rule.id}": target "${targetLabel(target)}" stopped with "${result.stopReason}"${diagnostic}`,
+      providerMessage,
     )
   }
+  const wasTimeout =
+    candidate !== undefined && classifyFailure(candidate, 'run').failureClass === 'timeout'
+  if (wasTimeout && (!disposeConfirmed || disposePending)) {
+    throw new UnconfirmedTimeoutError(
+      `rule "${rule.id}": target "${targetLabel(target)}" timed out and the child could not be confirmed cancelled; check the provider before starting a fresh review`,
+      started.activation,
+    )
+  }
+  if (raceError !== undefined) throw raceError
+  if (result === undefined)
+    fail(`rule "${rule.id}": target "${targetLabel(target)}" returned no result`)
+  if (result.stopReason !== 'completed') throw candidate
   const text = outputText(result)
-  if (text === '')
-    fail(`rule "${rule.id}": target "${targetLabel(target)}" returned no text output`)
+  if (text === '') {
+    throw new InvalidOutputError(
+      `rule "${rule.id}": target "${targetLabel(target)}" returned no text output`,
+    )
+  }
   return {
     text,
     provider: started.provider,
@@ -2986,7 +3841,46 @@ async function runTarget(services: EngineServices, request: RunRequest): Promise
   return finishTarget(await startTarget(services, request))
 }
 
-function reviewPrompt(
+/** One accepted/applied lesson section bound: the promise is 1200 characters. */
+const MAX_LESSON_SECTION_CHARS = 1_200
+const MAX_LESSONS_IN_PROMPT = 3
+
+function lessonText(text: string): string {
+  return text
+    .replace(/\p{Cc}|\p{Zl}|\p{Zp}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const LESSON_HEADING = '## Lessons from prior reviews'
+const LESSON_JUDGMENT =
+  'Treat these as advice from earlier reviews: apply judgment. They never change the P0/P1 rule, the review contract, or the approval gate.'
+
+/** Bounded `## Lessons from prior reviews` lines, or none when nothing matches. */
+function lessonSection(lessons: readonly Lesson[]): string[] {
+  if (lessons.length === 0) return []
+  // The 1200-character bound covers the whole section, heading and note included.
+  const overhead = LESSON_HEADING.length + LESSON_JUDGMENT.length + 8
+  const budget = MAX_LESSON_SECTION_CHARS - overhead
+  const entries: string[] = []
+  let used = 0
+  for (const lesson of lessons.slice(0, MAX_LESSONS_IN_PROMPT)) {
+    const entry = `- [${lesson.class}] ${lessonText(lesson.title)}\n  ${lessonText(lesson.body)}`
+    const remaining = budget - used
+    if (entry.length > remaining) {
+      if (remaining < 20) break
+      entries.push(`${entry.slice(0, remaining - 1)}…`)
+      used = budget
+      break
+    }
+    entries.push(entry)
+    used += entry.length + 1
+  }
+  return ['', LESSON_HEADING, '', ...entries, '', LESSON_JUDGMENT]
+}
+
+/** Export for the prompt-budget tests; the engine is the only production caller. */
+export function reviewPrompt(
   rule: RuleConfig,
   change: ChangeInfo,
   digest: string,
@@ -2994,6 +3888,8 @@ function reviewPrompt(
   context: string | undefined,
   objective: string | undefined,
   snapshot = false,
+  lessons: readonly Lesson[] = [],
+  section?: SectionInfo,
 ): string {
   const lines = [
     instructionText(rule).trimEnd(),
@@ -3004,8 +3900,25 @@ function reviewPrompt(
     `- Change: ${change.name}`,
     `- Scope: ${rule.scope ?? 'whole'}`,
   ]
-  if (task !== undefined) lines.push(`- Task: ${task.number} ${task.text}`)
-  lines.push(`- Review key: ${reviewKeyForPrompt(change.name, task, rule)}`)
+  if (section !== undefined) {
+    lines.push(
+      `- Section: ${section.title === '' ? '(untitled)' : section.title} (key ${section.key})`,
+    )
+    lines.push('- Checked tasks in scope (review every one):')
+    for (const entry of section.covered) {
+      lines.push(`  - ${entry.number} ${entry.text} (task id ${entry.id})`)
+    }
+    if (section.unchecked.length > 0) {
+      lines.push('- Out of scope (unchecked; never review as done and never approve):')
+      for (const entry of section.unchecked) lines.push(`  - ${entry.number} ${entry.text}`)
+    }
+    lines.push(
+      '- One verdict covers the whole section. Name the affected task number in every finding, and report a finding when one covered task is incomplete.',
+    )
+  } else if (task !== undefined) {
+    lines.push(`- Task: ${task.number} ${task.text}`)
+  }
+  lines.push(`- Review key: ${reviewKeyForPrompt(change.name, task, rule, section?.key)}`)
   lines.push(`- Digest: ${digest}`)
   if (snapshot) {
     lines.push(
@@ -3016,9 +3929,10 @@ function reviewPrompt(
     lines.push('', '## Context', '', context.trim())
   if (objective !== undefined && objective.trim() !== '')
     lines.push('', '## Objective', '', objective.trim())
+  lines.push(...lessonSection(lessons))
   lines.push(
     '',
-    'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with title, evidence, and fix. Prose outside that block is ignored.',
+    'Return exactly one fenced JSON block whose `digest` is the value above, `verdict` is `PASS` or `FINDINGS`, and `findings` lists only P0/P1 items with `class`, title, evidence, and fix. Prose outside that block is ignored.',
   )
   return lines.join('\n')
 }
@@ -3065,7 +3979,7 @@ function formatRecord(cwd: string, path: string, record: ReviewRecord, reused: b
   const head = reused ? 'reused record' : 'wrote record'
   const findings = record.findings.map(
     (finding) =>
-      `- ${finding.severity} ${finding.title}\n  evidence: ${finding.evidence}\n  fix: ${finding.fix}`,
+      `- ${finding.severity} ${finding.title}\n  class: ${normalizeFindingClass(finding.class)}\n  evidence: ${finding.evidence}\n  fix: ${finding.fix}`,
   )
   const lines = [
     `rule "${record.rule}" ${record.verdict} (${head} ${relativePath(cwd, path)})`,
@@ -3073,6 +3987,10 @@ function formatRecord(cwd: string, path: string, record: ReviewRecord, reused: b
     `digest: ${record.digest}`,
   ]
   if (record.taskId !== undefined) lines.push(`task id: ${record.taskId}`)
+  if (record.section !== undefined) {
+    lines.push(`section: ${record.section}${record.sectionTitle ? ` ${record.sectionTitle}` : ''}`)
+    if (record.taskIds !== undefined) lines.push(`covered task ids: ${record.taskIds.join(', ')}`)
+  }
   if (record.error !== undefined) lines.push(`error: ${record.error}`)
   lines.push(`target: ${targetLabelFromIdentity(record.target)}`)
   if (record.session !== undefined) lines.push(`session: ${record.session}`)
@@ -3091,6 +4009,7 @@ interface DelegateArguments {
   rule: string
   change?: string
   task?: string
+  section?: string
   context?: string
   objective?: string
 }
@@ -3103,14 +4022,30 @@ interface ToolAgentContext {
 /** The engine behind the three tools: validation, target runs, records, status. */
 class DelegationEngine {
   private readonly runs = new Map<string, ManagedRun>()
-  private readonly runIdentities = new Map<string, ManagedRun>()
-  private readonly runKeyHeads = new Map<string, ManagedRun>()
-  private readonly runQueues = new Map<string, ManagedRun[]>()
+  private readonly recoveryPromises = new Map<string, Promise<void>>()
+  private readonly queue: ReviewQueue<ManagedRun>
+  /** Latest submitted identity per rule/change/section; a frozen older run discards. */
+  private readonly sectionIdentities = new Map<string, { identity: string; seq: number }>()
+  private sectionSequence = 0
 
   constructor(
     private readonly config: EngineConfig,
     private readonly services: EngineServices,
-  ) {}
+  ) {
+    this.queue = new ReviewQueue<ManagedRun>(config.reviewQueue, {
+      start: (run) => this.startPreparedReview(run),
+      persist: (run) => this.persistRun(run),
+      fail: (run, error, failureClass) => this.failRun(run, error, run.prepared, failureClass),
+      timeout: (run, info) => this.timeoutRun(run, info),
+      settled: (run, state) => this.notifySettled(run, state),
+      internalFault: async (run, message) => {
+        run.file.failureClass = 'queue-internal-error'
+        run.queueFaultDetail = `queue-internal-error: ${sanitizeText(message, MAX_ERROR_CHARS)}`
+        await this.persistRun(run)
+      },
+      now: () => this.services.now(),
+    })
+  }
 
   private rule(ruleId: string): RuleConfig {
     const rule = this.config.rules.find((entry) => entry.id === ruleId)
@@ -3142,6 +4077,23 @@ class DelegationEngine {
     return this.services.now().toISOString()
   }
 
+  private sectionIdentityKey(run: ManagedRun): string | undefined {
+    const section = run.context.section
+    if (section === undefined) return undefined
+    return `${run.workspaceRoot}\u0000${run.context.rule.id}\u0000${run.context.change.name}\u0000${section.key}`
+  }
+
+  /** Record the newest submitted section identity; an older frozen run must not publish. */
+  private rememberSectionIdentity(run: ManagedRun): void {
+    const key = this.sectionIdentityKey(run)
+    if (key === undefined) return
+    if (run.identitySeq === undefined) run.identitySeq = this.sectionSequence += 1
+    const seq = run.identitySeq
+    const existing = this.sectionIdentities.get(key)
+    if (existing !== undefined && existing.seq > seq) return
+    this.sectionIdentities.set(key, { identity: run.file.identity, seq })
+  }
+
   async runDelegate(args: DelegateArguments, context: ToolAgentContext): Promise<string> {
     const rule = this.rule(args.rule)
     if (rule.contract === 'note') {
@@ -3149,9 +4101,14 @@ class DelegationEngine {
         `rule "${rule.id}" is the task-progress note; use task_progress(task, status, reason) instead of delegate`,
       )
     }
-    if (args.task !== undefined && rule.contract !== 'review') {
+    if (args.task !== undefined && args.section !== undefined) {
       fail(
-        `rule "${rule.id}" is a ${rule.contract} rule; task is only valid for a task-scoped review`,
+        `rule "${rule.id}": task and section are mutually exclusive; pass task for one checked task or section for a whole tasks.md section`,
+      )
+    }
+    if ((args.task !== undefined || args.section !== undefined) && rule.contract !== 'review') {
+      fail(
+        `rule "${rule.id}" is a ${rule.contract} rule; task and section are only valid for a task-scoped review`,
       )
     }
     const agent = this.requireAgent(context)
@@ -3199,14 +4156,15 @@ class DelegationEngine {
     workspaceRoot: string,
     agent: Agent,
     change: string,
-    taskId?: string,
+    taskIds: readonly string[] = [],
   ): Promise<void> {
     await withInvolvementLock(workspaceRoot, currentThread(agent), async () => {
       const { involvement } = await readInvolvement(workspaceRoot, currentThread(agent))
       const existed = involvement.changes[change] !== undefined
       const entry = involvementEntry(involvement, change)
       let changed = !existed
-      if (taskId !== undefined && !entry.tasks.includes(taskId)) {
+      for (const taskId of taskIds) {
+        if (entry.tasks.includes(taskId)) continue
         entry.tasks.push(taskId)
         changed = true
       }
@@ -3222,18 +4180,21 @@ class DelegationEngine {
     agent: Agent,
     cwd: string,
     args: DelegateArguments,
+    section?: SectionInfo,
   ): ManagedRun {
     const id = `run-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`
-    const path = recordPath(cwd, rule, change.name, task?.id)
-    const key = `${workspaceRoot}\u0000${reviewConversationKey(change.name, task, rule)}`
+    const path = recordPath(cwd, rule, change.name, task?.id, section?.key)
+    const key = `${workspaceRoot}\u0000${reviewConversationKey(change.name, task, rule, section?.key)}`
     const file: RunFile = {
       id,
       rule: rule.id,
       change: change.name,
       ...(task === undefined ? {} : { taskId: task.id }),
+      ...(section === undefined ? {} : { section: section.key }),
       key,
-      identity: `${workspaceRoot}\u0000${reviewIdentity(rule, change.name, task)}`,
-      state: 'running',
+      // Replaced with the prepared digest/reviewer identity before admission.
+      identity: `${workspaceRoot}\u0000pending\u0000${id}`,
+      state: 'queued',
       record: relativePath(workspaceRoot, path),
       startedAt: this.now(),
     }
@@ -3245,6 +4206,7 @@ class DelegationEngine {
         rule,
         change,
         ...(task === undefined ? {} : { task }),
+        ...(section === undefined ? {} : { section }),
         agent,
         cwd,
         args,
@@ -3253,7 +4215,11 @@ class DelegationEngine {
     }
   }
 
-  /** Validate, start, and return the run handle without waiting for the verdict. */
+  /**
+   * Validate, prepare, admit, and return the run handle without waiting for the
+   * verdict. Preparation and cached-record reuse run before admission so a
+   * cached verdict never consumes a queue slot.
+   */
   private async startReview(
     rule: RuleConfig,
     change: ChangeInfo,
@@ -3262,9 +4228,20 @@ class DelegationEngine {
     workspaceRoot: string,
     args: DelegateArguments,
   ): Promise<string> {
+    await this.ensureRecovered(workspaceRoot)
     const tasks = await readTasks(change.dir)
     let task: TaskInfo | undefined
-    if (args.task !== undefined) {
+    let section: SectionInfo | undefined
+    if (args.section !== undefined) {
+      if (rule.scope !== 'task') {
+        fail(
+          `rule "${rule.id}" reviews the whole scope; omit section (only a task-scoped review accepts one)`,
+        )
+      }
+      const lanes = await readTaskLanesOrFail(change)
+      rememberSections(change.name, lanes)
+      section = resolveSectionArgument(change, lanes, args.section)
+    } else if (args.task !== undefined) {
       if (rule.scope !== 'task') {
         fail(
           `rule "${rule.id}" reviews the whole scope; omit task (only a task-scoped review accepts one)`,
@@ -3275,120 +4252,436 @@ class DelegationEngine {
       task = await this.nextTaskForReview(change, tasks, cwd)
     }
     // Explicit review: any session may run it; the call attributes the change,
-    // and a task-scoped review also attributes the selected checked task.
-    await this.attributeChange(workspaceRoot, agent, change.name, task?.id)
+    // and a task-scoped review also attributes the selected checked task(s).
+    await this.attributeChange(
+      workspaceRoot,
+      agent,
+      change.name,
+      section === undefined
+        ? task === undefined
+          ? []
+          : [task.id]
+        : section.covered.map((entry) => entry.id),
+    )
 
-    const run = this.createRun(workspaceRoot, rule, change, task, agent, cwd, args)
-    const pending = this.runIdentities.get(run.file.identity)
-    if (pending !== undefined) return this.runHandleText(pending, 'duplicate')
-    this.runs.set(run.file.id, run)
-    this.runIdentities.set(run.file.identity, run)
-
-    const head = this.runKeyHeads.get(run.file.key)
-    if (head !== undefined) {
-      const queue = this.runQueues.get(run.file.key) ?? []
-      queue.push(run)
-      this.runQueues.set(run.file.key, queue)
-      await this.markRun(run, 'queued', `queued behind run ${head.file.id}`)
-      return this.runHandleText(run, 'queued')
+    const run = this.createRun(workspaceRoot, rule, change, task, agent, cwd, args, section)
+    try {
+      const reused = await this.prepareReviewRun(run)
+      if (reused !== undefined) return reused
+      const prepared = run.prepared
+      if (prepared === undefined) fail(`run ${run.file.id} prepared no review inputs`)
+      // Identity is computed only after preparation: a changed digest or
+      // reviewer is a distinct run, never a join of the earlier handle.
+      run.file.identity = `${workspaceRoot}\u0000${reviewIdentity(
+        rule,
+        change.name,
+        task,
+        prepared.digest,
+        reviewerLabel(this.target(rule)),
+        section?.key,
+      )}`
+      // Submission order decides supersession: a newer section call wins even
+      // when an older submit is still waiting for its target startup.
+      this.rememberSectionIdentity(run)
+    } catch (error) {
+      await this.failRun(run, error, run.prepared)
+      throw error
     }
-    this.runKeyHeads.set(run.file.key, run)
-    const outcome = await this.beginReviewRun(run)
-    return outcome.reusedText ?? this.runHandleText(run, 'running')
+    this.runs.set(run.file.id, run)
+
+    let admission: Admission<ManagedRun>
+    try {
+      this.services.queueFault?.()
+    } catch (cause) {
+      const internal = new QueueInternalError(
+        `review queue internal error: ${errorMessage(cause)}`,
+        cause,
+      )
+      return this.fallbackAfterQueueError(run, internal)
+    }
+    try {
+      admission = await this.queue.submit(run)
+    } catch (error) {
+      if (!(error instanceof QueueInternalError)) throw error
+      // Fallback: start directly once so a queue fault cannot trap the turn.
+      return this.fallbackAfterQueueError(run, error)
+    }
+    if (admission.kind === 'duplicate') {
+      await this.discardSnapshot(run)
+      this.runs.delete(run.file.id)
+      // A duplicate can join an in-flight start; wait it out so the handle
+      // reports a settled admission state (running or queued), never starting.
+      await this.queue.whenAdmitted(admission.run.file.id)
+      return this.runHandleText(admission.run, 'duplicate')
+    }
+    if (admission.kind === 'accepted' && admission.phase !== 'running') {
+      run.waitedInQueue = true
+    }
+    if (admission.kind === 'full') {
+      const error = new DelegationError(
+        `review queue full: ${admission.depth} waiting run(s) at maxQueued=${admission.maxQueued}; let the current reviews settle, then start this review again`,
+      )
+      await this.failRun(run, error, run.prepared, 'queue-full')
+      throw error
+    }
+    if (admission.kind === 'settled') return this.runHandleText(run, 'settled')
+    return this.runHandleText(run, admission.phase)
   }
 
-  /** Prepare immutable digest/inputs and start the target; cleanup is owned here. */
-  private async beginReviewRun(run: ManagedRun): Promise<{ reusedText?: string }> {
-    let prepared: ReviewPreparation | undefined
-    try {
-      const tasks = await readTasks(run.context.change.dir)
-      const task = run.context.task
-      if (task !== undefined) {
-        const current = tasks.find((entry) => entry.id === task.id)
+  /** Re-read the selected task/section and refuse anything that is gone or unchecked. */
+  private async validateSelectedTask(run: ManagedRun): Promise<void> {
+    const section = run.context.section
+    if (section !== undefined) {
+      const lanes = await readTaskLanesOrFail(run.context.change)
+      const lane = lanes.find((entry) => sectionKeyOf(entry.title) === section.key)
+      if (lane === undefined) {
+        fail(
+          `section "${section.key}" is no longer a section in change "${run.context.change.name}"; start a fresh review`,
+        )
+      }
+      const covered: TaskInfo[] = []
+      for (const selected of section.covered) {
+        const current = lane.tasks.find(
+          (entry) => entry.id === selected.id && entry.number === selected.number,
+        )
         if (current === undefined || !current.checked) {
           fail(
-            `task "${task.number} ${task.text}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
+            `task "${selected.number} ${selected.text}" selected for section "${section.key}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
           )
         }
-        run.context.task = current
+        covered.push(current)
       }
-      prepared = await this.prepareReview(run)
-      const existing = await inspectRecord(prepared.path)
-      run.existingFingerprint =
-        existing.kind === 'record' ? JSON.stringify(existing.record) : undefined
-      const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)))
+      run.context.section = {
+        key: section.key,
+        title: lane.title,
+        tasks: lane.tasks,
+        covered,
+        unchecked: lane.tasks.filter((entry) => !entry.checked),
+      }
+      return
+    }
+    const tasks = await readTasks(run.context.change.dir)
+    const task = run.context.task
+    if (task === undefined) return
+    const current = tasks.find((entry) => entry.id === task.id)
+    if (current === undefined || !current.checked) {
+      fail(
+        `task "${task.number} ${task.text}" is no longer a checked task in change "${run.context.change.name}"; start a fresh review`,
+      )
+    }
+    run.context.task = current
+  }
+
+  /**
+   * Re-read the selected task, build the immutable digest/inputs, and reuse a
+   * matching authoritative record. Returns the reused text when no target is
+   * needed; the caller admits the run otherwise.
+   */
+  private async prepareReviewRun(run: ManagedRun): Promise<string | undefined> {
+    await this.validateSelectedTask(run)
+    const prepared = await this.prepareReview(run)
+    run.prepared = prepared
+    // This inspection decides cached reuse, not the publication baseline: a
+    // queued run re-inspects when it becomes start-eligible.
+    const existing = await inspectRecord(prepared.path)
+    run.admissionFingerprint =
+      existing.kind === 'record' ? JSON.stringify(existing.record) : undefined
+    const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)))
+    if (existing.kind === 'record') {
+      const record = existing.record
+      const reusable =
+        record.verdict === 'PASS' ||
+        (record.verdict === 'FINDINGS' && record.digest === prepared.digest)
+      const section = run.context.section
+      const identifies =
+        section === undefined
+          ? recordIdentifies(
+              record,
+              run.context.rule,
+              run.context.change.name,
+              run.context.task?.id,
+            )
+          : record.rule === run.context.rule.id &&
+            record.change === run.context.change.name &&
+            record.scope === 'task' &&
+            record.section === section.key
+      // A section PASS is historical only while its covered set and content
+      // digest are unchanged; a newly checked task must start a new review.
+      const current =
+        section !== undefined
+          ? record.digest === prepared.digest
+          : run.context.rule.scope === 'task'
+            ? true
+            : record.digest === prepared.digest
+      // A cached PASS from another reviewer is not reused: the marker binding
+      // prescribes a fresh run of the configured reviewer instead. An
+      // unreadable marker also forbids reuse until it is repaired.
       if (
-        existing.kind === 'record' &&
-        recordIdentifies(
-          existing.record,
-          run.context.rule,
-          run.context.change.name,
-          run.context.task?.id,
-        )
+        identifies &&
+        reusable &&
+        current &&
+        reviewer.error === undefined &&
+        reviewerMatches(record.target, reviewer.reviewer)
       ) {
-        const record = existing.record
-        const reusable =
-          record.verdict === 'PASS' ||
-          (record.verdict === 'FINDINGS' && record.digest === prepared.digest)
-        const current = run.context.rule.scope === 'task' ? true : record.digest === prepared.digest
-        // A cached PASS from another reviewer is not reused: the marker binding
-        // prescribes a fresh run of the configured reviewer instead. An
-        // unreadable marker also forbids reuse until it is repaired.
+        await this.discardSnapshot(run)
+        await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'))
+        this.notifySettled(run, 'completed')
+        return formatRecord(run.context.cwd, prepared.path, record, true)
+      }
+    }
+    return undefined
+  }
+
+  /** Matching accepted/applied lessons; a broken learning store never fails a review. */
+  private async reviewLessons(run: ManagedRun): Promise<Lesson[]> {
+    if (!this.config.reviewLearning.enabled) return []
+    try {
+      const capabilities = await changeCapabilities(run.context.change.dir)
+      const { lessons } = await readLessons(run.workspaceRoot)
+      return matchingLessons(lessons, run.context.rule.id, capabilities)
+    } catch {
+      return []
+    }
+  }
+
+  /** Start one admitted target; the queue owns the slot and settlement. */
+  private async startPreparedReview(run: ManagedRun): Promise<void> {
+    let prepared = run.prepared
+    if (prepared === undefined) {
+      fail(`run ${run.file.id} reached the queue without a prepared review; start the review again`)
+    }
+    if (run.baselineCaptured !== true) {
+      // Start-eligible means the record's predecessor has settled: snapshot the
+      // authoritative record now, but never again before a retry.
+      const current = await inspectRecord(run.recordPath)
+      const fingerprint = current.kind === 'record' ? JSON.stringify(current.record) : undefined
+      // A single-task run queued behind an overlapping section must not treat
+      // the section's PASS as its own predecessor and overwrite it. A per-task
+      // predecessor publishing while this run waits keeps the successor rule.
+      if (
+        run.context.section === undefined &&
+        run.context.task !== undefined &&
+        fingerprint !== run.admissionFingerprint &&
+        current.kind === 'record' &&
+        current.record.verdict === 'PASS' &&
+        current.record.section !== undefined &&
+        current.record.taskId === run.context.task.id
+      ) {
+        const reviewer = await readReviewerBinding(dirname(dirname(run.context.change.dir)))
         if (
-          reusable &&
-          current &&
           reviewer.error === undefined &&
-          reviewerMatches(record.target, reviewer.reviewer)
+          reviewerMatches(current.record.target, reviewer.reviewer)
         ) {
+          await this.markRun(
+            run,
+            'discarded',
+            'an authoritative section PASS was published while this run waited; its completion is discarded',
+          )
           await this.discardSnapshot(run)
-          await this.markRun(run, 'completed', this.withFallbackDetail(prepared, 'reused record'))
-          this.freeRun(run)
-          await this.startNextRun(run.file.key)
-          return {
-            reusedText: formatRecord(run.context.cwd, prepared.path, record, true),
-          }
+          await this.settleReviewRun(run, 'discarded')
+          return
         }
       }
-      const started = await startTarget(this.services, {
-        rule: run.context.rule,
-        target: this.target(run.context.rule),
-        prompt: reviewPrompt(
-          run.context.rule,
-          run.context.change,
-          prepared.digest,
-          run.context.task,
-          run.context.args.context,
-          run.context.args.objective,
-          prepared.snapshotTree !== undefined,
-        ),
-        agent: run.context.agent,
-        cwd: prepared.reviewCwd ?? run.context.cwd,
-        signal: run.context.signal,
-      })
-      await this.markRun(
+      run.existingFingerprint = fingerprint
+      run.baselineCaptured = true
+    }
+    // Never retry into a run whose authoritative record changed while it
+    // waited: the newer publication already decides this review.
+    if (run.baselineCaptured === true) {
+      const current = await inspectRecord(run.recordPath)
+      const fingerprint = current.kind === 'record' ? JSON.stringify(current.record) : undefined
+      if (
+        current.kind === 'record' &&
+        current.record.runId !== run.file.id &&
+        fingerprint !== run.existingFingerprint
+      ) {
+        await this.markRun(
+          run,
+          'discarded',
+          'a newer review record was published while this run waited; its completion is discarded',
+        )
+        await this.discardSnapshot(run)
+        await this.settleReviewRun(run, 'discarded')
+        return
+      }
+    }
+    if (run.waitedInQueue === true && (await this.queuedInputsChanged(run))) {
+      if (run.reprepared === true) {
+        // The single re-preparation is spent: a later change must surface as a
+        // terminal ERROR, never as a start on stale queued inputs.
+        fail(
+          'reviewed inputs changed again while the review waited in the queue; a review re-prepares only once — finish the writes and start a fresh review',
+        )
+      }
+      // A queued run re-checks its source inputs before every attempt; a retry
+      // after a rejected start must not begin on stale prepared inputs.
+      await this.reprepareQueuedRun(run)
+      // A collision settled this run as the duplicate; its successor proceeds.
+      if (run.file.state === 'discarded' || run.file.state === 'failed') return
+      prepared = run.prepared
+      if (prepared === undefined) {
+        fail(`run ${run.file.id} lost its prepared review after re-preparation`)
+      }
+    }
+    const lessons = await this.reviewLessons(run)
+    await this.services.startHold?.({
+      rule: run.context.rule.id,
+      change: run.context.change.name,
+      ...(run.context.section === undefined ? {} : { section: run.context.section.key }),
+    })
+    const started = await startTarget(this.services, {
+      rule: run.context.rule,
+      target: this.target(run.context.rule),
+      prompt: reviewPrompt(
+        run.context.rule,
+        run.context.change,
+        prepared.digest,
+        run.context.task,
+        run.context.args.context,
+        run.context.args.objective,
+        prepared.snapshotTree !== undefined,
+        lessons,
+        run.context.section,
+      ),
+      agent: run.context.agent,
+      cwd: prepared.reviewCwd ?? run.context.cwd,
+      signal: run.context.signal,
+    })
+    await this.markRun(
+      run,
+      'running',
+      this.withQueueFault(
         run,
-        'running',
         this.withFallbackDetail(
           prepared,
           prepared.snapshotTree === undefined
             ? 'live worktree'
             : `snapshot ${prepared.snapshotTree.slice(0, 8)}`,
-        ),
-      )
-      void this.completeReviewRun(run, started, prepared)
-      return {}
-    } catch (error) {
-      await this.failRun(run, error, prepared)
-      throw error
+        ) ?? 'running',
+      ),
+    )
+    void this.completeReviewRun(run, started, prepared)
+  }
+
+  /** Reserve fallback ownership, then start directly when it is safe. */
+  private async fallbackAfterQueueError(run: ManagedRun, error: unknown): Promise<string> {
+    if (this.queue.owns(run.file.id)) {
+      // A start may already be in flight; never launch a second target.
+      return this.runHandleText(run, 'running')
     }
+    // Every fallback path, including a refused reservation, must carry the
+    // gate-recognized queue-fault classification.
+    run.file.failureClass = 'queue-internal-error'
+    run.queueFaultDetail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`
+    let reservation: Awaited<ReturnType<ReviewQueue<ManagedRun>['reserve']>>
+    try {
+      reservation = await this.queue.reserve(run)
+    } catch (reserveError) {
+      run.file.failureClass = 'queue-internal-error'
+      await this.failRun(run, reserveError, run.prepared, 'queue-internal-error')
+      throw reserveError
+    }
+    if (reservation.kind === 'duplicate') {
+      await this.discardSnapshot(run)
+      this.runs.delete(run.file.id)
+      return this.runHandleText(reservation.run, 'duplicate')
+    }
+    if (reservation.kind === 'conflict') {
+      const conflict = new QueueInternalError(
+        'review queue internal error: another run for the same review conversation is already active; let it settle, then start this review again',
+      )
+      run.file.failureClass = 'queue-internal-error'
+      if (reservation.run.recordPath === run.recordPath) {
+        // Never publish to the incumbent's record path: report this run failed
+        // without invalidating the active review's result.
+        await this.markRun(run, 'failed', this.withQueueFault(run, conflict.message))
+        await this.discardSnapshot(run)
+        await this.settleReviewRun(run, 'failed')
+      } else {
+        // A different rule has its own record path; its ERROR is observable.
+        await this.failRun(run, conflict, run.prepared, 'queue-internal-error')
+      }
+      throw conflict
+    }
+    run.fallback = true
+    await this.startDirectFallback(run, error)
+    return this.runHandleText(run, 'running')
+  }
+
+  /** Start prepared work directly once when the queue faults before admission. */
+  private async startDirectFallback(run: ManagedRun, error: unknown): Promise<void> {
+    run.file.failureClass = 'queue-internal-error'
+    run.queueFaultDetail = `queue-internal-error: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`
+    await this.markRun(run, 'running', run.queueFaultDetail)
+    try {
+      await this.startPreparedReview(run)
+    } catch (startError) {
+      run.file.failureClass = 'queue-internal-error'
+      await this.failRun(run, startError, run.prepared, 'queue-internal-error')
+      throw startError
+    }
+  }
+
+  /** Keep the queue fault visible alongside a later fallback failure. */
+  private withQueueFault(run: ManagedRun, detail: string): string {
+    return run.queueFaultDetail === undefined ? detail : `${run.queueFaultDetail}; ${detail}`
+  }
+
+  /** Whether the live source inputs moved since this run was prepared. */
+  private async queuedInputsChanged(run: ManagedRun): Promise<boolean> {
+    const prepared = run.prepared
+    if (prepared === undefined) return false
+    const current = await reviewedInputs(
+      run.context.cwd,
+      run.context.rule,
+      run.context.change,
+      this.services,
+      run.context.signal,
+    )
+    return signatureHash(current) !== prepared.queueSignature
+  }
+
+  /**
+   * Rebuild the digest/snapshot for a queued run whose inputs moved. The
+   * identity is replaced atomically; a collision settles this run as the
+   * duplicate and the incumbent proceeds.
+   */
+  private async reprepareQueuedRun(run: ManagedRun): Promise<void> {
+    await this.validateSelectedTask(run)
+    await this.discardSnapshot(run)
+    const next = await this.prepareReview(run)
+    run.prepared = next
+    const identity = `${run.workspaceRoot}\u0000${reviewIdentity(
+      run.context.rule,
+      run.context.change.name,
+      run.context.task,
+      next.digest,
+      reviewerLabel(this.target(run.context.rule)),
+      run.context.section?.key,
+    )}`
+    const replaced = await this.queue.replaceIdentity(run, identity)
+    if (!replaced.replaced) {
+      await this.discardSnapshot(run)
+      return
+    }
+    run.reprepared = true
+    run.identitySeq = undefined
+    this.rememberSectionIdentity(run)
+    await this.markRun(run, 'starting', this.withFallbackDetail(next, 're-prepared while queued'))
   }
 
   private async prepareReview(run: ManagedRun): Promise<ReviewPreparation> {
     const { rule, change, cwd, signal } = run.context
-    const path = recordPath(cwd, rule, change.name, run.context.task?.id)
+    const path = recordPath(cwd, rule, change.name, run.context.task?.id, run.context.section?.key)
+    if (run.context.section !== undefined) {
+      return this.prepareSectionReview(run, path, rule, change, cwd, signal)
+    }
     if (rule.scope === 'task') {
       const task = run.context.task
       if (task === undefined) fail(`rule "${rule.id}": a task-scoped review needs a task`)
+      // Capture the source signature before the snapshot so a mutation during
+      // snapshot creation can never be hidden behind a newer signature.
+      const queueInputs = await reviewedInputs(cwd, rule, change, this.services, signal)
       let fallbackReason: string | undefined
       const snapshot = await createReviewSnapshot(
         cwd,
@@ -3414,6 +4707,8 @@ class DelegationEngine {
             `task "${frozen.number} ${frozen.text}" is not checked in the frozen snapshot of change "${change.name}"; re-run the review`,
           )
         }
+        // The source set was tracked before the snapshot so a queued run can
+        // re-prepare when the live inputs moved while it waited.
         return {
           digest: hashParts([
             'task-review-v2',
@@ -3424,6 +4719,7 @@ class DelegationEngine {
           ]),
           worktreeDigest: hashParts(['task-review-snapshot-v1', snapshot.tree]),
           path,
+          queueSignature: signatureHash(queueInputs),
           reviewCwd: snapshot.worktree,
           snapshotTree: snapshot.tree,
         }
@@ -3443,6 +4739,7 @@ class DelegationEngine {
         worktreeDigest: worktree,
         path,
         signature,
+        queueSignature: signatureHash(signature),
         fallbackReason,
       }
     }
@@ -3462,6 +4759,64 @@ class DelegationEngine {
       ...(worktree === undefined ? {} : { worktreeDigest: worktree }),
       path,
       signature,
+      queueSignature: signatureHash(signature),
+    }
+  }
+
+  /** Section digest/inputs: one frozen snapshot over every covered checked task. */
+  private async prepareSectionReview(
+    run: ManagedRun,
+    path: string,
+    rule: RuleConfig,
+    change: ChangeInfo,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<ReviewPreparation> {
+    const section = run.context.section
+    if (section === undefined) fail(`rule "${rule.id}": a section-scoped review needs a section`)
+    // Capture the source signature before the snapshot so a mutation during
+    // snapshot creation can never be hidden behind a newer signature.
+    const queueInputs = await reviewedInputs(cwd, rule, change, this.services, signal)
+    let fallbackReason: string | undefined
+    const snapshot = await createReviewSnapshot(
+      cwd,
+      change,
+      run.file.id,
+      this.services.git.runGit,
+      signal,
+      undefined,
+      (reason) => {
+        fallbackReason = reason
+      },
+    )
+    if (snapshot !== undefined) {
+      run.snapshot = snapshot
+      const frozen = await frozenSection(snapshot.changeDir, section, change)
+      run.context.section = frozen
+      return {
+        digest: sectionDigest('section-review-v2', frozen, snapshot.specDigest, snapshot.tree),
+        worktreeDigest: hashParts(['section-review-snapshot-v1', snapshot.tree]),
+        path,
+        queueSignature: signatureHash(queueInputs),
+        reviewCwd: snapshot.worktree,
+        snapshotTree: snapshot.tree,
+      }
+    }
+    // Fallback: review the live worktree under the mutation guard.
+    const signature = await reviewedInputs(cwd, rule, change, this.services, signal)
+    const worktree = await worktreeDigest(cwd, this.services.git, signal)
+    return {
+      digest: sectionDigest(
+        'section-review-v1',
+        section,
+        await specDigest(change.dir, signal),
+        worktree,
+      ),
+      worktreeDigest: worktree,
+      path,
+      signature,
+      queueSignature: signatureHash(signature),
+      fallbackReason,
     }
   }
 
@@ -3471,6 +4826,8 @@ class DelegationEngine {
     started: StartedTarget,
     prepared: ReviewPreparation,
   ): Promise<void> {
+    let outcome: SettledRunState = 'failed'
+    let skipCleanup = false
     try {
       const result = await finishTarget(started)
       const parsed = parseVerdict(result.text, prepared.digest)
@@ -3485,12 +4842,12 @@ class DelegationEngine {
         const changed = changedInputPaths(prepared.signature, current)
         if (changed.length > 0) {
           const sample = changed.slice(0, 5).join(', ')
-          fail(
+          throw new InputMutationError(
             `reviewed inputs changed during the run (${changed.length} changed: ${sample}${changed.length > 5 ? ', …' : ''}); a write inside the reviewed scope happened during the run — finish the writes, then re-run the review`,
           )
         }
       }
-      await this.publishRecord(run, {
+      const record = await this.publishRecord(run, {
         digest: prepared.digest,
         ...(prepared.worktreeDigest === undefined
           ? {}
@@ -3499,18 +4856,100 @@ class DelegationEngine {
         findings: parsed.findings,
         target: targetIdentity(result.provider, result.model, result.reasoningEffort),
       })
+      const historyDetail = await this.recordFindingHistory(run, record)
+      const detail = [
+        parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
+        historyDetail,
+      ]
+        .filter((part): part is string => part !== undefined)
+        .join('; ')
       await this.markRun(
         run,
         'completed',
-        this.withFallbackDetail(
-          prepared,
-          parsed.verdict === 'FINDINGS' ? `${parsed.findings.length} finding(s)` : undefined,
-        ),
+        this.withFallbackDetail(prepared, detail === '' ? undefined : detail),
       )
+      outcome = 'completed'
     } catch (error) {
       if (error instanceof DiscardedRun) {
         await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
+        outcome = 'discarded'
       } else {
+        const failure = classifyFailure(error, 'run')
+        const unconfirmed = error instanceof UnconfirmedTimeoutError
+        const queued = this.queue.owns(run.file.id)
+        run.file.failureClass =
+          run.fallback === true ? 'queue-internal-error' : failure.failureClass
+        if (unconfirmed) {
+          // A possibly-still-running child owns its key, slot, and snapshot
+          // until teardown is confirmed, regardless of publication outcome.
+          let terminal: SettledRunState = 'failed'
+          try {
+            await this.publishRecord(run, {
+              digest: prepared.digest,
+              ...(prepared.worktreeDigest === undefined
+                ? {}
+                : { worktreeDigest: prepared.worktreeDigest }),
+              verdict: 'ERROR',
+              findings: [],
+              target: targetIdentity(started.provider, started.model, started.reasoningEffort),
+              error: sanitizeText(this.withQueueFault(run, errorMessage(error)), MAX_ERROR_CHARS),
+            })
+            await this.markRun(
+              run,
+              'failed',
+              this.withQueueFault(
+                run,
+                this.withFallbackDetail(
+                  prepared,
+                  sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+                ) ?? '',
+              ),
+            )
+          } catch (publishError) {
+            if (publishError instanceof DiscardedRun) terminal = 'discarded'
+            try {
+              await this.markRun(
+                run,
+                publishError instanceof DiscardedRun ? 'discarded' : 'failed',
+                this.withFallbackDetail(
+                  prepared,
+                  sanitizeText(
+                    this.withQueueFault(run, errorMessage(publishError)),
+                    MAX_ERROR_CHARS,
+                  ),
+                ),
+              )
+            } catch {
+              // The run file is scratch; quarantine still protects the key.
+            }
+          }
+          if (queued) {
+            skipCleanup = true
+            outcome = terminal
+            this.queue.quarantine(
+              run,
+              async () => {
+                await started.activation.dispose()
+                await this.discardSnapshot(run)
+              },
+              terminal,
+            )
+            return
+          }
+        } else if (
+          queued &&
+          run.fallback !== true &&
+          this.config.reviewQueue.enabled &&
+          failure.transient &&
+          this.queue.attemptsOf(run.file.id) < this.config.reviewQueue.maxAttempts
+        ) {
+          // A retry publishes no verdict and keeps its snapshot for the re-run.
+          // Re-check the inputs before the next start, as for a queued run.
+          run.waitedInQueue = true
+          skipCleanup = true
+          await this.queue.scheduleRetry(run, failure, error)
+          return
+        }
         try {
           await this.publishRecord(run, {
             digest: prepared.digest,
@@ -3520,12 +4959,18 @@ class DelegationEngine {
             verdict: 'ERROR',
             findings: [],
             target: targetIdentity(started.provider, started.model, started.reasoningEffort),
-            error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+            error: sanitizeText(this.withQueueFault(run, errorMessage(error)), MAX_ERROR_CHARS),
           })
           await this.markRun(
             run,
             'failed',
-            this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+            this.withQueueFault(
+              run,
+              this.withFallbackDetail(
+                prepared,
+                sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+              ) ?? '',
+            ),
           )
         } catch (publishError) {
           if (publishError instanceof DiscardedRun) {
@@ -3534,28 +4979,57 @@ class DelegationEngine {
               'discarded',
               this.withFallbackDetail(prepared, publishError.message),
             )
+            outcome = 'discarded'
           } else {
             await this.markRun(
               run,
               'failed',
               this.withFallbackDetail(
                 prepared,
-                sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+                sanitizeText(this.withQueueFault(run, errorMessage(publishError)), MAX_ERROR_CHARS),
               ),
             )
           }
         }
       }
     } finally {
-      await this.discardSnapshot(run)
-      this.freeRun(run)
-      await this.startNextRun(run.file.key)
+      if (!skipCleanup) {
+        await this.discardSnapshot(run)
+        await this.settleReviewRun(run, outcome)
+      }
     }
   }
   /** Write a record under the publish lock; a newer writer wins and this run is discarded. */
   private async publishRecord(run: ManagedRun, fields: PublishFields): Promise<ReviewRecord> {
-    const release = await acquirePublishLock(run.recordPath)
+    const release = await acquirePublishLock(
+      publicationLockPath(run.context.cwd, run.context.rule, run.context.change.name),
+    )
     try {
+      if (
+        this.queue.owns(run.file.id) &&
+        !this.queue.ownsIdentity(run.file.id, run.file.identity)
+      ) {
+        throw new DiscardedRun(
+          'this run no longer owns the current review identity; its completion was discarded',
+        )
+      }
+      const sectionKey = this.sectionIdentityKey(run)
+      if (sectionKey !== undefined) {
+        const latest = this.sectionIdentities.get(sectionKey)
+        if (latest !== undefined && latest.identity !== run.file.identity) {
+          throw new DiscardedRun(
+            'a newer review identity for this section was submitted; its completion was discarded',
+          )
+        }
+      }
+      await this.services.publishHold?.({
+        rule: run.context.rule.id,
+        change: run.context.change.name,
+        ...(run.context.section === undefined ? {} : { section: run.context.section.key }),
+      })
+      if (run.context.section !== undefined) {
+        return await this.publishSectionRecordLocked(run, fields)
+      }
       const current = await inspectRecord(run.recordPath)
       if (current.kind === 'record' && current.record.runId !== run.file.id) {
         if (JSON.stringify(current.record) !== run.existingFingerprint) {
@@ -3573,7 +5047,10 @@ class DelegationEngine {
         digest: fields.digest,
         ...(fields.worktreeDigest === undefined ? {} : { worktreeDigest: fields.worktreeDigest }),
         verdict: fields.verdict,
-        findings: fields.findings,
+        findings: fields.findings.map((finding) => ({
+          ...finding,
+          class: normalizeFindingClass(finding.class),
+        })),
         target: fields.target,
         session: currentThread(run.context.agent),
         runId: run.file.id,
@@ -3584,20 +5061,8 @@ class DelegationEngine {
         // The portable approval is committed with the change; write it before
         // the local PASS so a failed write can never publish an approval.
         const path = portableTaskRecordPath(run.context.change.dir, record.taskId)
-        const portable: PortableTaskReviewRecord = {
-          rule: record.rule,
-          change: record.change,
-          scope: 'task',
-          taskId: record.taskId,
-          digest: record.digest,
-          ...(record.worktreeDigest === undefined ? {} : { worktreeDigest: record.worktreeDigest }),
-          verdict: 'PASS',
-          findings: [],
-          target: record.target,
-          time: record.time,
-        }
         try {
-          await writeJsonAtomic(path, portable)
+          await writeJsonAtomic(path, portableRecordOf(record, record.taskId))
         } catch (error) {
           fail(
             `could not write the portable approval record at ${relativePath(run.context.cwd, path)}: ${errorMessage(error)}; no PASS record was published`,
@@ -3605,9 +5070,156 @@ class DelegationEngine {
         }
       }
       await writeJsonAtomic(run.recordPath, record)
+      try {
+        this.services.onPublished?.(run.file.id, record)
+      } catch {
+        // The observer is a seam; it must not change publication.
+      }
       return record
     } finally {
       await release()
+    }
+  }
+
+  /**
+   * One section verdict publishes the per-task local records and, for PASS, the
+   * per-task portable approvals as one transaction: all temporaries are written
+   * before any rename, and a failure restores every destination byte-identically.
+   */
+  private async publishSectionRecordLocked(
+    run: ManagedRun,
+    fields: PublishFields,
+  ): Promise<ReviewRecord> {
+    const section = run.context.section
+    if (section === undefined) fail('a section publication needs a resolved section')
+    const { rule, change, cwd } = run.context
+    const current = await inspectRecord(run.recordPath)
+    if (current.kind === 'record' && current.record.runId !== run.file.id) {
+      if (JSON.stringify(current.record) !== run.existingFingerprint) {
+        throw new DiscardedRun(
+          `a newer section review record already exists at ${run.file.record}; this completion was discarded`,
+        )
+      }
+    }
+    const record: ReviewRecord = {
+      rule: rule.id,
+      change: change.name,
+      phase: rule.phase ?? 'task',
+      scope: 'task',
+      section: section.key,
+      sectionTitle: section.title,
+      taskIds: section.covered.map((task) => task.id),
+      digest: fields.digest,
+      ...(fields.worktreeDigest === undefined ? {} : { worktreeDigest: fields.worktreeDigest }),
+      verdict: fields.verdict,
+      findings: fields.findings.map((finding) => ({
+        ...finding,
+        class: normalizeFindingClass(finding.class),
+      })),
+      target: fields.target,
+      session: currentThread(run.context.agent),
+      runId: run.file.id,
+      time: this.now(),
+      ...(fields.error === undefined ? {} : { error: fields.error }),
+      ...(fields.verdict === 'ERROR' && run.file.failureClass !== undefined
+        ? { failureClass: run.file.failureClass }
+        : {}),
+    }
+    const reviewer = await readReviewerBinding(dirname(dirname(change.dir)))
+    const files: PublishFile[] = [{ path: run.recordPath, body: jsonText(record) }]
+    for (const task of section.covered) {
+      const taskPath = recordPath(cwd, rule, change.name, task.id)
+      const portablePath = portableTaskRecordPath(change.dir, task.id)
+      const local = await inspectRecord(taskPath)
+      const portable = await inspectPortableRecord(change.dir, task.id)
+      const localPass =
+        local.kind === 'record' &&
+        local.record.rule === rule.id &&
+        local.record.change === change.name &&
+        local.record.scope === 'task' &&
+        local.record.taskId === task.id &&
+        local.record.verdict === 'PASS' &&
+        reviewer.error === undefined &&
+        reviewerMatches(local.record.target, reviewer.reviewer)
+      const portablePass =
+        portable.kind === 'record' &&
+        portable.record.rule === rule.id &&
+        portable.record.change === change.name &&
+        portable.record.scope === 'task' &&
+        portable.record.taskId === task.id &&
+        portable.record.verdict === 'PASS' &&
+        reviewer.error === undefined &&
+        reviewerMatches(portable.record.target, reviewer.reviewer)
+      const taskRecord: ReviewRecord = { ...record, taskId: task.id }
+      if (fields.verdict === 'PASS') {
+        // A satisfying approval stays byte-identical; only the remaining
+        // records are published.
+        if (localPass && portablePass) continue
+        files.push({ path: taskPath, body: jsonText(taskRecord) })
+        if (!portablePass) {
+          files.push({ path: portablePath, body: jsonText(portableRecordOf(record, task.id)) })
+        }
+      } else if (fields.verdict === 'FINDINGS') {
+        // Keep a covered task's existing valid approval; the section verdict
+        // must not replace it with an unresolved one.
+        if (localPass) continue
+        files.push({ path: taskPath, body: jsonText(taskRecord) })
+      } else {
+        // ERROR is visible on every covered task and publishes no approval.
+        files.push({ path: taskPath, body: jsonText(taskRecord) })
+      }
+    }
+    try {
+      await publishFilesTransaction(files)
+    } catch (error) {
+      fail(
+        `could not publish the section review records for change "${change.name}": ${errorMessage(error)}; no section approval was published`,
+      )
+    }
+    try {
+      this.services.onPublished?.(run.file.id, record)
+    } catch {
+      // The observer is a seam; it must not change publication.
+    }
+    return record
+  }
+
+  /**
+   * Append one settled review's findings after its record is published. The
+   * helper never throws; when neither the entry nor its gap marker is writable,
+   * the run detail names the gap rather than changing any verdict.
+   */
+  private async recordFindingHistory(
+    run: ManagedRun,
+    record: ReviewRecord,
+  ): Promise<string | undefined> {
+    try {
+      const result = await appendFindingHistory(
+        run.workspaceRoot,
+        {
+          v: 1,
+          kind: 'run',
+          rule: record.rule,
+          change: record.change,
+          ...(record.taskId === undefined ? {} : { taskId: record.taskId }),
+          ...(record.section === undefined ? {} : { section: sanitizeText(record.section, 200) }),
+          ...(record.taskIds === undefined ? {} : { taskIds: record.taskIds }),
+          verdict: record.verdict === 'FINDINGS' ? 'FINDINGS' : 'PASS',
+          digest: record.digest,
+          findings: record.findings.map((finding) => ({
+            class: normalizeFindingClass(finding.class),
+            title: finding.title,
+            evidence: finding.evidence,
+            fix: finding.fix,
+          })),
+          time: record.time,
+        },
+        { window: this.config.reviewLearning.window },
+      )
+      if (result.appended || result.gapAppended) return undefined
+      return `history gap: ${result.detail ?? 'the finding history could not be written'}`
+    } catch (error) {
+      return `history gap: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`
     }
   }
 
@@ -3616,10 +5228,17 @@ class DelegationEngine {
     run: ManagedRun,
     error: unknown,
     prepared: ReviewPreparation | undefined,
+    failureClass?: FailureClass,
   ): Promise<void> {
+    if (failureClass !== undefined) run.file.failureClass = failureClass
+    else if (!(error instanceof DiscardedRun)) {
+      run.file.failureClass = classifyFailure(error, 'run').failureClass
+    }
+    let outcome: SettledRunState = 'failed'
     try {
       if (error instanceof DiscardedRun) {
         await this.markRun(run, 'discarded', this.withFallbackDetail(prepared, error.message))
+        outcome = 'discarded'
       } else if (prepared !== undefined) {
         try {
           const target = this.config.targets.get(run.context.rule.to ?? '')
@@ -3638,12 +5257,18 @@ class DelegationEngine {
                     target.model ?? target.agentOptions?.model,
                     target.reasoningEffort ?? target.agentOptions?.reasoningEffort,
                   ),
-            error: sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+            error: sanitizeText(this.withQueueFault(run, errorMessage(error)), MAX_ERROR_CHARS),
           })
           await this.markRun(
             run,
             'failed',
-            this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+            this.withQueueFault(
+              run,
+              this.withFallbackDetail(
+                prepared,
+                sanitizeText(errorMessage(error), MAX_ERROR_CHARS),
+              ) ?? '',
+            ),
           )
         } catch (publishError) {
           if (publishError instanceof DiscardedRun) {
@@ -3652,13 +5277,14 @@ class DelegationEngine {
               'discarded',
               this.withFallbackDetail(prepared, publishError.message),
             )
+            outcome = 'discarded'
           } else {
             await this.markRun(
               run,
               'failed',
               this.withFallbackDetail(
                 prepared,
-                sanitizeText(errorMessage(publishError), MAX_ERROR_CHARS),
+                sanitizeText(this.withQueueFault(run, errorMessage(publishError)), MAX_ERROR_CHARS),
               ),
             )
           }
@@ -3667,13 +5293,107 @@ class DelegationEngine {
         await this.markRun(
           run,
           'failed',
-          this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)),
+          this.withQueueFault(
+            run,
+            this.withFallbackDetail(prepared, sanitizeText(errorMessage(error), MAX_ERROR_CHARS)) ??
+              '',
+          ),
         )
       }
     } finally {
       await this.discardSnapshot(run)
-      this.freeRun(run)
-      await this.startNextRun(run.file.key).catch(() => undefined)
+      await this.settleReviewRun(run, outcome)
+    }
+  }
+
+  /** Write the terminal wait-timeout ERROR; the queue finishes the run after this. */
+  private async timeoutRun(run: ManagedRun, info: QueueTimeoutInfo): Promise<void> {
+    const prepared = run.prepared
+    const position = info.position === undefined ? '' : ` at position ${info.position}`
+    const message = `review queue wait timed out after ${info.waitMs} ms${position}; no target started. Shorten the running reviews or start this review again after the queue drains`
+    run.file.waitMs = info.waitMs
+    if (run.file.attempts === undefined) run.file.attempts = 0
+    // A newer publication during the wait decides this review; report the
+    // discard instead of a timeout that would hide the authoritative record.
+    const current = await inspectRecord(run.recordPath)
+    const fingerprint = current.kind === 'record' ? JSON.stringify(current.record) : undefined
+    if (
+      current.kind === 'record' &&
+      current.record.runId !== run.file.id &&
+      fingerprint !== run.existingFingerprint
+    ) {
+      await this.markRun(
+        run,
+        'discarded',
+        'a newer review record was published while this run waited; its completion is discarded',
+      )
+      await this.discardSnapshot(run)
+      await this.settleReviewRun(run, 'discarded')
+      return
+    }
+    run.file.failureClass = 'queue-timeout'
+    if (prepared !== undefined) {
+      try {
+        const target = this.config.targets.get(run.context.rule.to ?? '')
+        await this.publishRecord(run, {
+          digest: prepared.digest,
+          ...(prepared.worktreeDigest === undefined
+            ? {}
+            : { worktreeDigest: prepared.worktreeDigest }),
+          verdict: 'ERROR',
+          findings: [],
+          target:
+            target === undefined
+              ? { provider: run.context.rule.to ?? 'unknown' }
+              : targetIdentity(
+                  target.provider,
+                  target.model ?? target.agentOptions?.model,
+                  target.reasoningEffort ?? target.agentOptions?.reasoningEffort,
+                ),
+          error: sanitizeText(message, MAX_ERROR_CHARS),
+        })
+      } catch (publishError) {
+        if (publishError instanceof DiscardedRun) {
+          await this.markRun(
+            run,
+            'discarded',
+            'a newer review record was published while this run waited; its completion is discarded',
+          )
+          await this.discardSnapshot(run)
+          await this.settleReviewRun(run, 'discarded')
+          return
+        }
+        // A record write failure must not keep a timed-out run queued.
+      }
+    }
+    await this.markRun(run, 'failed', this.withFallbackDetail(prepared, message))
+    await this.discardSnapshot(run)
+  }
+
+  /** Persist the current run-file state without a state transition. */
+  private async persistRun(run: ManagedRun): Promise<void> {
+    try {
+      await writeJsonAtomic(runFilePath(run.workspaceRoot, run.file.id), run.file)
+    } catch {
+      // Run state is local scratch; a write failure must not break the background run.
+    }
+  }
+
+  /** Terminal cleanup and the single settlement observation for this run. */
+  private async settleReviewRun(run: ManagedRun, state: SettledRunState): Promise<void> {
+    if (this.queue.owns(run.file.id)) {
+      await this.queue.complete(run, state)
+      return
+    }
+    this.notifySettled(run, state)
+  }
+
+  private notifySettled(run: ManagedRun, state: SettledRunState): void {
+    this.runs.delete(run.file.id)
+    try {
+      this.services.onRunSettled?.(run.file.id, state)
+    } catch {
+      // The observer is a test seam; it must not change run cleanup.
     }
   }
 
@@ -3710,37 +5430,90 @@ class DelegationEngine {
     }
   }
 
-  private freeRun(run: ManagedRun): void {
-    this.runs.delete(run.file.id)
-    this.runIdentities.delete(run.file.identity)
-    const state = run.file.state
-    if (state === 'queued' || state === 'running') return
+  /** Reconcile crashed run files from the authoritative records once per workspace. */
+  async recoverWorkspace(workspaceRoot: string): Promise<void> {
+    await this.ensureRecovered(workspaceRoot)
+  }
+
+  /** Every caller waits for the same reconciliation before admitting new runs. */
+  private async ensureRecovered(workspaceRoot: string): Promise<void> {
+    const existing = this.recoveryPromises.get(workspaceRoot)
+    if (existing !== undefined) return existing
+    const recovery = this.recoverOnce(workspaceRoot)
+    this.recoveryPromises.set(workspaceRoot, recovery)
     try {
-      this.services.onRunSettled?.(run.file.id, state)
+      await recovery
     } catch {
-      // The observer is a test seam; it must not change run cleanup.
+      this.recoveryPromises.delete(workspaceRoot)
     }
   }
 
-  private async startNextRun(key: string): Promise<void> {
-    const queue = this.runQueues.get(key)
-    const next = queue?.shift()
-    if (queue !== undefined && queue.length === 0) this.runQueues.delete(key)
-    if (next === undefined) {
-      this.runKeyHeads.delete(key)
-      return
-    }
-    this.runKeyHeads.set(key, next)
-    try {
-      await this.beginReviewRun(next)
-    } catch {
-      // beginReviewRun already cleaned up and surfaced a failed run file.
+  private async recoverOnce(workspaceRoot: string): Promise<void> {
+    await this.services.recoverDelay?.()
+    for (const run of await listAllRunFiles(workspaceRoot)) {
+      if (!isActiveRunState(run.state)) continue
+      const current = await inspectRecord(join(workspaceRoot, run.record))
+      if (current.kind === 'record' && current.record.runId === run.id) {
+        run.state = current.record.verdict === 'ERROR' ? 'failed' : 'completed'
+        run.detail = `recovered from the published ${current.record.verdict} record`
+      } else if (current.kind === 'record') {
+        // A record older than this run means the run is a rerun that crashed
+        // before publishing; only a newer publication supersedes it.
+        const publishedAt = Date.parse(current.record.time)
+        const startedAt = Date.parse(run.startedAt)
+        const superseded =
+          Number.isFinite(publishedAt) && Number.isFinite(startedAt) && publishedAt >= startedAt
+        run.state = superseded ? 'discarded' : 'interrupted'
+        run.detail = superseded
+          ? 'recovered: a newer review run holds the record'
+          : 'recovered after restart without an authoritative record; run a fresh review'
+      } else {
+        run.state = 'interrupted'
+        run.detail = 'recovered after restart without an authoritative record; run a fresh review'
+      }
+      try {
+        await writeJsonAtomic(runFilePath(workspaceRoot, run.id), run)
+      } catch {
+        // Run state is scratch; recovery must not fail the caller.
+      }
     }
   }
 
-  private runHandleText(run: ManagedRun, mode: 'running' | 'queued' | 'duplicate'): string {
+  /** Bounded queue facts; never a path, credential, or provider message. */
+  private runFacts(file: RunFile): string {
+    const facts: string[] = []
+    if (file.queuePosition !== undefined) facts.push(`position=${file.queuePosition}`)
+    if (file.queuedAt !== undefined) facts.push(`queuedAt=${file.queuedAt}`)
+    const waitMs = file.waitMs ?? this.elapsedWaitMs(file)
+    if (waitMs !== undefined) facts.push(`waitMs=${waitMs}`)
+    if (file.attempts !== undefined) facts.push(`attempts=${file.attempts}`)
+    if (file.lastRetryAt !== undefined) facts.push(`lastRetryAt=${file.lastRetryAt}`)
+    if (file.failureClass !== undefined) facts.push(`failureClass=${file.failureClass}`)
+    return facts.length === 0 ? '' : ` ${facts.join(' ')}`
+  }
+
+  /** Elapsed wait for a still-queued run; bounded to 30 days. */
+  private elapsedWaitMs(file: RunFile): number | undefined {
+    if (file.state !== 'queued' || file.queuedAt === undefined) return undefined
+    const queuedAt = Date.parse(file.queuedAt)
+    if (!Number.isFinite(queuedAt)) return undefined
+    return Math.min(2_592_000_000, Math.max(0, this.services.now().getTime() - queuedAt))
+  }
+
+  private runHandleText(
+    run: ManagedRun,
+    mode: 'running' | 'queued' | 'retry-wait' | 'settled' | 'duplicate',
+  ): string {
     const label =
-      mode === 'duplicate' ? 'already pending' : mode === 'queued' ? 'queued' : 'started'
+      mode === 'duplicate'
+        ? 'already pending'
+        : mode === 'queued'
+          ? 'queued'
+          : mode === 'retry-wait'
+            ? 'retrying'
+            : mode === 'settled'
+              ? 'finished'
+              : 'started'
     const lines = [
       `rule "${run.file.rule}" review ${label}`,
       `run: ${run.file.id}`,
@@ -3748,10 +5521,19 @@ class DelegationEngine {
       `change: ${run.file.change}`,
     ]
     if (run.file.taskId !== undefined) lines.push(`task id: ${run.file.taskId}`)
+    if (run.file.section !== undefined) {
+      const covered = run.context.section?.covered.length ?? 0
+      lines.push(`section: ${run.file.section} (${covered} checked task(s) in scope)`)
+    }
     lines.push(`record: ${run.file.record}`)
-    if (mode === 'queued') {
-      const head = this.runKeyHeads.get(run.file.key)
-      if (head !== undefined) lines.push(`queued behind: ${head.file.id}`)
+    if (run.file.queuePosition !== undefined) {
+      lines.push(`queue position: ${run.file.queuePosition}`)
+    }
+    if (run.file.waitMs !== undefined) lines.push(`queue wait: ${run.file.waitMs} ms`)
+    if (mode === 'retry-wait') {
+      if (run.file.attempts !== undefined) lines.push(`attempt: ${run.file.attempts}`)
+      if (run.file.failureClass !== undefined) lines.push(`failure class: ${run.file.failureClass}`)
+      if (run.file.lastRetryAt !== undefined) lines.push(`last retry: ${run.file.lastRetryAt}`)
     }
     lines.push(
       '',
@@ -3773,12 +5555,22 @@ class DelegationEngine {
       if (
         run.workspaceRoot !== workspaceRoot ||
         run.file.rule !== ruleId ||
-        run.file.change !== change ||
-        (run.context.task?.id ?? undefined) !== taskId
+        run.file.change !== change
       ) {
         continue
       }
-      if (run.file.state === 'queued' || run.file.state === 'running') {
+      const section = run.context.section
+      if (section === undefined) {
+        if ((run.context.task?.id ?? undefined) !== taskId) continue
+      } else if (taskId === undefined || !section.covered.some((task) => task.id === taskId)) {
+        continue
+      }
+      if (
+        run.file.state === 'queued' ||
+        run.file.state === 'starting' ||
+        run.file.state === 'running' ||
+        run.file.state === 'retry-wait'
+      ) {
         return { id: run.file.id, state: run.file.state, record: run.file.record }
       }
     }
@@ -4034,6 +5826,7 @@ class DelegationEngine {
       const changes = await listActiveChanges(openspecRoot)
       if (changes.length === 0) lines.push('- no active change')
       const workspaceRoot = dirname(openspecRoot)
+      await this.ensureRecovered(workspaceRoot)
       const involvementRead = await readInvolvement(workspaceRoot, thread)
       if (involvementRead.warning !== undefined) {
         lines.push(`- session involvement: ${involvementRead.warning}`)
@@ -4057,6 +5850,7 @@ class DelegationEngine {
           `  this session: ${entry === undefined ? 'not involved' : involvementSummary(entry, attributedChecked)}`,
         )
         if (tasks === undefined) continue
+        rememberSections(change.name, await readTaskLanes(change.dir))
         const checked = tasks.filter((task) => task.checked)
         lines.push(`  tasks: ${checked.length}/${tasks.length} checked`)
         for (const rule of this.config.rules) {
@@ -4133,12 +5927,17 @@ class DelegationEngine {
           lines.push('  progress note: none')
         }
       }
+      const queue = this.queue.summary()
+      lines.push(
+        '',
+        `Review queue: enabled=${queue.enabled} concurrency=${queue.concurrency} active=${queue.active} queued=${queue.queued} depth=${queue.active + queue.queued}`,
+      )
       const runs = await listRunFiles(workspaceRoot)
       lines.push('', 'Review runs:')
       if (runs.length === 0) lines.push('- none')
       for (const run of runs) {
         lines.push(
-          `- run ${run.id}: rule=${run.rule} change=${run.change}${run.taskId === undefined ? '' : ` task=${run.taskId}`} state=${run.state} record=${run.record}${run.detail === undefined ? '' : ` detail="${run.detail}"`}`,
+          `- run ${run.id}: rule=${run.rule} change=${run.change}${run.taskId === undefined ? '' : ` task=${run.taskId}`}${run.section === undefined ? '' : ` section=${run.section}`} state=${run.state} record=${run.record}${this.runFacts(run)}${run.detail === undefined ? '' : ` detail="${run.detail}"`}`,
         )
       }
     }
@@ -4171,6 +5970,8 @@ interface GateDeps {
   services: EngineServices
   /** Visible worker-start tools for one agent; undefined keeps the lane gate enabled. */
   workerToolVisible?: (agent: Agent) => boolean | undefined
+  /** Once-per-workspace durable-run reconciliation, run before gate evaluation. */
+  recover?: (workspaceRoot: string) => Promise<void>
 }
 
 /** Per-turn steering once for a soft issue, keyed by rule/digest/task. */
@@ -4205,6 +6006,17 @@ async function readTaskLanesOrUndefined(changeDir: string): Promise<TaskLane[] |
     return parseTaskLanes(await readFile(join(changeDir, 'tasks.md'), 'utf8'))
   } catch {
     return undefined
+  }
+}
+
+/** Group a change's task plan for a section selector; an unreadable plan is an error. */
+async function readTaskLanesOrFail(change: ChangeInfo): Promise<TaskLane[]> {
+  try {
+    return parseTaskLanes(await readFile(join(change.dir, 'tasks.md'), 'utf8'))
+  } catch (error) {
+    fail(
+      `change "${change.name}" has no readable tasks.md for a section review: ${errorMessage(error)}`,
+    )
   }
 }
 
@@ -4397,6 +6209,7 @@ async function evaluateGate(
   const cwd = deps.services.workingDirectory.get(agent.session)
   const openspecRoot = await findOpenSpecRoot(cwd)
   const workspaceRoot = openspecRoot === undefined ? undefined : dirname(openspecRoot)
+  if (workspaceRoot !== undefined) await deps.recover?.(workspaceRoot)
   const changes = openspecRoot === undefined ? [] : await listActiveChanges(openspecRoot)
   // All active changes are snapshotted so a new or newly edited change is
   // detectable; only the session's involved changes are evaluated.
@@ -4442,6 +6255,9 @@ async function evaluateGate(
     if (state.kind !== 'record') return `no PASS/ERROR record at ${record}`
     if (state.record.verdict === 'FINDINGS') {
       return `its FINDINGS record at ${record} is unresolved; fix the findings and re-review`
+    }
+    if (state.record.verdict === 'ERROR' && reviewedInputsChanged(state.record)) {
+      return `its review at ${record} could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review`
     }
     return `${state.record.verdict} record at ${record} is stale (recorded ${digestShort(state.record.digest)}, current ${digestShort(expectedDigest)})`
   }
@@ -4543,49 +6359,64 @@ async function evaluateGate(
       const strictTaskRule = taskRules.find((rule) => rule.gate === 'strict')
       const softTaskRule = taskRules.find((rule) => rule.gate === 'soft')
       // Only the checked tasks this session attributed are in its review scope.
-      for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
-        let satisfied = false
-        let findingsOnly = false
-        for (const rule of taskRules) {
-          const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id))
-          if (
-            reviewer.error === undefined &&
-            state.kind === 'record' &&
-            reviewerMatches(state.record.target, reviewer.reviewer) &&
-            recordSatisfies(state, change.name, 'task', undefined, task.id)
-          ) {
-            satisfied = true
-            break
+      // A workflow-owned profile moves this rule to the workflow definition;
+      // the spec-review, progress, and lane gates below stay in force.
+      if (deps.config.gates.workflowOwned) {
+        for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
+          let satisfied = false
+          let findingsOnly = false
+          let reviewedInputsMoved = false
+          for (const rule of taskRules) {
+            const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id))
+            if (
+              reviewer.error === undefined &&
+              state.kind === 'record' &&
+              reviewerMatches(state.record.target, reviewer.reviewer) &&
+              recordSatisfies(state, change.name, 'task', undefined, task.id)
+            ) {
+              satisfied = true
+              break
+            }
+            if (state.kind === 'record' && state.record.verdict === 'FINDINGS') findingsOnly = true
+            if (
+              state.kind === 'record' &&
+              state.record.verdict === 'ERROR' &&
+              reviewedInputsChanged(state.record)
+            ) {
+              reviewedInputsMoved = true
+            }
           }
-          if (state.kind === 'record' && state.record.verdict === 'FINDINGS') findingsOnly = true
-        }
-        if (satisfied) continue
-        const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review'
-        const pending = pendingFor(ruleId, change.name, task.id)
-        const detail =
-          reviewer.error !== undefined
-            ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
-            : pending !== undefined
-              ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
-              : findingsOnly
-                ? 'its review record has unresolved findings'
-                : 'it has no task-review PASS/ERROR record'
-        const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`
-        const call =
-          reviewer.error !== undefined
-            ? `repair openspec/${APPROVAL_MARKER_FILE}`
-            : pending === undefined
-              ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
-              : `delegation_status (run ${pending.id})`
-        if (strictTaskRule !== undefined) pushStrict(ruleId, text, call)
-        else if (softTaskRule !== undefined) {
-          pushSoft(`task-review:${change.name}:${task.id}`, ruleId, text, call)
+          if (satisfied) continue
+          const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review'
+          const pending = pendingFor(ruleId, change.name, task.id)
+          const detail =
+            reviewer.error !== undefined
+              ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
+              : pending !== undefined
+                ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
+                : reviewedInputsMoved
+                  ? 'its review could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review'
+                  : findingsOnly
+                    ? 'its review record has unresolved findings'
+                    : 'it has no task-review PASS/ERROR record'
+          const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`
+          const call =
+            reviewer.error !== undefined
+              ? `repair openspec/${APPROVAL_MARKER_FILE}`
+              : pending === undefined
+                ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
+                : `delegation_status (run ${pending.id})`
+          if (strictTaskRule !== undefined) pushStrict(ruleId, text, call)
+          else if (softTaskRule !== undefined) {
+            pushSoft(`task-review:${change.name}:${task.id}`, ruleId, text, call)
+          }
         }
       }
 
       // The completing session must obtain an approval for every checked task,
       // not only the tasks its own tick attributed.
       if (
+        deps.config.gates.workflowOwned &&
         entry.completed &&
         taskRules.length > 0 &&
         tasks.length > 0 &&
@@ -4671,25 +6502,37 @@ async function evaluateGate(
           const nextTask = tasks.find((task) => !task.checked)
           const taskReviewRule = strictTaskRule ?? softTaskRule
           const ownReviewTarget = ownChecked.find((task) => !reviewedOwn.has(task.id))
+          // A pending section run already covers the unreviewed task; point at
+          // it instead of asking for a duplicate per-task run.
+          const pendingOwn =
+            ownReviewTarget !== undefined && taskReviewRule !== undefined
+              ? pendingFor(taskReviewRule.id, change.name, ownReviewTarget.id)
+              : undefined
           const what =
-            nextTask === undefined
-              ? ownReviewTarget === undefined
-                ? 'the task list is fully checked and this session has no unreviewed task; add a task for follow-up work or archive the change'
-                : `review task "${ownReviewTarget.number} ${ownReviewTarget.text}"`
-              : taskReviewRule === undefined
-                ? `tick the completed task, or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
-                : `tick the completed task and run delegate(rule: "${taskReviewRule.id}"), or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
+            pendingOwn !== undefined && ownReviewTarget !== undefined
+              ? `wait for review run ${pendingOwn.id}; it covers task "${ownReviewTarget.number} ${ownReviewTarget.text}" (record ${pendingOwn.record})`
+              : nextTask === undefined
+                ? ownReviewTarget === undefined
+                  ? 'the task list is fully checked and this session has no unreviewed task; add a task for follow-up work or archive the change'
+                  : `review task "${ownReviewTarget.number} ${ownReviewTarget.text}"`
+                : taskReviewRule === undefined
+                  ? `tick the completed task, or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
+                  : `tick the completed task and run delegate(rule: "${taskReviewRule.id}"), or record task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
           const ruleId =
             workRules.find((rule) => rule.gate === 'strict')?.id ??
             workRules[0]?.id ??
             'task-progress'
           const text = `rule "${ruleId}": this turn changed implementation files in change "${change.name}" without a newly checked-and-reviewed task and without a matching progress note for worktree digest ${digestShort(current.digest)}; ${what}.`
           const call =
-            nextTask === undefined && taskReviewRule !== undefined && ownReviewTarget !== undefined
-              ? `delegate(rule: "${taskReviewRule.id}", change: "${change.name}", task: "${ownReviewTarget.id}")`
-              : nextTask === undefined
-                ? 'delegation_status: no unchecked or unreviewed session task remains; add a task for follow-up work or archive the change'
-                : `task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
+            pendingOwn !== undefined
+              ? `delegation_status (run ${pendingOwn.id})`
+              : nextTask === undefined &&
+                  taskReviewRule !== undefined &&
+                  ownReviewTarget !== undefined
+                ? `delegate(rule: "${taskReviewRule.id}", change: "${change.name}", task: "${ownReviewTarget.id}")`
+                : nextTask === undefined
+                  ? 'delegation_status: no unchecked or unreviewed session task remains; add a task for follow-up work or archive the change'
+                  : `task_progress(task: "${nextTask.number} ${nextTask.text}", status: "in-progress", reason: "...")`
           if (workRules.some((rule) => rule.gate === 'strict')) pushStrict(ruleId, text, call)
           else
             pushSoft(
@@ -5040,6 +6883,9 @@ async function archiveGateDecision(
   deps: GateDeps,
   exec: ToolExecution,
 ): Promise<PreToolDecision | undefined> {
+  // Gate-only retirement: the workflow archive gate owns this check, so the
+  // legacy guard must run no marker read and deny nothing.
+  if (!deps.config.gates.workflowOwned) return undefined
   if (exec.agent === undefined) return undefined
   const invocation = archiveShellInvocation(exec)
   if (invocation === undefined) return undefined
@@ -5137,6 +6983,7 @@ function attachGate({ ctx, deps }: GateWiring): void {
       if (!deps.state.beginTurn(agentId, payload.turn)) return decision
       const cwd = deps.services.workingDirectory.get(payload.agent.session)
       const root = await findOpenSpecRoot(cwd)
+      if (root !== undefined) await deps.recover?.(dirname(root))
       const changes = root === undefined ? [] : await listActiveChanges(root)
       deps.state.setBaseline(
         agentId,
@@ -5214,13 +7061,30 @@ function timeoutForContract(timeouts: TimeoutConfig, contract: Contract): number
   return contract === 'note' ? timeouts.answer : timeouts[contract]
 }
 
-function buildToolDefinitions(engine: DelegationEngine, config: EngineConfig): ToolDefinition[] {
+/** The learning store is workspace-scoped like the review records. */
+async function sessionWorkspaceRoot(services: EngineServices, agent: Agent): Promise<string> {
+  const cwd = services.workingDirectory.get(agent.session)
+  const openspecRoot = await findOpenSpecRoot(cwd)
+  return openspecRoot === undefined ? cwd : dirname(openspecRoot)
+}
+
+/** Tool executions carry the calling agent; a sessionless call cannot scope a store. */
+function requireToolAgent(agent: Agent | undefined): Agent {
+  if (agent === undefined) fail('this tool needs a live agent session; call it from a session turn')
+  return agent
+}
+
+function buildToolDefinitions(
+  engine: DelegationEngine,
+  config: EngineConfig,
+  services: EngineServices,
+): ToolDefinition[] {
   const ruleIds = config.rules.map((rule) => rule.id)
   const output = {
     schema: TOOL_OUTPUT_SCHEMA,
     render: (_args: unknown, value: unknown) => renderOutput(value),
   }
-  return [
+  const definitions: ToolDefinition[] = [
     {
       name: 'delegate',
       description: toolDescriptions.delegate,
@@ -5240,7 +7104,12 @@ function buildToolDefinitions(engine: DelegationEngine, config: EngineConfig): T
           task: {
             type: 'string',
             description:
-              'Task-scoped review only: the checked task id (or its task text) to review. Omit to let the engine pick the next checked task.',
+              'Task-scoped review only: the checked task id (or its task text) to review. Omit to let the engine pick the next checked task. Mutually exclusive with section.',
+          },
+          section: {
+            type: 'string',
+            description:
+              'Task-scoped review only: one tasks.md level-2 section reviewed in a single run - its heading number (`1`), the `1.x` form, the normalized title, or `untitled`; an unknown selector names the available sections. Every checked task in it is reviewed with one verdict and one per-task approval each; unchecked tasks are out of scope. Mutually exclusive with task.',
           },
           context: {
             type: 'string',
@@ -5304,6 +7173,108 @@ function buildToolDefinitions(engine: DelegationEngine, config: EngineConfig): T
       },
     },
   ]
+  // The section labels come from the workspace the engine last inspected, so
+  // the model sees them before choosing a selector instead of by trial.
+  const delegate = definitions[0] as ToolDefinition
+  Object.defineProperty(delegate, 'description', {
+    enumerable: true,
+    configurable: true,
+    get: () => `${toolDescriptions.delegate}${sectionCatalogNote()}`,
+  })
+  if (!config.reviewLearning.enabled) return definitions
+  definitions.push(
+    {
+      name: 'review_retro',
+      description: REVIEW_RETRO_DESCRIPTION,
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['report', 'propose'],
+            description:
+              'report: deterministic counts and repeat rate; propose: also store at most one proposed lesson draft.',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output,
+      execute: async (args, exec) => {
+        const agent = requireToolAgent(exec.agent)
+        const workspaceRoot = await sessionWorkspaceRoot(services, agent)
+        return toolOutput(
+          await executeReviewRetro(args, {
+            workspaceRoot,
+            now: services.now,
+            window: config.reviewLearning.window,
+            maxLessons: config.reviewLearning.maxLessons,
+          }),
+        )
+      },
+    },
+    {
+      name: 'review_lesson',
+      description: REVIEW_LESSON_DESCRIPTION,
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['list', 'propose', 'decide', 'apply'],
+            description:
+              'A model may only propose; decide and apply ask the user and return without a write until the user answers.',
+          },
+          class: { type: 'string', description: 'One of the fixed finding-class vocabulary.' },
+          title: { type: 'string', description: 'Short lesson title (dedupe key with the class).' },
+          body: { type: 'string', description: 'The lesson text; stored as bounded data.' },
+          appliesTo: {
+            type: 'object',
+            properties: {
+              rules: { type: 'array', items: { type: 'string' } },
+              capabilities: { type: 'array', items: { type: 'string' } },
+            },
+            additionalProperties: false,
+          },
+          source: {
+            type: 'object',
+            properties: {
+              change: { type: 'string' },
+              taskId: { type: 'string' },
+              findingHashes: { type: 'array', items: { type: 'string' } },
+            },
+            additionalProperties: false,
+          },
+          id: { type: 'string', description: 'Lesson revision id from list.' },
+          decision: { type: 'string', enum: ['accept', 'reject'] },
+          target: {
+            type: 'string',
+            description: 'Change, spec, file, or test the accepted lesson is applied to.',
+          },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output,
+      execute: async (args, exec) => {
+        const agent = requireToolAgent(exec.agent)
+        const workspaceRoot = await sessionWorkspaceRoot(services, agent)
+        return toolOutput(
+          await executeReviewLesson(args, {
+            workspaceRoot,
+            now: services.now,
+            maxLessons: config.reviewLearning.maxLessons,
+            agent,
+            signal: exec.signal,
+            ...(services.userQuestions === undefined
+              ? {}
+              : { userQuestions: services.userQuestions }),
+          }),
+        )
+      },
+    },
+  )
+  return definitions
 }
 
 function parseDelegateArgs(args: unknown): DelegateArguments {
@@ -5312,6 +7283,9 @@ function parseDelegateArgs(args: unknown): DelegateArguments {
   const result: DelegateArguments = { rule }
   if (args.change !== undefined) result.change = requireNonEmpty(args.change, 'delegate.change')
   if (args.task !== undefined) result.task = requireNonEmpty(args.task, 'delegate.task')
+  if (args.section !== undefined) {
+    result.section = requireNonEmpty(args.section, 'delegate.section')
+  }
   if (args.context !== undefined) {
     if (typeof args.context !== 'string') fail('delegate.context must be a string')
     result.context = args.context
@@ -5383,6 +7357,73 @@ function createSkillProvider(note: string): SkillProvider {
   }
 }
 
+/** One human command definition accepted by the DSH commands registry. */
+interface CommandRegistry {
+  register(definition: {
+    definitionId: string
+    name: string
+    description: string
+    handler: (invocation: { agent: Agent }) => Promise<unknown>
+  }): unknown
+}
+
+/**
+ * `/review-retro` is a read-only host command: it prints the deterministic
+ * report and never accepts or applies a lesson. Disabled learning registers
+ * nothing.
+ */
+function registerReviewRetroCommand(
+  ctx: Context,
+  config: EngineConfig,
+  services: EngineServices,
+): void {
+  if (!config.reviewLearning.enabled) return
+  // Read the optional service without declaring a Cordis inject dependency, so
+  // the plugin still loads in a profile that has no command registry.
+  const commands = (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get?.(
+    'commands',
+  ) as CommandRegistry | undefined
+  if (commands === undefined) return
+  const definition = {
+    definitionId: '@dsh-setup/plugin-delegation-rules/review-retro',
+    name: 'review-retro',
+    description:
+      'Report repeated review findings by class from the local bounded finding history; never accepts or applies a lesson.',
+    handler: async (invocation: { agent: Agent }) => {
+      try {
+        const workspaceRoot = await sessionWorkspaceRoot(services, invocation.agent)
+        const text = await executeReviewRetro(
+          { action: 'report' },
+          {
+            workspaceRoot,
+            now: services.now,
+            window: config.reviewLearning.window,
+          },
+        )
+        return { kind: 'success' as const, text }
+      } catch (error) {
+        return {
+          kind: 'error' as const,
+          text: `review retro failed: ${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}`,
+        }
+      }
+    },
+  }
+  const effect = (ctx as unknown as { effect?: (work: () => unknown) => unknown }).effect
+  if (typeof effect === 'function') effect(() => commands.register(definition))
+  else commands.register(definition)
+}
+
+/** Provide the ownership status once; an older host or a test double may lack provide(). */
+function provideStatus(ctx: Context, name: string, value: unknown): void {
+  try {
+    if (typeof ctx.get === 'function' && ctx.get(name) !== undefined) return
+    ctx.provide(name, value)
+  } catch {
+    // The switch is still read from this plugin's own config.
+  }
+}
+
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools
@@ -5390,22 +7431,54 @@ function createSkillProvider(note: string): SkillProvider {
  */
 export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOptions = {}): void {
   const validated = validateConfig(config)
+  // The workflow engine resolves per-signal legacy ownership from this status;
+  // the review runtime stays mounted either way. The spec-review signal is real
+  // only while a strict or soft `spec-ready` review rule is configured to steer.
+  provideStatus(
+    ctx,
+    'delegationRulesStatus',
+    Object.freeze({
+      workflowOwned: validated.gates.workflowOwned,
+      specReview: validated.rules.some(
+        (rule) => rule.when === 'spec-ready' && rule.contract === 'review' && rule.gate !== 'none',
+      ),
+      taskReview: validated.rules.some(
+        (rule) =>
+          rule.when === 'spec-task-ready' &&
+          rule.contract === 'review' &&
+          rule.scope === 'task' &&
+          rule.gate !== 'none',
+      ),
+    }),
+  )
   const state = new DelegationState()
+  // Optional services are read through ctx.get(), not the service property: a
+  // hard inject would stop the plugin loading in a profile without them.
+  const userQuestions = (
+    ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }
+  ).get?.('userQuestions') as UserQuestionsService | undefined
   const services: EngineServices = {
     subagents: ctx.subagents,
     workingDirectory: ctx.workingDirectory,
     state,
     git: { runGit: options.runGit ?? defaultGit },
     now: options.now ?? (() => new Date()),
+    ...(userQuestions === undefined ? {} : { userQuestions }),
     timeoutsFor: (rule) => timeoutForContract(validated.timeouts, rule.contract),
     ...(options.onRunSettled === undefined ? {} : { onRunSettled: options.onRunSettled }),
+    ...(options.onPublished === undefined ? {} : { onPublished: options.onPublished }),
+    ...(options.queueFault === undefined ? {} : { queueFault: options.queueFault }),
+    ...(options.recoverDelay === undefined ? {} : { recoverDelay: options.recoverDelay }),
+    ...(options.publishHold === undefined ? {} : { publishHold: options.publishHold }),
+    ...(options.startHold === undefined ? {} : { startHold: options.startHold }),
   }
   const engine = new DelegationEngine(validated, services)
   services.pendingReview = (workspaceRoot, ruleId, change, taskId) =>
     engine.pendingReview(workspaceRoot, ruleId, change, taskId)
-  for (const definition of buildToolDefinitions(engine, validated)) {
+  for (const definition of buildToolDefinitions(engine, validated, services)) {
     ctx.tools.register(definition)
   }
+  registerReviewRetroCommand(ctx, validated, services)
   ctx.skills.registerProvider(() => createSkillProvider(skillAdapterNote()))
   attachGate({
     ctx,
@@ -5414,6 +7487,7 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
       state,
       services,
       workerToolVisible: workerToolVisibility(ctx),
+      recover: (workspaceRoot) => engine.recoverWorkspace(workspaceRoot),
     },
   })
 }

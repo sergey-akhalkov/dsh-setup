@@ -81,9 +81,9 @@ result contract is a code extension.
 
 The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
 must not be strict (an answer writes no record). `lane-boundary` is deprecated and kept only for
-existing profiles; the shipped defaults include the strict `lane-fanout` rule and no automatic
-progress rule, and the `implementation-work` and `lane-assignment` triggers remain available to
-profile rules.
+existing profiles; the shipped defaults include the strict `lane-fanout`, `task-progress`, and
+`lane-boundary` rules, and the `implementation-work` and `lane-assignment` triggers remain
+overridable.
 
 The change-scoped triggers evaluate only for changes attributed to the current session. A session
 is involved in a change when it created or modified it in this workspace; observation, a
@@ -156,10 +156,12 @@ one fenced JSON verdict that echoes the digest, validates the severities, and wr
 record under `.dsh/delegation/<rule>/<change>/`:
 
 - whole scope: `<phase>.json`;
-- task scope: `tasks/<taskId>.json`, with the task id derived from the normalized task text.
+- task scope: `tasks/<taskId>.json`, with the task id derived from the normalized task text;
+- section scope: `sections/<hash>.json` for the one section verdict, plus a `tasks/<taskId>.json`
+  for every covered checked task.
 
 A task-scope `PASS` additionally writes the committed [portable approval](#portable-task-approvals)
-inside the change.
+inside the change. A section-scope `PASS` writes one portable approval per covered checked task.
 
 A `PASS` requires zero P0/P1 findings. `FINDINGS` and `ERROR` records are reported but do not
 satisfy a strict gate. A matching `PASS` is reused without another run; a `FINDINGS` record is
@@ -182,9 +184,11 @@ A target run is bounded by the per-contract timeout: 20 minutes for `review`, 5 
 `answer`, and 30 minutes for `patch`. A profile overrides them through `timeouts`; a timed-out
 review writes an `ERROR` record and the error names the contract to widen.
 
-Several reviews can run at once. A duplicate request is identified by rule + change + task/phase: a
-second call while that identity is pending returns the existing run handle. Different rules on the
-same change/task queue over one conversation key and each writes its own record. Task-scoped reviews
+Several reviews can run at once. A duplicate request is identified by rule + change + task/phase plus
+the prepared digest and the resolved reviewer: a second call while that identity is pending returns
+the existing run handle, and a changed input or reviewer is a distinct run that waits behind the same
+conversation key. Different rules on the same change/task queue over one conversation key and each
+writes its own record. Task-scoped reviews
 accept an explicit `task` (id or task text), so parallel task reviews for different tasks do not
 collapse onto the engine's next-task choice. A task-scoped run reviews an immutable snapshot of the
 worktree: a detached checkout under `.dsh/delegation/snapshots/<runId>` built from the exact review
@@ -197,6 +201,97 @@ guard, and its run detail names the bounded cause (`live worktree: <reason>`); a
 ignore rule is named with the fix. The reviewed change's `reviews/` approval directory is engine
 output and is never a reviewed input, so a portable task approval written by one review does not
 invalidate another.
+
+### Section-scoped task review
+
+A task-review `delegate` call may pass `section` instead of `task`; they are mutually exclusive
+and either one is rejected on a non-review or whole-scope rule before a target starts. The
+selector is a `tasks.md` level-2 heading:
+
+- its number — `section: "1"`;
+- its wildcard form — `section: "1.x"` (equivalent to `"1"`);
+- its normalized title, or `untitled` for tasks before the first heading.
+
+An unknown, empty, ambiguous, or unchecked-only section is rejected with the available sections.
+The `delegate` tool description and `delegation_status` also name the sections of the change the
+engine last inspected, so a selector can be chosen before the first call.
+The level-2 heading shape is the same one the lane guidance asks for:
+
+```markdown
+## 1. Section review engine (lane 1, owns `packages/plugin-delegation-rules/**`)
+
+- [x] 1.1 Add the selector
+```
+
+One call starts one run over every checked task in that section: one prompt naming the section
+title, each checked task, and the unchecked tasks as out of scope; one frozen worktree snapshot;
+and one PASS/FINDINGS/ERROR verdict. The reviewer instruction asks every finding to name the
+affected task, so the one verdict stays actionable per task. A section PASS publishes the existing
+per-task `openspec/changes/<change>/reviews/<taskId>.json` approval for each covered checked task,
+so `pnpm reviews:check` and the archive gate are unchanged: one PASS per checked task, and
+unchecked tasks are never approved. A matching approval is kept byte-identical; the publication writes all
+temporaries before any rename and restores every replaced destination byte-identically on failure,
+so a failed publication approves nothing. Per-task and section publications share the
+rule/change publication lock: the later completion discards when an authoritative PASS exists,
+and a superseded section identity discards its whole publication.
+
+The section identity is rule + change + section key + digest + reviewer; the digest covers the
+section key and title, the sorted checked task ids and normalized texts, the frozen change-artifact
+digest, and the snapshot content tree. An unchanged section reuses a FINDINGS record; a newly
+checked task, an unchecked task, or a changed covered task text changes the digest and requires a
+new section or task review. A section ERROR writes a local ERROR record for each covered task with the
+failure class preserved and publishes no new approval; existing valid approvals remain, so the
+archive gate reports only covered tasks without one. While a section run is queued or running, the
+turn gate points at that run instead of starting duplicate per-task reviews.
+
+Limits: a section review is only as precise as its prompt, so use it for related tasks and keep a
+risky task on its own per-task review; sections are bounded by the author's `tasks.md` grouping.
+The live profile only gets the mode after the owner installs the regenerated setup, because it
+runs the installed engine, not this checkout.
+
+### Review queue contract
+
+`reviewQueue` bounds concurrent review targets per profile. Defaults:
+
+| Option          | Default  | Meaning                                                                                                                                                         |
+| --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | `true`   | `false` removes the global admission limit, the acceptance deadline, and automatic retries; deduplication and same-key waiting stay.                            |
+| `concurrency`   | `2`      | Live review targets per profile; a whole number from 1 to 4, below the DSH active-child limit.                                                                  |
+| `maxQueued`     | `16`     | Unique waiting runs allowed before admission is refused with `review queue full` and an `ERROR` record. A same-key follower behind an active review counts too. |
+| `maxAttempts`   | `3`      | Original attempt plus retries for transient failures.                                                                                                           |
+| `baseDelayMs`   | `5000`   | Base delay of the exponential backoff with full jitter.                                                                                                         |
+| `maxDelayMs`    | `60000`  | Backoff cap; a provider `retry-after` is honored up to this cap.                                                                                                |
+| `waitTimeoutMs` | `300000` | Acceptance deadline for a queued run; expiry writes a `queue-timeout` `ERROR` without starting a target.                                                        |
+
+Admission is a bounded queue: an admitted run starts immediately and a same-key (one conversation)
+run waits behind its predecessor. The queue selects the first eligible run in submission order (FIFO
+among eligible runs), while runs under different conversation keys complete independently. A
+duplicate request (same rule + change + task/phase + prepared digest + resolved reviewer) returns the
+existing run handle instead of starting another target. A queued `delegate` handle names the run, its
+state, and its queue position; `delegation_status` adds
+the queue summary (`enabled`, `concurrency`, `active`, `queued`, `depth`) and bounded per-run facts
+(`position`, `queuedAt`, `waitMs`, `attempts`, `failureClass`, `lastRetryAt`) — never credentials,
+provider output, or machine paths.
+
+A failure is classified as `child-limit`, `provider-not-started`, `timeout`,
+`reviewed-inputs-changed`, `invalid-output`, `config`, `permission`, or `unknown`. Transient classes
+are `child-limit`, `provider-not-started`, and `timeout`; the rest are permanent. A timeout retries
+only when cancellation is confirmed. An unconfirmed teardown settles a terminal `ERROR` while the run
+keeps its key, capacity slot, and snapshot until teardown succeeds, so same-key followers wait.
+`queue-full`, `queue-timeout`, and `queue-internal-error` are recorded as `ERROR` outcomes. A
+queue-internal fault starts one direct target when ownership is safe and otherwise reports an `ERROR`
+the task gate does not treat as a review. Only the settled attempt publishes a record: retries and
+timeouts publish no intermediate `PASS`/`FINDINGS`/`ERROR`, and a retry that finds a newer
+authoritative record is discarded instead of overwriting it.
+
+The settlement observer fires exactly once per run after it leaves the pending set; retries and
+queue admissions never fire it early. On restart, active run files are reconciled once per
+workspace from the records on disk: a matching `PASS`/`FINDINGS` completes, a matching `ERROR`
+fails, a newer record discards the older run, and a run without a matching record is marked
+`interrupted` — never synthesized as a `PASS`. The gate always reads records, not run status. To
+turn the queue off, set `reviewQueue: { enabled: false }`: deduplication and same-key waiting stay,
+while the global concurrency/shape limits, the acceptance deadline, and automatic retries are
+bypassed.
 
 **`answer`** is the read-only blocker/research/advisor contract. It returns the answer with evidence
 and, for research, sources and dates, and, for an advisor, a recommendation, the strongest
@@ -255,6 +350,41 @@ The export copies only a local task-scope `PASS` whose rule, change, and task id
 task; it refuses `ERROR`/`FINDINGS`, a foreign change, and a task-id mismatch, and it cannot invent
 an approval.
 
+### Gate-only retirement switch
+
+`gates.workflowOwned: false` moves enforcement of the task-review turn-stopping rule and the archive
+guard to the workflow definitions, while the review runtime stays exactly as documented here. The
+`delegate` tool, the review queue, runs, records, `task_progress` notes, the rule data, the
+whole-spec `spec-review` rule, and the task-progress and lane-assignment/lane-boundary gates remain.
+Only two signals stop: the task-review rule that refuses a close for a checked task without a
+`PASS`/`ERROR` record (including the completion-coverage branch for a freshly completed list), and
+the archive guard that refuses `openspec archive`/`mv`/`Move-Item`/`git mv` without a portable
+`PASS`. A `defer` `task-review` definition beside `gates.workflowOwned: false` is refused at load; the
+`spec-review` signal stays enabled, so `change-intake` keeps its deferred spec-review step and a
+missing spec review still steers. The default is `true`. Rollback is one config flip: set
+`gates.workflowOwned: true` and return the definition to `defer`; records, queue state, and notes are
+never rewritten. The tracked parity report at
+`packages/plugin-workflows/assets/parity/retire-legacy-gates.json` must pass
+(`node scripts/workflows-parity.ts --check`; the release gate wires the `pnpm workflows:parity`
+alias) before the switch is
+flipped in a shipped profile.
+
+### Migration and settings
+
+Migrate in this order: the tracked parity report passes for the current and the retired behavior;
+flip the two gate-only switches, disable the `dsh-setup-verification-gate` row, and set the three
+definitions to `own` in one config change (the loader refuses `own` while its signal is enabled and
+`defer` while it is disabled, so a half-flipped state fails loudly); keep the legacy provider rows
+installed for one release so rollback is a config flip; delete only the retired rows after a clean
+release, keeping the providers the retained spec-review and lane gates use. The workflows row carries
+the mirrored settings:
+`checkpointApplicability` (`minToolCalls`, `requireWrite`, `bottleneckAge`, `stepInterval`,
+`enforceParallel`) and `verify.commands`/`verify.maxBlocks`. The parity settings matrix must cover at
+least two non-empty command lists and two positive caps with one above 128. The release gate runs
+`node scripts/workflows-parity.ts --check` (the `pnpm workflows:parity` alias is wired with the
+release job). Rollback is per signal as described above; the whole-spec `spec-review`, task-progress,
+and lane gates are never part of the flip.
+
 ### Change-level approval and the archive gate
 
 `delegation_status` and `pnpm reviews:check` compute approval from the change, not from the session
@@ -292,6 +422,58 @@ Audit commands:
   pre-cutoff historical baseline without enforcing either;
 - `pnpm reviews:check --push` — the archived changes a push adds or modifies (read from stdin; the
   pre-push hook runs this and fails closed on an unknown range).
+
+### Review learning
+
+Every review finding carries a `class` from a fixed vocabulary: `spec-ambiguity`,
+`missing-test`, `path-boundary`, `state-persistence`, `stale-input`, `api-contract`,
+`plan-shape`, `docs-drift`, `security`, `other`. The review instructions request it, the verdict
+parser stores a valid class, and an absent or unknown class is stored as `other` — a malformed
+class never rejects a verdict. A PASS record carries no findings, so the portable approval is
+unchanged.
+
+The plugin keeps learning state under `.dsh/review-learning/` (local scratch, never tracked):
+
+- `<workspaceKey>.history.jsonl` — one bounded, sanitized entry per settled review
+  (`FINDINGS`/`PASS`, rule, change, task id, digest, findings, time), or a `gap` marker when the
+  append failed. The default window and history cap are 50 settled reviews; the maximum is 200.
+  A reused record appends nothing, and a later PASS never erases the earlier findings.
+- `<workspaceKey>.jsonl` — the lesson store, bounded to 200 lessons or 1 MB per workspace by
+  default. A lesson has a class, title, body, `appliesTo` rules/capabilities, source evidence,
+  and a state: `proposed`, `accepted`, `rejected`, or `applied`. The dedupe key is the normalized
+  class plus title; a duplicate of a proposed lesson updates it, and a duplicate of an accepted or
+  applied lesson creates a new proposed revision with a `supersedes` link while the accepted
+  content stays immutable. When the store is at its cap the oldest non-applied lesson is evicted
+  first; an applied-only full store refuses the write with `capacity` and changes nothing. Two
+  hosts writing the same workspace use a `<workspaceKey>.jsonl.lock` directory: a write waits
+  briefly, then fails with the lock path and asks you to remove it only when no other host is
+  writing.
+
+Only a direct user answer moves a lesson: a model may call `review_lesson` with `propose`, but
+`decide` (accept/reject) and `apply` go through the host user-questions service and the answer is
+bound to the exact lesson revision — an answer for a revision that changed while the question was
+open is refused and the current revision is named. `apply` requires a target: a change, spec,
+file, or test, recorded with the time; it is readable through `review_lesson` `list`.
+
+`review_retro` reads the finding history deterministically (no model call): counts per class, the
+top class, up to three bounded examples with their source records, the repeat count and rate per
+class, and the gap and malformed-line counts. A finding is repeated when the same normalized class
+and title hash appeared in an earlier entry in the window; the rate is the repeats divided by the
+class's findings. Its `propose` action stores at most one draft lesson (deduped by the store key);
+its output is bounded to 4000 characters. `/review-retro` prints the report and never accepts a
+lesson.
+
+At review start, up to three `accepted` or `applied` lessons whose `appliesTo` matches the rule
+and the change's delta capability names are injected as a `## Lessons from prior reviews` section
+before the output contract. The section is bounded to 1200 characters, is sanitized as data, and
+says to apply judgment — a lesson never changes the P0/P1 rule, the review contract, or the
+approval gate. No matching lesson means no section and a byte-identical prompt.
+
+Opt out with `reviewLearning.enabled: false`: the `review_retro` and `review_lesson` tools and the
+`/review-retro` command are not registered, no lesson is injected, and existing records stay
+readable. `reviewLearning.window` (default 50, 1–200) and `reviewLearning.maxLessons` (default
+200, 1–1000) are validated at plugin load; an invalid value fails the row with its range. The
+lesson store keeps its 1 MB cap regardless.
 
 ### Targets
 
@@ -422,13 +604,15 @@ The shipped defaults live in this package's composition fragment:
 | `bug-fix`            | `manual`                  | patch                              | none   |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
 | `lane-fanout`        | `lane-assignment`         | note                               | strict |
+| `task-progress`      | `implementation-work`     | note                               | strict |
+| `lane-boundary`      | `lane-boundary`           | note                               | strict |
 
-The shipped set includes the strict `lane-fanout` rule: a multi-lane change must start one tagged
-worker per unassigned lane or record a per-lane serial note before the turn closes. It
-intentionally omits an automatic `task-progress` rule. The `implementation-work` and
-`lane-assignment` triggers and the `note` contract remain available to profile rules; the
-goal-continuity `work-checkpoints` capability owns the pause-time progress and parallel decision
-and requires a `work_checkpoint` call at each substantial pause.
+The shipped set includes the strict `lane-fanout`, `task-progress`, and `lane-boundary` rules: a
+multi-lane change must start one tagged worker per unassigned lane or record a per-lane serial note
+before the turn closes, and a code-changing turn must show a newly checked-and-reviewed task or a
+progress note matching the current worktree. The triggers and the `note` contract remain
+overridable; the goal-continuity `work-checkpoints` capability still owns the pause-time progress
+and parallel decision and requires a `work_checkpoint` call at each substantial pause.
 
 `advisor` is a manual, read-only second opinion. Use it only when the decision is expensive to
 reverse, security or data integrity is at stake, the design spans modules, or two attempts have
@@ -450,6 +634,11 @@ The gate exists to make incremental review the normal path:
    working. Keep implementing an independent task while the run uses a frozen snapshot. When the run
    reports the live worktree, a write can discard its verdict: restore snapshot support and re-run,
    or defer writes until the run settles. No blocking sleep.
+   For a related group of tasks, tick the whole section and run it once with
+   `delegate(rule: "task-review", change: "<change>", section: "1")` (or `"1.x"`, the normalized
+   title, or `untitled`). One verdict covers every checked task in the section and publishes one
+   per-task approval each; unchecked tasks stay out of scope, and a task checked after the PASS
+   needs a new section or task review.
 4. Fix every P0/P1 finding and re-run until the record is `PASS`.
 5. If the turn must stop mid-task and a profile `task-progress` rule is configured, call
    `task_progress` for that task instead of ticking it; otherwise the goal-continuity
@@ -682,14 +871,17 @@ for the soft `failure-streak` rule it marks the consultation attempt and does no
 The plugin adds no always-on prompt text. Its model-facing policy is the three tool descriptions
 plus the skill catalog line, and the full workflow is loaded only when the skill is invoked.
 
-- Measured: three tool descriptions plus the skill catalog description are 2656 UTF-8 bytes
-  (~664 estimated tokens at bytes / 4), against the 900 estimated tokens budget.
-- Measured: the skill body is 20063 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: three tool descriptions plus the skill catalog description are 2750 + 285 = 3035 UTF-8
+  bytes (~759 estimated tokens at bytes / 4), against the 900 estimated tokens budget. The
+  `delegate` description may append at most 400 bytes of discovered section labels; the total
+  stays inside the same budget.
+- Measured: the skill body is 21323 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
-  Per-task reviews multiply runs, so keep tasks sized for one review; set the optional
-  integration review to `soft` or `none` if it adds noise. The shipped `codex` and `codex-write`
-  targets select `gpt-6-astra` at `xhigh`, so every default Codex rule pays for the strong model;
-  override those targets for cheaper routine reviews and leave `advisor` on `codex-astra`.
+  Per-task reviews multiply runs, so keep tasks sized for one review; a section review covers a
+  related group in one run; set the optional integration review to `soft` or `none` if it adds
+  noise. The shipped `codex` and `codex-write` targets select `gpt-6-astra` at `xhigh`, so every
+  default Codex rule pays for the strong model; override those targets for cheaper routine reviews
+  and leave `advisor` on `codex-astra`.
 - The engine validates rule ids, change names, task ids, and record paths before effects; git is
   invoked with fixed arguments; target output is untrusted data, parsed for the declared contract
   and never executed. Patch results stay isolated until a human or agent reviews and applies

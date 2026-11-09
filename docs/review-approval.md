@@ -134,6 +134,16 @@ restored. It applies to subagents too (only the turn-stopping gate skips them). 
 the command run unchanged. It is a guard, not a sandbox: a deliberately obfuscated move can archive
 locally, and the push audit is the backstop for that.
 
+When `delegation.gates.workflowOwned` is `false`, this legacy guard does not run. The workflow
+`task-review` definition (`own`) then owns the same four command forms through its pre-execute
+archive gate and reads the same `reviews/<taskId>.json` portable PASS records, including the
+marker's reviewer binding; the refusal names the missing tasks and the review calls. The legacy
+switch and the definition flip are one config change, and the tracked parity report
+(`assets/parity/retire-legacy-gates.json`) covers the four move forms before either ships.
+The owned gate has one deliberate difference: it archives **one change per command**. A multi-source
+move is refused even when every source has approvals, so archive each change with its own command.
+Rollback is the reverse pair: `gates.workflowOwned: true` and the definition back to `defer`.
+
 ## Hooks, push, and CI
 
 Two tracked hooks live in `.githooks/`, and `pnpm hooks:install` selects the directory by setting this
