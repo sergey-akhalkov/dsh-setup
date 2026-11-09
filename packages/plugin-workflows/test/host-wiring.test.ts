@@ -2251,16 +2251,25 @@ describe('intake end-to-end in a fake host', () => {
     )
     expect(await readdir(changeDir)).toContain('.openspec.yaml')
 
-    // 3. A restart after create-change resumes at spec and never recreates or adopts.
+    // 3. A fresh host recovers the persisted run; a restart resumes at spec
+    //    without recreating the directory, adopting, or dispatching again.
     const metadata = await readFile(join(changeDir, '.openspec.yaml'), 'utf8')
-    await runs.writeRun(
-      workspace,
-      runs.setRunStatus(afterCreate as never, 'interrupted', Date.now()),
-      auth,
-    )
-    const resumed = (await pre('create-restart')) as { kind?: string; reason?: string }
+    const fresh = fakeHost(workspace, { toolExecute: true, userQuestions: true })
+    apply(fresh.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const resumed = (await fresh.emit(
+      'tools/pre-execute',
+      {
+        agent: fresh.agent,
+        callId: 'create-restart',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )) as { kind?: string; reason?: string }
     expect(resumed?.kind).toBe('deny')
     expect(resumed?.reason).toContain('spec')
+    expect(fresh.toolExecutions).toHaveLength(0)
     expect(await readFile(join(changeDir, '.openspec.yaml'), 'utf8')).toBe(metadata)
     expect(await intakeRuns()).toHaveLength(1)
 
@@ -2274,10 +2283,10 @@ describe('intake end-to-end in a fake host', () => {
       await mkdir(dirname(join(changeDir, file)), { recursive: true })
       await writeFile(join(changeDir, file), text, 'utf8')
     }
-    await host.emit(
+    await fresh.emit(
       'tools/result',
       {
-        agent: host.agent,
+        agent: fresh.agent,
         name: 'pwsh',
         callId: 'validate-e2e',
         arguments: { command: 'openspec validate auth --strict' },
@@ -2298,7 +2307,7 @@ describe('intake end-to-end in a fake host', () => {
         },
       },
     )
-    await turnStop(4)
+    await fresh.emit('agent/turn-stopping', { agent: fresh.agent, turn: 4 })
 
     // 5. The current whole-spec PASS record completes the deferred review.
     const digest = await currentSpecDigest(workspace, 'auth')
@@ -2310,7 +2319,7 @@ describe('intake end-to-end in a fake host', () => {
       `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
       'utf8',
     )
-    await turnStop(5)
+    await fresh.emit('agent/turn-stopping', { agent: fresh.agent, turn: 5 })
     const completed = await runs.readAuthenticatedRun(workspace, created?.id ?? '', auth)
     expect(completed?.status).toBe('completed')
     expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
@@ -2319,7 +2328,16 @@ describe('intake end-to-end in a fake host', () => {
     })
 
     // 6. A repeated creation is allowed and starts no second run.
-    const repeated = (await pre('create-2')) as { kind?: string }
+    const repeated = (await fresh.emit(
+      'tools/pre-execute',
+      {
+        agent: fresh.agent,
+        callId: 'create-2',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )) as { kind?: string }
     expect(repeated?.kind).toBe('continue')
     expect(await intakeRuns()).toHaveLength(1)
   })
@@ -2351,12 +2369,33 @@ describe('intake end-to-end in a fake host', () => {
     for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
       run = runs.settleStep(run, step, 'done', { at: 1_100 })
     }
-    run = runs.requestStep(run, 'spec-review', 1_200)
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    for (const [file, text] of [
+      ['proposal.md', '# proposal\n'],
+      ['design.md', '# design\n'],
+      ['tasks.md', '- [ ] 1.1 Task\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await mkdir(dirname(join(changeDir, file)), { recursive: true })
+      await writeFile(join(changeDir, file), text, 'utf8')
+    }
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    expect(digest).toBeDefined()
+    const recordDir = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
     await runs.writeRun(workspace, run, auth)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const stored = await runs.readAuthenticatedRun(workspace, 'run-intake-no', auth)
     expect(stored?.status).not.toBe('completed')
-    expect(stored?.steps.find((step) => step.id === 'approval')?.state).not.toBe('done')
+    const approval = stored?.steps.find((step) => step.id === 'approval')
+    expect(approval?.state).not.toBe('done')
+    expect(approval?.reason).toContain('no')
     expect(await receipts.readReceipt(workspace, 'auth', auth)).toBeUndefined()
   })
 })
