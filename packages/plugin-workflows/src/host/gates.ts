@@ -55,7 +55,7 @@ export interface TurnCloseInput {
 
 function stepIsOpen(run: WorkflowRun, stepId: string): boolean {
   const state = run.steps.find((step) => step.id === stepId)?.state
-  return state === 'open' || state === 'blocked'
+  return state === 'open' || state === 'blocked' || state === 'failed'
 }
 
 /**
@@ -162,6 +162,25 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
           kind: 'violation',
           run: resetStepAttempts(resetTurnBlocks(recorded, at), step.id),
           detail,
+        }
+      }
+      // A failed dispatch stays an obligation until the run advances/retries;
+      // never let the close pass silently on the failed step.
+      if (steered.reason.includes('already failed')) {
+        const blocks = input.run.turnBlocks ?? 0
+        if (blocks >= input.maxBlocks) {
+          const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`
+          return {
+            kind: 'violation',
+            run: resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at),
+            detail,
+          }
+        }
+        return {
+          kind: 'refuse',
+          run,
+          stepId: step.id,
+          text: `step "${step.id}" has a failed dispatch; retry it before the close`,
         }
       }
       const message = `step "${step.id}" could not be steered: ${steered.reason}`

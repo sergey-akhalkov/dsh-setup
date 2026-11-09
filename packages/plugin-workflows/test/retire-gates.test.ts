@@ -431,6 +431,46 @@ describe('owned checkpoint decisions', () => {
       }),
     ).toContain('parallel runnable lanes')
 
+    // Disjoint external scopes are parallel; a parent scope contains src.
+    expect(
+      checkpointCloseIssue({
+        record: {
+          outcome: 'continue',
+          lanes: [
+            { id: 'a', owner: 'lane-a', scope: ['../one'], state: 'running' },
+            { id: 'b', owner: 'lane-b', scope: ['../two'], state: 'running' },
+          ],
+          bottleneck: undefined,
+        },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+        workspace: '/repo/app',
+      }),
+    ).toContain('parallel runnable lanes')
+    expect(
+      checkpointCloseIssue({
+        record: {
+          outcome: 'continue',
+          lanes: [
+            { id: 'a', owner: 'lane-a', scope: ['..'], state: 'running' },
+            { id: 'b', owner: 'lane-b', scope: ['src'], state: 'running' },
+          ],
+          bottleneck: undefined,
+        },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+        workspace: '/repo/app',
+      }),
+    ).toContain('without a bottleneck')
+
     // Padded identifiers are normalized like the producer's validator.
     expect(
       checkpointCloseIssue({
@@ -1211,6 +1251,12 @@ describe('owned task-review definition', () => {
         taskRule: 'task-review',
         grandfathered: { '../bad': 'old' },
       },
+      {
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerModel: '/tmp/reviewer',
+      },
     ]) {
       await writeFile(marker, JSON.stringify(malformed), 'utf8')
       expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
@@ -1276,6 +1322,31 @@ describe('owned task-review definition', () => {
       expect(taskReviewCompletion(workspace, 'auth')?.ok).toBe(false)
       await rm(workspace, { recursive: true, force: true })
     }
+  })
+
+  it('refuses a close while a failed dispatch step is unresolved', () => {
+    const definition = shipped('task-review')
+    let run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { name: 'auth', taskId: '0123456789abcdef' },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    run = settleStep(run, 'start-review', 'failed', { at: 1_001, reason: 'delegate failed' })
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 1,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+    })
+    expect(outcome.kind).not.toBe('allow')
   })
 
   it('requires portable PASS coverage for every checked task at completion', async () => {

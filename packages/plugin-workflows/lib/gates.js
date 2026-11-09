@@ -4,7 +4,7 @@ import { requestMainStep } from './executors.js';
 import { addViolation, incrementTurnBlocks, resetStepAttempts, resetTurnBlocks, setRunStatus, settleStep, } from './runs.js';
 function stepIsOpen(run, stepId) {
     const state = run.steps.find((step) => step.id === stepId)?.state;
-    return state === 'open' || state === 'blocked';
+    return state === 'open' || state === 'blocked' || state === 'failed';
 }
 /**
  * The first open `blockTurnClose` owned step, unless an earlier open step is
@@ -96,6 +96,25 @@ export function evaluateTurnClose(input) {
                     kind: 'violation',
                     run: resetStepAttempts(resetTurnBlocks(recorded, at), step.id),
                     detail,
+                };
+            }
+            // A failed dispatch stays an obligation until the run advances/retries;
+            // never let the close pass silently on the failed step.
+            if (steered.reason.includes('already failed')) {
+                const blocks = input.run.turnBlocks ?? 0;
+                if (blocks >= input.maxBlocks) {
+                    const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`;
+                    return {
+                        kind: 'violation',
+                        run: resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at),
+                        detail,
+                    };
+                }
+                return {
+                    kind: 'refuse',
+                    run,
+                    stepId: step.id,
+                    text: `step "${step.id}" has a failed dispatch; retry it before the close`,
                 };
             }
             const message = `step "${step.id}" could not be steered: ${steered.reason}`;

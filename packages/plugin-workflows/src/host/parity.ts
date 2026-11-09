@@ -536,11 +536,17 @@ export function reviewerBinding(
   }
   const provider = raw.reviewerProvider
   const model = raw.reviewerModel
-  if (provider !== undefined && (typeof provider !== 'string' || provider.trim() === '')) {
-    return { invalid: 'reviewerProvider must be a non-empty string' }
+  if (
+    provider !== undefined &&
+    (typeof provider !== 'string' || provider.trim() === '' || hasMachinePath(provider))
+  ) {
+    return { invalid: 'reviewerProvider must be a clean provider name' }
   }
-  if (model !== undefined && (typeof model !== 'string' || model.trim() === '')) {
-    return { invalid: 'reviewerModel must be a non-empty string' }
+  if (
+    model !== undefined &&
+    (typeof model !== 'string' || model.trim() === '' || hasMachinePath(model))
+  ) {
+    return { invalid: 'reviewerModel must be a clean model name' }
   }
   if (provider === undefined && model === undefined) return undefined
   return {
@@ -754,8 +760,12 @@ function scopeOverlaps(
   right: readonly string[],
   workspace: string,
 ): boolean {
-  const parts = (value: string): string[] =>
-    (workspacePath(value, workspace) ?? '\\u0000').split('/').filter(Boolean)
+  const parts = (value: string): string[] => {
+    const normalized = value.replaceAll('\\', '/')
+    const absolute = isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized)
+    const folded = process.platform === 'win32' ? absolute.toLowerCase() : absolute
+    return folded.replaceAll('\\', '/').split('/').filter(Boolean)
+  }
   return left.some((a) =>
     right.some((b) => {
       // Resource scopes are exact identifiers, never paths.

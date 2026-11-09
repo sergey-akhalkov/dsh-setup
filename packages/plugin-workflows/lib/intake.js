@@ -59,7 +59,17 @@ export async function advanceIntake(input) {
             }
             return { run: completedRun, completed: true };
         }
-        if (pending.state === 'failed' ||
+        if (pending.state === 'failed' && pending.step.executor === 'tool') {
+            // A rejected dispatch stays retryable: reset the tool step so the next
+            // close dispatches it again instead of closing without the obligation.
+            run = {
+                ...run,
+                steps: run.steps.map((entry) => entry.id === pending.step.id
+                    ? { ...entry, state: 'open', evidence: undefined, reason: undefined }
+                    : entry),
+            };
+        }
+        else if (pending.state === 'failed' ||
             pending.state === 'cancelled' ||
             pending.state === 'missing') {
             return { run, completed: false };
