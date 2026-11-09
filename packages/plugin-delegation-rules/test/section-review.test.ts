@@ -1063,7 +1063,7 @@ describe('section gate and status', () => {
   })
 
   it('sanitizes an unnumbered section key before writing finding history', async () => {
-    const title = 'Review C:\\Users\\me\\private token=synthetic-history-secret'
+    const title = 'Review /srv/synthetic/private token=synthetic-history-secret'
     const untitled = `# Tasks\n\n## ${title}\n\n- [x] 1.1 First task\n`
     const { root, harness } = await fixture(untitled)
     const run = runIdFrom(
@@ -1078,7 +1078,7 @@ describe('section gate and status', () => {
     const entry = history.entries[0]
     expect(entry?.kind).toBe('run')
     if (entry?.kind === 'run') {
-      expect(entry.section).not.toContain('C:')
+      expect(entry.section).not.toContain('/srv/')
       expect(entry.section).not.toContain('synthetic-history-secret')
       expect(entry.section).toContain('[path]')
       expect(entry.section).toContain('[secret]')
