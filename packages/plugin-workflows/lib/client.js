@@ -124,9 +124,9 @@ window.__ModuleLoader__.load({
             return x === y && (0 !== x || 1 / x === 1 / y) || x !== x && y !== y;
           }
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef3 = React.useRef, useEffect4 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
+          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef4 = React.useRef, useEffect4 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
           exports.useSyncExternalStoreWithSelector = function(subscribe, getSnapshot, getServerSnapshot, selector2, isEqual) {
-            var instRef = useRef3(null);
+            var instRef = useRef4(null);
             if (null === instRef.current) {
               var inst = { hasValue: false, value: null };
               instRef.current = inst;
@@ -11082,7 +11082,7 @@ window.__ModuleLoader__.load({
     }
     function patchListField(graphId, step, field, value2, onPatch) {
       if (field === "title" || field === "prompt" || field === "executor") {
-        onPatch(graphId, { [field]: value2 });
+        onPatch(graphId, { [field]: value2 === "" && field === "prompt" ? void 0 : value2 });
         return;
       }
       if (field === "evidenceKind") {
@@ -11745,7 +11745,9 @@ window.__ModuleLoader__.load({
               value: typeof step.prompt === "string" ? step.prompt : "",
               "aria-label": "Prompt",
               rows: 3,
-              onChange: (event) => props.onPatch(node.id, { prompt: event.currentTarget.value })
+              onChange: (event) => props.onPatch(node.id, {
+                prompt: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
+              })
             }
           )
         ] }),
@@ -12126,12 +12128,19 @@ window.__ModuleLoader__.load({
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
       }, [selected2]);
+      const runsRequest = (0, import_react6.useRef)(0);
       const loadRuns = async (definitionId) => {
+        runsRequest.current += 1;
+        const request = runsRequest.current;
+        setRuns([]);
+        setRunId(void 0);
         try {
           const next = await api.runs(definitionId);
+          if (request !== runsRequest.current) return;
           setRuns(next);
           setRunId(next[0]?.id);
         } catch {
+          if (request !== runsRequest.current) return;
           setRuns([]);
           setRunId(void 0);
         }

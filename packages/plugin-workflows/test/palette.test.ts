@@ -525,6 +525,15 @@ describe('palette and property panel', () => {
     fire(find('Loop list key'), 'onChange', '')
     expect(state.document.definition.steps[0]?.loop?.list).toBeUndefined()
     expect(validateDefinition(state.document.definition).steps[0]?.loop?.list).toBeUndefined()
+    fire(
+      elements(render()).find(
+        (element) => element.type === 'textarea' && element.props['aria-label'] === 'Prompt',
+      ),
+      'onChange',
+      '',
+    )
+    expect(state.document.definition.steps[0]?.prompt).toBeUndefined()
+    expect(validateDefinition(state.document.definition).steps[0]?.prompt).toBeUndefined()
   })
 
   it('offers the human timeout for a valid human step without a config object', () => {
@@ -601,6 +610,9 @@ describe('list mode', () => {
     patchListField(nodeIdOf('requirements'), step, 'prompt', 'Do it', (_id, patch) =>
       patches.push(patch),
     )
+    patchListField(nodeIdOf('requirements'), step, 'prompt', '', (_id, patch) =>
+      patches.push(patch),
+    )
     patchListField(nodeIdOf('requirements'), step, 'loopMaxIterations', '4', (_id, patch) =>
       patches.push(patch),
     )
@@ -608,6 +620,7 @@ describe('list mode', () => {
       { title: 'Requirements' },
       { evidence: { kind: 'declaration' } },
       { prompt: 'Do it' },
+      { prompt: undefined },
     ])
   })
 

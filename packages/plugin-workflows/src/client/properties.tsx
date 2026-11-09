@@ -294,7 +294,11 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           value={typeof step.prompt === 'string' ? step.prompt : ''}
           aria-label="Prompt"
           rows={3}
-          onChange={(event) => props.onPatch(node.id, { prompt: event.currentTarget.value })}
+          onChange={(event) =>
+            props.onPatch(node.id, {
+              prompt: event.currentTarget.value === '' ? undefined : event.currentTarget.value,
+            })
+          }
         />
       </label>
       <JsonField

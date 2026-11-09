@@ -83,7 +83,7 @@ export function patchListField(
   onPatch: (nodeId: string, patch: Readonly<Record<string, unknown>>) => void,
 ): void {
   if (field === 'title' || field === 'prompt' || field === 'executor') {
-    onPatch(graphId, { [field]: value })
+    onPatch(graphId, { [field]: value === '' && field === 'prompt' ? undefined : value })
     return
   }
   if (field === 'evidenceKind') {
