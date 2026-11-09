@@ -1,7 +1,6 @@
 {
   "rule": "task-review",
   "change": "add-workflow-obligations",
-  "phase": "task",
   "scope": "task",
   "taskId": "9999a0031c4e387d",
   "digest": "605eb96953b65ae151b96c32584d5d06a452e8cdcfc233d7e89884a3eba58ed2",
@@ -13,7 +12,5 @@
     "model": "gpt-6-astra",
     "reasoningEffort": "xhigh"
   },
-  "session": "06229c0c-7152-45b4-b35c-16c16de4509f",
-  "runId": "run-mw7py489-74c83b01",
   "time": "2026-11-08T11:01:04.183Z"
 }

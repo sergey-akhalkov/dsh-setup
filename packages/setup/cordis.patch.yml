@@ -426,4 +426,7 @@
         minSamples: 20
         guardrail: failure-rate
 - id: dsh-setup-workflows
-  config: {}
+  config:
+    checkpointApplicability:
+      minToolCalls: 4
+      requireWrite: true

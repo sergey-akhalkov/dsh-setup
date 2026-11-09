@@ -36,8 +36,14 @@ export interface FsChangeWatcher {
     start(): Promise<void>;
     dispose(): Promise<void>;
 }
+interface SnapshotEntry {
+    readonly sig: string;
+    readonly hash: string;
+}
 /** Whether a canonical target stays inside a canonical root. */
 export declare function isInside(root: string, target: string): boolean;
+/** Read one file's identity; oversized files use size and mtime instead of bytes. */
+export declare function fileEntry(file: string): Promise<SnapshotEntry | undefined>;
 /**
  * Start one workspace's change-tree watcher. The initial scan is a silent
  * baseline; watches attach, then one rescan catches an edit made while they were
@@ -45,3 +51,4 @@ export declare function isInside(root: string, target: string): boolean;
  * per-directory debounce window.
  */
 export declare function startFsChangeWatcher(options: FsChangeOptions): Promise<FsChangeWatcher>;
+export {};

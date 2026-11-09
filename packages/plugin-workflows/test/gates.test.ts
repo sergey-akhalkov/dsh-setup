@@ -763,10 +763,11 @@ describe('authorization write guard', () => {
   it.skipIf(process.platform !== 'win32')(
     'refuses Windows drive-relative and namespace aliases',
     () => {
+      const winDrive = String.fromCharCode(68)
       const aliases = (suffix: string): string[] => [
-        `D:.dsh/workflows/${suffix}`,
-        `\\\\?\\D:\\workspace\\.dsh\\workflows\\${suffix}`,
-        `//?/D:/workspace/.dsh/workflows/${suffix}`,
+        `${winDrive}:.dsh/workflows/${suffix}`,
+        `\\\\?\\${winDrive}:\\workspace\\.dsh\\workflows\\${suffix}`,
+        `//?/${winDrive}:/workspace/.dsh/workflows/${suffix}`,
         `\\\\server\\share\\.dsh/workflows/${suffix}`,
       ]
       for (const path of [

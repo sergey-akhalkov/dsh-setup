@@ -23,6 +23,7 @@
     "icon.svg",
     "locale/*.json",
     "assets/triggers/*.json",
+    "assets/definitions/*.json",
     "lib/index.js",
     "lib/index.d.ts",
     "lib/client.js",

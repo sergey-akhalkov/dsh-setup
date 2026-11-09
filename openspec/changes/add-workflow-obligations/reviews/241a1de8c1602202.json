@@ -3,8 +3,8 @@
   "change": "add-workflow-obligations",
   "scope": "task",
   "taskId": "241a1de8c1602202",
-  "digest": "3ea8ff50e0fef8e232f9c34f2fec3e1a73434709e14485c90a3127dac56d8e4d",
-  "worktreeDigest": "b4634fec48344fdc2f0812b4f869c47cf9660008e30c1bfae57a1d2a615c010e",
+  "digest": "a73519d82967809b7d3c48afe32bf14f149a6ab283081f28e98496110b9127cb",
+  "worktreeDigest": "0bc33311b618a7971966e48ae98bce33eb04caed096d1f9f9128a0a226b5d847",
   "verdict": "PASS",
   "findings": [],
   "target": {
@@ -12,5 +12,5 @@
     "model": "gpt-6-astra",
     "reasoningEffort": "xhigh"
   },
-  "time": "2026-11-07T19:38:35.650Z"
+  "time": "2026-11-09T12:22:43.102Z"
 }

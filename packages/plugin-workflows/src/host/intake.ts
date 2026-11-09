@@ -12,8 +12,8 @@ import {
   type OwnedCalls,
   runHumanStep,
   runSubagentStep,
-  type SubagentRunner,
   runToolStep,
+  type SubagentRunner,
   type ToolRunner,
 } from './executors.js'
 import { runDeferredStep } from './gates.js'

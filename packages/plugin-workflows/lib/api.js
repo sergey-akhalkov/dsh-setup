@@ -15,6 +15,8 @@ export const RUNS_ROUTE = '/api/workflows/runs';
 export const TRIGGERS_ROUTE = '/api/workflows/triggers';
 export const HEALTH_ROUTE = '/api/workflows/health';
 export const EVIDENCE_ROUTE = '/api/workflows/evidence';
+export const DEFINITIONS_ROUTE = '/api/workflows/definitions';
+export const RECEIPTS_ROUTE = '/api/workflows/receipts';
 /** Default and maximum page sizes. */
 export const DEFAULT_LIMIT = 50;
 export const MAX_LIMIT = 200;
@@ -111,7 +113,12 @@ function route(path, handler) {
     };
 }
 /** Only settled record evidence inside the workspace may be served. */
-const EVIDENCE_PREFIXES = ['.dsh/delegation/', '.dsh/work-checkpoints/', 'openspec/changes/'];
+const EVIDENCE_PREFIXES = [
+    '.dsh/delegation/',
+    '.dsh/work-checkpoints/',
+    '.dsh/workflows/runs/',
+    'openspec/changes/',
+];
 async function readEvidence(workspace, path) {
     if (!EVIDENCE_PREFIXES.some((prefix) => path.startsWith(prefix))) {
         return json(400, { error: 'the evidence path is not a record path' });
@@ -194,17 +201,71 @@ export function createWorkflowRoutes(services) {
             if ('response' in resolved)
                 return resolved.response;
             const evaluations = await lastEvaluations(services, resolved.workspace, resolved.session);
+            const definitions = services.definitionsFor?.(resolved.workspace) ?? [];
             return json(200, {
                 session: resolved.session,
-                triggers: services.triggers.map((trigger) => ({
-                    id: trigger.id,
-                    event: trigger.event,
-                    filter: trigger.filter,
-                    mode: trigger.mode,
-                    dedupe: trigger.dedupe,
-                    ...(evaluations.get(trigger.id) === undefined
-                        ? {}
-                        : { last: evaluations.get(trigger.id) }),
+                triggers: [
+                    ...services.triggers.map((trigger) => ({
+                        id: trigger.id,
+                        event: trigger.event,
+                        filter: trigger.filter,
+                        mode: trigger.mode,
+                        dedupe: trigger.dedupe,
+                        ...(evaluations.get(trigger.id) === undefined
+                            ? {}
+                            : { last: evaluations.get(trigger.id) }),
+                    })),
+                    ...definitions.map((definition) => ({
+                        id: `definition:${definition.id}`,
+                        event: definition.trigger.kind,
+                        filter: definition.trigger.match,
+                        mode: definition.trigger.mode,
+                        dedupe: definition.trigger.dedupe,
+                        source: 'workflow-definition',
+                        ...(evaluations.get(`definition:${definition.id}`) === undefined
+                            ? {}
+                            : { last: evaluations.get(`definition:${definition.id}`) }),
+                    })),
+                ],
+            });
+        }),
+        route(DEFINITIONS_ROUTE, async (request) => {
+            const resolved = resolveSession(services, request);
+            if ('response' in resolved)
+                return resolved.response;
+            const definitions = services.definitionsFor?.(resolved.workspace) ?? [];
+            return json(200, {
+                session: resolved.session,
+                definitions: definitions.map((definition) => ({
+                    id: definition.id,
+                    name: definition.name,
+                    version: definition.version,
+                    trigger: definition.trigger,
+                    risk: definition.settings.risk,
+                    allowModelStart: definition.settings.allowModelStart,
+                    gateOwnership: definition.settings.gateOwnership,
+                    steps: definition.steps.map((step) => ({
+                        id: step.id,
+                        title: step.title,
+                        executor: step.executor,
+                        ownership: step.ownership ?? 'own',
+                        blockTurnClose: step.blockTurnClose === true,
+                    })),
+                })),
+            });
+        }),
+        route(RECEIPTS_ROUTE, async (request) => {
+            const resolved = resolveSession(services, request);
+            if ('response' in resolved)
+                return resolved.response;
+            const receipts = (await services.receiptsFor?.(resolved.workspace)) ?? [];
+            return json(200, {
+                session: resolved.session,
+                receipts: receipts.map((receipt) => ({
+                    change: receipt.change,
+                    kind: receipt.kind,
+                    digest: receipt.digest,
+                    issuedAt: receipt.issuedAt,
                 })),
             });
         }),

@@ -118,6 +118,7 @@ export function capRecord(record, maxBytes = MAX_RECORD_BYTES) {
             id: evaluation.id.slice(0, 60),
             matched: evaluation.matched,
             reason: evaluation.reason,
+            ...(evaluation.runId === undefined ? {} : { runId: evaluation.runId }),
         }));
         candidate = { ...candidate, triggers: compact };
         if (fits(candidate))

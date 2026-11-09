@@ -1,0 +1,88 @@
+import { listAuthenticatedRuns, readAuthenticatedRun, setRunStatus, settleStep, writeRun, } from './runs.js';
+/**
+ * Startup recovery and resume-by-run-id. An unfinished run from a previous
+ * process is interrupted, never auto-completed; resume re-evaluates only its
+ * pending step from authenticated durable state and never starts a second run
+ * or recreates a change directory.
+ */
+export const INTERRUPTED_REASON = 'the host process ended while this run was unfinished';
+/** Mark every authenticated running or blocked run as interrupted. */
+export async function recoverRuns(workspace, auth, now = Date.now()) {
+    const recovered = [];
+    const skipped = [];
+    for (const run of await listAuthenticatedRuns(workspace, auth)) {
+        if (run.status !== 'running' && run.status !== 'blocked') {
+            skipped.push(run.id);
+            continue;
+        }
+        const interrupted = setRunStatus(run, 'interrupted', now, INTERRUPTED_REASON);
+        await writeRun(workspace, interrupted, auth);
+        recovered.push(run.id);
+    }
+    return { recovered, skipped };
+}
+/** The first step still open or blocked; the step resume re-evaluates. */
+export function pendingStep(run) {
+    if (run.branchPath !== undefined && run.branchPath.length > 0) {
+        for (const id of run.branchPath) {
+            const step = run.steps.find((entry) => entry.id === id);
+            if (step !== undefined && (step.state === 'open' || step.state === 'blocked')) {
+                return step.id;
+            }
+        }
+    }
+    if (run.nextStep !== undefined) {
+        const selected = run.steps.find((step) => step.id === run.nextStep && (step.state === 'open' || step.state === 'blocked'));
+        if (selected !== undefined)
+            return selected.id;
+    }
+    return run.steps.find((step) => step.state === 'open' || step.state === 'blocked')?.id;
+}
+/**
+ * Resume one interrupted or blocked run at its pending step. A completed,
+ * failed, cancelled, running, forged, or unsigned run is refused.
+ */
+export async function resumeRun(workspace, runId, auth, now = Date.now(), session) {
+    const run = await readAuthenticatedRun(workspace, runId, auth);
+    if (run !== undefined && session !== undefined && run.session !== session) {
+        throw new Error(`run "${runId}" belongs to session "${run.session}"; session "${session}" cannot resume it`);
+    }
+    if (run === undefined) {
+        throw new Error(`run "${runId}" is unsigned, modified, or unreadable; it cannot be resumed`);
+    }
+    if (run.status !== 'interrupted' && run.status !== 'blocked') {
+        throw new Error(`run "${runId}" is ${run.status}; only an interrupted or blocked run can be resumed`);
+    }
+    const stepId = pendingStep(run);
+    if (stepId === undefined) {
+        throw new Error(`run "${runId}" has no pending step; cancel it instead of resuming`);
+    }
+    let resumed = settleStep(run, stepId, 'open', { at: now });
+    resumed = setRunStatus(resumed, 'running', now);
+    await writeRun(workspace, resumed, auth);
+    return { run: resumed, stepId };
+}
+/** Cancel one open run; an open or blocked step is recorded as cancelled. */
+export async function cancelRun(workspace, runId, auth, now = Date.now(), session) {
+    const run = await readAuthenticatedRun(workspace, runId, auth);
+    if (run !== undefined && session !== undefined && run.session !== session) {
+        throw new Error(`run "${runId}" belongs to session "${run.session}"; session "${session}" cannot cancel it`);
+    }
+    if (run === undefined) {
+        throw new Error(`run "${runId}" is unsigned, modified, or unreadable; it cannot be cancelled`);
+    }
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+        throw new Error(`run "${runId}" is ${run.status}; it is not cancelable`);
+    }
+    const stepId = pendingStep(run);
+    let cancelled = run;
+    if (stepId !== undefined) {
+        cancelled = settleStep(cancelled, stepId, 'cancelled', {
+            at: now,
+            reason: 'the user cancelled the run',
+        });
+    }
+    cancelled = setRunStatus(cancelled, 'cancelled', now);
+    await writeRun(workspace, cancelled, auth);
+    return cancelled;
+}

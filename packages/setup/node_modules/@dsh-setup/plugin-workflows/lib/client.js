@@ -129,6 +129,7 @@ window.__ModuleLoader__.load({
       "whyNot.reason": "Reason",
       "whyNot.path": "Rejected path",
       "whyNot.filter": "Filter",
+      "whyNot.run": "Run",
       "whyNot.matched": "matched",
       "whyNot.notMatched": "not matched",
       "reason.would-fire": "would fire",
@@ -221,7 +222,8 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("whyNot.result") }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("whyNot.reason") }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("whyNot.path") }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("whyNot.filter") })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("whyNot.filter") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { children: t("whyNot.run") })
         ] }) }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: rows.map((row, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
           "tr",
@@ -233,7 +235,8 @@ window.__ModuleLoader__.load({
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.evaluation.matched ? t("whyNot.matched") : t("whyNot.notMatched") }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: t(`reason.${row.evaluation.reason}`) }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.evaluation.path ?? "\u2014" }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.evaluation.filter ?? "\u2014" })
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.evaluation.filter ?? "\u2014" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: row.evaluation.runId ?? "\u2014" })
             ]
           },
           `${row.evaluation.id}:${String(row.at)}:${String(index)}`
@@ -284,7 +287,13 @@ window.__ModuleLoader__.load({
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: run.steps.map((step) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { "data-step": step.id, children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.title }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.state }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { children: [
+              step.state,
+              step.reason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-wf-error", children: [
+                " ",
+                step.reason
+              ] })
+            ] }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: step.evidence === void 0 ? "\u2014" : props.session === void 0 || !isRecordEvidence(step.evidence) ? step.evidence : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
               "a",
@@ -327,7 +336,69 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/view.tsx
     var import_react = require("react");
+
+    // packages/plugin-workflows/src/client/workflows.tsx
     var import_jsx_runtime2 = require("react/jsx-runtime");
+    function definitionsUrl(sessionId) {
+      return `/api/workflows/definitions?session=${encodeURIComponent(sessionId)}`;
+    }
+    function receiptsUrl(sessionId) {
+      return `/api/workflows/receipts?session=${encodeURIComponent(sessionId)}`;
+    }
+    function filterSummary(match) {
+      if (match === void 0) return "any";
+      const entries = Object.entries(match);
+      return entries.length === 0 ? "any" : entries.map(([key, value]) => `${key}: ${value}`).join(", ");
+    }
+    function DefinitionsTable(props) {
+      const { definitions, t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dsh-wf-section", "data-section": "definitions", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { className: "dsh-wf-heading", children: t("definitions.heading") }),
+        definitions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wf-muted", children: t("definitions.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { className: "dsh-wf-table", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("definitions.id") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("definitions.trigger") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("definitions.mode") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("definitions.risk") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("definitions.steps") })
+          ] }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("tbody", { children: definitions.map((definition) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { "data-definition": definition.id, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: definition.id }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("td", { children: [
+              definition.trigger.kind,
+              " (",
+              filterSummary(definition.trigger.match),
+              ")"
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("td", { children: [
+              definition.trigger.mode,
+              " / ",
+              definition.gateOwnership
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: definition.risk }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: definition.steps.map((step) => `${step.id}:${step.executor}/${step.ownership}`).join(", ") })
+          ] }, definition.id)) })
+        ] })
+      ] });
+    }
+    function ReceiptsList(props) {
+      const { receipts, t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dsh-wf-section", "data-section": "receipts", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { className: "dsh-wf-heading", children: t("receipts.heading") }),
+        receipts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wf-muted", children: t("receipts.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ul", { className: "dsh-wf-runs", children: receipts.map((receipt) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("li", { "data-receipt": receipt.change, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wf-kind", children: receipt.kind }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wf-subject", children: receipt.change }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dsh-wf-summary", children: [
+            receipt.digest.slice(0, 12),
+            "\u2026"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wf-time", children: new Date(receipt.issuedAt).toISOString() })
+        ] }, `${receipt.kind}:${receipt.change}`)) })
+      ] });
+    }
+
+    // packages/plugin-workflows/src/client/view.tsx
+    var import_jsx_runtime3 = require("react/jsx-runtime");
     var VIEW_CSS = `
     .dsh-wf { display: flex; flex-direction: column; gap: var(--dsw-space-3, 12px); padding: 12px; overflow: auto; }
     .dsh-wf-health { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); }
@@ -368,6 +439,55 @@ window.__ModuleLoader__.load({
     function isStaleGeneration(requested, current) {
       return requested !== current;
     }
+    function WorkflowsLoaded(props) {
+      const { loaded, t, sessionId } = props;
+      const selectedRun = loaded.runs.items.find((run) => run.id === props.selected);
+      const pageProps = (kind, next) => {
+        const page = props.pageStates?.[kind];
+        if (next === void 0 || page?.key !== `${kind}:${next}`) return {};
+        if (page.phase === "loading") return { loading: true };
+        return { error: page.message ?? t("state.error") };
+      };
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(HealthStrip, { health: loaded.health, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(DefinitionsTable, { definitions: loaded.definitions, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(TriggersTable, { triggers: loaded.triggers, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ReceiptsList, { receipts: loaded.receipts, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(EventList, { events: loaded.events.items, t }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          LoadMore,
+          {
+            next: loaded.events.next,
+            t,
+            onLoad: props.onLoadEvents ?? (() => {
+            }),
+            ...pageProps("events", loaded.events.next)
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          RunsList,
+          {
+            runs: loaded.runs.items,
+            t,
+            ...props.selected === void 0 ? {} : { selected: props.selected },
+            onSelect: props.onSelect ?? (() => {
+            })
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          LoadMore,
+          {
+            next: loaded.runs.next,
+            t,
+            onLoad: props.onLoadRuns ?? (() => {
+            }),
+            ...pageProps("runs", loaded.runs.next)
+          }
+        ),
+        selectedRun === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(RunDetail, { run: selectedRun, t, session: sessionId }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(WhyNotTable, { events: loaded.events.items, t })
+      ] });
+    }
     function WorkflowsView(props) {
       const { sessionId, t } = props;
       const [state, setState] = (0, import_react.useState)({ phase: "loading" });
@@ -388,9 +508,11 @@ window.__ModuleLoader__.load({
           requestJson(healthUrl(sessionId)),
           requestJson(triggersUrl(sessionId)),
           requestJson(eventsUrl(sessionId)),
-          requestJson(runsUrl(sessionId))
+          requestJson(runsUrl(sessionId)),
+          requestJson(definitionsUrl(sessionId)),
+          requestJson(receiptsUrl(sessionId))
         ]).then(
-          ([health, triggers, events, runs]) => {
+          ([health, triggers, events, runs, definitions, receipts]) => {
             if (isStaleGeneration(generation, loadId.current)) return;
             setState({
               phase: "ready",
@@ -398,7 +520,9 @@ window.__ModuleLoader__.load({
                 health,
                 triggers: triggers.triggers,
                 events: pageOf(events, events.events),
-                runs: pageOf(runs, runs.runs)
+                runs: pageOf(runs, runs.runs),
+                definitions: definitions.definitions,
+                receipts: receipts.receipts
               }
             });
           },
@@ -418,7 +542,7 @@ window.__ModuleLoader__.load({
         };
       }, [sessionId]);
       if (sessionId === void 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
+        return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
       }
       const mergeEvents = () => {
         const next = state.loaded?.events.next;
@@ -495,62 +619,33 @@ window.__ModuleLoader__.load({
         );
       };
       let body;
-      const pageProps = (kind, next) => {
-        const page = pageStates[kind];
-        if (next === void 0 || page?.key !== `${kind}:${next}`) return {};
-        if (page.phase === "loading") return { loading: true };
-        return { error: page.message ?? t("state.error") };
-      };
       if (state.phase === "loading") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(LoadingLine, { t });
+        body = /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(LoadingLine, { t });
       } else if (state.phase === "error") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ErrorLine, { message: state.message ?? "", t, onRetry: load });
+        body = /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(ErrorLine, { message: state.message ?? "", t, onRetry: load });
       } else {
-        const loaded = state.loaded;
-        const selectedRun = loaded.runs.items.find((run) => run.id === selected);
-        body = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(HealthStrip, { health: loaded.health, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(TriggersTable, { triggers: loaded.triggers, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(EventList, { events: loaded.events.items, t }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            LoadMore,
-            {
-              next: loaded.events.next,
-              t,
-              onLoad: mergeEvents,
-              ...pageProps("events", loaded.events.next)
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            RunsList,
-            {
-              runs: loaded.runs.items,
-              t,
-              ...selected === void 0 ? {} : { selected },
-              onSelect: (run) => setSelected(run.id)
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            LoadMore,
-            {
-              next: loaded.runs.next,
-              t,
-              onLoad: mergeRuns,
-              ...pageProps("runs", loaded.runs.next)
-            }
-          ),
-          selectedRun === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(RunDetail, { run: selectedRun, t, session: sessionId }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(WhyNotTable, { events: loaded.events.items, t })
-        ] });
+        body = /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          WorkflowsLoaded,
+          {
+            loaded: state.loaded,
+            t,
+            sessionId,
+            selected,
+            onSelect: (run) => setSelected(run.id),
+            onLoadEvents: mergeEvents,
+            onLoadRuns: mergeRuns,
+            pageStates
+          }
+        );
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf", "data-state": state.phase, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("style", { children: VIEW_CSS }),
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf", "data-state": state.phase, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("style", { children: VIEW_CSS }),
         body
       ] });
     }
 
     // packages/plugin-workflows/src/client/index.tsx
-    var import_jsx_runtime3 = require("react/jsx-runtime");
+    var import_jsx_runtime4 = require("react/jsx-runtime");
     var ENTRY_LIMITATION = "The host exposes no command that opens a conversation view; the Workflows tab is the entry.";
     var inject = ["slots", "locale", "resources"];
     var NS = "dsh-setup-workflows";
@@ -568,7 +663,7 @@ window.__ModuleLoader__.load({
             "conversation.view",
             () => slots.register(
               { name: "conversation.view", id: "workflows", order: 30, label: () => t("view.label") },
-              (props) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              (props) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                 WorkflowsView,
                 {
                   t,

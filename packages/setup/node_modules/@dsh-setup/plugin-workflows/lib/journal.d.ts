@@ -32,6 +32,8 @@ export interface TriggerEvaluationRecord {
     readonly path?: string;
     readonly filter?: string;
     readonly detail?: string;
+    /** The created run id for a run-created outcome. */
+    readonly runId?: string;
 }
 /** One journal record, as the read API and the Why-not view consume it. */
 export interface JournalRecord {

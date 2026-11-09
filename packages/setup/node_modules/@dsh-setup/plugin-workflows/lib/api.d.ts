@@ -1,5 +1,7 @@
+import type { Definition } from './definitions.js';
 import type { WorkflowHealth } from './health.js';
 import type { Journal } from './journal.js';
+import type { WorkflowReceipt } from './receipts.js';
 import type { Trigger } from './triggers.js';
 /**
  * The read-only Workflows API. Routes are registered through the carrier-neutral
@@ -13,6 +15,8 @@ export declare const RUNS_ROUTE = "/api/workflows/runs";
 export declare const TRIGGERS_ROUTE = "/api/workflows/triggers";
 export declare const HEALTH_ROUTE = "/api/workflows/health";
 export declare const EVIDENCE_ROUTE = "/api/workflows/evidence";
+export declare const DEFINITIONS_ROUTE = "/api/workflows/definitions";
+export declare const RECEIPTS_ROUTE = "/api/workflows/receipts";
 /** Default and maximum page sizes. */
 export declare const DEFAULT_LIMIT = 50;
 export declare const MAX_LIMIT = 200;
@@ -41,6 +45,10 @@ export interface WorkflowApiServices {
     /** The requesting session's own last observed event time, if any. */
     readonly lastEventAtFor?: (session: string) => number | undefined;
     readonly triggers: readonly Trigger[];
+    /** The approved definitions of one workspace. */
+    readonly definitionsFor?: (workspace: string) => readonly Definition[];
+    /** The authenticated receipts of one workspace. */
+    readonly receiptsFor?: (workspace: string) => Promise<readonly WorkflowReceipt[]>;
 }
 /** Build the read-only routes. */
 export declare function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[];

@@ -13,6 +13,7 @@ export interface RunStep {
     readonly state: string;
     readonly at?: number;
     readonly evidence?: string;
+    readonly reason?: string;
 }
 /** The one shape every adapter returns. */
 export interface RunView {
@@ -28,7 +29,7 @@ export interface RunView {
     /** The absolute or workspace-relative record path this view came from. */
     readonly record?: string;
 }
-export declare const WORK_CHECKPOINT_DIR: string;
+export declare const KNOWN_STEP_STATES: Set<string>;
 export declare const DELEGATION_DIR: string;
 export declare const WORKFLOW_EVENTS_DIR: string;
 /** The producer's checkpoint directory name: sha256 of the session id, first 16 hex. */
@@ -53,6 +54,12 @@ export interface LocalReviewRead {
     readonly records: LocalReviewRecord[];
     readonly failures: LocalReviewFailure[];
 }
+/** The producer contract for a settled local review record. */
+/** The goal-continuity checkpoint record shape every reader accepts. */
+export declare function checkpointRecordError(record: Record<string, unknown>): string | undefined;
+export declare function localRecordError(record: Record<string, unknown>): string | undefined;
+/** The producer contract for a portable task approval. */
+export declare function portableRecordError(record: Record<string, unknown>): string | undefined;
 /** Read every settled local review record; malformed and invalid files are reported. */
 export declare function readLocalReviewRecords(workspace: string): Promise<LocalReviewRead>;
 /**
@@ -69,6 +76,12 @@ export declare function portableReviewRuns(workspace: string, localRecords: read
  * names the run but must not establish or transfer ownership.
  */
 export declare function delegationObservations(workspace: string): Promise<Map<string, string>>;
+/**
+ * Engine obligation runs from `.dsh/workflows/runs/`. They are display-only
+ * here; authority reads authenticate them separately. A malformed or unsigned
+ * file is shown as an unreadable row, never silently dropped.
+ */
+export declare function engineRuns(workspace: string): Promise<RunView[]>;
 /** Every projected run in one workspace, unattributed runs included. */
 export declare function workspaceRuns(workspace: string): Promise<RunView[]>;
 /** The requesting session's timeline: only attributed runs, in time order. */

@@ -16,7 +16,7 @@ const MAX_IDENTIFIER_CHARS = 80
 
 /** Collapse control and Unicode line separators in one data-derived value. */
 function oneLine(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/gu, ' ')
+  return value.replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
 }
 
 /** Sanitize and bound one identifier before composing the prompt line. */
