@@ -8,7 +8,6 @@ import {
   addViolation,
   incrementTurnBlocks,
   resetStepAttempts,
-  resetTurnBlocks,
   setRunStatus,
   settleStep,
   type WorkflowRun,
@@ -101,7 +100,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
           const detail = `step "${failed.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`
           return {
             kind: 'violation',
-            run: resetTurnBlocks(addViolation(input.run, detail, { step: failed.id, at }), at),
+            run: addViolation(input.run, detail, { step: failed.id, at }),
             detail,
           }
         }
@@ -144,7 +143,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       const blocks = input.run.turnBlocks ?? 0
       if (blocks >= input.maxBlocks) {
         const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`
-        const run = resetTurnBlocks(addViolation(input.run, detail, { at }), at)
+        const run = addViolation(input.run, detail, { at })
         return { kind: 'violation', run, detail }
       }
       return {
@@ -164,10 +163,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     const blocks = input.run.turnBlocks ?? 0
     if (blocks >= input.maxBlocks) {
       const detail = `turn close was refused ${String(blocks)} time(s) with step "${step.id}" open; the close is allowed once as a VIOLATION, never as a pass`
-      const run = resetStepAttempts(
-        resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at),
-        step.id,
-      )
+      const run = resetStepAttempts(addViolation(input.run, detail, { step: step.id, at }), step.id)
       return { kind: 'violation', run, detail }
     }
     const steered = requestMainStep({
@@ -188,7 +184,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         const recorded = addViolation(input.run, detail, { step: step.id, at })
         return {
           kind: 'violation',
-          run: resetStepAttempts(resetTurnBlocks(recorded, at), step.id),
+          run: resetStepAttempts(recorded, step.id),
           detail,
         }
       }
@@ -200,7 +196,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
           const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`
           return {
             kind: 'violation',
-            run: resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at),
+            run: addViolation(input.run, detail, { step: step.id, at }),
             detail,
           }
         }

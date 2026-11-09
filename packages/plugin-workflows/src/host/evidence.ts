@@ -855,6 +855,19 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
       accepted.has(normalizeCheckCommand(candidate.command)) &&
       (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)),
   )
+  // A persisted successful check survives buffer eviction; a later failed
+  // attempt does not re-dirty the turn (legacy semantics).
+  if (context.lastCheckAt !== undefined && context.lastCheckAt > lastWrite) {
+    return {
+      ok: true,
+      evidence: {
+        kind: 'check',
+        callId: 'persisted-check',
+        at: context.lastCheckAt,
+        detail: 'a configured check succeeded after the last write',
+      },
+    }
+  }
   const afterWrite = results.filter((candidate) => candidate.at > lastWrite)
   const shown = shownCommands(commands)
   const target =
@@ -862,17 +875,6 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
       ? ''
       : ` (last write: ${context.lastWritePath.slice(0, 120)})`
   if (afterWrite.length === 0) {
-    if (context.lastCheckAt !== undefined && context.lastCheckAt > lastWrite) {
-      return {
-        ok: true,
-        evidence: {
-          kind: 'check',
-          callId: 'persisted-check',
-          at: context.lastCheckAt,
-          detail: 'a configured check succeeded after the last write',
-        },
-      }
-    }
     return checkFailure(
       `no configured verification command completed after the last code write${target}; run ${shown}`,
       item,
@@ -1173,7 +1175,7 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
     }
     case 'check': {
       if (value.source === 'verify-settings') {
-        return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write${context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath})`}`
+        return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write${context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath.slice(0, 120)})`}`
       }
       const command = resolveEvidenceText(value.command ?? '', context, undefined)
       return `foreground command "${command.ok ? command.text : value.command}" exits 0`

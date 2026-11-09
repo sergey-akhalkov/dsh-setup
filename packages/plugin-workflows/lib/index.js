@@ -1618,7 +1618,8 @@ export function apply(ctx, config = {}) {
                 toolCalls,
                 shellResults,
                 checkCommands: verifySettings.commands,
-                ...(lastCodeWriteAt(toolCalls, workspace) === undefined && writeMetrics?.lastWriteAt === undefined
+                ...(lastCodeWriteAt(toolCalls, workspace) === undefined &&
+                    writeMetrics?.lastWriteAt === undefined
                     ? {}
                     : { lastWriteAt: lastCodeWriteAt(toolCalls, workspace) ?? writeMetrics?.lastWriteAt }),
                 ...(writeMetrics?.lastWritePath === undefined

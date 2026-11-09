@@ -665,8 +665,12 @@ function mentions(value: Readonly<Record<string, unknown>>, wanted: string): boo
   return argumentStrings(value).some((text) => text.includes(wanted))
 }
 
-/** Resolve one path against the workspace; undefined when it escapes it. */
+/** Resolve one path against the workspace, keeping its drive for root paths. */
 function resolveWorkspacePath(value: string, workspace: string): string {
+  if (process.platform === 'win32' && (value === '/' || value === '\\')) {
+    const drive = /^([A-Za-z]):/u.exec(workspace)?.[1]
+    if (drive !== undefined) return resolve(`${drive}:/`)
+  }
   const normalized = value.replaceAll('\\', '/')
   if (process.platform === 'win32' && /^\/[^/]/u.test(normalized)) {
     const drive = /^([A-Za-z]):/u.exec(workspace)?.[1]
