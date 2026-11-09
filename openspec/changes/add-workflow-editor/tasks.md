@@ -42,8 +42,8 @@ The editor is a Client feature with a small Host write API. Lanes 1-2 own disjoi
 
 ## 7. Accessibility and fallback (lane 4, owns `src/client/a11y.ts`, `src/client/list.tsx`, `test/a11y.test.tsx`)
 
-- [x] 7.1 Add keyboard add/connect, focusable nodes and edges, labels, and visible focus; verify keyboard-only creation of a two-step definition and a tab order through the palette, canvas, and properties.
-- [x] 7.2 Add the screen-reader summary, the `Canvas | List` toggle, and the narrow-window default to List; verify the summary updates on selection and the narrow mode is editable.
+- [ ] 7.1 Add keyboard add/connect, focusable nodes and edges, labels, and visible focus; verify keyboard-only creation of a two-step definition and a tab order through the palette, canvas, and properties.
+- [ ] 7.2 Add the screen-reader summary, the `Canvas | List` toggle, and the narrow-window default to List; verify the summary updates on selection and the narrow mode is editable.
 - [x] 7.3 Verify a canvas render failure switches to List with a bounded notice and the host and runs are unaffected; record that a client-module evaluation failure is reported by the Harness loader and is outside the in-view fallback.
 
 ## 8. Security, docs, and integration (lane 5, owns `test/editor-security.test.ts`, `docs/workflows.md`, `docs/plugins.md`, `packages/setup/**`, `packages/plugin-workflows/lib/**`)
