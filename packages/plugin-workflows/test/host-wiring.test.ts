@@ -578,6 +578,94 @@ describe('retro applicability evidence', () => {
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect(await retroRuns()).toHaveLength(1)
   })
+
+  it('repeated non-applicable turns consume no run capacity', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const retroRows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(journalFile, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:retro')
+    const emitTurn = async (
+      turn: number,
+      results: ReadonlyArray<{ name: string; args: Record<string, unknown> }>,
+    ): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      for (const [index, result] of results.entries()) {
+        await host.emit(
+          'tools/result',
+          {
+            agent: host.agent,
+            callId: `call-${String(turn)}-${String(index)}`,
+            name: result.name,
+            arguments: result.args,
+          },
+          { isError: false, content: [{ type: 'text', text: 'ok' }] },
+        )
+      }
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn })
+    }
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const retroRuns = async (): Promise<Array<{ id: string }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition === 'retro',
+      )
+
+    // Short, read-only, and written question-ending turns are all not-applicable.
+    await emitTurn(1, [{ name: 'read', args: {} }])
+    await emitTurn(
+      2,
+      Array.from({ length: 5 }, () => ({ name: 'read', args: {} })),
+    )
+    await emitTurn(3, [
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'write', args: { file_path: 'src/app.ts' } },
+      { name: 'ask_user_question', args: {} },
+    ])
+    await waitFor(
+      async () => (await retroRows()).filter((row) => row.reason === 'not-applicable').length >= 3,
+    )
+    expect(await retroRuns()).toHaveLength(0)
+
+    // The single maxRuns slot is still free for a real applicable turn.
+    await emitTurn(4, [
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'write', args: { file_path: 'src/app.ts' } },
+    ])
+    await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
+    expect(await retroRuns()).toHaveLength(1)
+  })
 })
 
 describe('task-review runtime from a tasks.md change', () => {
