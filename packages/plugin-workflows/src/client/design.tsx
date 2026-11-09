@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { defaultMode, fallbackNotice, resolveSurface, summaryText } from './a11y.ts'
 import { CanvasBoundary, DesignCanvas } from './canvas.tsx'
 import { connectChoices, EDGE_LABELS } from './edges.ts'
@@ -86,6 +86,8 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     drafts: [],
   })
   const [editor, setEditor] = useState<EditorState>()
+  const editorRef = useRef<EditorState | undefined>(undefined)
+  editorRef.current = editor
   const [selected, setSelected] = useState<string>()
   const [runs, setRuns] = useState<readonly RunView[]>([])
   const [runId, setRunId] = useState<string>()
@@ -268,20 +270,18 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setLoading(true)
     try {
       const result = await saveAsCopy(editor, { api, taken })
-      const nextId = result.document.definition.id
-      // A copy that saved its definition but failed only on the layout has
-      // already become the open document; drop the original's runs either way.
+      // Reconcile against the latest state first: an edit during the request
+      // keeps the original document, so its runs must stay selected.
+      const latest = editorRef.current ?? editor
+      const next = latest === editor ? result : reconcileCopy(editor, latest, result)
+      const nextId = next.document.definition.id
       const documentChanged = nextId !== editor.document.definition.id
       if (documentChanged) {
         runSelection.invalidate()
         setRuns([])
         setRunId(undefined)
       }
-      setEditor((current) => {
-        if (current === undefined) return result
-        if (current === editor) return result
-        return reconcileCopy(editor, current, result)
-      })
+      setEditor(next)
       if (documentChanged) {
         await refreshLibrary()
         await loadRuns(nextId)

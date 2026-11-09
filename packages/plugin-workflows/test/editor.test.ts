@@ -327,6 +327,11 @@ describe('draft, dirty tracking, and save', () => {
     expect(layoutFailed.status).toBe('error')
     expect(layoutFailed.document.definition.id).toBe('demo-copy')
     expect(layoutFailed.document.revision).not.toBeNull()
+    // An edit during the request keeps the original document; its runs must
+    // stay selected instead of the ignored copy's.
+    const editedDuringCopy = patchStep(moved, nodeIdOf('one'), { title: 'Edited during copy' })
+    const retained = reconcileCopy(moved, editedDuringCopy, layoutFailed)
+    expect(retained.document.definition.id).toBe('demo')
   })
 
   it('installs a draft only through the create-only save', async () => {

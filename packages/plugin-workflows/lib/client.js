@@ -124,9 +124,9 @@ window.__ModuleLoader__.load({
             return x === y && (0 !== x || 1 / x === 1 / y) || x !== x && y !== y;
           }
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef3 = React.useRef, useEffect4 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
+          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef4 = React.useRef, useEffect4 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
           exports.useSyncExternalStoreWithSelector = function(subscribe, getSnapshot, getServerSnapshot, selector2, isEqual) {
-            var instRef = useRef3(null);
+            var instRef = useRef4(null);
             if (null === instRef.current) {
               var inst = { hasValue: false, value: null };
               instRef.current = inst;
@@ -12110,6 +12110,8 @@ window.__ModuleLoader__.load({
         drafts: []
       });
       const [editor, setEditor] = (0, import_react6.useState)();
+      const editorRef = (0, import_react6.useRef)(void 0);
+      editorRef.current = editor;
       const [selected2, setSelected] = (0, import_react6.useState)();
       const [runs, setRuns] = (0, import_react6.useState)([]);
       const [runId, setRunId] = (0, import_react6.useState)();
@@ -12275,18 +12277,16 @@ window.__ModuleLoader__.load({
         setLoading(true);
         try {
           const result = await saveAsCopy(editor, { api, taken });
-          const nextId2 = result.document.definition.id;
+          const latest = editorRef.current ?? editor;
+          const next = latest === editor ? result : reconcileCopy(editor, latest, result);
+          const nextId2 = next.document.definition.id;
           const documentChanged = nextId2 !== editor.document.definition.id;
           if (documentChanged) {
             runSelection.invalidate();
             setRuns([]);
             setRunId(void 0);
           }
-          setEditor((current) => {
-            if (current === void 0) return result;
-            if (current === editor) return result;
-            return reconcileCopy(editor, current, result);
-          });
+          setEditor(next);
           if (documentChanged) {
             await refreshLibrary();
             await loadRuns(nextId2);

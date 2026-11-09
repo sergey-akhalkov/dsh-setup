@@ -26,6 +26,8 @@ import {
   TRIGGER_NODE,
 } from '../src/client/graph.ts'
 import { withLayout } from '../src/client/layout.ts'
+import { overlayFor, withOverlay } from '../src/client/overlay.ts'
+import type { RunView } from '../src/client/panel.tsx'
 import { validateDefinition } from '../src/host/definitions.ts'
 import {
   call,
@@ -563,6 +565,72 @@ describe('palette and property panel', () => {
     expect(validateDefinition(state.document.definition).steps[0]?.human?.timeoutAction).toBe(
       'cancel',
     )
+  })
+
+  it('selects an overlaid node through the canvas click and opens its property panel', () => {
+    const state = editor()
+    const step = DEFINITION.steps.find((entry) => entry.id === 'requirements')
+    if (step === undefined) throw new Error('missing template step')
+    const run: RunView = {
+      id: 'workflow:run-1',
+      source: 'workflow',
+      session: 'session-1',
+      attribution: 'local',
+      title: 'change-intake intake',
+      startedAt: 1,
+      status: 'running',
+      definition: { id: 'change-intake', name: 'OpenSpec change intake', version: 1 },
+      steps: [
+        {
+          id: step.id,
+          title: step.title,
+          state: 'blocked',
+          failureClass: 'no-answer',
+        },
+      ],
+      violations: [{ stepId: step.id, at: 2, reason: 'bypassed' }],
+    }
+    const nodes = withOverlay(state.diagram.nodes, overlayFor(run, state.document.definition))
+    let selectedId: string | undefined
+    const writes: unknown[] = []
+    const tree = call(ui, 'DesignCanvas', {
+      nodes,
+      edges: state.diagram.edges,
+      focusKey: 'canvas',
+      onSelect: (id: string | undefined) => {
+        selectedId = id
+      },
+      onMove: (id: string) => writes.push(id),
+      onConnectNode: (id: string) => writes.push(id),
+    })
+    const flow = rawElements(tree).find(
+      (element) =>
+        typeof element.type === 'function' && typeof element.props['onNodeClick'] === 'function',
+    )
+    const click = flow?.props['onNodeClick'] as
+      | ((event: unknown, node: { id: string }) => void)
+      | undefined
+    if (click === undefined) throw new Error('no node click handler')
+    click({}, { id: nodeIdOf(step.id) })
+    expect(selectedId).toBe(nodeIdOf(step.id))
+    expect(writes).toEqual([])
+    expect(nodes.find((node) => node.step?.id === step.id)).toMatchObject({
+      runState: 'blocked',
+      failureClass: 'no-answer',
+      violations: ['bypassed'],
+    })
+    const panel = call(ui, 'PropertyPanel', {
+      state,
+      selected: selectedId,
+      onDefinitionPatch: () => {},
+      onPatch: () => {},
+      onConnect: () => {},
+      onDelete: () => {},
+      onRename: () => {},
+    })
+    expect(
+      elements(panel).find((element) => element.props['aria-label'] === 'Step title')?.props.value,
+    ).toBe(step.title)
   })
 
   it('opens the property panel for the selected node', () => {
