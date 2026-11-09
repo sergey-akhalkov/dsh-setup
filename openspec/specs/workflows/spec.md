@@ -1147,7 +1147,13 @@ When the session's tick completes the change's task list, the owned task-review 
 
 ### Requirement: Owned verification
 
-The `verify` definition SHALL reproduce the verification gate: after a code-writing turn, it SHALL require a foreground zero-exit result for the configured commands after the last write, and refuse the close until that result exists. The definition MUST NOT execute the command; the agent runs it. In the migrated setup, the legacy `verification-gate` row MUST be disabled and MUST NOT steer.
+The `verify` definition SHALL reproduce the verification gate: after a code-writing turn,
+it SHALL require a foreground zero-exit result for the configured commands after the last
+write, and refuse the close until that result exists. The definition MUST NOT execute the
+command; the agent runs it. In the migrated setup, the legacy `verification-gate` row MUST
+be disabled and MUST NOT steer. A profile that configures an empty `commands` list SHALL keep
+the definition inert: the step records `no-command` evidence and the turn close is allowed
+without a verification steer.
 
 #### Scenario: Check is required
 
@@ -1163,6 +1169,12 @@ The `verify` definition SHALL reproduce the verification gate: after a code-writ
 
 - **WHEN** the verification-gate row is disabled
 - **THEN** it produces no steer and the workflow is the only gate
+
+#### Scenario: No configured command keeps it inert
+
+- **WHEN** a profile configures `verify.commands` as an empty list and a turn writes code
+- **THEN** the step records `no-command` evidence, the close is allowed, and no verification
+  steer is added
 
 ### Requirement: Profile settings parity
 
