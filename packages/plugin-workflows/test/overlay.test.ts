@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { definitionToGraph, type GraphDefinition } from '../src/client/graph.ts'
 import { overlayFor, withOverlay } from '../src/client/overlay.ts'
 import type { RunView } from '../src/client/panel.tsx'
-import { createRunSelection } from '../src/client/run-selection.ts'
+import { activeRun, createRunSelection } from '../src/client/run-selection.ts'
 import { packageDir } from './client-harness.ts'
 
 const DEFINITION = JSON.parse(
@@ -235,6 +235,14 @@ describe('run overlay', () => {
     expect(
       withOverlay(graph.nodes, overlay).find((node) => node.step?.id === 'constructor')?.runState,
     ).toBe('running')
+  })
+
+  it('shows no overlay when the selector is cleared', () => {
+    const runs = [{ id: 'run-1' }, { id: 'run-2' }]
+    expect(activeRun(runs, undefined)?.id).toBe('run-1')
+    expect(activeRun(runs, 'run-2')?.id).toBe('run-2')
+    expect(activeRun(runs, '')).toBeUndefined()
+    expect(activeRun(runs, 'missing')).toBeUndefined()
   })
 
   it('discards a superseded definition run response', async () => {

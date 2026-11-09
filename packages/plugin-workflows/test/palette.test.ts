@@ -1,6 +1,8 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { TAB_ORDER } from '../src/client/a11y.ts'
 import { connectChoices, currentTarget, EDGE_LABELS, outputKinds } from '../src/client/edges.ts'
 import {
   addStep,
@@ -196,8 +198,13 @@ describe('canvas node rendering', () => {
     const node = nodes.find((node) => node.id === nodeIdOf('requirements'))
     expect(node?.ariaLabel).toBe(DEFINITION.steps.find((step) => step.id === 'requirements')?.title)
     expect(node?.selected).toBe(true)
-    // Keyboard selection inside React Flow arrives through this callback, not
-    // through a node click, and must still update the editor's selection.
+    // Keyboard selection inside React Flow arrives as a select change, not a
+    // node click, and must still update the editor's selection.
+    const nodeChanges = flow?.props.onNodesChange as (
+      changes: readonly { type: string; id: string; selected: boolean }[],
+    ) => void
+    nodeChanges([{ type: 'select', id: nodeIdOf('architecture'), selected: true }])
+    expect(selectedId).toBe(nodeIdOf('architecture'))
     const selection = flow?.props.onSelectionChange as (value: { nodes: { id: string }[] }) => void
     selection({ nodes: [{ id: nodeIdOf('approval') }] })
     expect(selectedId).toBe(nodeIdOf('approval'))
@@ -222,6 +229,41 @@ describe('canvas node rendering', () => {
     )
     expect(new Set(distinct.map((edge) => edge.ariaLabel)).size).toBe(3)
     expect(distinct[0]?.ariaLabel).toContain('Check')
+  })
+
+  it('exposes tab stops on the palette, canvas, and properties in order', () => {
+    expect(TAB_ORDER).toEqual(['palette', 'canvas', 'properties'])
+    const paletteTree = call(ui, 'Palette', { onAdd: () => {} })
+    expect(
+      elements(paletteTree).some(
+        (element) => element.type === 'button' && element.props['tabIndex'] !== -1,
+      ),
+    ).toBe(true)
+    expect(
+      elements(
+        call(ui, 'DesignCanvas', {
+          nodes: definitionToGraph(DEFINITION).nodes,
+          edges: definitionToGraph(DEFINITION).edges,
+          focusKey: 'tab',
+          onSelect: () => {},
+          onMove: () => {},
+          onConnectNode: () => {},
+        }),
+      ).find((element) => element.type === 'reactflow')?.props.nodesFocusable,
+    ).toBe(true)
+    expect(
+      elements(
+        call(ui, 'PropertyPanel', {
+          state: editor(),
+          selected: nodeIdOf('requirements'),
+          onDefinitionPatch: () => {},
+          onPatch: () => {},
+          onConnect: () => {},
+          onDelete: () => {},
+          onRename: () => {},
+        }),
+      ).some((element) => element.type === 'input' || element.type === 'textarea'),
+    ).toBe(true)
   })
 
   it('shows the overlay state, failure class, evidence, and violation on a node', () => {
@@ -668,6 +710,28 @@ describe('palette and property panel', () => {
     expect(
       elements(panel).find((element) => element.props['aria-label'] === 'Step title')?.props.value,
     ).toBe(step.title)
+    // The interaction must not start a run or a tool or write the run record.
+    const runFile = join(tmpdir(), `dsh-wf-run-${String(process.pid)}.json`)
+    const runBytes = `${JSON.stringify(run, null, 2)}\n`
+    writeFileSync(runFile, runBytes)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      click({}, { id: nodeIdOf(step.id) })
+      call(ui, 'PropertyPanel', {
+        state,
+        selected: selectedId,
+        onDefinitionPatch: () => {},
+        onPatch: () => {},
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+      expect(readFileSync(runFile, 'utf8')).toBe(runBytes)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      rmSync(runFile, { force: true })
+    }
   })
 
   it('opens the property panel for the selected node', () => {

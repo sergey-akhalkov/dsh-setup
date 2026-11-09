@@ -9908,6 +9908,13 @@ window.__ModuleLoader__.load({
           edgesFocusable: true,
           onNodeClick: (_event, node) => props.onSelect(node.id),
           onPaneClick: () => props.onSelect(void 0),
+          onNodesChange: (changes) => {
+            for (const change of changes) {
+              if (change.type === "select" && change.id !== void 0) {
+                props.onSelect(change.selected === true ? change.id : void 0);
+              }
+            }
+          },
           onSelectionChange: (selection2) => {
             const first = selection2.nodes?.[0];
             props.onSelect(first?.id);
@@ -12032,6 +12039,11 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/run-selection.ts
+    function activeRun(runs, runId) {
+      if (runId === void 0) return runs[0];
+      if (runId === "") return void 0;
+      return runs.find((run) => run.id === runId);
+    }
     function createRunSelection(read) {
       let request = 0;
       return {
@@ -12333,8 +12345,10 @@ window.__ModuleLoader__.load({
       };
       const useNextId = () => {
         if (editor?.conflict?.nextId === void 0) return;
-        setEditor(renameToNextId(editor, editor.conflict.nextId));
+        const nextId2 = editor.conflict.nextId;
+        setEditor(renameToNextId(editor, nextId2));
         setMessage(void 0);
+        void loadRuns(nextId2);
       };
       const apply2 = (next) => {
         if (next === void 0) return;
@@ -12349,7 +12363,8 @@ window.__ModuleLoader__.load({
       if (sessionId === void 0) {
         return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "dsh-wf-design", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
       }
-      const overlay = editor === void 0 ? overlayFor(void 0, blankDefinition(/* @__PURE__ */ new Set())) : overlayFor(runs.find((run) => run.id === runId) ?? runs[0], editor.document.definition);
+      const active = activeRun(runs, runId);
+      const overlay = editor === void 0 ? overlayFor(void 0, blankDefinition(/* @__PURE__ */ new Set())) : overlayFor(active, editor.document.definition);
       const surface = editor === void 0 ? "list" : resolveSurface(editor.mode, canvasFailed);
       const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected2);
       const choices = editor === void 0 || selected2 === void 0 ? [] : connectChoices(editor.diagram.nodes, selected2).flatMap(

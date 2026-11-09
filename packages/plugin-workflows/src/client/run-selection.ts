@@ -2,6 +2,19 @@
  * Load one definition's run list while discarding responses superseded by a
  * later load, so another definition's runs can never supply the overlay.
  */
+/**
+ * The run the overlay should display: the first loaded run initially, nothing
+ * when the selector is cleared to "No run", otherwise the selected run.
+ */
+export function activeRun<T extends { readonly id: string }>(
+  runs: readonly T[],
+  runId: string | undefined,
+): T | undefined {
+  if (runId === undefined) return runs[0]
+  if (runId === '') return undefined
+  return runs.find((run) => run.id === runId)
+}
+
 export interface RunSelection<T> {
   load(definitionId: string, onChange: (runs: readonly T[]) => void): Promise<void>
   /** Drop any in-flight load; its response will not be applied. */

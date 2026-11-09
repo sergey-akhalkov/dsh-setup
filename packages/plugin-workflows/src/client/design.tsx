@@ -45,7 +45,7 @@ import { overlayFor, withOverlay } from './overlay.ts'
 import { Palette } from './palette.tsx'
 import type { RunView, Translate } from './panel.tsx'
 import { PropertyPanel } from './properties.tsx'
-import { createRunSelection } from './run-selection.ts'
+import { activeRun, createRunSelection } from './run-selection.ts'
 import { FLOW_CSS } from './styles.ts'
 
 /**
@@ -313,8 +313,11 @@ export function DesignMode(props: DesignModeProps): ReactNode {
 
   const useNextId = (): void => {
     if (editor?.conflict?.nextId === undefined) return
-    setEditor(renameToNextId(editor, editor.conflict.nextId))
+    const nextId = editor.conflict.nextId
+    setEditor(renameToNextId(editor, nextId))
     setMessage(undefined)
+    // The renamed document is a different definition: never keep the old runs.
+    void loadRuns(nextId)
   }
 
   const apply = (next: EditorState | undefined): void => {
@@ -340,10 +343,11 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     )
   }
 
+  const active = activeRun(runs, runId)
   const overlay =
     editor === undefined
       ? overlayFor(undefined, blankDefinition(new Set()))
-      : overlayFor(runs.find((run) => run.id === runId) ?? runs[0], editor.document.definition)
+      : overlayFor(active, editor.document.definition)
   const surface = editor === undefined ? 'list' : resolveSurface(editor.mode, canvasFailed)
   const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected)
   const choices =
