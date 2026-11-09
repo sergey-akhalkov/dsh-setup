@@ -416,6 +416,9 @@ export function patchDefinition(
     ...state,
     document: { ...state.document, definition },
     diagram: { ...state.diagram, definition },
+    // Host validation feedback is stale once a definition field changes; the
+    // structural pre-check still applies.
+    issues: state.issues.filter((issue) => issue.kind !== 'host'),
     dirty: true,
     status: 'dirty',
   }
@@ -428,15 +431,21 @@ export function mapHostErrors(
 ): GraphIssue[] {
   return errors.map((entry) => {
     const stepMatch = /^steps\[(\d+)\](?:\.(.*))?$/u.exec(entry.path)
-    if (stepMatch === null) return { path: entry.path, message: entry.message }
+    if (stepMatch === null) return { path: entry.path, message: entry.message, kind: 'host' }
     const step = definition.steps[Number(stepMatch[1])]
     return {
       // The canvas addresses a step by its namespaced graph node id.
       ...(step === undefined ? {} : { nodeId: nodeIdOf(step.id) }),
       path: entry.path,
       message: entry.message,
+      kind: 'host',
     }
   })
+}
+
+/** The bounded issue line: the affected node and the exact field path. */
+export function issueLabel(issue: GraphIssue): string {
+  return issue.nodeId === undefined ? issue.path : `${issue.nodeId}: ${issue.path}`
 }
 
 /** The version rule: a create starts at 1, a save bumps the loaded version. */
@@ -533,7 +542,7 @@ export async function save(state: EditorState, context: SaveContext): Promise<Ed
       message: 'a shipped definition is read-only; copy it before saving',
     }
   }
-  if (state.issues.length > 0) {
+  if (state.issues.some((issue) => issue.kind !== 'host')) {
     return { ...state, status: 'error', message: 'fix the highlighted graph issues first' }
   }
   const definition = { ...clone(state.document.definition), version: nextVersion(state) }
@@ -685,15 +694,23 @@ export async function saveAsCopy(
     context.taken,
     copyName ?? `${state.document.definition.name} copy`,
   )
-  const base = openNew(definition)
-  const nodes = base.diagram.nodes.map((node) => {
-    if (node.step === undefined) return node
-    const current = state.diagram.nodes.find((entry) => entry.step?.id === node.step?.id)
-    return current === undefined ? node : { ...node, position: current.position }
-  })
-  const diagram = { ...base.diagram, nodes, definition }
+  // The copy is the current canvas with a new identity: positions and any
+  // structural problem carry over, so a broken graph is refused, not repaired.
+  const diagram = { ...state.diagram, definition }
   const layout = { ...layoutOf(diagram, state.layout), id: definition.id }
-  const copy: EditorState = { ...base, diagram, layout, dirty: true, status: 'dirty' }
+  const issues = precheckGraph(diagram.nodes, diagram.edges)
+  const copy: EditorState = {
+    ...state,
+    document: { definition, revision: null, source: 'local' },
+    diagram,
+    layout,
+    layoutRevision: null,
+    issues,
+    dirty: true,
+    conflict: undefined,
+    status: issues.length > 0 ? 'error' : 'dirty',
+    ...(issues.length === 0 ? {} : { message: 'fix the highlighted graph issues first' }),
+  }
   return save({ ...copy, mode: state.mode }, context)
 }
 

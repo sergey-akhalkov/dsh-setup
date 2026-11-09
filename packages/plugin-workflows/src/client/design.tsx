@@ -14,6 +14,7 @@ import {
   type EditorListEntry,
   type EditorState,
   idsOf,
+  issueLabel,
   leaveEditor,
   moveStep,
   openDocument,
@@ -479,7 +480,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           <ul className="dsh-wf-issue" data-issues={issues.length}>
             {issues.map((issue) => (
               <li key={`${issue.path}:${issue.message}`}>
-                {issue.nodeId ?? issue.path}: {issue.message}
+                {issueLabel(issue)}: {issue.message}
               </li>
             ))}
           </ul>

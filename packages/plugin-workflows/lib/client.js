@@ -10183,7 +10183,7 @@ window.__ModuleLoader__.load({
           });
         }
       }
-      return issues;
+      return issues.map((issue) => ({ ...issue, kind: "structural" }));
     }
     function autoPositions(nodes, edges) {
       const outgoing = /* @__PURE__ */ new Map();
@@ -10493,6 +10493,9 @@ window.__ModuleLoader__.load({
         ...state,
         document: { ...state.document, definition },
         diagram: { ...state.diagram, definition },
+        // Host validation feedback is stale once a definition field changes; the
+        // structural pre-check still applies.
+        issues: state.issues.filter((issue) => issue.kind !== "host"),
         dirty: true,
         status: "dirty"
       };
@@ -10500,15 +10503,19 @@ window.__ModuleLoader__.load({
     function mapHostErrors(errors, definition) {
       return errors.map((entry) => {
         const stepMatch = /^steps\[(\d+)\](?:\.(.*))?$/u.exec(entry.path);
-        if (stepMatch === null) return { path: entry.path, message: entry.message };
+        if (stepMatch === null) return { path: entry.path, message: entry.message, kind: "host" };
         const step = definition.steps[Number(stepMatch[1])];
         return {
           // The canvas addresses a step by its namespaced graph node id.
           ...step === void 0 ? {} : { nodeId: nodeIdOf(step.id) },
           path: entry.path,
-          message: entry.message
+          message: entry.message,
+          kind: "host"
         };
       });
+    }
+    function issueLabel(issue) {
+      return issue.nodeId === void 0 ? issue.path : `${issue.nodeId}: ${issue.path}`;
     }
     function nextVersion(state) {
       return state.document.revision === null ? 1 : state.document.definition.version + 1;
@@ -10567,7 +10574,7 @@ window.__ModuleLoader__.load({
           message: "a shipped definition is read-only; copy it before saving"
         };
       }
-      if (state.issues.length > 0) {
+      if (state.issues.some((issue) => issue.kind !== "host")) {
         return { ...state, status: "error", message: "fix the highlighted graph issues first" };
       }
       const definition = { ...clone(state.document.definition), version: nextVersion(state) };
@@ -10707,15 +10714,21 @@ window.__ModuleLoader__.load({
         context.taken,
         copyName ?? `${state.document.definition.name} copy`
       );
-      const base = openNew(definition);
-      const nodes = base.diagram.nodes.map((node) => {
-        if (node.step === void 0) return node;
-        const current = state.diagram.nodes.find((entry) => entry.step?.id === node.step?.id);
-        return current === void 0 ? node : { ...node, position: current.position };
-      });
-      const diagram = { ...base.diagram, nodes, definition };
+      const diagram = { ...state.diagram, definition };
       const layout = { ...layoutOf(diagram, state.layout), id: definition.id };
-      const copy = { ...base, diagram, layout, dirty: true, status: "dirty" };
+      const issues = precheckGraph(diagram.nodes, diagram.edges);
+      const copy = {
+        ...state,
+        document: { definition, revision: null, source: "local" },
+        diagram,
+        layout,
+        layoutRevision: null,
+        issues,
+        dirty: true,
+        conflict: void 0,
+        status: issues.length > 0 ? "error" : "dirty",
+        ...issues.length === 0 ? {} : { message: "fix the highlighted graph issues first" }
+      };
       return save({ ...copy, mode: state.mode }, context);
     }
     async function deleteDefinition(state, api) {
@@ -11924,7 +11937,7 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => setConnectValue(void 0), children: "Cancel" })
           ] }),
           issues.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-issue", "data-issues": issues.length, children: issues.map((issue) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("li", { children: [
-            issue.nodeId ?? issue.path,
+            issueLabel(issue),
             ": ",
             issue.message
           ] }, `${issue.path}:${issue.message}`)) })

@@ -9,6 +9,7 @@ import {
   type EditorApi,
   type EditorState,
   installDraft,
+  issueLabel,
   leaveEditor,
   moveStep,
   nextCopyId,
@@ -16,6 +17,7 @@ import {
   openDocument,
   openDraft,
   openNew,
+  patchDefinition,
   patchStep,
   reconcileCopy,
   reconcileSave,
@@ -26,6 +28,7 @@ import {
   save,
   saveAsCopy,
   unsavedChanges,
+  updateGraph,
 } from '../src/client/editor.ts'
 import { type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
@@ -525,8 +528,56 @@ describe('pre-check and host error mapping', () => {
       taken: TAKEN,
     })
     expect(result.status).toBe('error')
-    expect(result.issues[0]).toMatchObject({ nodeId: nodeIdOf('two'), path: 'steps[1].title' })
+    expect(result.issues[0]).toMatchObject({
+      nodeId: nodeIdOf('two'),
+      path: 'steps[1].title',
+      kind: 'host',
+    })
     expect(result.issues[0]?.message).toContain('non-empty string')
+    expect(issueLabel(result.issues[0] as never)).toBe(`${nodeIdOf('two')}: steps[1].title`)
+  })
+
+  it('retries after a host error once the named field is corrected', async () => {
+    let attempt = 0
+    const { api, calls } = fakeApi({
+      save: () => {
+        attempt += 1
+        return attempt === 1
+          ? {
+              ok: false,
+              kind: 'invalid',
+              status: 400,
+              errors: [{ path: 'name', message: 'must be a non-empty string' }],
+            }
+          : { ok: true, revision: 'rev-2' }
+      },
+    })
+    const rejected = await save(opened(), { api, taken: TAKEN })
+    expect(rejected.issues[0]).toMatchObject({ path: 'name', kind: 'host' })
+    const corrected = patchDefinition(rejected, { name: 'Fixed name' })
+    expect(corrected.issues).toEqual([])
+    // Saving the corrected definition retries the host instead of blocking on
+    // the stale field error.
+    const retried = await save(corrected, { api, taken: TAKEN })
+    expect(retried.status).toBe('saved')
+    expect(calls.saveDefinition).toHaveLength(2)
+  })
+
+  it('refuses a structurally invalid save-as-copy without writing', async () => {
+    const { api, calls } = fakeApi()
+    const graph = opened()
+    const withoutNext = updateGraph(
+      graph,
+      graph.diagram.nodes,
+      graph.diagram.edges.filter(
+        (edge) => !(edge.source === nodeIdOf('one') && edge.kind === 'next'),
+      ),
+    )
+    expect(withoutNext.issues.some((issue) => issue.kind === 'structural')).toBe(true)
+    const result = await saveAsCopy(withoutNext, { api, taken: TAKEN })
+    expect(result.status).toBe('error')
+    expect(result.issues.some((issue) => issue.kind === 'structural')).toBe(true)
+    expect(calls.saveDefinition).toHaveLength(0)
   })
 
   it('adds a palette step as an unconnected node the pre-check names', () => {

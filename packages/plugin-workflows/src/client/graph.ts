@@ -98,6 +98,8 @@ export interface GraphIssue {
   readonly nodeId?: string
   readonly path: string
   readonly message: string
+  /** A structural pre-check issue blocks a save; a host error is feedback. */
+  readonly kind?: 'structural' | 'host'
 }
 
 /** A graph the editor cannot convert back safely. */
@@ -387,7 +389,7 @@ export function precheckGraph(
       })
     }
   }
-  return issues
+  return issues.map((issue) => ({ ...issue, kind: 'structural' as const }))
 }
 
 /**
