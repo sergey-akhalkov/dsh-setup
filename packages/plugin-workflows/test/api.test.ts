@@ -13,6 +13,7 @@ import {
   RECEIPTS_ROUTE,
   RUNS_ROUTE,
   registerWorkflowRoutes,
+  TEMPLATES_ROUTE,
   TRIGGERS_ROUTE,
   type WorkflowApiServices,
 } from '../src/host/api.ts'
@@ -137,6 +138,7 @@ describe('workflows read API', () => {
       RUNS_ROUTE,
       TRIGGERS_ROUTE,
       DEFINITIONS_ROUTE,
+      TEMPLATES_ROUTE,
       RECEIPTS_ROUTE,
       HEALTH_ROUTE,
     ])
