@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   computeApprovalCoverage,
+  legacyRecordSatisfies,
   parsePortableTaskReviewRecord,
   parseReviewApprovalMarker,
   parseTasksText,
@@ -13,6 +14,12 @@ import {
   recognizeArchiveCommands,
   reviewerBindingOf,
 } from '../../plugin-delegation-rules/src/shared/approval.ts'
+import { CheckpointHarness } from '../../plugin-goal-continuity/test/checkpoint-harness.ts'
+import { decideVerifyClose } from '../../plugin-verification-gate/src/host/index.ts'
+import {
+  shellResult,
+  Harness as VerifyHarness,
+} from '../../plugin-verification-gate/test/harness.ts'
 import { parseArchiveCommand } from '../lib/command-parse.js'
 import type { Evidence } from '../lib/definitions.js'
 import { verifyEvidence } from '../lib/evidence.js'
@@ -768,20 +775,213 @@ export const PARITY_CASES: readonly ParityCase[] = [
   },
 ]
 
-/** Every non-retained case's decision, with the replayed legacy verdict. */
+/**
+ * The real legacy gates, replayed for the parity table. These run the shipped
+ * provider harnesses (or the exported pure legacy decision), so the legacy
+ * side is the actual implementation rather than a transcribed table.
+ */
+
+const CHECKPOINT_BOTTLENECK = {
+  id: 'guard',
+  owner: 'lead',
+  action: 'lead_action' as const,
+  blockingLanes: ['edit'],
+  targets: ['src/a.ts'],
+}
+
+function checkpointRecord(
+  outcome: 'continue' | 'done',
+  bottleneck = true,
+): Record<string, unknown> {
+  return {
+    outcome,
+    verified: [],
+    lanes: [{ id: 'main', owner: 'lead', scope: ['src'], state: 'running' }],
+    next: outcome === 'done' ? 'report' : 'continue',
+    ...(outcome === 'continue' && bottleneck
+      ? {
+          bottleneck: CHECKPOINT_BOTTLENECK,
+        }
+      : {}),
+  }
+}
+
+function checkpointCalls(harness: CheckpointHarness): void {
+  for (const [name, args] of [
+    ['read', {}],
+    ['read', {}],
+    ['read', {}],
+    ['edit', { file_path: 'src/a.ts' }],
+  ] as const) {
+    const callId = harness.toolCall(name, args)
+    harness.toolResult(callId)
+  }
+}
+
+async function legacyCheckpointCase(kind: string): Promise<ParityDecision> {
+  const { harness, cleanup } = await CheckpointHarness.create({
+    config: { checkpoint: { automation: true, bottleneckAge: 2, stepInterval: 40 } },
+  })
+  try {
+    harness.turnStart(1)
+    checkpointCalls(harness)
+    if (kind === 'missing') {
+      await harness.turnStopping(1)
+      return harness.steers.length > 0 ? REFUSE : ALLOW
+    }
+    if (kind === 'done') {
+      await harness.checkpoint(checkpointRecord('done'))
+      await harness.turnStopping(1)
+      return harness.steers.length > 0 ? REFUSE : ALLOW
+    }
+    const record =
+      kind === 'worker-unexecuted' || kind === 'worker-executed'
+        ? {
+            ...checkpointRecord('continue'),
+            bottleneck: {
+              id: 'guard',
+              owner: 'lane',
+              action: 'worker_start',
+              blockingLanes: ['edit'],
+            },
+          }
+        : checkpointRecord('continue')
+    await harness.checkpoint(record)
+    if (kind === 'lead-executed') {
+      const callId = harness.toolCall('edit', { file_path: 'src/a.ts' })
+      harness.toolResult(callId)
+    }
+    if (kind === 'worker-executed') {
+      const checkpointId = String((await harness.readRecord(1)).checkpoint ?? '')
+      const callId = harness.toolCall('subagent', {
+        checkpoint: checkpointId,
+        bottleneck: 'guard',
+      })
+      harness.toolResult(callId, 'worker started')
+    }
+    await harness.turnStopping(1)
+    if (kind !== 'aged' && kind !== 'route-change') {
+      return harness.steers.length > 0 ? REFUSE : ALLOW
+    }
+    // Aged: the second consecutive record names the same owner and lanes; the
+    // remedy is executed each turn so only the age rule can refuse.
+    harness.turnStart(2)
+    checkpointCalls(harness)
+    const aged =
+      kind === 'route-change'
+        ? {
+            ...checkpointRecord('continue'),
+            bottleneck: { ...CHECKPOINT_BOTTLENECK, owner: 'lane-b' },
+          }
+        : checkpointRecord('continue')
+    await harness.checkpoint(aged)
+    const before = harness.steers.length
+    const callId = harness.toolCall('edit', { file_path: 'src/a.ts' })
+    harness.toolResult(callId)
+    await harness.turnStopping(2)
+    return harness.steers.length > before ? REFUSE : ALLOW
+  } finally {
+    await cleanup()
+  }
+}
+
+async function legacyVerifyCase(
+  kind: string,
+  commands: readonly string[] = ['pnpm check'],
+  maxBlocks = 8,
+): Promise<ParityDecision> {
+  const short = kind.replace(/^verify-/u, '')
+  const configured = short === 'inert-no-commands' ? [] : commands
+  const harness = new VerifyHarness({ commands: [...configured], maxBlocks })
+  await harness.preStep(1)
+  if (short !== 'non-code-turn') await harness.write('src/a.ts')
+  const command = configured.at(-1) ?? 'pnpm check'
+  if (short === 'code-write-success') {
+    await harness.shell(command, shellResult())
+  }
+  if (short === 'code-write-failed-check') {
+    await harness.shell(command, shellResult({ exitCode: 1 }))
+  }
+  if (short === 'background-check') {
+    await harness.shell(command, shellResult({ kind: 'background' }))
+  }
+  await harness.stop(1)
+  return harness.steerTexts().length > 0 ? REFUSE : ALLOW
+}
+
+async function legacyReviewCase(verdict?: string): Promise<ParityDecision> {
+  const state =
+    verdict === undefined
+      ? { kind: 'missing' as const }
+      : {
+          kind: 'record' as const,
+          record: {
+            rule: 'task-review',
+            change: 'change-a',
+            phase: 'task',
+            scope: 'task',
+            taskId: '0123456789abcdef',
+            digest: 'a'.repeat(64),
+            verdict,
+            findings: [],
+            target: { provider: 'codex-subagent' },
+            time: '2026-10-29T08:55:43.317Z',
+          },
+        }
+  const record = state.kind === 'record' ? state.record : undefined
+  const ok =
+    record !== undefined &&
+    legacyRecordSatisfies(record, 'change-a', 'task', undefined, '0123456789abcdef')
+  return ok ? ALLOW : REFUSE
+}
+
+/** The real legacy verdict per case id; it overrides the recorded decision. */
+const LEGACY_CHECKS: Readonly<Record<string, () => Promise<ParityDecision>>> = {
+  'checkpoint-missing': () => legacyCheckpointCase('missing'),
+  'checkpoint-lead-bottleneck-unexecuted': () => legacyCheckpointCase('lead-unexecuted'),
+  'checkpoint-lead-bottleneck-executed': () => legacyCheckpointCase('lead-executed'),
+  'checkpoint-worker-bottleneck-unexecuted': () => legacyCheckpointCase('worker-unexecuted'),
+  'checkpoint-worker-bottleneck-executed': () => legacyCheckpointCase('worker-executed'),
+  'checkpoint-aged-bottleneck': () => legacyCheckpointCase('aged'),
+  'checkpoint-route-change': () => legacyCheckpointCase('route-change'),
+  'checkpoint-done': () => legacyCheckpointCase('done'),
+  'task-review-missing': () => legacyReviewCase(),
+  'task-review-pass': () => legacyReviewCase('PASS'),
+  'task-review-error-intermediate': () => legacyReviewCase('ERROR'),
+  'task-review-findings': () => legacyReviewCase('FINDINGS'),
+  'verify-code-write-missing-check': () => legacyVerifyCase('verify-code-write-missing-check'),
+  'verify-code-write-success': () => legacyVerifyCase('verify-code-write-success'),
+  'verify-code-write-failed-check': () => legacyVerifyCase('verify-code-write-failed-check'),
+  'verify-non-code-turn': () => legacyVerifyCase('non-code-turn'),
+  'verify-inert-no-commands': () => legacyVerifyCase('inert-no-commands'),
+  'verify-background-check': () => legacyVerifyCase('verify-background-check'),
+  'verify-settings-profile-a': () => legacyVerifyCase('code-write-success', ['pnpm check'], 8),
+  'verify-settings-profile-b': () =>
+    legacyVerifyCase('code-write-success', ['rtk pnpm check', 'cargo test'], 129),
+  'verify-cap-129-refuses-below': () =>
+    Promise.resolve(decideVerifyClose(true, 128, 129) === 'refuse' ? REFUSE : ALLOW),
+  'verify-cap-129-allows-at-cap': () =>
+    Promise.resolve(decideVerifyClose(true, 129, 129) === 'unverified' ? ALLOW : REFUSE),
+}
+
 export async function runParityCase(parityCase: ParityCase): Promise<{
   readonly ok: boolean
   readonly workflow?: ParityDecision
   readonly legacyReplay?: ParityDecision
 }> {
   if (parityCase.workflow === undefined) return { ok: true }
-  const legacyReplay = await parityCase.legacyCheck?.()
+  const replay = LEGACY_CHECKS[parityCase.id]
+  const legacyReplay = replay === undefined ? await parityCase.legacyCheck?.() : await replay()
   const workflow = await parityCase.workflow()
-  const replayOk =
-    legacyReplay === undefined || legacyReplay.decision === parityCase.legacy.decision
+  if (legacyReplay === undefined) {
+    return { ok: workflow.decision === parityCase.legacy.decision, workflow }
+  }
+  // The replay is the authority; a recorded decision that disagrees is a stale
+  // table entry and fails the report rather than silently certifying it.
+  const recordedOk = legacyReplay.decision === parityCase.legacy.decision
   return {
-    ok: replayOk && workflow.decision === parityCase.legacy.decision,
+    ok: recordedOk && workflow.decision === legacyReplay.decision,
     workflow,
-    ...(legacyReplay === undefined ? {} : { legacyReplay }),
+    legacyReplay,
   }
 }

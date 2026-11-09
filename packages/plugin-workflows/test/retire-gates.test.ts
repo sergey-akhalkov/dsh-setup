@@ -351,7 +351,273 @@ describe('owned checkpoint decisions', () => {
       observations: [],
       bottleneckAge: 2,
     })
-    expect(workerOwned).toContain('worker_start or user_decision')
+    expect(workerOwned).toContain('worker_start')
+    expect(workerOwned).toContain('user_decision')
+  })
+
+  it('requires the remedy after the checkpoint and matches targets by path component', () => {
+    const record = {
+      outcome: 'continue' as const,
+      lanes: [],
+      bottleneck: {
+        id: 'guard',
+        owner: 'lead',
+        action: 'lead_action' as const,
+        blockingLanes: ['edit'],
+        targets: ['src/app.ts'],
+      },
+    }
+    const before = checkpointCloseIssue({
+      record,
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        {
+          toolName: 'write',
+          arguments: { file_path: 'src/app.ts' },
+          ok: true,
+          at: 100,
+        },
+      ],
+      bottleneckAge: 2,
+      checkpointAt: 200,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+    })
+    expect(before).toContain('execute the bottleneck remedy')
+    const after = checkpointCloseIssue({
+      record,
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        {
+          toolName: 'write',
+          arguments: { file_path: './src/app.ts' },
+          ok: true,
+          at: 300,
+        },
+      ],
+      bottleneckAge: 2,
+      checkpointAt: 200,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+    })
+    expect(after).toBeUndefined()
+    const sibling = checkpointCloseIssue({
+      record,
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        {
+          toolName: 'write',
+          arguments: { file_path: 'xsrc/app.ts' },
+          ok: true,
+          at: 300,
+        },
+      ],
+      bottleneckAge: 2,
+      checkpointAt: 200,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+    })
+    expect(sibling).toContain('execute the bottleneck remedy')
+  })
+
+  it('accepts a started delegate as a worker remedy and rejects a cached answer', () => {
+    const record = {
+      outcome: 'continue' as const,
+      lanes: [],
+      bottleneck: {
+        id: 'guard',
+        owner: 'lane',
+        action: 'worker_start' as const,
+        blockingLanes: ['edit'],
+      },
+    }
+    const args = { checkpoint: 'checkpoint-1-aaaaaaaa', bottleneck: 'guard' }
+    const started = checkpointCloseIssue({
+      record,
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        {
+          toolName: 'delegate',
+          arguments: args,
+          ok: true,
+          at: 300,
+          detail: 'rule "task-review" review started',
+        },
+      ],
+      bottleneckAge: 2,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+    })
+    expect(started).toBeUndefined()
+    const cached = checkpointCloseIssue({
+      record,
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        {
+          toolName: 'delegate',
+          arguments: args,
+          ok: true,
+          at: 300,
+          detail: 'rule "task-review" PASS (reused record abc)',
+        },
+      ],
+      bottleneckAge: 2,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+    })
+    expect(cached).toContain('execute the bottleneck remedy')
+  })
+
+  it('fails open to a targeted lead action when no worker tool is visible', () => {
+    const record = {
+      outcome: 'continue' as const,
+      lanes: [],
+      bottleneck: {
+        id: 'guard',
+        owner: 'lane',
+        action: 'lead_action' as const,
+        blockingLanes: ['edit'],
+        targets: ['src/app.ts'],
+      },
+    }
+    expect(
+      checkpointCloseIssue({
+        record,
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [{ toolName: 'write', arguments: { file_path: 'src/app.ts' }, ok: true }],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: false,
+        enforceParallel: true,
+      }),
+    ).toBeUndefined()
+    expect(
+      checkpointCloseIssue({
+        record,
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+      }),
+    ).toContain('worker_start')
+  })
+
+  it('requires a tagged worker for disjoint parallel lanes and allows the serial forms', () => {
+    const lanes = [
+      { id: 'a', owner: 'lane-a', scope: ['src'], state: 'running' },
+      { id: 'b', owner: 'lane-b', scope: ['src2'], state: 'running' },
+    ]
+    const parallel = checkpointCloseIssue({
+      record: { outcome: 'continue', lanes, bottleneck: undefined },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [],
+      bottleneckAge: 2,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+    })
+    expect(parallel).toContain('parallel runnable lanes')
+    expect(
+      checkpointCloseIssue({
+        record: {
+          outcome: 'continue',
+          lanes,
+          bottleneck: {
+            id: 'guard',
+            owner: 'lead',
+            action: 'user_decision',
+            blockingLanes: ['edit'],
+          },
+        },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [
+          { toolName: 'subagent', arguments: { checkpoint: 'checkpoint-1-aaaaaaaa' }, ok: true },
+          { toolName: 'ask_user_question', arguments: {}, ok: true },
+        ],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+      }),
+    ).toBeUndefined()
+    const sameOwner = lanes.map((lane) => ({ ...lane, owner: 'lead' }))
+    expect(
+      checkpointCloseIssue({
+        record: { outcome: 'continue', lanes: sameOwner, bottleneck: undefined },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+      }),
+    ).toContain('without a bottleneck')
+    expect(
+      checkpointCloseIssue({
+        record: {
+          outcome: 'continue',
+          lanes: [
+            { id: 'a', owner: 'lane-a', scope: ['src'], state: 'running' },
+            { id: 'b', owner: 'lane-b', scope: ['src/**'], state: 'running' },
+          ],
+          bottleneck: undefined,
+        },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+      }),
+    ).toContain('without a bottleneck')
+  })
+
+  it('applies freshness and the user-decision age escape', () => {
+    const record = {
+      outcome: 'continue' as const,
+      lanes: [],
+      bottleneck: {
+        id: 'guard',
+        owner: 'lead',
+        action: 'lead_action' as const,
+        blockingLanes: ['edit'],
+        targets: ['src/app.ts'],
+      },
+      bottleneckAge: 2,
+    }
+    expect(
+      checkpointCloseIssue({
+        record: { ...record, bottleneckAge: undefined },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [{ toolName: 'write', arguments: { file_path: 'src/app.ts' }, ok: true }],
+        bottleneckAge: 2,
+        fresh: false,
+        workerVisible: true,
+        enforceParallel: true,
+      }),
+    ).toContain('older than the configured step interval')
+    const userDecision = {
+      ...record,
+      bottleneck: { ...record.bottleneck, action: 'user_decision' as const, targets: [] },
+    }
+    expect(
+      checkpointCloseIssue({
+        record: userDecision,
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [{ toolName: 'ask_user_question', arguments: {}, ok: true }],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+      }),
+    ).toBeUndefined()
   })
 
   it('refuses the turn close while a checkpoint issue is present', () => {

@@ -57,6 +57,7 @@ import {
   workflowsDirectory,
 } from './journal.js'
 import {
+  type CheckpointObservation,
   checkpointGateIssue,
   parityLoadIssues,
   readParityReport,
@@ -370,6 +371,8 @@ export interface CheckpointApplicabilityConfig {
   readonly bottleneckAge?: number
   /** Steps after the latest checkpoint before it is stale; default 40. */
   readonly stepInterval?: number
+  /** Require a tagged worker start for computed parallel lanes; default true. */
+  readonly enforceParallel?: boolean
 }
 
 export interface ResolvedCheckpointApplicability {
@@ -377,6 +380,7 @@ export interface ResolvedCheckpointApplicability {
   readonly requireWrite: boolean
   readonly bottleneckAge: number
   readonly stepInterval: number
+  readonly enforceParallel: boolean
 }
 
 export const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability = Object.freeze({
@@ -384,6 +388,7 @@ export const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability =
   requireWrite: true,
   bottleneckAge: 2,
   stepInterval: 40,
+  enforceParallel: true,
 })
 
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
@@ -398,7 +403,8 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
       key !== 'minToolCalls' &&
       key !== 'requireWrite' &&
       key !== 'bottleneckAge' &&
-      key !== 'stepInterval'
+      key !== 'stepInterval' &&
+      key !== 'enforceParallel'
     ) {
       throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`)
     }
@@ -443,6 +449,10 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
       'workflows checkpointApplicability.stepInterval must be an integer between 1 and 10000',
     )
   }
+  const enforceParallel = record.enforceParallel
+  if (enforceParallel !== undefined && typeof enforceParallel !== 'boolean') {
+    throw new Error('workflows checkpointApplicability.enforceParallel must be a boolean')
+  }
   return {
     minToolCalls:
       (minToolCalls as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
@@ -452,6 +462,8 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
       (bottleneckAge as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
     stepInterval:
       (stepInterval as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.stepInterval,
+    enforceParallel:
+      (enforceParallel as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.enforceParallel,
   }
 }
 
@@ -859,6 +871,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   /** Bounded per-session observations the evidence verifier may consume. */
   const sessionToolCalls = new Map<string, ToolCallObservation[]>()
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
+  /** The current pre-step index per session, for checkpoint freshness. */
+  const turnSteps = new Map<string, number>()
   /** The checked task ids last seen per session and change, for the delta. */
   const checkedTasksSeen = new Map<string, ReadonlySet<string>>()
   /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -1188,6 +1202,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (workspace !== undefined) {
           const activeWorkspace = workspace
           turns.set(String(session.id), payload.turn)
+          turnSteps.set(String(session.id), payload.step)
           metricsFor(String(session.id), payload.turn)
           const origin = session.header.origin === 'subagent' ? 'subagent' : 'root'
           const summary = `step ${String(payload.step)}`
@@ -1388,7 +1403,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           arguments: args,
           ok: isShellTool ? shellOutcome.ok : !result.isError,
           at: journal.time(),
+          detail: text.slice(0, 500),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+          ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -1782,7 +1799,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           arguments: { ...request.arguments },
           ok: true,
           at: journal.time(),
+          detail: JSON.stringify(first.result).slice(0, 500),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+          ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -2419,6 +2438,44 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const ordered =
           owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
         const legacy = legacySignalState()
+        const checkpointObservations = (session: string): CheckpointObservation[] =>
+          (sessionToolCalls.get(session) ?? []).map((call) => ({
+            toolName: call.name,
+            arguments: call.arguments,
+            ok: call.ok,
+            ...(call.at === undefined ? {} : { at: call.at }),
+            ...(call.detail === undefined ? {} : { detail: call.detail }),
+          }))
+        const checkpointFreshness = (
+          session: string,
+          turn: number,
+        ): { fresh: boolean; checkpointAt?: number } => {
+          const calls = (sessionToolCalls.get(session) ?? []).filter(
+            (call) => call.name === 'work_checkpoint' && call.ok && call.turn === turn,
+          )
+          const last = calls.at(-1)
+          const steps = turnSteps.get(session) ?? 0
+          return {
+            fresh:
+              last !== undefined && steps - (last.step ?? 0) < checkpointApplicability.stepInterval,
+            ...(last?.at === undefined ? {} : { checkpointAt: last.at }),
+          }
+        }
+        const workerToolVisible = (): boolean => {
+          try {
+            const tools = ctx.get('tools') as { get?: (name: string) => unknown } | undefined
+            return ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate'].some(
+              (name) => tools?.get?.(name) !== undefined,
+            )
+          } catch {
+            return true
+          }
+        }
+        const checkpointOptions = (turn: number) => ({
+          ...checkpointFreshness(sessionId, turn),
+          workerVisible: workerToolVisible(),
+          enforceParallel: checkpointApplicability.enforceParallel,
+        })
         // Advance every run first: an owned tool step (the review start) must
         // dispatch for every newly checked task before one close is refused.
         const advanced = new Map<string, WorkflowRun>()
@@ -2429,17 +2486,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // A retro run must not complete on the record alone: while the host
           // checkpoint remedy/age rule fails, keep the run open and steer.
           if (definition.id === 'retro' && typeof run.context.checkpoint === 'string') {
-            const calls = (sessionToolCalls.get(sessionId) ?? []).map((call) => ({
-              toolName: call.name,
-              arguments: call.arguments,
-              ok: call.ok,
-            }))
             if (
               checkpointGateIssue(
                 workspace,
                 run.context.checkpoint,
-                calls,
+                checkpointObservations(sessionId),
                 checkpointApplicability.bottleneckAge,
+                checkpointOptions(payload.turn),
               ) !== undefined
             ) {
               advanced.set(run.id, run)
@@ -2469,6 +2522,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             toolName: call.name,
             arguments: call.arguments,
             ok: call.ok,
+            ...(call.at === undefined ? {} : { at: call.at }),
+            ...(call.detail === undefined ? {} : { detail: call.detail }),
           }))
           const completion =
             definition.id === 'task-review' && typeof current.context.name === 'string'
@@ -2481,6 +2536,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   current.context.checkpoint,
                   observations,
                   checkpointApplicability.bottleneckAge,
+                  checkpointOptions(payload.turn),
                 )
               : undefined
           const outcome = evaluateTurnClose({

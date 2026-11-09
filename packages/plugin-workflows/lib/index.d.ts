@@ -21,12 +21,15 @@ export interface CheckpointApplicabilityConfig {
     readonly bottleneckAge?: number;
     /** Steps after the latest checkpoint before it is stale; default 40. */
     readonly stepInterval?: number;
+    /** Require a tagged worker start for computed parallel lanes; default true. */
+    readonly enforceParallel?: boolean;
 }
 export interface ResolvedCheckpointApplicability {
     readonly minToolCalls: number;
     readonly requireWrite: boolean;
     readonly bottleneckAge: number;
     readonly stepInterval: number;
+    readonly enforceParallel: boolean;
 }
 export declare const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability;
 /**

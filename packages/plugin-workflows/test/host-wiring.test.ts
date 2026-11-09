@@ -533,6 +533,16 @@ describe('retro fresh checkpoint', () => {
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
     }
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'checkpoint-call',
+        name: 'work_checkpoint',
+        arguments: {},
+      },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
@@ -580,6 +590,16 @@ describe('retro fresh checkpoint', () => {
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
     }
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'checkpoint-call',
+        name: 'work_checkpoint',
+        arguments: {},
+      },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')

@@ -403,6 +403,9 @@ const PORTABLE_KEYS = new Set([
   'time',
 ])
 const PORTABLE_TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort'])
+function hasMachinePath(value: string): boolean {
+  return /(?:^[A-Za-z]:[\\/]|^\/(?:Users|home|root)\/|^~[\\/])/u.test(value)
+}
 /**
  * The committed portable schema; unknown fields (session, runId, phase) and an
  * invalid optional worktreeDigest can never approve a completion or archive.
@@ -412,6 +415,12 @@ function strictPortableApprovalError(record: Record<string, unknown>): string | 
     if (!PORTABLE_KEYS.has(key)) return `unsupported field "${key}"`
   }
   if (record.scope !== 'task') return 'scope must be "task"'
+  if (typeof record.rule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(record.rule)) {
+    return 'rule must be a kebab-case rule id'
+  }
+  if (typeof record.change !== 'string' || !/^[a-z0-9][a-z0-9-]*$/u.test(record.change)) {
+    return 'change must be a change directory name'
+  }
   if (typeof record.taskId !== 'string' || !/^[0-9a-f]{16}$/u.test(record.taskId)) {
     return 'taskId must be 16 lowercase hex characters'
   }
@@ -432,10 +441,16 @@ function strictPortableApprovalError(record: Record<string, unknown>): string | 
   for (const key of Object.keys(record.target)) {
     if (!PORTABLE_TARGET_KEYS.has(key)) return `unsupported target field "${key}"`
   }
-  if (typeof record.target.provider !== 'string' || record.target.provider === '') {
-    return 'target must carry a provider'
+  for (const field of ['provider', 'model', 'reasoningEffort'] as const) {
+    const value = record.target[field]
+    if (value === undefined && field !== 'provider') continue
+    if (typeof value !== 'string' || value.trim() === '' || hasMachinePath(value)) {
+      return `target.${field} must be a clean non-empty string`
+    }
   }
-  if (typeof record.time !== 'string' || record.time === '') return 'time must be non-empty'
+  if (typeof record.time !== 'string' || record.time.trim() === '' || hasMachinePath(record.time)) {
+    return 'time must be a clean non-empty string'
+  }
   return undefined
 }
 
@@ -473,6 +488,13 @@ export function reviewerBinding(
       : { invalid: 'openspec/review-approval.json is unreadable or not valid JSON' }
   }
   if (!isRecord(raw)) return { invalid: 'openspec/review-approval.json is not a JSON object' }
+  if (raw.version !== 1) return { invalid: 'review-approval.json version must be 1' }
+  if (typeof raw.archiveGate !== 'boolean') {
+    return { invalid: 'review-approval.json archiveGate must be a boolean' }
+  }
+  if (typeof raw.taskRule !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(raw.taskRule)) {
+    return { invalid: 'review-approval.json taskRule must be a kebab-case rule id' }
+  }
   const provider = raw.reviewerProvider
   const model = raw.reviewerModel
   if (provider !== undefined && (typeof provider !== 'string' || provider.trim() === '')) {
@@ -574,6 +596,9 @@ export interface CheckpointObservation {
   readonly toolName: string
   readonly arguments: Readonly<Record<string, unknown>>
   readonly ok: boolean
+  readonly at?: number
+  /** The tool result text; used to tell a started delegate from a cached answer. */
+  readonly detail?: string
 }
 
 function stringList(value: unknown): string[] {
@@ -587,20 +612,151 @@ function mentions(value: Readonly<Record<string, unknown>>, wanted: string): boo
   return text.includes(wanted)
 }
 
+function normalizePath(value: string): string {
+  return value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/+/gu, '/').replace(/\/$/u, '')
+}
+
+/** A destination matches a target only by whole path components. */
+function targetMatches(targets: readonly string[], destination: string): boolean {
+  const path = normalizePath(destination)
+  return targets.some((target) => {
+    const wanted = normalizePath(target)
+    return wanted !== '' && (path === wanted || path.endsWith(`/${wanted}`))
+  })
+}
+
+function delegateStarted(detail: string | undefined): boolean {
+  if (detail === undefined) return false
+  if (
+    detail.trimEnd().endsWith('(no gate record: this answer does not satisfy a strict review rule)')
+  ) {
+    return true
+  }
+  const first = detail.split(/\r?\n/u)[0] ?? ''
+  if (/^rule "[^"]+" review (?:already pending|queued)$/u.test(first)) return false
+  return !/^rule "[^"]+" (?:PASS|FINDINGS|ERROR) \(reused record /u.test(first)
+}
+
+const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow'])
+
+function isWorkerStart(entry: CheckpointObservation): boolean {
+  if (entry.toolName === 'delegate') return delegateStarted(entry.detail)
+  return WORKER_TOOLS.has(entry.toolName)
+}
+
+function taggedWorkerStart(
+  later: readonly CheckpointObservation[],
+  checkpointId: string,
+  bottleneckId?: string,
+): boolean {
+  return later.some((entry) => {
+    if (!isWorkerStart(entry)) return false
+    if (!mentions(entry.arguments, checkpointId)) return false
+    return bottleneckId === undefined || mentions(entry.arguments, bottleneckId)
+  })
+}
+
+interface LanePlan {
+  readonly id: string
+  readonly owner: string
+  readonly scope: readonly string[]
+  readonly state: string
+  readonly blockedBy: readonly string[]
+}
+
+function lanesOf(record: CheckpointCloseRecord): LanePlan[] {
+  if (!Array.isArray(record.lanes)) return []
+  return record.lanes.filter(isRecord).map((lane) => ({
+    id: typeof lane.id === 'string' ? lane.id : '',
+    owner: typeof lane.owner === 'string' ? lane.owner : '',
+    scope:
+      typeof lane.scope === 'string'
+        ? [lane.scope]
+        : Array.isArray(lane.scope)
+          ? stringList(lane.scope)
+          : [],
+    state: typeof lane.state === 'string' ? lane.state : 'running',
+    blockedBy: stringList(lane.blockedBy),
+  }))
+}
+
+function runnableLanes(lanes: readonly LanePlan[]): LanePlan[] {
+  const byId = new Map(lanes.map((lane) => [lane.id, lane]))
+  return lanes.filter((lane) => {
+    if (lane.state === 'done' || lane.state === 'blocked') return false
+    return !lane.blockedBy.some((id) => byId.get(id)?.state !== 'done')
+  })
+}
+
+function scopeOverlaps(left: readonly string[], right: readonly string[]): boolean {
+  const parts = (value: string): string[] => normalizePath(value).split('/').filter(Boolean)
+  return left.some((a) =>
+    right.some((b) => {
+      const x = parts(a)
+      const y = parts(b)
+      const min = Math.min(x.length, y.length)
+      return min > 0 && x.slice(0, min).every((part, index) => part === y[index])
+    }),
+  )
+}
+
+function parallelPlan(record: CheckpointCloseRecord): boolean {
+  const runnable = runnableLanes(lanesOf(record))
+  for (let i = 0; i < runnable.length; i += 1) {
+    for (let j = i + 1; j < runnable.length; j += 1) {
+      const left = runnable[i] as LanePlan
+      const right = runnable[j] as LanePlan
+      if (left.owner !== right.owner && !scopeOverlaps(left.scope, right.scope)) return true
+    }
+  }
+  return false
+}
+
 /**
- * The owned checkpoint rules beyond the tool's own validation: a `continue`
- * checkpoint must carry its declared remedy evidence, and a bottleneck that
- * reached the configured age needs a route change.
+ * The owned checkpoint rules beyond the tool's own validation: freshness, a
+ * computed parallel plan needing a tagged worker, a `continue` remedy executed
+ * after the checkpoint, and an aged bottleneck. Every call is judged against
+ * the observations the host already recorded.
  */
 export function checkpointCloseIssue(input: {
   readonly record: CheckpointCloseRecord | undefined
   readonly checkpointId: string
   readonly observations: readonly CheckpointObservation[]
   readonly bottleneckAge: number
+  /** False when the latest checkpoint is at or beyond the step interval. */
+  readonly fresh?: boolean
+  /** The time of the successful checkpoint call; only later calls count. */
+  readonly checkpointAt?: number
+  /** Whether any worker-start tool is visible; absent means visible. */
+  readonly workerVisible?: boolean
+  /** Whether the parallel-action gate is enabled; absent means enabled. */
+  readonly enforceParallel?: boolean
 }): string | undefined {
   const record = input.record
   if (record === undefined) return undefined
-  if (record.outcome !== 'continue') return undefined
+  const later = input.observations.filter(
+    (entry) =>
+      entry.ok &&
+      (input.checkpointAt === undefined ||
+        (entry.at !== undefined && entry.at > input.checkpointAt)),
+  )
+  const stale = input.fresh === false
+  const outcome = typeof record.outcome === 'string' ? record.outcome : ''
+  if (outcome !== 'continue') {
+    return stale
+      ? 'the checkpoint is older than the configured step interval; call work_checkpoint again before the close'
+      : undefined
+  }
+  const workerVisible = input.workerVisible !== false
+  if (
+    !stale &&
+    input.enforceParallel !== false &&
+    workerVisible &&
+    parallelPlan(record) &&
+    !taggedWorkerStart(later, input.checkpointId)
+  ) {
+    return `the checkpoint has parallel runnable lanes; start one tagged worker whose arguments name "${input.checkpointId}", or amend the plan in a new work_checkpoint`
+  }
   const bottleneck = record.bottleneck
   if (bottleneck === undefined) {
     return 'the checkpoint is a continue plan without a bottleneck; call work_checkpoint with lanes, a bottleneck, and its remedy before the close'
@@ -611,52 +767,46 @@ export function checkpointCloseIssue(input: {
   if (id === '') {
     return 'the checkpoint bottleneck has no id; refresh work_checkpoint with a named bottleneck'
   }
-  const later = input.observations.filter((entry) => entry.ok)
   if (action === 'worker_start') {
-    const matched = later.some(
-      (entry) =>
-        WORKER_TOOLS.has(entry.toolName) &&
-        mentions(entry.arguments, id) &&
-        JSON.stringify(entry.arguments).includes(input.checkpointId),
-    )
-    if (!matched) {
+    if (!taggedWorkerStart(later, input.checkpointId, id)) {
       return `execute the bottleneck remedy: start a tagged worker that names checkpoint "${input.checkpointId}" and bottleneck "${id}", or record a route change in a new work_checkpoint`
     }
   } else if (action === 'lead_action') {
-    if (owner !== 'lead') {
-      return `bottleneck "${id}" is owned by "${owner}"; a lead_action needs owner "lead" — use worker_start or user_decision`
+    const workerOwned = owner !== 'lead' && workerVisible
+    if (workerOwned) {
+      return `bottleneck "${id}" is owned by "${owner}"; use worker_start with a call carrying "${input.checkpointId}" and "${id}", or user_decision with ask_user_question; lead_action is refused when the bottleneck owner is not "lead"`
     }
     const targets = stringList(bottleneck.targets)
     const matched = later.some(
       (entry) =>
         (entry.toolName === 'edit' || entry.toolName === 'write') &&
-        targets.some((target) =>
-          [entry.arguments.path, entry.arguments.file_path].some(
-            (value) =>
-              typeof value === 'string' &&
-              value.replaceAll('\\', '/').endsWith(target.replaceAll('\\', '/')),
-          ),
+        [entry.arguments.path, entry.arguments.file_path].some(
+          (value) => typeof value === 'string' && targetMatches(targets, value),
         ),
     )
     if (!matched) {
       return `execute the bottleneck remedy: write one of the declared targets of bottleneck "${id}" before the close`
     }
   } else if (action === 'user_decision') {
-    const asked = later.some((entry) => entry.toolName === 'ask_user_question')
-    if (!asked) {
+    if (!later.some((entry) => entry.toolName === 'ask_user_question')) {
       return `bottleneck "${id}" needs a user decision; ask the user before the close`
     }
   } else {
     return `bottleneck "${id}" has an unknown action "${action}"; use worker_start, lead_action, or user_decision`
   }
   const age = typeof record.bottleneckAge === 'number' ? record.bottleneckAge : 0
-  if (age >= input.bottleneckAge && record.bottleneckChanged !== true) {
+  if (
+    age >= input.bottleneckAge &&
+    record.bottleneckChanged !== true &&
+    action !== 'user_decision'
+  ) {
     return `bottleneck "${id}" survived ${String(age)} consecutive checkpoints; change the owner, the blocking lane, or ask the user for a decision before the close`
+  }
+  if (stale) {
+    return 'the checkpoint is older than the configured step interval; call work_checkpoint again before the close'
   }
   return undefined
 }
-
-const WORKER_TOOLS = new Set(['subagent', 'subagent_fork', 'spawn_teammate', 'workflow'])
 
 /** The completion branch: applies only when the task list is fully checked. */
 export function taskReviewCompletion(
@@ -700,6 +850,12 @@ export function checkpointGateIssue(
   checkpointPath: string,
   observations: readonly CheckpointObservation[],
   bottleneckAge: number,
+  options: {
+    readonly fresh?: boolean
+    readonly checkpointAt?: number
+    readonly workerVisible?: boolean
+    readonly enforceParallel?: boolean
+  } = {},
 ): { readonly text: string } | undefined {
   const record = readCheckpointRecord(workspace, checkpointPath)
   if (record === undefined) return undefined
@@ -712,6 +868,7 @@ export function checkpointGateIssue(
     checkpointId: checkpoint,
     observations,
     bottleneckAge,
+    ...options,
   })
   return issue === undefined ? undefined : { text: issue }
 }

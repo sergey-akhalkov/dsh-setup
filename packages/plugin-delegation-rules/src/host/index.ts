@@ -44,6 +44,7 @@ import {
   formatApprovalGapLines,
   isReviewFinding,
   laneOfTask,
+  legacyRecordSatisfies,
   type NumberedTask,
   normalizeCheckboxes,
   normalizeFindingClass,
@@ -3131,7 +3132,7 @@ function reviewedInputsChanged(record: ReviewRecord): boolean {
 }
 
 /** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
-function recordSatisfies(
+export function recordSatisfies(
   state: RecordState,
   change: string,
   scope: ReviewScope,
@@ -3139,17 +3140,7 @@ function recordSatisfies(
   taskId?: string,
 ): boolean {
   if (state.kind !== 'record') return false
-  const record = state.record
-  if (record.change !== change || record.scope !== scope) return false
-  if (record.verdict !== 'PASS' && record.verdict !== 'ERROR') return false
-  // A queue fault is not a review: the gate must ask for a fresh review rather
-  // than treating its fallback ERROR as the reviewed outcome.
-  if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error')) return false
-  // An input-mutation ERROR means the verdict was discarded; finish the writes
-  // and re-run instead of accepting the failure as the reviewed outcome.
-  if (record.verdict === 'ERROR' && reviewedInputsChanged(record)) return false
-  if (scope === 'task' && record.taskId !== taskId) return false
-  return digest === undefined || record.digest === digest
+  return legacyRecordSatisfies(state.record, change, scope, digest, taskId)
 }
 
 async function inspectNote(

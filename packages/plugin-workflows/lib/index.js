@@ -236,6 +236,7 @@ export const DEFAULT_CHECKPOINT_APPLICABILITY = Object.freeze({
     requireWrite: true,
     bottleneckAge: 2,
     stepInterval: 40,
+    enforceParallel: true,
 });
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
 function resolveCheckpointApplicability(raw) {
@@ -249,7 +250,8 @@ function resolveCheckpointApplicability(raw) {
         if (key !== 'minToolCalls' &&
             key !== 'requireWrite' &&
             key !== 'bottleneckAge' &&
-            key !== 'stepInterval') {
+            key !== 'stepInterval' &&
+            key !== 'enforceParallel') {
             throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`);
         }
     }
@@ -281,11 +283,16 @@ function resolveCheckpointApplicability(raw) {
             stepInterval > 10_000)) {
         throw new Error('workflows checkpointApplicability.stepInterval must be an integer between 1 and 10000');
     }
+    const enforceParallel = record.enforceParallel;
+    if (enforceParallel !== undefined && typeof enforceParallel !== 'boolean') {
+        throw new Error('workflows checkpointApplicability.enforceParallel must be a boolean');
+    }
     return {
         minToolCalls: minToolCalls ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
         requireWrite: requireWrite ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
         bottleneckAge: bottleneckAge ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
         stepInterval: stepInterval ?? DEFAULT_CHECKPOINT_APPLICABILITY.stepInterval,
+        enforceParallel: enforceParallel ?? DEFAULT_CHECKPOINT_APPLICABILITY.enforceParallel,
     };
 }
 export function apply(ctx, config = {}) {
@@ -662,6 +669,8 @@ export function apply(ctx, config = {}) {
     /** Bounded per-session observations the evidence verifier may consume. */
     const sessionToolCalls = new Map();
     const sessionShellResults = new Map();
+    /** The current pre-step index per session, for checkpoint freshness. */
+    const turnSteps = new Map();
     /** The checked task ids last seen per session and change, for the delta. */
     const checkedTasksSeen = new Map();
     /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -959,6 +968,7 @@ export function apply(ctx, config = {}) {
             if (workspace !== undefined) {
                 const activeWorkspace = workspace;
                 turns.set(String(session.id), payload.turn);
+                turnSteps.set(String(session.id), payload.step);
                 metricsFor(String(session.id), payload.turn);
                 const origin = session.header.origin === 'subagent' ? 'subagent' : 'root';
                 const summary = `step ${String(payload.step)}`;
@@ -1136,7 +1146,9 @@ export function apply(ctx, config = {}) {
                 arguments: args,
                 ok: isShellTool ? shellOutcome.ok : !result.isError,
                 at: journal.time(),
+                detail: text.slice(0, 500),
                 ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+                ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
             });
             if (observed.length > 100)
                 observed.shift();
@@ -1495,7 +1507,9 @@ export function apply(ctx, config = {}) {
                     arguments: { ...request.arguments },
                     ok: true,
                     at: journal.time(),
+                    detail: JSON.stringify(first.result).slice(0, 500),
                     ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+                    ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
                 });
                 if (observed.length > 100)
                     observed.shift();
@@ -2074,6 +2088,36 @@ export function apply(ctx, config = {}) {
                 mainStepOwners.delete(sessionId);
             const ordered = owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)];
             const legacy = legacySignalState();
+            const checkpointObservations = (session) => (sessionToolCalls.get(session) ?? []).map((call) => ({
+                toolName: call.name,
+                arguments: call.arguments,
+                ok: call.ok,
+                ...(call.at === undefined ? {} : { at: call.at }),
+                ...(call.detail === undefined ? {} : { detail: call.detail }),
+            }));
+            const checkpointFreshness = (session, turn) => {
+                const calls = (sessionToolCalls.get(session) ?? []).filter((call) => call.name === 'work_checkpoint' && call.ok && call.turn === turn);
+                const last = calls.at(-1);
+                const steps = turnSteps.get(session) ?? 0;
+                return {
+                    fresh: last !== undefined && steps - (last.step ?? 0) < checkpointApplicability.stepInterval,
+                    ...(last?.at === undefined ? {} : { checkpointAt: last.at }),
+                };
+            };
+            const workerToolVisible = () => {
+                try {
+                    const tools = ctx.get('tools');
+                    return ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate'].some((name) => tools?.get?.(name) !== undefined);
+                }
+                catch {
+                    return true;
+                }
+            };
+            const checkpointOptions = (turn) => ({
+                ...checkpointFreshness(sessionId, turn),
+                workerVisible: workerToolVisible(),
+                enforceParallel: checkpointApplicability.enforceParallel,
+            });
             // Advance every run first: an owned tool step (the review start) must
             // dispatch for every newly checked task before one close is refused.
             const advanced = new Map();
@@ -2085,12 +2129,7 @@ export function apply(ctx, config = {}) {
                 // A retro run must not complete on the record alone: while the host
                 // checkpoint remedy/age rule fails, keep the run open and steer.
                 if (definition.id === 'retro' && typeof run.context.checkpoint === 'string') {
-                    const calls = (sessionToolCalls.get(sessionId) ?? []).map((call) => ({
-                        toolName: call.name,
-                        arguments: call.arguments,
-                        ok: call.ok,
-                    }));
-                    if (checkpointGateIssue(workspace, run.context.checkpoint, calls, checkpointApplicability.bottleneckAge) !== undefined) {
+                    if (checkpointGateIssue(workspace, run.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn)) !== undefined) {
                         advanced.set(run.id, run);
                         definitionOf.set(run.id, definition);
                         continue;
@@ -2110,12 +2149,14 @@ export function apply(ctx, config = {}) {
                     toolName: call.name,
                     arguments: call.arguments,
                     ok: call.ok,
+                    ...(call.at === undefined ? {} : { at: call.at }),
+                    ...(call.detail === undefined ? {} : { detail: call.detail }),
                 }));
                 const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
                     ? taskReviewCompletion(workspace, current.context.name)
                     : undefined;
                 const checkpointIssue = definition.id === 'retro' && typeof current.context.checkpoint === 'string'
-                    ? checkpointGateIssue(workspace, current.context.checkpoint, observations, checkpointApplicability.bottleneckAge)
+                    ? checkpointGateIssue(workspace, current.context.checkpoint, observations, checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn))
                     : undefined;
                 const outcome = evaluateTurnClose({
                     run: current,

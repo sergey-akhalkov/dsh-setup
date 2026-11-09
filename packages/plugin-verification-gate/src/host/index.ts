@@ -248,6 +248,18 @@ function shellOutcome(value: unknown): ShellOutcome {
   return 'failure'
 }
 
+/** The legacy close decision for one stop: allow, refuse, or the capped notice. */
+export type LegacyVerifyDecision = 'allow' | 'refuse' | 'unverified'
+
+export function decideVerifyClose(
+  dirty: boolean,
+  blocks: number,
+  maxBlocks: number,
+): LegacyVerifyDecision {
+  if (!dirty) return 'allow'
+  return blocks >= maxBlocks ? 'unverified' : 'refuse'
+}
+
 /** Build the refusal text for one stop attempt. */
 function refusalText(configured: readonly string[], state: AgentState): string {
   const commands = configured.map((command) => `"${clean(command, 240)}"`).join(', ')
@@ -376,8 +388,10 @@ export function apply(ctx: Context, config?: Config): void {
     if (isSubagent(agent)) return
     const state = stateFor(agent)
     beginTurn(state, turn)
-    if (!state.dirty || state.allowedAnyway) return
-    if (state.blocks >= resolved.maxBlocks) {
+    if (state.allowedAnyway) return
+    const decision = decideVerifyClose(state.dirty, state.blocks, resolved.maxBlocks)
+    if (decision === 'allow') return
+    if (decision === 'unverified') {
       state.allowedAnyway = true
       try {
         agent.inject(

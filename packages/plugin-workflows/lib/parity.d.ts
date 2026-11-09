@@ -104,17 +104,29 @@ export interface CheckpointObservation {
     readonly toolName: string;
     readonly arguments: Readonly<Record<string, unknown>>;
     readonly ok: boolean;
+    readonly at?: number;
+    /** The tool result text; used to tell a started delegate from a cached answer. */
+    readonly detail?: string;
 }
 /**
- * The owned checkpoint rules beyond the tool's own validation: a `continue`
- * checkpoint must carry its declared remedy evidence, and a bottleneck that
- * reached the configured age needs a route change.
+ * The owned checkpoint rules beyond the tool's own validation: freshness, a
+ * computed parallel plan needing a tagged worker, a `continue` remedy executed
+ * after the checkpoint, and an aged bottleneck. Every call is judged against
+ * the observations the host already recorded.
  */
 export declare function checkpointCloseIssue(input: {
     readonly record: CheckpointCloseRecord | undefined;
     readonly checkpointId: string;
     readonly observations: readonly CheckpointObservation[];
     readonly bottleneckAge: number;
+    /** False when the latest checkpoint is at or beyond the step interval. */
+    readonly fresh?: boolean;
+    /** The time of the successful checkpoint call; only later calls count. */
+    readonly checkpointAt?: number;
+    /** Whether any worker-start tool is visible; absent means visible. */
+    readonly workerVisible?: boolean;
+    /** Whether the parallel-action gate is enabled; absent means enabled. */
+    readonly enforceParallel?: boolean;
 }): string | undefined;
 /** The completion branch: applies only when the task list is fully checked. */
 export declare function taskReviewCompletion(workspace: string, change: string): {
@@ -124,6 +136,11 @@ export declare function taskReviewCompletion(workspace: string, change: string):
 /** Read the retro checkpoint record's own fields; a missing record defers to the step evidence. */
 export declare function readCheckpointRecord(workspace: string, checkpointPath: string): CheckpointCloseRecord | undefined;
 /** The owned checkpoint remedy/age issue for a close, when a record exists. */
-export declare function checkpointGateIssue(workspace: string, checkpointPath: string, observations: readonly CheckpointObservation[], bottleneckAge: number): {
+export declare function checkpointGateIssue(workspace: string, checkpointPath: string, observations: readonly CheckpointObservation[], bottleneckAge: number, options?: {
+    readonly fresh?: boolean;
+    readonly checkpointAt?: number;
+    readonly workerVisible?: boolean;
+    readonly enforceParallel?: boolean;
+}): {
     readonly text: string;
 } | undefined;

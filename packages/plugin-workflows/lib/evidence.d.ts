@@ -30,6 +30,10 @@ export interface ToolCallObservation {
     readonly at?: number;
     /** The turn the call was observed in; absent on older in-memory entries. */
     readonly turn?: number;
+    /** The pre-step index the call was observed at, for checkpoint freshness. */
+    readonly step?: number;
+    /** A bounded result text, for classifying delegate starts/answers. */
+    readonly detail?: string;
 }
 /** One completed foreground shell result the verifier may match against. */
 export interface ShellResultObservation {

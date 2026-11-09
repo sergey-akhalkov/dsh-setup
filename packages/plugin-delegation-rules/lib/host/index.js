@@ -4,7 +4,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, normalizeCheckboxes, normalizeFindingClass, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, sanitizeText, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
+import { APPROVAL_MARKER_FILE, approvalSummaryLine, CHANGE_PATTERN, computeApprovalCoverage, DIGEST_PATTERN, formatApprovalGapLines, isReviewFinding, laneOfTask, legacyRecordSatisfies, normalizeCheckboxes, normalizeFindingClass, normalizeTaskText, parsePortableTaskReviewRecord, parseReviewApprovalMarker, parseTaskLanes, parseTasksText, portableTaskRecordDisplayPath, portableTaskRecordPath, REVIEWS_DIRECTORY, recognizeArchiveCommands, reviewerBindingOf, reviewerMatches, sanitizeText, shellSegments, TASK_ID_PATTERN, unparseableCheckedLines, } from '../shared/approval.js';
 import { appendFindingHistory, DEFAULT_HISTORY_WINDOW, MAX_HISTORY_WINDOW, } from './finding-history.js';
 import { executeReviewLesson, REVIEW_LESSON_DESCRIPTION } from './learning-tools.js';
 import { changeCapabilities, DEFAULT_MAX_LESSONS, matchingLessons, readLessons, } from './lesson-store.js';
@@ -2372,25 +2372,10 @@ function reviewedInputsChanged(record) {
         record.error?.includes('reviewed inputs changed') === true);
 }
 /** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
-function recordSatisfies(state, change, scope, digest, taskId) {
+export function recordSatisfies(state, change, scope, digest, taskId) {
     if (state.kind !== 'record')
         return false;
-    const record = state.record;
-    if (record.change !== change || record.scope !== scope)
-        return false;
-    if (record.verdict !== 'PASS' && record.verdict !== 'ERROR')
-        return false;
-    // A queue fault is not a review: the gate must ask for a fresh review rather
-    // than treating its fallback ERROR as the reviewed outcome.
-    if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error'))
-        return false;
-    // An input-mutation ERROR means the verdict was discarded; finish the writes
-    // and re-run instead of accepting the failure as the reviewed outcome.
-    if (record.verdict === 'ERROR' && reviewedInputsChanged(record))
-        return false;
-    if (scope === 'task' && record.taskId !== taskId)
-        return false;
-    return digest === undefined || record.digest === digest;
+    return legacyRecordSatisfies(state.record, change, scope, digest, taskId);
 }
 async function inspectNote(cwd, change) {
     let raw;

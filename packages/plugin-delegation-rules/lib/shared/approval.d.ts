@@ -223,3 +223,18 @@ export declare function portableRecordFromLocal(input: ExportRecordInput): {
     record?: PortableTaskReviewRecord;
     error?: string;
 };
+/** The legacy intermediate-review predicate: PASS/ERROR only, identified. */
+export interface LegacyReviewRecordLike {
+    readonly change: string;
+    readonly scope: string;
+    readonly verdict: string;
+    readonly taskId?: string;
+    readonly digest?: string;
+    readonly error?: string;
+    readonly failureClass?: string;
+}
+/**
+ * The real legacy gate match, extracted unchanged: a queue fault or a
+ * discarded-input ERROR is not a usable review.
+ */
+export declare function legacyRecordSatisfies(record: LegacyReviewRecordLike, change: string, scope: string, digest?: string, taskId?: string): boolean;

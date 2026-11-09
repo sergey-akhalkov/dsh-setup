@@ -225,6 +225,15 @@ interface ReviewRecord {
     failureClass?: FailureClass;
 }
 type Finding = ReviewFinding;
+type RecordState = {
+    kind: 'missing';
+} | {
+    kind: 'malformed';
+    error: string;
+} | {
+    kind: 'record';
+    record: ReviewRecord;
+};
 /** Hash every change artifact, normalizing `tasks.md` checkbox state. */
 export declare function specDigest(changeDir: string, signal?: AbortSignal): Promise<string>;
 /** One immutable review checkout; the digest binds to `tree`. */
@@ -268,6 +277,8 @@ export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now
 export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner, 
 /** Test seam: the filesystem remover, so a failed removal can be injected. */
 remove?: (path: string) => Promise<void>): Promise<void>;
+/** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
+export declare function recordSatisfies(state: RecordState, change: string, scope: ReviewScope, digest: string | undefined, taskId?: string): boolean;
 interface ParsedVerdict {
     verdict: 'PASS' | 'FINDINGS';
     findings: Finding[];

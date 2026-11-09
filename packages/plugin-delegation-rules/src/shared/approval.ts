@@ -909,3 +909,41 @@ export function portableRecordFromLocal(input: ExportRecordInput): {
   }
   return { record: checked.record }
 }
+
+/** The legacy intermediate-review predicate: PASS/ERROR only, identified. */
+export interface LegacyReviewRecordLike {
+  readonly change: string
+  readonly scope: string
+  readonly verdict: string
+  readonly taskId?: string
+  readonly digest?: string
+  readonly error?: string
+  readonly failureClass?: string
+}
+
+/**
+ * The real legacy gate match, extracted unchanged: a queue fault or a
+ * discarded-input ERROR is not a usable review.
+ */
+export function legacyRecordSatisfies(
+  record: LegacyReviewRecordLike,
+  change: string,
+  scope: string,
+  digest?: string,
+  taskId?: string,
+): boolean {
+  if (record.change !== change || record.scope !== scope) return false
+  if (record.verdict !== 'PASS' && record.verdict !== 'ERROR') return false
+  if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error') === true) {
+    return false
+  }
+  if (
+    record.verdict === 'ERROR' &&
+    (record.failureClass === 'reviewed-inputs-changed' ||
+      record.error?.includes('reviewed inputs changed') === true)
+  ) {
+    return false
+  }
+  if (scope === 'task' && record.taskId !== taskId) return false
+  return digest === undefined || record.digest === digest
+}

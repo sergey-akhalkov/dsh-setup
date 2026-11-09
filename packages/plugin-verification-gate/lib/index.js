@@ -189,6 +189,11 @@ function shellOutcome(value) {
     }
     return 'failure';
 }
+export function decideVerifyClose(dirty, blocks, maxBlocks) {
+    if (!dirty)
+        return 'allow';
+    return blocks >= maxBlocks ? 'unverified' : 'refuse';
+}
 /** Build the refusal text for one stop attempt. */
 function refusalText(configured, state) {
     const commands = configured.map((command) => `"${clean(command, 240)}"`).join(', ');
@@ -305,9 +310,12 @@ export function apply(ctx, config) {
             return;
         const state = stateFor(agent);
         beginTurn(state, turn);
-        if (!state.dirty || state.allowedAnyway)
+        if (state.allowedAnyway)
             return;
-        if (state.blocks >= resolved.maxBlocks) {
+        const decision = decideVerifyClose(state.dirty, state.blocks, resolved.maxBlocks);
+        if (decision === 'allow')
+            return;
+        if (decision === 'unverified') {
             state.allowedAnyway = true;
             try {
                 agent.inject(gateMessage(unverifiedText(resolved.commands, state), 'verification-gate: unverified close'));
