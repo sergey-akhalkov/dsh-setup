@@ -43,6 +43,8 @@ export type StepState = (typeof STEP_STATES)[number]
 /** What satisfied one step. */
 export interface RunEvidence {
   readonly kind: string
+  /** The workspace-relative path, call id, or record the evidence names. */
+  readonly ref?: string
   readonly path?: string
   readonly detail?: string
   readonly digest?: string
@@ -64,6 +66,24 @@ export interface RunStep {
   readonly lastTurn?: number
   readonly evidence?: RunEvidence
   readonly reason?: string
+  /** The producer-owned failure class of a blocked or failed step. */
+  readonly failureClass?: string
+}
+
+/**
+ * The producer-owned failure vocabulary. The editor renders the stored value
+ * verbatim and never derives a class from a message; this mapping only turns
+ * the executor's own reason into the record's class at settlement time.
+ */
+export function classifyFailure(reason: string | undefined): string {
+  const text = (reason ?? '').toLowerCase()
+  if (/missing-file|does not exist|not found|enoent/u.test(text)) return 'missing-file'
+  if (/digest|hash|signature|mismatch|tampered|record/u.test(text)) return 'record-mismatch'
+  if (/rejected|not accepted/u.test(text)) return 'rejected-answer'
+  if (/answer|question/u.test(text)) return 'no-answer'
+  if (/no call|not observed|no evidence/u.test(text)) return 'no-call'
+  if (/schema|invalid|result/u.test(text)) return 'invalid-result'
+  return 'check-failed'
 }
 
 /** A visible refusal or bypass; never a pass. */
@@ -82,6 +102,10 @@ export interface WorkflowRun {
   readonly v: typeof RUN_VERSION
   readonly id: string
   readonly definition: string
+  /** The definition name in effect when the run started; copied, never looked up. */
+  readonly definitionName?: string
+  /** The definition version in effect when the run started; copied, not looked up. */
+  readonly definitionVersion?: number
   readonly trigger: string
   readonly session: string
   readonly workspaceKey: string
@@ -121,6 +145,8 @@ export function newRunId(now = Date.now()): string {
 
 export interface CreateRunInput {
   readonly definition: string
+  readonly definitionName?: string
+  readonly definitionVersion?: number
   readonly trigger: string
   readonly session: string
   readonly workspace: string
@@ -138,6 +164,10 @@ export function createRun(input: CreateRunInput): WorkflowRun {
     v: RUN_VERSION,
     id: input.id ?? newRunId(at),
     definition: input.definition,
+    ...(input.definitionName === undefined ? {} : { definitionName: input.definitionName }),
+    ...(input.definitionVersion === undefined
+      ? {}
+      : { definitionVersion: input.definitionVersion }),
     trigger: input.trigger,
     session: input.session,
     workspaceKey: input.workspace,
@@ -355,12 +385,21 @@ export function settleStep(
   run: WorkflowRun,
   stepId: string,
   state: StepState,
-  patch: { readonly at?: number; readonly evidence?: RunEvidence; readonly reason?: string } = {},
+  patch: {
+    readonly at?: number
+    readonly evidence?: RunEvidence
+    readonly reason?: string
+    readonly failureClass?: string
+  } = {},
 ): WorkflowRun {
   if (!run.steps.some((step) => step.id === stepId)) {
     throw new Error(`run "${run.id}" has no step "${stepId}"`)
   }
   const at = patch.at ?? Date.now()
+  const failureClass =
+    state === 'blocked' || state === 'failed'
+      ? (patch.failureClass ?? classifyFailure(patch.reason))
+      : undefined
   return {
     ...run,
     updatedAt: at,
@@ -372,6 +411,7 @@ export function settleStep(
             at,
             ...(patch.evidence === undefined ? {} : { evidence: patch.evidence }),
             ...(patch.reason === undefined ? {} : { reason: patch.reason }),
+            ...(failureClass === undefined ? {} : { failureClass }),
           }
         : step,
     ),

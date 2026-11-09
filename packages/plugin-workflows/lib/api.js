@@ -183,10 +183,21 @@ export function createWorkflowRoutes(services) {
             const resolved = resolveSession(services, request);
             if ('response' in resolved)
                 return resolved.response;
-            const paging = parsePaging(new URL(request.url));
+            const url = new URL(request.url);
+            const paging = parsePaging(url);
             if ('response' in paging)
                 return paging.response;
-            const runs = await sessionRuns(resolved.workspace, resolved.session);
+            const source = url.searchParams.get('source');
+            const definition = url.searchParams.get('definition');
+            let runs = await sessionRuns(resolved.workspace, resolved.session);
+            if (source !== null && source !== '')
+                runs = runs.filter((run) => run.source === source);
+            if (definition !== null && definition !== '') {
+                runs = runs.filter((run) => run.definition?.id === definition);
+            }
+            // A definition-filtered request is the editor overlay: newest first.
+            if ((definition ?? '') !== '')
+                runs = [...runs].reverse();
             const start = Math.min(paging.cursor, runs.length);
             const page = runs.slice(start, start + paging.limit);
             const next = start + page.length < runs.length ? String(start + page.length) : undefined;

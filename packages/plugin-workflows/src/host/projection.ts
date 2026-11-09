@@ -21,7 +21,25 @@ export interface RunStep {
   readonly state: string
   readonly at?: number
   readonly evidence?: string
+  /** The structured producer evidence the overlay renders. */
+  readonly evidenceRef?: { readonly kind: string; readonly ref?: string; readonly at?: number }
+  /** The producer-owned class of a blocked or failed step. */
+  readonly failureClass?: string
   readonly reason?: string
+}
+
+/** A visible refusal or bypass, exposed as the run record wrote it. */
+export interface RunViolationView {
+  readonly stepId?: string
+  readonly at: number
+  readonly reason: string
+}
+
+/** The definition identity a workflow run recorded when it started. */
+export interface RunDefinitionView {
+  readonly id: string
+  readonly name: string
+  readonly version: number
 }
 
 /** The one shape every adapter returns. */
@@ -34,6 +52,9 @@ export interface RunView {
   readonly startedAt: number
   readonly status: RunStatus
   readonly steps: readonly RunStep[]
+  /** The recorded definition identity; workflow runs only. */
+  readonly definition?: RunDefinitionView
+  readonly violations?: readonly RunViolationView[]
   readonly error?: string
   /** The absolute or workspace-relative record path this view came from. */
   readonly record?: string
@@ -823,6 +844,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
     for (const entry of Array.isArray(record.steps) ? record.steps : []) {
       if (!isRecord(entry) || typeof entry.id !== 'string') continue
       const evidence = isRecord(entry.evidence) ? entry.evidence : undefined
+      const evidenceRef = evidence === undefined ? undefined : structuredEvidence(evidence)
       steps.push({
         id: redactText(entry.id),
         title: redactText(entry.id),
@@ -832,6 +854,9 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
             : 'unknown',
         ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
         ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
+        ...(typeof entry.failureClass === 'string'
+          ? { failureClass: safeText(entry.failureClass) }
+          : {}),
         ...(evidence === undefined
           ? {}
           : {
@@ -842,11 +867,24 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
                     ? (safeText(evidence.kind) ?? 'evidence')
                     : 'evidence',
             }),
+        ...(evidenceRef === undefined ? {} : { evidenceRef }),
       })
     }
     const violations = Array.isArray(record.violations) ? record.violations : []
+    const violationViews: RunViolationView[] = []
     for (const [index, violation] of violations.entries()) {
       if (!isRecord(violation)) continue
+      const reason =
+        typeof violation.detail === 'string'
+          ? (safeError(violation.detail) ?? 'violation')
+          : typeof violation.kind === 'string'
+            ? (safeText(violation.kind) ?? 'violation')
+            : 'violation'
+      violationViews.push({
+        ...(typeof violation.step === 'string' ? { stepId: safeText(violation.step) } : {}),
+        at: typeof violation.at === 'number' ? violation.at : 0,
+        reason,
+      })
       steps.push({
         id: `violation:${String(index)}`,
         title: 'VIOLATION',
@@ -854,6 +892,14 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
         ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
       })
+    }
+    const definitionId = redactText(String(record.definition ?? 'workflow'))
+    const definitionName =
+      typeof record.definitionName === 'string' ? safeText(record.definitionName) : undefined
+    const definition: RunDefinitionView = {
+      id: definitionId,
+      name: definitionName ?? definitionId,
+      version: typeof record.definitionVersion === 'number' ? record.definitionVersion : 0,
     }
     runs.push({
       id: `workflow:${redactText(typeof record.id === 'string' ? record.id : id)}`,
@@ -864,6 +910,8 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       status,
       steps,
+      definition,
+      ...(violationViews.length === 0 ? {} : { violations: violationViews }),
       ...(typeof record.reason === 'string' && status === 'failed'
         ? { error: safeError(record.reason) }
         : {}),
@@ -871,6 +919,27 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
     })
   }
   return runs
+}
+
+/** The overlay's structured evidence: the recorded kind plus its reference. */
+function structuredEvidence(evidence: Record<string, unknown>): RunStep['evidenceRef'] {
+  const stringOf = (key: string): string | undefined =>
+    typeof evidence[key] === 'string' && evidence[key] !== ''
+      ? (evidence[key] as string)
+      : undefined
+  const rawRef =
+    stringOf('ref') ??
+    stringOf('path') ??
+    stringOf('callId') ??
+    stringOf('digest') ??
+    stringOf('answer') ??
+    stringOf('detail')
+  const ref = rawRef === undefined ? undefined : (safeError(rawRef) ?? undefined)
+  return {
+    kind: typeof evidence.kind === 'string' ? (safeText(evidence.kind) ?? 'evidence') : 'evidence',
+    ...(ref === undefined ? {} : { ref }),
+    ...(typeof evidence.at === 'number' ? { at: evidence.at } : {}),
+  }
 }
 
 /** Every projected run in one workspace, unattributed runs included. */

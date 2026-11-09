@@ -22,6 +22,27 @@ export const RUN_STATUSES = [
     'interrupted',
 ];
 export const STEP_STATES = ['open', 'done', 'blocked', 'failed', 'cancelled'];
+/**
+ * The producer-owned failure vocabulary. The editor renders the stored value
+ * verbatim and never derives a class from a message; this mapping only turns
+ * the executor's own reason into the record's class at settlement time.
+ */
+export function classifyFailure(reason) {
+    const text = (reason ?? '').toLowerCase();
+    if (/missing-file|does not exist|not found|enoent/u.test(text))
+        return 'missing-file';
+    if (/digest|hash|signature|mismatch|tampered|record/u.test(text))
+        return 'record-mismatch';
+    if (/rejected|not accepted/u.test(text))
+        return 'rejected-answer';
+    if (/answer|question/u.test(text))
+        return 'no-answer';
+    if (/no call|not observed|no evidence/u.test(text))
+        return 'no-call';
+    if (/schema|invalid|result/u.test(text))
+        return 'invalid-result';
+    return 'check-failed';
+}
 /** The run directory for one workspace. */
 export function runsDirectory(workspace) {
     return join(workspace, '.dsh', 'workflows', 'runs');
@@ -41,6 +62,10 @@ export function createRun(input) {
         v: RUN_VERSION,
         id: input.id ?? newRunId(at),
         definition: input.definition,
+        ...(input.definitionName === undefined ? {} : { definitionName: input.definitionName }),
+        ...(input.definitionVersion === undefined
+            ? {}
+            : { definitionVersion: input.definitionVersion }),
         trigger: input.trigger,
         session: input.session,
         workspaceKey: input.workspace,
@@ -217,6 +242,9 @@ export function settleStep(run, stepId, state, patch = {}) {
         throw new Error(`run "${run.id}" has no step "${stepId}"`);
     }
     const at = patch.at ?? Date.now();
+    const failureClass = state === 'blocked' || state === 'failed'
+        ? (patch.failureClass ?? classifyFailure(patch.reason))
+        : undefined;
     return {
         ...run,
         updatedAt: at,
@@ -227,6 +255,7 @@ export function settleStep(run, stepId, state, patch = {}) {
                 at,
                 ...(patch.evidence === undefined ? {} : { evidence: patch.evidence }),
                 ...(patch.reason === undefined ? {} : { reason: patch.reason }),
+                ...(failureClass === undefined ? {} : { failureClass }),
             }
             : step),
     };

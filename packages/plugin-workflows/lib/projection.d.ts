@@ -13,7 +13,27 @@ export interface RunStep {
     readonly state: string;
     readonly at?: number;
     readonly evidence?: string;
+    /** The structured producer evidence the overlay renders. */
+    readonly evidenceRef?: {
+        readonly kind: string;
+        readonly ref?: string;
+        readonly at?: number;
+    };
+    /** The producer-owned class of a blocked or failed step. */
+    readonly failureClass?: string;
     readonly reason?: string;
+}
+/** A visible refusal or bypass, exposed as the run record wrote it. */
+export interface RunViolationView {
+    readonly stepId?: string;
+    readonly at: number;
+    readonly reason: string;
+}
+/** The definition identity a workflow run recorded when it started. */
+export interface RunDefinitionView {
+    readonly id: string;
+    readonly name: string;
+    readonly version: number;
 }
 /** The one shape every adapter returns. */
 export interface RunView {
@@ -25,6 +45,9 @@ export interface RunView {
     readonly startedAt: number;
     readonly status: RunStatus;
     readonly steps: readonly RunStep[];
+    /** The recorded definition identity; workflow runs only. */
+    readonly definition?: RunDefinitionView;
+    readonly violations?: readonly RunViolationView[];
     readonly error?: string;
     /** The absolute or workspace-relative record path this view came from. */
     readonly record?: string;

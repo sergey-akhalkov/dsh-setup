@@ -16,6 +16,8 @@ export type StepState = (typeof STEP_STATES)[number];
 /** What satisfied one step. */
 export interface RunEvidence {
     readonly kind: string;
+    /** The workspace-relative path, call id, or record the evidence names. */
+    readonly ref?: string;
     readonly path?: string;
     readonly detail?: string;
     readonly digest?: string;
@@ -36,7 +38,15 @@ export interface RunStep {
     readonly lastTurn?: number;
     readonly evidence?: RunEvidence;
     readonly reason?: string;
+    /** The producer-owned failure class of a blocked or failed step. */
+    readonly failureClass?: string;
 }
+/**
+ * The producer-owned failure vocabulary. The editor renders the stored value
+ * verbatim and never derives a class from a message; this mapping only turns
+ * the executor's own reason into the record's class at settlement time.
+ */
+export declare function classifyFailure(reason: string | undefined): string;
 /** A visible refusal or bypass; never a pass. */
 export interface RunViolation {
     readonly at: number;
@@ -52,6 +62,10 @@ export interface WorkflowRun {
     readonly v: typeof RUN_VERSION;
     readonly id: string;
     readonly definition: string;
+    /** The definition name in effect when the run started; copied, never looked up. */
+    readonly definitionName?: string;
+    /** The definition version in effect when the run started; copied, not looked up. */
+    readonly definitionVersion?: number;
     readonly trigger: string;
     readonly session: string;
     readonly workspaceKey: string;
@@ -76,6 +90,8 @@ export declare function runPath(workspace: string, id: string): string;
 export declare function newRunId(now?: number): string;
 export interface CreateRunInput {
     readonly definition: string;
+    readonly definitionName?: string;
+    readonly definitionVersion?: number;
     readonly trigger: string;
     readonly session: string;
     readonly workspace: string;
@@ -126,6 +142,7 @@ export declare function settleStep(run: WorkflowRun, stepId: string, state: Step
     readonly at?: number;
     readonly evidence?: RunEvidence;
     readonly reason?: string;
+    readonly failureClass?: string;
 }): WorkflowRun;
 /** Move a run to a terminal or blocked status and stamp it. Pure. */
 export declare function setRunStatus(run: WorkflowRun, status: RunStatus, now?: number, reason?: string): WorkflowRun;
