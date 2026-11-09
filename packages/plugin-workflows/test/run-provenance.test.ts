@@ -124,6 +124,32 @@ describe('run provenance record', () => {
     expect(step?.reason).toBeUndefined()
   })
 
+  it('maps a legacy violation shape in an old run record', async () => {
+    const workspace = await tempWorkspace()
+    const current = createRun({
+      definition: { id: 'legacy-violation', name: 'Legacy', version: 1 },
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['one'],
+      now: 1_000,
+    })
+    const legacy = {
+      ...current,
+      violations: [{ at: 1_100, kind: 'BYPASS', step: 'one', detail: 'the old bypass reason' }],
+    }
+    const directory = runsDirectory(workspace)
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, `${current.id}.json`),
+      `${JSON.stringify({ ...legacy, signature: auth().sign('workflows/run/v1', legacy) }, null, 2)}\n`,
+    )
+    const views = await engineRuns(workspace)
+    expect(views[0]?.violations).toEqual([
+      { stepId: 'one', at: 1_100, reason: 'the old bypass reason' },
+    ])
+  })
+
   it('keeps the recorded name and version readable after the definition is deleted', async () => {
     const workspace = await tempWorkspace()
     const run = createRun({
@@ -211,6 +237,15 @@ describe('run provenance record', () => {
       ref: '.dsh/workflows/drafts/demo/requirements.md',
       at: 1_050,
     })
+    const stored = JSON.parse(
+      await readFile(join(runsDirectory(workspace), `${settled.id}.json`), 'utf8'),
+    ) as { violations: Record<string, unknown>[] }
+    expect(stored.violations).toEqual([
+      { stepId: 'two', at: 1_250, reason: 'the user bypassed the step' },
+    ])
+    expect(stored.violations[0]).not.toHaveProperty('kind')
+    expect(stored.violations[0]).not.toHaveProperty('detail')
+    expect(stored.violations[0]).not.toHaveProperty('step')
     const view = (await engineRuns(workspace))[0]
     const first = view?.steps.find((step) => step.id === 'one')
     expect(first?.evidenceRef).toEqual({

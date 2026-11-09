@@ -106,10 +106,9 @@ export function classifyFailure(reason: string | undefined): string {
 
 /** A visible refusal or bypass; never a pass. */
 export interface RunViolation {
+  readonly stepId?: string
   readonly at: number
-  readonly kind: string
-  readonly step?: string
-  readonly detail: string
+  readonly reason: string
 }
 
 /** The definition identity a run records at creation; copied, never looked up. */
@@ -541,10 +540,9 @@ export function addViolation(
     violations: [
       ...run.violations,
       {
+        ...(options.step === undefined ? {} : { stepId: options.step }),
         at,
-        kind: options.kind ?? 'VIOLATION',
-        detail,
-        ...(options.step === undefined ? {} : { step: options.step }),
+        reason: detail,
       },
     ],
   }

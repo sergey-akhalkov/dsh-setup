@@ -165,7 +165,11 @@ describe('run store', () => {
     await writeRun(workspace, run, auth())
     const reloaded = await readAuthenticatedRun(workspace, run.id, auth())
     expect(reloaded?.status).toBe('cancelled')
-    expect(reloaded?.violations[0]).toMatchObject({ kind: 'VIOLATION', step: 'requirements' })
+    expect(reloaded?.violations[0]).toMatchObject({
+      stepId: 'requirements',
+      at: 1_200,
+      reason: 'the turn closed with the requirements step open',
+    })
     expect(reloaded?.steps[0]?.evidence).toEqual({ kind: 'tool', callId: 'call-1', ref: 'call-1' })
     expect(reloaded?.steps[1]?.reason).toBe('user cancelled')
   })
