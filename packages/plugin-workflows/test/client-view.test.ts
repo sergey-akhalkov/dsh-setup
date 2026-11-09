@@ -112,6 +112,7 @@ describe('workflows view data', () => {
     const malformed = runs.find((run) => run.id === 'workflow:malformed')
     expect(malformed).toMatchObject({ status: 'unknown' })
     expect(malformed?.error).toBeDefined()
+    expect(malformed?.record).toBe('.dsh/workflows/runs/malformed.json')
     const sessionRows = await sessionRuns(workspace, 'session-1')
     expect(sessionRows.find((run) => run.id === 'workflow:malformed')).toBeDefined()
     // A parseable but incomplete record is also a diagnostic.
@@ -122,6 +123,9 @@ describe('workflows view data', () => {
     )
     const incompleteRows = await sessionRuns(workspace, 'session-1')
     expect(incompleteRows.find((run) => run.id === 'workflow:incomplete')?.error).toBeDefined()
+    expect(incompleteRows.find((run) => run.id === 'workflow:incomplete')?.record).toBe(
+      '.dsh/workflows/runs/incomplete.json',
+    )
     // A record without a session is also a malformed diagnostic.
     await writeFile(
       join(runsDirectory(workspace), 'missing-session.json'),
