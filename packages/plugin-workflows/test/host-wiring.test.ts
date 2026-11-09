@@ -254,12 +254,19 @@ function fakeHost(
       if (name === 'verificationGateStatus') return { steering: false }
       if (name === 'userQuestions' && options.userQuestions === true) {
         return {
-          ask: async (request: { questions: Array<{ id: string }> }) => ({
-            answers: request.questions.map((question) => ({
-              id: question.id,
-              selected: [options.answer ?? 'yes'],
-            })),
-          }),
+          ask: async (request: { questions: Array<{ id: string }>; agent?: unknown }) => {
+            // The live service scopes the answerer by the live agent; without it
+            // no answerer accepts the question.
+            if (request.agent === undefined) {
+              throw new Error('no user-questions answerer accepted the request')
+            }
+            return {
+              answers: request.questions.map((question) => ({
+                id: question.id,
+                selected: [options.answer ?? 'yes'],
+              })),
+            }
+          },
         }
       }
       if (name === 'systemPrompt') {

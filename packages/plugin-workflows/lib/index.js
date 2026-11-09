@@ -1423,7 +1423,8 @@ export function apply(ctx, config = {}) {
         };
     };
     const rawUserQuestions = optionalService('userQuestions');
-    const userQuestions = rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions);
+    /** The live agent is the answerer scope, so the adapter is built per agent. */
+    const questionsFor = (agent) => rawUserQuestions === undefined ? undefined : adaptUserQuestions(rawUserQuestions, agent);
     const shellWorkdirOf = (exec) => {
         const args = exec.arguments;
         if (typeof args !== 'object' || args === null)
@@ -1659,6 +1660,7 @@ export function apply(ctx, config = {}) {
         sessionShellResults.set(sessionId, shellResults);
         const runner = liveToolRunner(agent);
         const subagentRunner = hostSubagentRunner(agent);
+        const questions = questionsFor(agent);
         const result = await advanceIntake({
             run,
             definition,
@@ -1684,7 +1686,7 @@ export function apply(ctx, config = {}) {
             owned: ownedCalls,
             ...(runner === undefined ? {} : { toolRunner: runner }),
             ...(subagentRunner === undefined ? {} : { subagentRunner }),
-            ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+            ...(questions === undefined ? {} : { questions }),
             readRecord: (step) => verifyEvidence(step.evidence ?? { kind: 'declaration' }, {
                 workspace,
                 values: run.context,
@@ -2420,61 +2422,64 @@ export function apply(ctx, config = {}) {
             publishListenerError(workspaceFor(services, payload.agent.session), error);
         }
     }));
-    const toolHostFor = (agent, workspace, auth, definitions) => ({
-        workspace,
-        session: String(agent.session.id),
-        definitions,
-        auth,
-        maxRuns,
-        ...(userQuestions === undefined ? {} : { questions: userQuestions }),
-        now: () => journal.time(),
-        evidenceContext: (run, step) => {
-            const sessionId = String(agent.session.id);
-            const state = run.steps.find((entry) => entry.id === step.id);
-            const calls = sessionToolCalls.get(sessionId) ?? [];
-            const metrics = turnMetrics.get(sessionId);
-            const lastWrite = lastCodeWriteAt(calls, workspace) ?? metrics?.lastWriteAt;
-            return {
-                toolCalls: calls,
-                shellResults: sessionShellResults.get(sessionId) ?? [],
-                checkCommands: verifySettings.commands,
-                ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
-                ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
-                ...(metrics?.lastCheckAt === undefined ? {} : { lastCheckAt: metrics.lastCheckAt }),
-                ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
-                ...(typeof state?.evidence?.answer === 'string'
-                    ? { answers: [{ answer: state.evidence.answer }] }
-                    : {}),
-            };
-        },
-        listRuns: async () => {
-            await recoverIfNeeded(workspace);
-            return listAuthenticatedRuns(workspace, auth);
-        },
-        readRun: async (runId) => {
-            await recoverIfNeeded(workspace);
-            return readAuthenticatedRun(workspace, runId, auth);
-        },
-        startRun: async (definition) => {
-            await recoverIfNeeded(workspace);
-            const run = await startRunFor(workspace, String(agent.session.id), auth, definition);
-            return { run, firstStep: definition.steps[0]?.id ?? 'end' };
-        },
-        resumeRun: async (runId) => {
-            await recoverIfNeeded(workspace);
-            const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id));
-            await writeRun(workspace, resumed.run, auth);
-            void refreshPromptRuns(workspace);
-            return { run: resumed.run, stepId: resumed.stepId };
-        },
-        cancelRun: async (runId) => {
-            await recoverIfNeeded(workspace);
-            const cancelled = await cancelRun(workspace, runId, auth, Date.now(), String(agent.session.id));
-            await writeRun(workspace, cancelled, auth);
-            void refreshPromptRuns(workspace);
-            return cancelled;
-        },
-    });
+    const toolHostFor = (agent, workspace, auth, definitions) => {
+        const questions = questionsFor(agent);
+        return {
+            workspace,
+            session: String(agent.session.id),
+            definitions,
+            auth,
+            maxRuns,
+            ...(questions === undefined ? {} : { questions }),
+            now: () => journal.time(),
+            evidenceContext: (run, step) => {
+                const sessionId = String(agent.session.id);
+                const state = run.steps.find((entry) => entry.id === step.id);
+                const calls = sessionToolCalls.get(sessionId) ?? [];
+                const metrics = turnMetrics.get(sessionId);
+                const lastWrite = lastCodeWriteAt(calls, workspace) ?? metrics?.lastWriteAt;
+                return {
+                    toolCalls: calls,
+                    shellResults: sessionShellResults.get(sessionId) ?? [],
+                    checkCommands: verifySettings.commands,
+                    ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
+                    ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
+                    ...(metrics?.lastCheckAt === undefined ? {} : { lastCheckAt: metrics.lastCheckAt }),
+                    ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
+                    ...(typeof state?.evidence?.answer === 'string'
+                        ? { answers: [{ answer: state.evidence.answer }] }
+                        : {}),
+                };
+            },
+            listRuns: async () => {
+                await recoverIfNeeded(workspace);
+                return listAuthenticatedRuns(workspace, auth);
+            },
+            readRun: async (runId) => {
+                await recoverIfNeeded(workspace);
+                return readAuthenticatedRun(workspace, runId, auth);
+            },
+            startRun: async (definition) => {
+                await recoverIfNeeded(workspace);
+                const run = await startRunFor(workspace, String(agent.session.id), auth, definition);
+                return { run, firstStep: definition.steps[0]?.id ?? 'end' };
+            },
+            resumeRun: async (runId) => {
+                await recoverIfNeeded(workspace);
+                const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id));
+                await writeRun(workspace, resumed.run, auth);
+                void refreshPromptRuns(workspace);
+                return { run: resumed.run, stepId: resumed.stepId };
+            },
+            cancelRun: async (runId) => {
+                await recoverIfNeeded(workspace);
+                const cancelled = await cancelRun(workspace, runId, auth, Date.now(), String(agent.session.id));
+                await writeRun(workspace, cancelled, auth);
+                void refreshPromptRuns(workspace);
+                return cancelled;
+            },
+        };
+    };
     // The model-facing tool is optional; a host without a tool registry keeps the
     // gates and the recorder.
     const toolsService = optionalService('tools');
@@ -2608,10 +2613,11 @@ export function apply(ctx, config = {}) {
                         }
                         await writeRun(workspace, steered.run, auth);
                     };
+                    const questions = questionsFor(invocation.agent);
                     const host = {
                         workspace,
                         session: sessionId,
-                        ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+                        ...(questions === undefined ? {} : { questions }),
                         openView: () => 'The Workflows tab is the entry point; a Host command result cannot open a client view.',
                         run: async (definitionId) => {
                             await recoverIfNeeded(workspace);
@@ -2643,7 +2649,7 @@ export function apply(ctx, config = {}) {
                                 change: name,
                                 auth,
                                 userStarted: true,
-                                ...(userQuestions === undefined ? {} : { questions: userQuestions }),
+                                ...(questions === undefined ? {} : { questions }),
                                 now: journal.time(),
                             });
                             return adopted.ok ? { ok: true } : { ok: false, reason: adopted.reason };

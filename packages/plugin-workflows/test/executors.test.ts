@@ -1340,16 +1340,21 @@ it('implements multi-operand ranges, multi-clause if, and validates malformed ru
 
 it('adapts the DSH questions contract and maps timeout', async () => {
   const requests: unknown[] = []
-  const answered = adaptUserQuestions({
-    async ask(request) {
-      requests.push(request)
-      return { answers: [{ id: request.questions[0]?.id ?? '', selected: ['yes'] }] }
+  const agent = { id: 'session-1' }
+  const answered = adaptUserQuestions(
+    {
+      async ask(request) {
+        requests.push(request)
+        return { answers: [{ id: request.questions[0]?.id ?? '', selected: ['yes'] }] }
+      },
     },
-  })
+    agent,
+  )
   expect(
     await answered.ask({ question: 'Approve?', accepted: ['yes', 'no'], timeoutAction: 'block' }),
   ).toEqual({ answer: 'yes' })
   expect(requests[0]).toMatchObject({
+    agent,
     questions: [
       {
         id: expect.stringMatching(/^workflows-\d+$/u),
@@ -1358,11 +1363,14 @@ it('adapts the DSH questions contract and maps timeout', async () => {
       },
     ],
   })
-  const custom = adaptUserQuestions({
-    async ask() {
-      return { answers: [{ id: 'workflows-1', custom: 'maybe' }] }
+  const custom = adaptUserQuestions(
+    {
+      async ask() {
+        return { answers: [{ id: 'workflows-1', custom: 'maybe' }] }
+      },
     },
-  })
+    agent,
+  )
   expect(
     await custom.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
   ).toEqual({ answer: 'maybe' })
@@ -1370,6 +1378,7 @@ it('adapts the DSH questions contract and maps timeout', async () => {
     {
       ask: async () => new Promise<never>(() => undefined),
     },
+    agent,
     5,
   )
   expect(
@@ -1405,13 +1414,16 @@ it('applies the declared action to a cancelled question', async () => {
 })
 
 it('maps an abort from the question service to cancellation in the adapter', async () => {
-  const aborted = adaptUserQuestions({
-    async ask() {
-      const error = new Error('the question was aborted')
-      error.name = 'AbortError'
-      throw error
+  const aborted = adaptUserQuestions(
+    {
+      async ask() {
+        const error = new Error('the question was aborted')
+        error.name = 'AbortError'
+        throw error
+      },
     },
-  })
+    { id: 'session-1' },
+  )
   expect(
     await aborted.ask({ question: 'Approve?', accepted: ['yes'], timeoutAction: 'block' }),
   ).toEqual({ cancelled: true })
@@ -1446,13 +1458,16 @@ it('persists the selected branch edge across a reload', async () => {
 
 it('maps native question cancellation to the declared action', async () => {
   const native = (code: string) =>
-    adaptUserQuestions({
-      async ask() {
-        const error = new Error('dismissed') as Error & { code: string }
-        error.code = code
-        throw error
+    adaptUserQuestions(
+      {
+        async ask() {
+          const error = new Error('dismissed') as Error & { code: string }
+          error.code = code
+          throw error
+        },
       },
-    })
+      { id: 'session-1' },
+    )
   const cancelled = await native('ASK_CANCELLED').ask({
     question: 'Approve?',
     accepted: ['yes'],

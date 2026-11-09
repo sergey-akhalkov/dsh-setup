@@ -18,9 +18,10 @@ export const HUMAN_QUESTION_TIMEOUT_MS = 15 * 60_000;
 /**
  * Adapt the DSH question service to the single-question confirm shape the
  * executors use. A stable id echoes the answer; timeout and cancellation map to
- * the declared action.
+ * the declared action. The live agent is the answerer scope, so it is passed on
+ * every ask.
  */
-export function adaptUserQuestions(raw, timeoutMs = HUMAN_QUESTION_TIMEOUT_MS) {
+export function adaptUserQuestions(raw, agent, timeoutMs = HUMAN_QUESTION_TIMEOUT_MS) {
     let counter = 0;
     return {
         ask: async (request) => {
@@ -42,6 +43,7 @@ export function adaptUserQuestions(raw, timeoutMs = HUMAN_QUESTION_TIMEOUT_MS) {
                                 multiSelect: false,
                             },
                         ],
+                        agent,
                         signal: controller.signal,
                     }),
                     aborted,

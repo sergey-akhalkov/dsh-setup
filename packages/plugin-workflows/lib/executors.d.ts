@@ -24,6 +24,8 @@ export interface DshUserQuestions {
             }>;
             readonly multiSelect?: boolean;
         }>;
+        /** The live owner agent; without it no answerer accepts a human question. */
+        readonly agent?: unknown;
         readonly signal?: AbortSignal;
     }): Promise<{
         readonly answers: Array<{
@@ -36,9 +38,10 @@ export interface DshUserQuestions {
 /**
  * Adapt the DSH question service to the single-question confirm shape the
  * executors use. A stable id echoes the answer; timeout and cancellation map to
- * the declared action.
+ * the declared action. The live agent is the answerer scope, so it is passed on
+ * every ask.
  */
-export declare function adaptUserQuestions(raw: DshUserQuestions, timeoutMs?: number): HumanQuestionService;
+export declare function adaptUserQuestions(raw: DshUserQuestions, agent: unknown, timeoutMs?: number): HumanQuestionService;
 export interface MainStepRequest {
     readonly run: WorkflowRun;
     readonly definition: Definition;
