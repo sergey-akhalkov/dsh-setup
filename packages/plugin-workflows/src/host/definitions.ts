@@ -167,7 +167,7 @@ export interface CheckEvidence {
   readonly kind: 'check'
   readonly command?: string
   /** erify-settings reads the validated profile command list. */
-  readonly source?: 'verify-settings'
+  readonly source?: 'verify-settings' | 'task-review-coverage'
 }
 
 export interface HumanEvidence {
@@ -590,7 +590,12 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
       const source =
         raw.source === undefined
           ? undefined
-          : isOneOf(raw.source, ['verify-settings'] as const, definition, `${field}.source`)
+          : isOneOf(
+              raw.source,
+              ['verify-settings', 'task-review-coverage'] as const,
+              definition,
+              `${field}.source`,
+            )
       const command =
         raw.command === undefined
           ? undefined

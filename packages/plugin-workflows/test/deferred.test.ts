@@ -94,7 +94,11 @@ describe('shipped ownership after the retirement flip', () => {
       plugin: 'delegation-rules',
       signal: 'task-review',
     })
-    expect(taskReview.steps.map((step) => step.id)).toEqual(['start-review', 'await-review'])
+    expect(taskReview.steps.map((step) => step.id)).toEqual([
+      'start-review',
+      'await-review',
+      'complete-review',
+    ])
 
     const retro = definition('retro')
     expect(retro.trigger).toMatchObject({

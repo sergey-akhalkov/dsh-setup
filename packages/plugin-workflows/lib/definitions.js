@@ -356,7 +356,7 @@ function evidence(raw, definition, field) {
             assertKnown(raw, CHECK_KEYS, definition, field);
             const source = raw.source === undefined
                 ? undefined
-                : isOneOf(raw.source, ['verify-settings'], definition, `${field}.source`);
+                : isOneOf(raw.source, ['verify-settings', 'task-review-coverage'], definition, `${field}.source`);
             const command = raw.command === undefined
                 ? undefined
                 : nonEmptyString(raw.command, definition, `${field}.command`);

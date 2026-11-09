@@ -13,6 +13,7 @@ import type {
 } from './definitions.js'
 import { globMatches } from './evaluate.js'
 import { isInside } from './fs-change.js'
+import { taskReviewCoverage } from './parity.js'
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js'
 import type { RunEvidence } from './runs.js'
 
@@ -637,6 +638,23 @@ async function recordCheck(
       item,
     )
   }
+  // Legacy ERROR exclusions: a queue fault or a discarded-input verdict is not
+  // a usable review; finish the writes and re-run.
+  if (evidence.rule === 'task-review' && record.verdict === 'ERROR') {
+    const failureClass = (record as { failureClass?: unknown }).failureClass
+    const error = (record as { error?: unknown }).error
+    const discarded =
+      failureClass === 'reviewed-inputs-changed' ||
+      (typeof error === 'string' &&
+        (error.startsWith('queue-internal-error') || error.includes('reviewed inputs changed')))
+    if (discarded) {
+      return mismatch(
+        'the ERROR record discarded its verdict (the reviewed inputs moved or the queue failed); finish the writes and re-run the review',
+        path.text,
+        item,
+      )
+    }
+  }
   if (evidence.digest === 'current') {
     if (change === undefined) {
       return mismatch('a current digest needs a change name', path.text, item)
@@ -834,6 +852,23 @@ function checkResult(
   item: string | undefined,
 ): EvidenceCheck {
   if (evidence.source === 'verify-settings') return verifyCheck(context, item)
+  if (evidence.source === 'task-review-coverage') {
+    const change = context.values.name
+    if (typeof change !== 'string') {
+      return checkFailure('the completion coverage check has no change name', item)
+    }
+    const coverage = taskReviewCoverage(context.workspace, change)
+    if (!coverage.ok) return checkFailure(coverage.gaps.join('; '), item)
+    return {
+      ok: true,
+      evidence: {
+        kind: 'check',
+        callId: 'task-review-coverage',
+        at: Date.now(),
+        detail: 'every checked task has a portable task-review PASS',
+      },
+    }
+  }
   const command = resolveEvidenceText(evidence.command ?? '', context, item)
   if (!command.ok) return command
   const startedAt = context.stepStartedAt

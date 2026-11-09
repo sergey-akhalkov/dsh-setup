@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { portableRecordError } from './projection.js';
 /**
  * The release-bound retirement parity: the tracked report, its template
  * hashes, the verify settings contract, and the legacy decisions the owned
@@ -297,7 +298,9 @@ export function checkedTaskLines(markdown) {
 function readPortableApproval(workspace, change, taskId) {
     try {
         const raw = JSON.parse(readFileSync(join(workspace, 'openspec', 'changes', change, 'reviews', `${taskId}.json`), 'utf8'));
-        return isRecord(raw) ? raw : undefined;
+        if (!isRecord(raw))
+            return undefined;
+        return portableRecordError(raw) === undefined ? raw : undefined;
     }
     catch {
         return undefined;

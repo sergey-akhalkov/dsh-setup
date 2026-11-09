@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 import { isInside } from './fs-change.js';
+import { taskReviewCoverage } from './parity.js';
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js';
 /** A validated checkpoint record path a host-computed context value may carry. */
 const CHECKPOINT_PATH = /^\.dsh\/work-checkpoints\/[a-f0-9]{16}\/[0-9]+\.json$/u;
@@ -484,6 +485,18 @@ async function recordCheck(evidence, context, item) {
     if (accepted.length === 0 || !accepted.includes(String(record.verdict))) {
         return mismatch(`the record verdict "${String(record.verdict)}" is not one of: ${accepted.join(', ')}`, path.text, item);
     }
+    // Legacy ERROR exclusions: a queue fault or a discarded-input verdict is not
+    // a usable review; finish the writes and re-run.
+    if (evidence.rule === 'task-review' && record.verdict === 'ERROR') {
+        const failureClass = record.failureClass;
+        const error = record.error;
+        const discarded = failureClass === 'reviewed-inputs-changed' ||
+            (typeof error === 'string' &&
+                (error.startsWith('queue-internal-error') || error.includes('reviewed inputs changed')));
+        if (discarded) {
+            return mismatch('the ERROR record discarded its verdict (the reviewed inputs moved or the queue failed); finish the writes and re-run the review', path.text, item);
+        }
+    }
     if (evidence.digest === 'current') {
         if (change === undefined) {
             return mismatch('a current digest needs a change name', path.text, item);
@@ -652,6 +665,24 @@ function verifyCheck(context, item) {
 function checkResult(evidence, context, item) {
     if (evidence.source === 'verify-settings')
         return verifyCheck(context, item);
+    if (evidence.source === 'task-review-coverage') {
+        const change = context.values.name;
+        if (typeof change !== 'string') {
+            return checkFailure('the completion coverage check has no change name', item);
+        }
+        const coverage = taskReviewCoverage(context.workspace, change);
+        if (!coverage.ok)
+            return checkFailure(coverage.gaps.join('; '), item);
+        return {
+            ok: true,
+            evidence: {
+                kind: 'check',
+                callId: 'task-review-coverage',
+                at: Date.now(),
+                detail: 'every checked task has a portable task-review PASS',
+            },
+        };
+    }
     const command = resolveEvidenceText(evidence.command ?? '', context, item);
     if (!command.ok)
         return command;

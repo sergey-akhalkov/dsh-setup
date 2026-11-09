@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -525,6 +525,97 @@ describe('owned task-review definition', () => {
       values: { name: 'auth', taskId },
     })
     expect(check.ok).toBe(false)
+    await rm(workspace, { recursive: true, force: true })
+  })
+
+  it('keeps the run open at complete-review until every checked task is approved', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n- [ ] 1.2 Later\n', 'utf8')
+    const context = { workspace, values: { name: 'auth' } }
+    const missing = await verifyEvidence({ kind: 'check', source: 'task-review-coverage' }, context)
+    expect(missing.ok).toBe(false)
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n', 'utf8')
+    const id = (await import('../src/host/tasks.ts')).taskIdOf('Foreign')
+    await writeFile(
+      join(changeDir, 'reviews', `${id}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: id,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-08T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    expect(
+      (await verifyEvidence({ kind: 'check', source: 'task-review-coverage' }, context)).ok,
+    ).toBe(true)
+    await rm(workspace, { recursive: true, force: true })
+  })
+
+  it('rejects a discarded or queue-fault ERROR record and a malformed approval', async () => {
+    const taskId = '0123456789abcdef'
+    const awaitEvidence = shipped('task-review').steps.find(
+      (step) => step.id === 'await-review',
+    )?.evidence
+    for (const extra of [
+      { failureClass: 'reviewed-inputs-changed' },
+      { error: 'queue-internal-error: failure' },
+    ]) {
+      const workspace = await workspaceWithRecords({ [taskId]: 'ERROR' })
+      const recordPath = join(
+        workspace,
+        '.dsh',
+        'delegation',
+        'task-review',
+        'auth',
+        'tasks',
+        `${taskId}.json`,
+      )
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>
+      await writeFile(recordPath, JSON.stringify({ ...record, ...extra }), 'utf8')
+      const check = await verifyEvidence(awaitEvidence as never, {
+        workspace,
+        values: { name: 'auth', taskId },
+      })
+      expect(check.ok).toBe(false)
+      await rm(workspace, { recursive: true, force: true })
+    }
+
+    // A four-field or findings-bearing PASS cannot approve coverage.
+    const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n', 'utf8')
+    const id = (await import('../src/host/tasks.ts')).taskIdOf('Foreign')
+    await writeFile(
+      join(changeDir, 'reviews', `${id}.json`),
+      JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId: id }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    await writeFile(
+      join(changeDir, 'reviews', `${id}.json`),
+      JSON.stringify({
+        rule: 'task-review',
+        change: 'auth',
+        scope: 'task',
+        taskId: id,
+        digest: 'a'.repeat(64),
+        verdict: 'PASS',
+        findings: [{ severity: 'P1', title: 'bad', evidence: 'x', fix: 'y' }],
+        target: { provider: 'codex-subagent' },
+        time: '2026-11-08T00:00:00.000Z',
+      }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
     await rm(workspace, { recursive: true, force: true })
   })
 

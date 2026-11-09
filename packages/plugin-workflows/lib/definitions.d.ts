@@ -110,7 +110,7 @@ export interface CheckEvidence {
     readonly kind: 'check';
     readonly command?: string;
     /** erify-settings reads the validated profile command list. */
-    readonly source?: 'verify-settings';
+    readonly source?: 'verify-settings' | 'task-review-coverage';
 }
 export interface HumanEvidence {
     readonly kind: 'human';

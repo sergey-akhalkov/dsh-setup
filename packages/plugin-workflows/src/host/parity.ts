@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Definition } from './definitions.js'
+import { portableRecordError } from './projection.js'
 
 /**
  * The release-bound retirement parity: the tracked report, its template
@@ -402,7 +403,8 @@ function readPortableApproval(
         'utf8',
       ),
     ) as unknown
-    return isRecord(raw) ? (raw as PortableApproval) : undefined
+    if (!isRecord(raw)) return undefined
+    return portableRecordError(raw) === undefined ? (raw as PortableApproval) : undefined
   } catch {
     return undefined
   }

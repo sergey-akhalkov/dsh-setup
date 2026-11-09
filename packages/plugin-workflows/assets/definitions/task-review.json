@@ -49,6 +49,15 @@
         "verdicts": ["PASS", "ERROR"],
         "path": ".dsh/delegation/task-review/{name}/tasks/{taskId}.json"
       },
+      "next": "complete-review",
+      "blockTurnClose": true
+    },
+    {
+      "id": "complete-review",
+      "title": "Confirm the completion coverage",
+      "executor": "main",
+      "prompt": "Confirm the portable task-review PASS coverage for every checked task before the change can complete. Do not tick or archive; a missing or non-PASS checked task keeps this step open.",
+      "evidence": { "kind": "check", "source": "task-review-coverage" },
       "next": "end",
       "blockTurnClose": true
     }
