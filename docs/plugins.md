@@ -501,8 +501,30 @@ writability, trigger count and last error. A 60-second self-check writes it, and
 `journal-readonly`, so silence is never mistaken for success. The plugin is inert when the
 conversation, resources, locale or filesystem services are absent: it registers nothing and reports one
 bounded diagnostic. It writes only under `.dsh/workflows/`, never steers a turn and never changes
-`openspec/`; disabling the `dsh-setup-workflows` row removes the view and the recorder together. The
-setup default row is `- id: dsh-setup-workflows` with an empty config.
+`openspec/`; disabling the `dsh-setup-workflows` row removes the view and the recorder together.
+
+## Workflow engine
+
+The same bundle also hosts the obligation engine added by `add-workflow-obligations`. It stores JSON
+definitions, runs them from a durable run store, evaluates deterministic triggers through the same
+journal, executes `main`, `subagent`, `tool`, `human`, `branch` and `loop` steps, verifies file, record,
+tool, check, human and recursive `all` evidence, and enforces the turn-close and pre-execute gates.
+Every action comes from an owned or explicitly deferred definition step; shadow triggers never steer.
+A local definition or override is active only with a host-signed approval in
+`.dsh/workflows/approved.json`; the host key is held outside `.dsh` and gives tamper-evidence against
+model-mediated writes, while a hostile same-user shell is outside the threat model. Completed intake
+and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The shipped definitions are
+`change-intake` (active), and `task-review` and `retro` (active, `defer` until `retire-legacy-gates`).
+The `workflows` tool exposes list, start, resume, status, evidence and cancel, and the `/workflows`
+command family covers run, resume, install, adopt and status. The Workflows view gains Definitions, a
+run detail with step state, evidence, failure class and violations, and receipts; the bundle also
+contributes a bounded `workflows-active-runs` system-prompt context (at most five lines, and no section
+when none). The engine is inert without its host
+services. Its configuration includes `checkpointApplicability` (`minToolCalls` default 4,
+`requireWrite` default true) for the deferred `retro` definition; the operator must mirror the installed
+`goal-continuity` checkpoint settings because one plugin row cannot read another's config. The setup
+default row is `- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates,
+intake/adoption flow and migration are documented in [workflows](workflows.md).
 
 ## OpenSpec apply picker
 
