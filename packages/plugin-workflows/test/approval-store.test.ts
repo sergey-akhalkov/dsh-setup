@@ -128,6 +128,7 @@ describe('local definitions and the host approval store', () => {
       'change-intake',
       'retro',
       'task-review',
+      'verify',
     ])
   })
 
@@ -321,8 +322,14 @@ it('applies ownership filtering on a linked-directory fallback too', async () =>
     auth: auth(),
     installedLegacy: new Set(),
   })
-  expect(empty.definitions).toEqual([])
-  expect(empty.errors.join('\n')).toMatch(/retire-legacy-gates/u)
+  // An own definition loads beside a not-installed legacy source; the linked
+  // directory drops the local overrides and the intake's deferred spec-review
+  // step loses its source.
+  expect(empty.definitions.map((entry) => entry.id)).toEqual(
+    expect.arrayContaining(['retro', 'task-review', 'verify']),
+  )
+  expect(empty.definitions.map((entry) => entry.id)).not.toContain('change-intake')
+  expect(empty.errors.join('\n')).toMatch(/directory is a link|ancestor is a link/u)
 })
 
 it('restores the installed file when the approval write fails', async () => {

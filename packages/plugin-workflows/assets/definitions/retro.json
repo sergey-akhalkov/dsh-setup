@@ -1,7 +1,7 @@
 {
   "v": 1,
   "id": "retro",
-  "name": "Deferred review retro",
+  "name": "Work checkpoint",
   "version": 1,
   "trigger": {
     "kind": "turn.stopping",
@@ -13,17 +13,17 @@
   "settings": {
     "allowModelStart": false,
     "risk": "low",
-    "gateOwnership": "defer",
+    "gateOwnership": "own",
     "maxBlocks": 3,
     "allowIntent": false,
     "legacy": { "plugin": "goal-continuity", "signal": "work_checkpoint" }
   },
   "steps": [
     {
-      "id": "read-checkpoint",
-      "title": "Read the work checkpoint",
+      "id": "checkpoint",
+      "title": "Request the work checkpoint",
       "executor": "main",
-      "prompt": "Read the existing work_checkpoint record for this turn. Do not request a second checkpoint and do not steer.",
+      "prompt": "Call work_checkpoint for this turn with the lane plan, the bottleneck (id, owner, action, blocking lanes, and targets for a lead_action), the next action, and the verified evidence. The close is refused until a fresh checkpoint record exists.",
       "evidence": {
         "kind": "record",
         "source": "checkpoint",
@@ -31,7 +31,23 @@
         "verdict": "recorded",
         "path": "{checkpoint}"
       },
-      "next": "end"
+      "next": "verify",
+      "blockTurnClose": true
+    },
+    {
+      "id": "verify",
+      "title": "Verify the checkpoint plan and remedy",
+      "executor": "main",
+      "prompt": "Keep the checkpoint current: execute the declared bottleneck remedy (tagged worker start, lead-owned edit/write at the targets, or the user decision), and change the owner, the blocking lane, or the decision when the bottleneck age reaches the configured limit. Refresh the checkpoint if the plan changed.",
+      "evidence": {
+        "kind": "record",
+        "source": "checkpoint",
+        "rule": "goal-continuity",
+        "verdict": "recorded",
+        "path": "{checkpoint}"
+      },
+      "next": "end",
+      "blockTurnClose": true
     }
   ]
 }

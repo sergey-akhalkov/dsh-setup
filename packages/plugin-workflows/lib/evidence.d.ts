@@ -60,6 +60,10 @@ export interface EvidenceContext {
     readonly shellResults?: readonly ShellResultObservation[];
     /** The step's request time; a check must run after it. */
     readonly stepStartedAt?: number;
+    /** The validated erify.commands profile setting; empty keeps verify inert. */
+    readonly checkCommands?: readonly string[];
+    /** When the turn last wrote a non-documentation file; absent means no code write. */
+    readonly lastWriteAt?: number;
     /** Recorded user answers for the step's question. */
     readonly answers?: readonly HumanAnswerObservation[];
     /** Whether the step is marked nonCritical, the only declaration consumer. */
@@ -100,6 +104,8 @@ export declare function currentSpecDigest(workspace: string, change: string): Pr
 export declare function hostToolName(name: string): string;
 /** Whether an observed tool is the declared tool; `shell` matches the host shell. */
 export declare function toolNameMatches(declared: string, observed: string): boolean;
+/** When the turn last wrote a non-documentation file, from its tool calls. */
+export declare function lastCodeWriteAt(calls: readonly ToolCallObservation[]): number | undefined;
 /** Resolve every workspace-relative path an evidence contract will check. */
 export declare function collectEvidencePaths(value: Evidence, context: EvidenceContext, item?: string): string[];
 export declare function describeEvidence(value: Evidence, context: EvidenceContext): string;

@@ -216,6 +216,11 @@ function fakeHost(
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
       if (name === 'tools') return tools
+      // The migrated profile: the workflow-owned legacy gates are off while the
+      // spec-review, progress, and lane signals stay enabled.
+      if (name === 'delegationRulesStatus') return { workflowOwned: false }
+      if (name === 'goalContinuityStatus') return { automation: false }
+      if (name === 'verificationGateStatus') return { steering: false }
       if (name === 'userQuestions' && options.userQuestions === true) {
         return {
           ask: async (request: { questions: Array<{ id: string }> }) => ({
@@ -447,13 +452,13 @@ describe('retro applicability through the journal path', () => {
     const blockedRetro = (await runs.listAuthenticatedRuns(workspace, auth)).find(
       (entry) => entry.definition === 'retro',
     )
-    expect(blockedRetro?.steps[0]?.state).toBe('blocked')
+    expect(blockedRetro?.steps[0]?.state).toBe('open')
     const { sessionRuns } = await import('../src/host/projection.ts')
     const view = (await sessionRuns(workspace, 'session-1')).find(
       (entry) => entry.id === `workflow:${blockedRetro?.id ?? ''}`,
     )
     expect(view).toBeDefined()
-    expect(view?.steps[0]?.state).toBe('blocked')
+    expect(view?.steps[0]?.state).toBe('open')
     const runId = String(
       (await retroRows()).find((row) => row.reason === 'run-created')?.runId ?? '',
     )
@@ -820,7 +825,7 @@ describe('retro applicability evidence', () => {
 })
 
 describe('task-review runtime from a tasks.md change', () => {
-  it('names the change and the task from the path and checked delta and never steers', async () => {
+  it('names the change and the task and starts the owned review', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     // The archive collection and an incomplete change precede the real change;
@@ -839,7 +844,7 @@ describe('task-review runtime from a tasks.md change', () => {
         'utf8',
       )
     }
-    const host = fakeHost(workspace)
+    const host = fakeHost(workspace, { toolExecute: true })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 200))
     const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
@@ -884,7 +889,16 @@ describe('task-review runtime from a tasks.md change', () => {
       expect(view).toBeDefined()
       expect(view?.steps[0]?.state).toBe('done')
     }
-    expect(host.steers).toHaveLength(0)
+    // The owned definition steers the review call while the record is missing.
+    expect(host.steers.length).toBeGreaterThan(0)
+    const steerText = host.steers
+      .map((message) =>
+        ((message as { content?: Array<{ text?: string }> }).content ?? [])
+          .map((block) => block.text ?? '')
+          .join(''),
+      )
+      .join('\\n')
+    expect(steerText).toContain('task-review')
 
     // An edit that checks nothing starts no second observational run.
     await writeFile(join(changeDir, 'tasks.md'), '# Notes\n\n- [x] 1.1 Task\n', 'utf8')

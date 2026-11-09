@@ -30,7 +30,7 @@ function waitingFor(step, context) {
 export async function advanceIntake(input) {
     const at = input.now ?? Date.now();
     let run = input.run;
-    const resolved = resolveOwnership(input.definition, input.installedLegacy);
+    const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy);
     for (let guard = 0; guard < input.definition.steps.length + 1; guard += 1) {
         const pending = firstPending(run, input.definition);
         // Only a fully done definition completes; a failed or cancelled step stops
@@ -79,6 +79,7 @@ export async function advanceIntake(input) {
                 definition: input.definition,
                 stepId: step.id,
                 installedLegacy: input.installedLegacy,
+                ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
                 readRecord: input.readRecord,
                 now: at,
             });

@@ -294,6 +294,8 @@ export class Harness {
   readonly commands: Array<{ definitionId?: string; name: string }> = []
   readonly events = new Map<string, ContextEvent[]>()
   readonly skillProviders: SkillProviderLike[] = []
+  /** Services the plugin provided through `ctx.provide`, by name. */
+  readonly provided = new Map<string, unknown>()
   /** Terminal review-run states reported by the engine, in completion order. */
   readonly settledRuns: Array<{ runId: string; state: SettledRunState }> = []
   readonly publishedRuns: Array<{ runId: string; verdict: string }> = []
@@ -310,6 +312,10 @@ export class Harness {
     const cwdByAgent = this.cwdByAgent
     const ctx = {
       subagents: this.subagents,
+      provide: (name: string, value: unknown) => {
+        this.provided.set(name, value)
+        return () => this.provided.delete(name)
+      },
       workingDirectory: { get: (session: { id: string }) => cwdByAgent[session.id] ?? this.cwd },
       tools: {
         register: (definition: ToolDefinition) => {

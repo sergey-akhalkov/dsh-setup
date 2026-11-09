@@ -25,6 +25,7 @@ import {
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
+  lastCodeWriteAt,
   type ShellResultObservation,
   type ToolCallObservation,
   verifyEvidence,
@@ -55,6 +56,16 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
+import {
+  checkpointGateIssue,
+  parityLoadIssues,
+  readParityReport,
+  resolveVerifySettings,
+  shippedParityReportPath,
+  taskReviewCompletion,
+  taskReviewCoverage,
+  withVerifySettings,
+} from './parity.js'
 import { registerActiveRunsContext } from './prompt.js'
 import { listReceipts } from './receipts.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
@@ -355,16 +366,20 @@ export interface CheckpointApplicabilityConfig {
   readonly minToolCalls?: number
   /** Require a write or a started worker; default true. */
   readonly requireWrite?: boolean
+  /** Consecutive checkpoints a bottleneck may persist before a route change; default 2. */
+  readonly bottleneckAge?: number
 }
 
 export interface ResolvedCheckpointApplicability {
   readonly minToolCalls: number
   readonly requireWrite: boolean
+  readonly bottleneckAge: number
 }
 
 export const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability = Object.freeze({
   minToolCalls: 4,
   requireWrite: true,
+  bottleneckAge: 2,
 })
 
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
@@ -375,7 +390,7 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
   }
   const record = raw as Record<string, unknown>
   for (const key of Object.keys(record)) {
-    if (key !== 'minToolCalls' && key !== 'requireWrite') {
+    if (key !== 'minToolCalls' && key !== 'requireWrite' && key !== 'bottleneckAge') {
       throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`)
     }
   }
@@ -395,11 +410,25 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
   if (requireWrite !== undefined && typeof requireWrite !== 'boolean') {
     throw new Error('workflows checkpointApplicability.requireWrite must be a boolean')
   }
+  const bottleneckAge = record.bottleneckAge
+  if (
+    bottleneckAge !== undefined &&
+    (typeof bottleneckAge !== 'number' ||
+      !Number.isSafeInteger(bottleneckAge) ||
+      bottleneckAge < 1 ||
+      bottleneckAge > 1000)
+  ) {
+    throw new Error(
+      'workflows checkpointApplicability.bottleneckAge must be an integer between 1 and 1000',
+    )
+  }
   return {
     minToolCalls:
       (minToolCalls as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
     requireWrite:
       (requireWrite as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
+    bottleneckAge:
+      (bottleneckAge as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
   }
 }
 
@@ -415,6 +444,8 @@ export interface WorkflowsConfig {
   readonly maxRuns?: number
   /** The retro applicability settings; must mirror the goal-continuity row. */
   readonly checkpointApplicability?: CheckpointApplicabilityConfig
+  /** The validate-only profile settings for the `verify` definition. */
+  readonly verify?: { readonly commands?: readonly string[]; readonly maxBlocks?: number }
 }
 
 export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
@@ -427,6 +458,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const engineAllowIntent = config.allowIntent === true
   const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS
   const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability)
+  const verifySettings = resolveVerifySettings(config.verify)
   // A malformed shipped trigger refuses the plugin load, naming the field.
   const triggers = loadCatalog()
   // A malformed or duplicate shipped definition refuses the plugin load too.
@@ -543,6 +575,41 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     return installed
   }
+  /**
+   * The legacy per-signal state: installed providers plus the signals whose
+   * gate-only switch is on. The legacy plugins publish their switch through a
+   * small status service; a missing service means the signal does not steer.
+   */
+  const legacySignalState = (): { installed: Set<string>; enabled: Set<string> } => {
+    const installed = installedLegacySources()
+    const enabled = new Set<string>()
+    try {
+      if (installed.has('delegation-rules')) {
+        // The spec-review, progress, and lane gates stay on under either switch
+        // value; only the task-review rule and the archive gate follow it.
+        for (const signal of ['spec-review', 'task-progress', 'lane-assignment', 'lane-boundary']) {
+          enabled.add(`delegation-rules/${signal}`)
+        }
+        const status = ctx.get('delegationRulesStatus') as { workflowOwned?: unknown } | undefined
+        if (status?.workflowOwned !== false) {
+          enabled.add('delegation-rules/task-review')
+          enabled.add('delegation-rules/archive')
+        }
+      }
+      const checkpoint = ctx.get('goalContinuityStatus') as { automation?: unknown } | undefined
+      if (checkpoint?.automation === true) {
+        enabled.add('goal-continuity/work_checkpoint')
+      }
+      const verification = ctx.get('verificationGateStatus') as { steering?: unknown } | undefined
+      if (verification !== undefined) {
+        installed.add('verification-gate')
+        if (verification.steering === true) enabled.add('verification-gate/verification-gate')
+      }
+    } catch {
+      // An unreadable status service proves nothing; the signal stays disabled.
+    }
+    return { installed, enabled }
+  }
   /** Load the shipped set plus the approved local overrides for one workspace. */
   const definitionLoads = new Map<string, Promise<void>>()
   const loadDefinitions = (workspace: string): Promise<void> => {
@@ -552,20 +619,35 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const promise = (async () => {
       try {
         if (await hasLocalDefinitionFiles(workspace)) await ensureAuth()
+        const legacy = legacySignalState()
         const loaded = await loadApprovedDefinitions(workspace, {
           ...(storedAuth === undefined ? {} : { auth: storedAuth }),
-          installedLegacy: installedLegacySources(),
+          installedLegacy: legacy.installed,
+          enabledLegacy: legacy.enabled,
         })
+        // The release-bound parity report gates every `own` definition; the
+        // verified profile settings are applied only after its template check.
+        const parity = readParityReport()
+        const parityCheck = parityLoadIssues(
+          loaded.definitions,
+          parity.report,
+          shippedParityReportPath(),
+          parity.error,
+        )
+        const loadErrors = [...loaded.errors, ...parityCheck.issues]
+        const accepted = loaded.definitions
+          .filter((definition) => !parityCheck.refused.has(definition.id))
+          .map((definition) => withVerifySettings(definition, verifySettings))
         if (pluginDisposed) return
-        definitionsByWorkspace.set(workspace, loaded.definitions)
+        definitionsByWorkspace.set(workspace, accepted)
         // A run is authoritative only when signed, so an active definition
         // needs the host key ready before its first event.
-        if (loaded.definitions.some((definition) => definition.trigger.mode === 'active')) {
+        if (accepted.some((definition) => definition.trigger.mode === 'active')) {
           void ensureAuth()
         }
         // Definition-load refusals are diagnostics, not listener failures: they
         // must not overwrite the health strip's single last-error slot.
-        for (const message of loaded.errors) {
+        for (const message of loadErrors) {
           console.error(`workflows: ${message.slice(0, 300)}`)
         }
       } catch (error) {
@@ -1278,6 +1360,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           name: exec.name,
           arguments: args,
           ok: isShellTool ? shellOutcome.ok : !result.isError,
+          at: journal.time(),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -1659,6 +1742,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           name: request.name,
           arguments: { ...request.arguments },
           ok: true,
+          at: journal.time(),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -1691,6 +1775,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     agent: Agent,
     auth: HostAuth,
     installedLegacy: ReadonlySet<string>,
+    enabledLegacy: ReadonlySet<string>,
     turn: number,
   ): Promise<WorkflowRun> => {
     // Only a fully applicable deferred observation advances; a run whose
@@ -1707,6 +1792,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         requireWrite: checkpointApplicability.requireWrite,
       })
       if (!applicable) {
+        const completed = completeNotApplicable(run, journal.time())
+        await writeRun(workspace, completed, auth)
+        return completed
+      }
+    }
+    if (definition.trigger.applicability === 'code-write') {
+      // The verify definition observes only a turn that wrote code; a
+      // documentation-only or inspection turn completes the run as inapplicable.
+      const calls = sessionToolCalls.get(String(agent.session.id)) ?? []
+      if (lastCodeWriteAt(calls) === undefined) {
         const completed = completeNotApplicable(run, journal.time())
         await writeRun(workspace, completed, auth)
         return completed
@@ -1731,6 +1826,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         values: run.context,
         toolCalls,
         shellResults,
+        checkCommands: verifySettings.commands,
+        ...(lastCodeWriteAt(toolCalls) === undefined
+          ? {}
+          : { lastWriteAt: lastCodeWriteAt(toolCalls) }),
         ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
       },
       owned: ownedCalls,
@@ -1743,6 +1842,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           values: run.context,
         }),
       installedLegacy,
+      enabledLegacy,
       auth,
       now: journal.time(),
     })
@@ -2208,12 +2308,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               },
               { workspace, values: { name: archive.change } },
             )
+            const taskReviewOwned = definitions.some(
+              (definition) =>
+                definition.id === 'task-review' && definition.settings.gateOwnership === 'own',
+            )
+            const coverage = taskReviewOwned
+              ? taskReviewCoverage(workspace, archive.change)
+              : undefined
             const decision = evaluateArchiveGate({
               change: archive.change,
               tamperedRuns: auth === undefined ? false : await hasTamperedRuns(workspace, auth),
               runs: auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth),
               receipts: auth === undefined ? [] : await listReceipts(workspace, auth),
               specRecord,
+              ...(coverage === undefined
+                ? {}
+                : {
+                    taskReview: {
+                      ok: coverage.ok,
+                      ...(coverage.gaps.length === 0 ? {} : { text: coverage.gaps.join('; ') }),
+                    },
+                  }),
             })
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
           }
@@ -2261,7 +2376,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (ownerId !== undefined && owner === undefined) mainStepOwners.delete(sessionId)
         const ordered =
           owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
-        const installedLegacy = installedLegacySources()
+        const legacy = legacySignalState()
+        // Advance every run first: an owned tool step (the review start) must
+        // dispatch for every newly checked task before one close is refused.
+        const advanced = new Map<string, WorkflowRun>()
+        const definitionOf = new Map<string, Definition>()
         for (const run of ordered) {
           const definition = definitions.find((entry) => entry.id === run.definition)
           if (definition === undefined) continue
@@ -2271,9 +2390,36 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             definition,
             payload.agent,
             auth,
-            installedLegacy,
+            legacy.installed,
+            legacy.enabled,
             payload.turn,
           )
+          advanced.set(run.id, current)
+          definitionOf.set(run.id, definition)
+        }
+        for (const run of ordered) {
+          const current = advanced.get(run.id)
+          const definition = definitionOf.get(run.id)
+          if (current === undefined || definition === undefined) continue
+          const sessionCalls = sessionToolCalls.get(sessionId) ?? []
+          const observations = sessionCalls.map((call) => ({
+            toolName: call.name,
+            arguments: call.arguments,
+            ok: call.ok,
+          }))
+          const completion =
+            definition.id === 'task-review' && typeof current.context.name === 'string'
+              ? taskReviewCompletion(workspace, current.context.name)
+              : undefined
+          const checkpointIssue =
+            definition.id === 'retro' && typeof current.context.checkpoint === 'string'
+              ? checkpointGateIssue(
+                  workspace,
+                  current.context.checkpoint,
+                  observations,
+                  checkpointApplicability.bottleneckAge,
+                )
+              : undefined
           const outcome = evaluateTurnClose({
             run: current,
             definition,
@@ -2289,10 +2435,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             evidenceContext: { workspace, values: current.context },
             turn: payload.turn,
             maxBlocks: definition.settings.maxBlocks,
-            installedLegacy,
+            installedLegacy: legacy.installed,
+            enabledLegacy: legacy.enabled,
+            ...(completion === undefined ? {} : { completion }),
+            ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
             onError: (error) => publishListenerError(workspace, error),
           })
-          if (outcome.run !== run) await writeRun(workspace, outcome.run, auth)
+          if (outcome.run !== current) await writeRun(workspace, outcome.run, auth)
           // Keep the session's main-step owner until its step settles; a
           // second run may take over only after that.
           if (outcome.kind !== 'allow') {
@@ -2484,9 +2633,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 const step = definition.steps.find((entry) => entry.id === pendingStep(run))
                 if (step === undefined) return
                 // A deferred step is never steered; only its legacy gate steers.
-                const resolved = resolveOwnership(definition, installedLegacySources()).steps.find(
-                  (entry) => entry.id === step.id,
-                )
+                const state = legacySignalState()
+                const resolved = resolveOwnership(
+                  definition,
+                  state.installed,
+                  state.enabled,
+                ).steps.find((entry) => entry.id === step.id)
                 if (resolved?.ownership !== 'own') return
                 // An explicit user run or resume gets a fresh bounded budget.
                 const budgeted: WorkflowRun = {

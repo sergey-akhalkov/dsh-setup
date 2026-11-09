@@ -476,8 +476,13 @@ async function recordCheck(evidence, context, item) {
     if (task !== undefined && record.taskId !== task.text) {
         return mismatch(`the record task is not "${task.text}"`, path.text, item);
     }
-    if (record.verdict !== evidence.verdict) {
-        return mismatch(`the record verdict is not "${evidence.verdict}"`, path.text, item);
+    const accepted = evidence.verdicts !== undefined
+        ? evidence.verdicts
+        : evidence.verdict === undefined
+            ? []
+            : [evidence.verdict];
+    if (accepted.length === 0 || !accepted.includes(String(record.verdict))) {
+        return mismatch(`the record verdict "${String(record.verdict)}" is not one of: ${accepted.join(', ')}`, path.text, item);
     }
     if (evidence.digest === 'current') {
         if (change === undefined) {
@@ -497,7 +502,7 @@ async function recordCheck(evidence, context, item) {
             kind: 'record',
             path: path.text,
             ...(typeof record.digest === 'string' ? { digest: record.digest } : {}),
-            detail: `record ${evidence.rule} ${evidence.verdict}`,
+            detail: `record ${evidence.rule} ${accepted.join('|')}`,
         },
     };
 }
@@ -550,8 +555,104 @@ function sameCheckDirectory(left, right) {
     const b = norm(right);
     return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
+/** True when a write target is planning scratch or documentation, not code. */
+function ignoredWrite(path) {
+    const normalized = path.replaceAll('\\', '/');
+    if (/\.md$/iu.test(normalized))
+        return true;
+    return /(?:^|\/)(?:\.dsh|\.tmp|node_modules|openspec)\//iu.test(normalized);
+}
+/** When the turn last wrote a non-documentation file, from its tool calls. */
+export function lastCodeWriteAt(calls) {
+    let last;
+    for (const call of calls) {
+        if (!call.ok || call.at === undefined)
+            continue;
+        if (call.name !== 'edit' && call.name !== 'write')
+            continue;
+        const raw = call.arguments.file_path ?? call.arguments.path;
+        if (typeof raw !== 'string' || raw.trim() === '' || ignoredWrite(raw))
+            continue;
+        if (last === undefined || call.at > last)
+            last = call.at;
+    }
+    return last;
+}
+/** The legacy command comparison: trim, then strip at most one leading `rtk `. */
+function normalizeCheckCommand(value) {
+    return value.trim().replace(/^rtk\s+/u, '');
+}
+function checkFailure(detail, item) {
+    return failure('check-failed', detail, undefined, item);
+}
+/**
+ * The owned verification check: a configured command must have completed
+ * successfully after the turn's last code write. No code write or no
+ * configured command keeps the step inert, exactly like the legacy gate.
+ */
+function verifyCheck(context, item) {
+    const commands = context.checkCommands ?? [];
+    if (commands.length === 0) {
+        return {
+            ok: true,
+            evidence: {
+                kind: 'check',
+                callId: 'no-command',
+                at: 0,
+                detail: 'no configured verification command; the verify definition is inert',
+            },
+        };
+    }
+    const lastWrite = context.lastWriteAt;
+    if (lastWrite === undefined) {
+        return {
+            ok: true,
+            evidence: {
+                kind: 'check',
+                callId: 'no-code-write',
+                at: 0,
+                detail: 'no code write in this turn',
+            },
+        };
+    }
+    const accepted = new Set(commands.map(normalizeCheckCommand));
+    const results = (context.shellResults ?? []).filter((candidate) => candidate.foreground &&
+        accepted.has(normalizeCheckCommand(candidate.command)) &&
+        (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)));
+    const afterWrite = results.filter((candidate) => candidate.at > lastWrite);
+    const shown = commands.map((command) => `"${command}"`).join(' or ');
+    if (afterWrite.length === 0) {
+        return checkFailure(`no configured verification command completed after the last code write; run ${shown}`, item);
+    }
+    const latest = afterWrite.reduce((last, candidate) => candidate.at >= last.at ? candidate : last);
+    if (latest.ok === false) {
+        return checkFailure(`"${latest.command}" did not complete successfully`, item);
+    }
+    if (latest.timedOut === true)
+        return checkFailure(`"${latest.command}" timed out`, item);
+    if (latest.signal !== undefined) {
+        return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item);
+    }
+    if (latest.sandboxDenied === true) {
+        return checkFailure(`"${latest.command}" was refused by the sandbox`, item);
+    }
+    if (latest.exitCode !== 0) {
+        return checkFailure(`"${latest.command}" exited ${String(latest.exitCode)}; a zero exit is required`, item);
+    }
+    return {
+        ok: true,
+        evidence: {
+            kind: 'check',
+            callId: latest.callId,
+            at: latest.at,
+            detail: latest.command,
+        },
+    };
+}
 function checkResult(evidence, context, item) {
-    const command = resolveEvidenceText(evidence.command, context, item);
+    if (evidence.source === 'verify-settings')
+        return verifyCheck(context, item);
+    const command = resolveEvidenceText(evidence.command ?? '', context, item);
     if (!command.ok)
         return command;
     const startedAt = context.stepStartedAt;
@@ -682,7 +783,7 @@ export function describeEvidence(value, context) {
             };
             const constraints = [
                 `rule=${show(value.rule) ?? value.rule}`,
-                `verdict=${value.verdict}`,
+                `verdict=${value.verdict ?? (value.verdicts ?? []).join('|')}`,
                 show(value.change) === undefined ? '' : `change=${String(show(value.change))}`,
                 show(value.phase) === undefined ? '' : `phase=${String(show(value.phase))}`,
                 show(value.scope) === undefined ? '' : `scope=${String(show(value.scope))}`,
@@ -699,7 +800,10 @@ export function describeEvidence(value, context) {
             return `completed tool call ${value.name}${command === undefined ? '' : ` "${command.ok ? command.text : value.command}"`}${args}`;
         }
         case 'check': {
-            const command = resolveEvidenceText(value.command, context, undefined);
+            if (value.source === 'verify-settings') {
+                return `a configured verify command (${(context.checkCommands ?? []).join(' or ') || 'inert'}) exits 0 after the last code write`;
+            }
+            const command = resolveEvidenceText(value.command ?? '', context, undefined);
             return `foreground command "${command.ok ? command.text : value.command}" exits 0`;
         }
         case 'human':

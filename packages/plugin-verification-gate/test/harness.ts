@@ -79,11 +79,17 @@ export class Harness {
   readonly agent: FakeAgent
   readonly events = new Map<string, ContextEvent[]>()
   readonly eventNames: string[] = []
+  /** Services the plugin provided through ctx.provide. */
+  readonly provided = new Map<string, unknown>()
 
   constructor(config?: Config, agent: FakeAgent = createAgent()) {
     this.agent = agent
     const events = this.events
     const ctx = {
+      provide: (name: string, value: unknown) => {
+        this.provided.set(name, value)
+        return () => this.provided.delete(name)
+      },
       on: (name: string, handler: ContextEvent) => {
         this.eventNames.push(name)
         const list = events.get(name) ?? []

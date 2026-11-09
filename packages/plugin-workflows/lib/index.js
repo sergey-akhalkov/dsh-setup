@@ -9,7 +9,7 @@ import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './comman
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { evaluateEvent } from './evaluate.js';
-import { verifyEvidence, } from './evidence.js';
+import { lastCodeWriteAt, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose, } from './gates.js';
@@ -17,6 +17,7 @@ import { WorkflowHealth } from './health.js';
 import { HostAuth } from './host-auth.js';
 import { advanceIntake } from './intake.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
+import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, shippedParityReportPath, taskReviewCompletion, taskReviewCoverage, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
 import { listReceipts } from './receipts.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
@@ -233,6 +234,7 @@ function toolSummary(name, isError, text) {
 export const DEFAULT_CHECKPOINT_APPLICABILITY = Object.freeze({
     minToolCalls: 4,
     requireWrite: true,
+    bottleneckAge: 2,
 });
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
 function resolveCheckpointApplicability(raw) {
@@ -243,7 +245,7 @@ function resolveCheckpointApplicability(raw) {
     }
     const record = raw;
     for (const key of Object.keys(record)) {
-        if (key !== 'minToolCalls' && key !== 'requireWrite') {
+        if (key !== 'minToolCalls' && key !== 'requireWrite' && key !== 'bottleneckAge') {
             throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`);
         }
     }
@@ -259,9 +261,18 @@ function resolveCheckpointApplicability(raw) {
     if (requireWrite !== undefined && typeof requireWrite !== 'boolean') {
         throw new Error('workflows checkpointApplicability.requireWrite must be a boolean');
     }
+    const bottleneckAge = record.bottleneckAge;
+    if (bottleneckAge !== undefined &&
+        (typeof bottleneckAge !== 'number' ||
+            !Number.isSafeInteger(bottleneckAge) ||
+            bottleneckAge < 1 ||
+            bottleneckAge > 1000)) {
+        throw new Error('workflows checkpointApplicability.bottleneckAge must be an integer between 1 and 1000');
+    }
     return {
         minToolCalls: minToolCalls ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
         requireWrite: requireWrite ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
+        bottleneckAge: bottleneckAge ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
     };
 }
 export function apply(ctx, config = {}) {
@@ -274,6 +285,7 @@ export function apply(ctx, config = {}) {
     const engineAllowIntent = config.allowIntent === true;
     const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS;
     const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability);
+    const verifySettings = resolveVerifySettings(config.verify);
     // A malformed shipped trigger refuses the plugin load, naming the field.
     const triggers = loadCatalog();
     // A malformed or duplicate shipped definition refuses the plugin load too.
@@ -395,6 +407,43 @@ export function apply(ctx, config = {}) {
         }
         return installed;
     };
+    /**
+     * The legacy per-signal state: installed providers plus the signals whose
+     * gate-only switch is on. The legacy plugins publish their switch through a
+     * small status service; a missing service means the signal does not steer.
+     */
+    const legacySignalState = () => {
+        const installed = installedLegacySources();
+        const enabled = new Set();
+        try {
+            if (installed.has('delegation-rules')) {
+                // The spec-review, progress, and lane gates stay on under either switch
+                // value; only the task-review rule and the archive gate follow it.
+                for (const signal of ['spec-review', 'task-progress', 'lane-assignment', 'lane-boundary']) {
+                    enabled.add(`delegation-rules/${signal}`);
+                }
+                const status = ctx.get('delegationRulesStatus');
+                if (status?.workflowOwned !== false) {
+                    enabled.add('delegation-rules/task-review');
+                    enabled.add('delegation-rules/archive');
+                }
+            }
+            const checkpoint = ctx.get('goalContinuityStatus');
+            if (checkpoint?.automation === true) {
+                enabled.add('goal-continuity/work_checkpoint');
+            }
+            const verification = ctx.get('verificationGateStatus');
+            if (verification !== undefined) {
+                installed.add('verification-gate');
+                if (verification.steering === true)
+                    enabled.add('verification-gate/verification-gate');
+            }
+        }
+        catch {
+            // An unreadable status service proves nothing; the signal stays disabled.
+        }
+        return { installed, enabled };
+    };
     /** Load the shipped set plus the approved local overrides for one workspace. */
     const definitionLoads = new Map();
     const loadDefinitions = (workspace) => {
@@ -407,21 +456,31 @@ export function apply(ctx, config = {}) {
             try {
                 if (await hasLocalDefinitionFiles(workspace))
                     await ensureAuth();
+                const legacy = legacySignalState();
                 const loaded = await loadApprovedDefinitions(workspace, {
                     ...(storedAuth === undefined ? {} : { auth: storedAuth }),
-                    installedLegacy: installedLegacySources(),
+                    installedLegacy: legacy.installed,
+                    enabledLegacy: legacy.enabled,
                 });
+                // The release-bound parity report gates every `own` definition; the
+                // verified profile settings are applied only after its template check.
+                const parity = readParityReport();
+                const parityCheck = parityLoadIssues(loaded.definitions, parity.report, shippedParityReportPath(), parity.error);
+                const loadErrors = [...loaded.errors, ...parityCheck.issues];
+                const accepted = loaded.definitions
+                    .filter((definition) => !parityCheck.refused.has(definition.id))
+                    .map((definition) => withVerifySettings(definition, verifySettings));
                 if (pluginDisposed)
                     return;
-                definitionsByWorkspace.set(workspace, loaded.definitions);
+                definitionsByWorkspace.set(workspace, accepted);
                 // A run is authoritative only when signed, so an active definition
                 // needs the host key ready before its first event.
-                if (loaded.definitions.some((definition) => definition.trigger.mode === 'active')) {
+                if (accepted.some((definition) => definition.trigger.mode === 'active')) {
                     void ensureAuth();
                 }
                 // Definition-load refusals are diagnostics, not listener failures: they
                 // must not overwrite the health strip's single last-error slot.
-                for (const message of loaded.errors) {
+                for (const message of loadErrors) {
                     console.error(`workflows: ${message.slice(0, 300)}`);
                 }
             }
@@ -1060,6 +1119,7 @@ export function apply(ctx, config = {}) {
                 name: exec.name,
                 arguments: args,
                 ok: isShellTool ? shellOutcome.ok : !result.isError,
+                at: journal.time(),
             });
             if (observed.length > 100)
                 observed.shift();
@@ -1409,6 +1469,7 @@ export function apply(ctx, config = {}) {
                     name: request.name,
                     arguments: { ...request.arguments },
                     ok: true,
+                    at: journal.time(),
                 });
                 if (observed.length > 100)
                     observed.shift();
@@ -1436,7 +1497,7 @@ export function apply(ctx, config = {}) {
         };
     };
     /** Advance one run through its verified evidence; a deferred step never steers. */
-    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, turn) => {
+    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn) => {
         // Only a fully applicable deferred observation advances; a run whose
         // trigger is no longer applicable becomes terminal and pruneable.
         if (definition.trigger.applicability === 'checkpoint-required') {
@@ -1451,6 +1512,16 @@ export function apply(ctx, config = {}) {
                 requireWrite: checkpointApplicability.requireWrite,
             });
             if (!applicable) {
+                const completed = completeNotApplicable(run, journal.time());
+                await writeRun(workspace, completed, auth);
+                return completed;
+            }
+        }
+        if (definition.trigger.applicability === 'code-write') {
+            // The verify definition observes only a turn that wrote code; a
+            // documentation-only or inspection turn completes the run as inapplicable.
+            const calls = sessionToolCalls.get(String(agent.session.id)) ?? [];
+            if (lastCodeWriteAt(calls) === undefined) {
                 const completed = completeNotApplicable(run, journal.time());
                 await writeRun(workspace, completed, auth);
                 return completed;
@@ -1475,6 +1546,10 @@ export function apply(ctx, config = {}) {
                 values: run.context,
                 toolCalls,
                 shellResults,
+                checkCommands: verifySettings.commands,
+                ...(lastCodeWriteAt(toolCalls) === undefined
+                    ? {}
+                    : { lastWriteAt: lastCodeWriteAt(toolCalls) }),
                 ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
             },
             owned: ownedCalls,
@@ -1486,6 +1561,7 @@ export function apply(ctx, config = {}) {
                 values: run.context,
             }),
             installedLegacy,
+            enabledLegacy,
             auth,
             now: journal.time(),
         });
@@ -1905,12 +1981,24 @@ export function apply(ctx, config = {}) {
                         verdict: 'PASS',
                         digest: 'current',
                     }, { workspace, values: { name: archive.change } });
+                    const taskReviewOwned = definitions.some((definition) => definition.id === 'task-review' && definition.settings.gateOwnership === 'own');
+                    const coverage = taskReviewOwned
+                        ? taskReviewCoverage(workspace, archive.change)
+                        : undefined;
                     const decision = evaluateArchiveGate({
                         change: archive.change,
                         tamperedRuns: auth === undefined ? false : await hasTamperedRuns(workspace, auth),
                         runs: auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth),
                         receipts: auth === undefined ? [] : await listReceipts(workspace, auth),
                         specRecord,
+                        ...(coverage === undefined
+                            ? {}
+                            : {
+                                taskReview: {
+                                    ok: coverage.ok,
+                                    ...(coverage.gaps.length === 0 ? {} : { text: coverage.gaps.join('; ') }),
+                                },
+                            }),
                     });
                     if (decision.kind === 'deny')
                         return { kind: 'deny', reason: decision.reason };
@@ -1959,12 +2047,36 @@ export function apply(ctx, config = {}) {
             if (ownerId !== undefined && owner === undefined)
                 mainStepOwners.delete(sessionId);
             const ordered = owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)];
-            const installedLegacy = installedLegacySources();
+            const legacy = legacySignalState();
+            // Advance every run first: an owned tool step (the review start) must
+            // dispatch for every newly checked task before one close is refused.
+            const advanced = new Map();
+            const definitionOf = new Map();
             for (const run of ordered) {
                 const definition = definitions.find((entry) => entry.id === run.definition);
                 if (definition === undefined)
                     continue;
-                const current = await advanceRun(workspace, run, definition, payload.agent, auth, installedLegacy, payload.turn);
+                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn);
+                advanced.set(run.id, current);
+                definitionOf.set(run.id, definition);
+            }
+            for (const run of ordered) {
+                const current = advanced.get(run.id);
+                const definition = definitionOf.get(run.id);
+                if (current === undefined || definition === undefined)
+                    continue;
+                const sessionCalls = sessionToolCalls.get(sessionId) ?? [];
+                const observations = sessionCalls.map((call) => ({
+                    toolName: call.name,
+                    arguments: call.arguments,
+                    ok: call.ok,
+                }));
+                const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
+                    ? taskReviewCompletion(workspace, current.context.name)
+                    : undefined;
+                const checkpointIssue = definition.id === 'retro' && typeof current.context.checkpoint === 'string'
+                    ? checkpointGateIssue(workspace, current.context.checkpoint, observations, checkpointApplicability.bottleneckAge)
+                    : undefined;
                 const outcome = evaluateTurnClose({
                     run: current,
                     definition,
@@ -1979,10 +2091,13 @@ export function apply(ctx, config = {}) {
                     evidenceContext: { workspace, values: current.context },
                     turn: payload.turn,
                     maxBlocks: definition.settings.maxBlocks,
-                    installedLegacy,
+                    installedLegacy: legacy.installed,
+                    enabledLegacy: legacy.enabled,
+                    ...(completion === undefined ? {} : { completion }),
+                    ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
                     onError: (error) => publishListenerError(workspace, error),
                 });
-                if (outcome.run !== run)
+                if (outcome.run !== current)
                     await writeRun(workspace, outcome.run, auth);
                 // Keep the session's main-step owner until its step settles; a
                 // second run may take over only after that.
@@ -2150,7 +2265,8 @@ export function apply(ctx, config = {}) {
                         if (step === undefined)
                             return;
                         // A deferred step is never steered; only its legacy gate steers.
-                        const resolved = resolveOwnership(definition, installedLegacySources()).steps.find((entry) => entry.id === step.id);
+                        const state = legacySignalState();
+                        const resolved = resolveOwnership(definition, state.installed, state.enabled).steps.find((entry) => entry.id === step.id);
                         if (resolved?.ownership !== 'own')
                             return;
                         // An explicit user run or resume gets a fresh bounded budget.

@@ -17,26 +17,38 @@ describe('verification gate package', () => {
     expect(DEFAULT_MAX_BLOCKS).toBe(8)
   })
 
-  it('registers only the three observation events and touches no other service', () => {
+  it('registers only the three observation events and reports its status service', () => {
     const registered: string[] = []
+    const provided = new Map<string, unknown>()
     const target = {
       on(eventName: string) {
         registered.push(eventName)
+        return () => undefined
+      },
+      provide(serviceName: string, value: unknown) {
+        provided.set(serviceName, value)
         return () => undefined
       },
     }
     const ctx = new Proxy(target, {
       get(object, property) {
         if (property === 'on') return object.on
+        if (property === 'provide') return object.provide
+        if (property === 'get') return () => undefined
         throw new Error(`verification-gate must not access ctx.${String(property)}`)
       },
     })
     expect(() => apply(ctx as unknown as Context, { commands: ['pnpm check'] })).not.toThrow()
     expect(registered).toEqual(['agent/pre-step', 'tools/result', 'agent/turn-stopping'])
+    expect(provided.get('verificationGateStatus')).toEqual({ steering: true, maxBlocks: 8 })
   })
 
   it('is inert with no commands: registers no listener and gates no turn', async () => {
     const harness = new Harness({})
+    expect(harness.provided.get('verificationGateStatus')).toEqual({
+      steering: false,
+      maxBlocks: 8,
+    })
     expect(harness.eventNames).toEqual([])
     await harness.write('src/app.ts')
     await harness.stop()

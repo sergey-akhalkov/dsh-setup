@@ -77,8 +77,8 @@ describe('always-on contract budget', () => {
     expect(section).toContain(
       'the lane plan, `verified`, `bottleneck`, its owner, blocking lanes, remedy, `next`',
     )
-    expect(section).toContain('Execute the remedy before the turn closes; the plugin checks for it')
-    expect(section).toContain('Independent lanes start a worker before the turn closes')
+    expect(section).toContain('Execute the remedy before the close; the workflow checks it')
+    expect(section).toContain('Independent lanes start a worker before the close')
     expect(section).toContain('integrated in the main agent')
     expect(contract).not.toContain('serialReason')
     expect(contract).not.toContain('speedup')
@@ -91,7 +91,7 @@ describe('always-on contract budget', () => {
     )
     expect(section).toContain('bottleneck surviving a second checkpoint needs a route change')
     expect(section).toContain('new owner, changed blocking lane, or user decision')
-    expect(section).toContain('not another wait')
+    expect(section).toContain('not a wait')
   })
 
   it('names independent lanes with owners and scopes and refreshes the plan', () => {
@@ -125,7 +125,7 @@ describe('always-on contract budget', () => {
       /\s+/g,
       ' ',
     )
-    expect(section).toContain('each step interval')
+    expect(section).toContain('A substantial pause ends with the workflow checkpoint')
     expect(section).toContain('`bottleneck`')
     expect(section).toContain('blocking lanes, remedy')
   })

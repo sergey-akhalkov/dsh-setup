@@ -155,6 +155,18 @@ remedy was not executed or whose bottleneck survived `bottleneckAge` checkpoints
 self-review, not an independent review, and the review gate remains the independent check for
 blockers and user-only questions.
 
+### Gate-only retirement switch
+
+`checkpoint.automation: false` retires the enforcement without removing the checkpoint. The
+`work_checkpoint` tool, its record, and the lane schema stay exactly as documented below; the close
+gate, the parallel gate, the remedy gate, the bottleneck-age gate, and the periodic request stop
+steering. The owning path is then the `retro` workflow definition (`own`), which requests the
+checkpoint at a substantial turn close, reads the same record as evidence, and refuses the close
+until the plan, the remedy, and the age rule pass. A `defer` `retro` definition beside
+`automation: false` is refused at load, so the two owners cannot both leave the checkpoint
+unenforced. The default is `true`. Rollback is one config flip: set `automation: true` and return the
+definition to `defer`; the records are never rewritten.
+
 ### Trigger
 
 The plugin evaluates a root agent's turn close from the tool results it already observes. A

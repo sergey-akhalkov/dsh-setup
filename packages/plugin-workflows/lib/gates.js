@@ -12,8 +12,8 @@ function stepIsOpen(run, stepId) {
  * whether it blocks the turn close itself, because the legacy gate is the only
  * steer for it.
  */
-export function selectBlockingStep(run, definition, installedLegacy) {
-    const resolved = resolveOwnership(definition, installedLegacy);
+export function selectBlockingStep(run, definition, installedLegacy, enabledLegacy) {
+    const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy);
     const ownership = new Map(resolved.steps.map((step) => [step.id, step.ownership]));
     for (const step of definition.steps) {
         if (!stepIsOpen(run, step.id))
@@ -42,7 +42,27 @@ export function evaluateTurnClose(input) {
                 reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
             };
         }
-        const step = selectBlockingStep(input.run, input.definition, input.installedLegacy);
+        const step = selectBlockingStep(input.run, input.definition, input.installedLegacy, input.enabledLegacy);
+        // A host-computed owned decision (completion coverage or the checkpoint
+        // remedy/age rule) refuses before the generic step walk.
+        const ownedText = input.checkpointIssue?.text ??
+            (input.completion?.ok === false
+                ? (input.completion.text ?? 'the completion coverage is incomplete')
+                : undefined);
+        if (ownedText !== undefined) {
+            const blocks = input.run.turnBlocks ?? 0;
+            if (blocks >= input.maxBlocks) {
+                const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`;
+                const run = resetTurnBlocks(addViolation(input.run, detail, { at }), at);
+                return { kind: 'violation', run, detail };
+            }
+            return {
+                kind: 'refuse',
+                run: incrementTurnBlocks(input.run, at),
+                stepId: step?.id ?? input.definition.steps.at(-1)?.id ?? 'owned-rule',
+                text: ownedText,
+            };
+        }
         if (step === undefined) {
             return {
                 kind: 'allow',
@@ -189,7 +209,7 @@ export async function evaluateIntakeGate(input) {
  */
 export async function runDeferredStep(input) {
     const at = input.now ?? Date.now();
-    const resolved = resolveOwnership(input.definition, input.installedLegacy);
+    const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy);
     const ownership = resolved.steps.find((step) => step.id === input.stepId);
     const step = input.definition.steps.find((entry) => entry.id === input.stepId);
     if (step === undefined)
@@ -208,11 +228,14 @@ export async function runDeferredStep(input) {
             stepId: input.stepId,
         };
     }
-    if (!input.installedLegacy.has(ownership.legacy.plugin)) {
+    const signalEnabled = input.enabledLegacy === undefined
+        ? input.installedLegacy.has(ownership.legacy.plugin)
+        : input.enabledLegacy.has(`${ownership.legacy.plugin}/${ownership.legacy.signal}`);
+    if (!signalEnabled) {
         return {
             run: setRunStatus(settleStep(input.run, input.stepId, 'blocked', {
                 at,
-                reason: `the legacy source "${ownership.legacy.plugin}/${ownership.legacy.signal}" is not installed; the retire-legacy-gates change owns the transition`,
+                reason: `the legacy source "${ownership.legacy.plugin}/${ownership.legacy.signal}" is not enabled; the retire-legacy-gates change owns the transition`,
             }), 'blocked', at),
             dispatched: false,
             steered: false,
@@ -407,6 +430,12 @@ export function evaluateArchiveGate(input) {
         return {
             kind: 'deny',
             reason: `the archive of "${input.change}" is refused: the current whole-spec PASS record is ${input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'} (${input.specRecord.failure.detail.slice(0, 200)})`,
+        };
+    }
+    if (input.taskReview !== undefined && !input.taskReview.ok) {
+        return {
+            kind: 'deny',
+            reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}`,
         };
     }
     return {

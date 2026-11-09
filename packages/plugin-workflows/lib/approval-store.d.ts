@@ -65,6 +65,8 @@ export declare function loadApprovedDefinitions(workspace: string, options: {
     readonly shipped?: readonly Definition[];
     /** The legacy sources the profile installs; absent skips ownership checks. */
     readonly installedLegacy?: ReadonlySet<string>;
+    /** The legacy signals that would actually steer; absent means installed = enabled. */
+    readonly enabledLegacy?: ReadonlySet<string>;
 }): Promise<ApprovedDefinitions>;
 /** Read one local installed definition regardless of approval; test/debug seam. */
 export declare function readLocalDefinition(workspace: string, id: string): Promise<Definition>;

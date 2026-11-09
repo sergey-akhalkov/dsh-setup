@@ -704,15 +704,21 @@ export class OwnedCalls {
 function resolveToolValue(value, context) {
     if (typeof value === 'string') {
         for (const match of value.matchAll(/\{([a-zA-Z][a-zA-Z0-9-]*)\}/gu)) {
-            if (match[1] !== 'name') {
+            const placeholder = match[1] ?? '';
+            if (placeholder !== 'name' && placeholder !== 'taskId') {
                 return {
                     ok: false,
-                    detail: `unsupported placeholder "{${match[1] ?? ''}}" in a tool call`,
+                    detail: `unsupported placeholder "{${placeholder}}" in a tool call`,
                 };
             }
-            const entry = context.values.name;
-            if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
-                return { ok: false, detail: `the name value "${String(entry)}" is not a change name` };
+            const entry = context.values[placeholder];
+            if (placeholder === 'name') {
+                if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
+                    return { ok: false, detail: `the name value "${String(entry)}" is not a change name` };
+                }
+            }
+            else if (typeof entry !== 'string' || !/^[0-9a-f]{16}$/u.test(entry)) {
+                return { ok: false, detail: `the taskId value "${String(entry)}" is not a task id` };
             }
         }
         const resolved = resolveEvidenceText(value, context);

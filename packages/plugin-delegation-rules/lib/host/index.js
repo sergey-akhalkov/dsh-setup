@@ -213,9 +213,17 @@ export function validateConfig(raw) {
         raw = {};
     if (!isRecord(raw))
         fail('configuration must be a mapping');
-    const unknownTop = unknownKeys(raw, new Set(['targets', 'rules', 'timeouts', 'failureStreak', 'reviewQueue', 'reviewLearning']));
+    const unknownTop = unknownKeys(raw, new Set([
+        'targets',
+        'rules',
+        'timeouts',
+        'failureStreak',
+        'reviewQueue',
+        'reviewLearning',
+        'gates',
+    ]));
     if (unknownTop.length > 0) {
-        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, reviewQueue, or reviewLearning`);
+        fail(`unknown configuration field(s) ${unknownTop.join(', ')}; use targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning, or gates`);
     }
     const targetsRaw = raw.targets ?? {};
     if (!isRecord(targetsRaw))
@@ -323,7 +331,26 @@ export function validateConfig(raw) {
     }
     const reviewQueue = validateReviewQueue(raw.reviewQueue);
     const reviewLearning = validateReviewLearning(raw.reviewLearning);
-    return { targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning };
+    const gates = validateGates(raw.gates);
+    return { targets, rules, timeouts, failureStreak, reviewQueue, reviewLearning, gates };
+}
+/** Validate the gate-only retirement switch fail-loud with its field and shape. */
+export function validateGates(raw) {
+    if (raw === undefined)
+        return { workflowOwned: true };
+    if (!isRecord(raw)) {
+        fail('gates must be a mapping; accepted shape: { workflowOwned?: boolean }');
+    }
+    for (const key of Object.keys(raw)) {
+        if (key !== 'workflowOwned') {
+            fail(`gates: unknown field "${key}"; accepted shape: { workflowOwned?: boolean }`);
+        }
+    }
+    const workflowOwned = raw.workflowOwned;
+    if (workflowOwned !== undefined && typeof workflowOwned !== 'boolean') {
+        fail('gates.workflowOwned must be a boolean');
+    }
+    return { workflowOwned: workflowOwned ?? true };
 }
 /**
  * Validate the review-learning block. The defaults bound the lesson store and
@@ -4954,55 +4981,60 @@ async function evaluateGate(deps, agent, turn, signal) {
             const strictTaskRule = taskRules.find((rule) => rule.gate === 'strict');
             const softTaskRule = taskRules.find((rule) => rule.gate === 'soft');
             // Only the checked tasks this session attributed are in its review scope.
-            for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
-                let satisfied = false;
-                let findingsOnly = false;
-                let reviewedInputsMoved = false;
-                for (const rule of taskRules) {
-                    const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
-                    if (reviewer.error === undefined &&
-                        state.kind === 'record' &&
-                        reviewerMatches(state.record.target, reviewer.reviewer) &&
-                        recordSatisfies(state, change.name, 'task', undefined, task.id)) {
-                        satisfied = true;
-                        break;
+            // A workflow-owned profile moves this rule to the workflow definition;
+            // the spec-review, progress, and lane gates below stay in force.
+            if (deps.config.gates.workflowOwned) {
+                for (const task of tasks.filter((task) => task.checked && entry.tasks.includes(task.id))) {
+                    let satisfied = false;
+                    let findingsOnly = false;
+                    let reviewedInputsMoved = false;
+                    for (const rule of taskRules) {
+                        const state = await inspectRecord(recordPath(cwd, rule, change.name, task.id));
+                        if (reviewer.error === undefined &&
+                            state.kind === 'record' &&
+                            reviewerMatches(state.record.target, reviewer.reviewer) &&
+                            recordSatisfies(state, change.name, 'task', undefined, task.id)) {
+                            satisfied = true;
+                            break;
+                        }
+                        if (state.kind === 'record' && state.record.verdict === 'FINDINGS')
+                            findingsOnly = true;
+                        if (state.kind === 'record' &&
+                            state.record.verdict === 'ERROR' &&
+                            reviewedInputsChanged(state.record)) {
+                            reviewedInputsMoved = true;
+                        }
                     }
-                    if (state.kind === 'record' && state.record.verdict === 'FINDINGS')
-                        findingsOnly = true;
-                    if (state.kind === 'record' &&
-                        state.record.verdict === 'ERROR' &&
-                        reviewedInputsChanged(state.record)) {
-                        reviewedInputsMoved = true;
+                    if (satisfied)
+                        continue;
+                    const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review';
+                    const pending = pendingFor(ruleId, change.name, task.id);
+                    const detail = reviewer.error !== undefined
+                        ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
+                        : pending !== undefined
+                            ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
+                            : reviewedInputsMoved
+                                ? 'its review could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review'
+                                : findingsOnly
+                                    ? 'its review record has unresolved findings'
+                                    : 'it has no task-review PASS/ERROR record';
+                    const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`;
+                    const call = reviewer.error !== undefined
+                        ? `repair openspec/${APPROVAL_MARKER_FILE}`
+                        : pending === undefined
+                            ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
+                            : `delegation_status (run ${pending.id})`;
+                    if (strictTaskRule !== undefined)
+                        pushStrict(ruleId, text, call);
+                    else if (softTaskRule !== undefined) {
+                        pushSoft(`task-review:${change.name}:${task.id}`, ruleId, text, call);
                     }
-                }
-                if (satisfied)
-                    continue;
-                const ruleId = (strictTaskRule ?? softTaskRule)?.id ?? 'task-review';
-                const pending = pendingFor(ruleId, change.name, task.id);
-                const detail = reviewer.error !== undefined
-                    ? `the approval marker could not be read (${sanitizeText(reviewer.error, MAX_ERROR_CHARS)}); repair openspec/${APPROVAL_MARKER_FILE}`
-                    : pending !== undefined
-                        ? `review run ${pending.id} is ${pending.state}; wait for ${pending.record} instead of starting another run`
-                        : reviewedInputsMoved
-                            ? 'its review could not finish because the reviewed inputs changed during the run; finish the writes and re-run the review'
-                            : findingsOnly
-                                ? 'its review record has unresolved findings'
-                                : 'it has no task-review PASS/ERROR record';
-                const text = `rule "${ruleId}": checked task "${task.number} ${task.text}" in change "${change.name}" requires its task-scoped review; ${detail}.`;
-                const call = reviewer.error !== undefined
-                    ? `repair openspec/${APPROVAL_MARKER_FILE}`
-                    : pending === undefined
-                        ? `delegate(rule: "${ruleId}", change: "${change.name}", task: "${task.id}")`
-                        : `delegation_status (run ${pending.id})`;
-                if (strictTaskRule !== undefined)
-                    pushStrict(ruleId, text, call);
-                else if (softTaskRule !== undefined) {
-                    pushSoft(`task-review:${change.name}:${task.id}`, ruleId, text, call);
                 }
             }
             // The completing session must obtain an approval for every checked task,
             // not only the tasks its own tick attributed.
-            if (entry.completed &&
+            if (deps.config.gates.workflowOwned &&
+                entry.completed &&
                 taskRules.length > 0 &&
                 tasks.length > 0 &&
                 tasks.every((task) => task.checked)) {
@@ -5375,6 +5407,10 @@ function archiveDenial(reason) {
  * subagents too; only the turn-stopping gate skips them.
  */
 async function archiveGateDecision(deps, exec) {
+    // Gate-only retirement: the workflow archive gate owns this check, so the
+    // legacy guard must run no marker read and deny nothing.
+    if (!deps.config.gates.workflowOwned)
+        return undefined;
     if (exec.agent === undefined)
         return undefined;
     const invocation = archiveShellInvocation(exec);
@@ -5843,6 +5879,17 @@ function registerReviewRetroCommand(ctx, config, services) {
     else
         commands.register(definition);
 }
+/** Provide the ownership status once; an older host or a test double may lack provide(). */
+function provideStatus(ctx, name, value) {
+    try {
+        if (typeof ctx.get === 'function' && ctx.get(name) !== undefined)
+            return;
+        ctx.provide(name, value);
+    }
+    catch {
+        // The switch is still read from this plugin's own config.
+    }
+}
 /**
  * Register the three tools, the on-demand skill, and the turn-stopping gate.
  * A missing subagent provider is not fatal here: it is diagnosed by the tools
@@ -5850,6 +5897,11 @@ function registerReviewRetroCommand(ctx, config, services) {
  */
 export function apply(ctx, config = {}, options = {}) {
     const validated = validateConfig(config);
+    // The workflow engine resolves per-signal legacy ownership from this status;
+    // the review runtime stays mounted either way.
+    provideStatus(ctx, 'delegationRulesStatus', Object.freeze({
+        workflowOwned: validated.gates.workflowOwned,
+    }));
     const state = new DelegationState();
     // Optional services are read through ctx.get(), not the service property: a
     // hard inject would stop the plugin loading in a profile without them.

@@ -43,6 +43,12 @@ export interface TurnCloseInput {
   readonly origin?: 'root' | 'subagent'
   /** The legacy plugins the profile installs. */
   readonly installedLegacy: ReadonlySet<string>
+  /** `${plugin}/signal` entries that would actually steer; absent means installed = enabled. */
+  readonly enabledLegacy?: ReadonlySet<string>
+  /** The owned completion-coverage decision for this turn, when it applies. */
+  readonly completion?: { readonly ok: boolean; readonly text?: string }
+  /** The owned checkpoint remedy/age decision for this turn, when it applies. */
+  readonly checkpointIssue?: { readonly text: string }
   readonly now?: number
   readonly onError?: (error: unknown) => void
 }
@@ -62,8 +68,9 @@ export function selectBlockingStep(
   run: WorkflowRun,
   definition: Definition,
   installedLegacy: ReadonlySet<string>,
+  enabledLegacy?: ReadonlySet<string>,
 ): Step | undefined {
-  const resolved = resolveOwnership(definition, installedLegacy)
+  const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
   const ownership = new Map(resolved.steps.map((step) => [step.id, step.ownership]))
   for (const step of definition.steps) {
     if (!stepIsOpen(run, step.id)) continue
@@ -92,7 +99,33 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
       }
     }
-    const step = selectBlockingStep(input.run, input.definition, input.installedLegacy)
+    const step = selectBlockingStep(
+      input.run,
+      input.definition,
+      input.installedLegacy,
+      input.enabledLegacy,
+    )
+    // A host-computed owned decision (completion coverage or the checkpoint
+    // remedy/age rule) refuses before the generic step walk.
+    const ownedText =
+      input.checkpointIssue?.text ??
+      (input.completion?.ok === false
+        ? (input.completion.text ?? 'the completion coverage is incomplete')
+        : undefined)
+    if (ownedText !== undefined) {
+      const blocks = input.run.turnBlocks ?? 0
+      if (blocks >= input.maxBlocks) {
+        const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`
+        const run = resetTurnBlocks(addViolation(input.run, detail, { at }), at)
+        return { kind: 'violation', run, detail }
+      }
+      return {
+        kind: 'refuse',
+        run: incrementTurnBlocks(input.run, at),
+        stepId: step?.id ?? input.definition.steps.at(-1)?.id ?? 'owned-rule',
+        text: ownedText,
+      }
+    }
     if (step === undefined) {
       return {
         kind: 'allow',
@@ -288,6 +321,8 @@ export interface DeferredStepInput {
   readonly definition: Definition
   readonly stepId: string
   readonly installedLegacy: ReadonlySet<string>
+  /** `${plugin}/${signal}` entries that would actually steer. */
+  readonly enabledLegacy?: ReadonlySet<string>
   /** The existing legacy reader; it never dispatches an executor. */
   readonly readRecord: (step: Step) => Promise<EvidenceCheck>
   readonly now?: number
@@ -310,7 +345,7 @@ export interface DeferredStepResult {
  */
 export async function runDeferredStep(input: DeferredStepInput): Promise<DeferredStepResult> {
   const at = input.now ?? Date.now()
-  const resolved = resolveOwnership(input.definition, input.installedLegacy)
+  const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy)
   const ownership = resolved.steps.find((step) => step.id === input.stepId)
   const step = input.definition.steps.find((entry) => entry.id === input.stepId)
   if (step === undefined) throw new Error(`the definition has no step "${input.stepId}"`)
@@ -332,12 +367,16 @@ export async function runDeferredStep(input: DeferredStepInput): Promise<Deferre
       stepId: input.stepId,
     }
   }
-  if (!input.installedLegacy.has(ownership.legacy.plugin)) {
+  const signalEnabled =
+    input.enabledLegacy === undefined
+      ? input.installedLegacy.has(ownership.legacy.plugin)
+      : input.enabledLegacy.has(`${ownership.legacy.plugin}/${ownership.legacy.signal}`)
+  if (!signalEnabled) {
     return {
       run: setRunStatus(
         settleStep(input.run, input.stepId, 'blocked', {
           at,
-          reason: `the legacy source "${ownership.legacy.plugin}/${ownership.legacy.signal}" is not installed; the retire-legacy-gates change owns the transition`,
+          reason: `the legacy source "${ownership.legacy.plugin}/${ownership.legacy.signal}" is not enabled; the retire-legacy-gates change owns the transition`,
         }),
         'blocked',
         at,
@@ -550,6 +589,8 @@ export interface ArchiveGateInput {
   readonly receipts: readonly WorkflowReceipt[]
   /** The whole-spec `PASS` record, already verified against the current digest. */
   readonly specRecord: EvidenceCheck
+  /** The owned per-task portable PASS coverage, computed from the workspace. */
+  readonly taskReview?: { readonly ok: boolean; readonly text?: string }
 }
 
 export type ArchiveGateDecision =
@@ -602,6 +643,12 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
       reason: `the archive of "${input.change}" is refused: the current whole-spec PASS record is ${
         input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'
       } (${input.specRecord.failure.detail.slice(0, 200)})`,
+    }
+  }
+  if (input.taskReview !== undefined && !input.taskReview.ok) {
+    return {
+      kind: 'deny',
+      reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}`,
     }
   }
   return {

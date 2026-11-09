@@ -40,6 +40,8 @@ export interface BlockReviewConfig {
 }
 /** Work-checkpoint policy nested under `checkpoint`. */
 export interface CheckpointConfig {
+    /** Gate-only retirement switch: false keeps the tool and record, disables every checkpoint gate (default true). */
+    automation?: boolean;
     /** Require a checkpoint at a substantial pause (default true). */
     enabled?: boolean;
     /** A turn needs at least this many tool calls before the checkpoint is required (default 4). */
@@ -99,6 +101,8 @@ export interface ResolvedBlockReviewConfig {
 }
 /** Fully resolved work-checkpoint policy; the plugin never runs on partial values. */
 export interface ResolvedCheckpointConfig {
+    /** Retained for tool/record availability; false means the gates are silent. */
+    readonly automation: boolean;
     readonly enabled: boolean;
     readonly minToolCalls: number;
     readonly requireWrite: boolean;

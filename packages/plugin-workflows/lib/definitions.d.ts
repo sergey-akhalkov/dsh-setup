@@ -21,7 +21,7 @@ export type DedupePolicy = (typeof DEDUPE_POLICIES)[number];
 /** Which dedupe identities each event kind can actually provide. */
 export declare const DEDUPE_BY_TRIGGER: Record<DefinitionTriggerKind, readonly DedupePolicy[]>;
 /** The one applicability decision a definition may declare for a trigger. */
-export declare const APPLICABILITY_KINDS: readonly ["checkpoint-required"];
+export declare const APPLICABILITY_KINDS: readonly ["checkpoint-required", "code-write"];
 export type ApplicabilityKind = (typeof APPLICABILITY_KINDS)[number];
 /** The structured command match an intent trigger accepts. */
 export type TriggerCommand = 'openspec new change <name>' | 'openspec archive <name>';
@@ -86,7 +86,10 @@ export interface RecordEvidence {
     readonly rule: string;
     /** Matched when declared; a checkpoint record carries no change. */
     readonly change?: string;
-    readonly verdict: string;
+    /** The single accepted verdict; exactly one of verdict/verdicts is required. */
+    readonly verdict?: string;
+    /** Every accepted verdict; for a task review that is PASS or ERROR. */
+    readonly verdicts?: readonly string[];
     /** Workspace-relative record path; derived from rule/change/phase when absent. */
     readonly path?: string;
     readonly phase?: string;
@@ -105,7 +108,9 @@ export interface ToolCallEvidence {
 }
 export interface CheckEvidence {
     readonly kind: 'check';
-    readonly command: string;
+    readonly command?: string;
+    /** erify-settings reads the validated profile command list. */
+    readonly source?: 'verify-settings';
 }
 export interface HumanEvidence {
     readonly kind: 'human';
@@ -193,14 +198,20 @@ export interface OwnershipResolution {
 }
 /** The legacy plugins this engine knows how to defer to. */
 export declare const KNOWN_LEGACY_SOURCES: readonly ["delegation-rules", "goal-continuity"];
+/** The legacy signal state a load or gate decision resolves against. */
+export interface LegacySignalState {
+    readonly installed: ReadonlySet<string>;
+    /** `${plugin}/${signal}` entries that would actually steer. */
+    readonly enabled: ReadonlySet<string>;
+}
 /**
- * Resolve ownership per definition and step against the installed legacy
- * sources. A `defer` needs its source installed; an `own` step may not declare
- * an installed source for the same behavior. A deferred definition defers every
- * step, so only a definition-level `own` can carry a deferred step such as
- * `spec-review`.
+ * Resolve ownership per definition and step against the installed and enabled
+ * legacy sources. A `defer` needs an enabled source; an `own` step may not
+ * declare an enabled source for the same behavior. A deferred definition
+ * defers every step, so only a definition-level `own` can carry a deferred
+ * step such as `spec-review`.
  */
-export declare function resolveOwnership(definition: Definition, installed: ReadonlySet<string>): OwnershipResolution;
+export declare function resolveOwnership(definition: Definition, installed: ReadonlySet<string>, enabledSignals?: ReadonlySet<string>): OwnershipResolution;
 /** Read and validate one definition file. */
 export declare function readDefinitionFile(file: string): Definition;
 /**

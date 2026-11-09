@@ -40,6 +40,8 @@ export interface IntakeAdvanceInput {
   /** The deferred-step record reader; it must not call delegate. */
   readonly readRecord?: (step: Step) => Promise<EvidenceCheck>
   readonly installedLegacy: ReadonlySet<string>
+  /** `${plugin}/${signal}` entries that would actually steer. */
+  readonly enabledLegacy?: ReadonlySet<string>
   /** When present, a completed intake writes its host-authenticated receipt. */
   readonly auth?: HostAuth
   readonly now?: number
@@ -90,7 +92,7 @@ function waitingFor(step: Step, context: EvidenceContext): IntakeWaiting {
 export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAdvanceResult> {
   const at = input.now ?? Date.now()
   let run = input.run
-  const resolved = resolveOwnership(input.definition, input.installedLegacy)
+  const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy)
   for (let guard = 0; guard < input.definition.steps.length + 1; guard += 1) {
     const pending = firstPending(run, input.definition)
     // Only a fully done definition completes; a failed or cancelled step stops
@@ -147,6 +149,7 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         definition: input.definition,
         stepId: step.id,
         installedLegacy: input.installedLegacy,
+        ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
         readRecord: input.readRecord,
         now: at,
       })

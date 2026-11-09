@@ -104,6 +104,14 @@ export interface BundleConfig {
     failureStreak?: number;
     reviewQueue?: Partial<ReviewQueueConfig>;
     reviewLearning?: Partial<ReviewLearningConfig>;
+    /** Gate-only retirement switch (default `workflowOwned: true`). */
+    gates?: {
+        workflowOwned?: boolean;
+    };
+}
+/** Resolved gate ownership: false moves the task-review and archive gates to the workflow. */
+export interface GatesConfig {
+    readonly workflowOwned: boolean;
 }
 /** Test seams; production uses the filesystem, git, and the wall clock. */
 export interface ApplyOptions {
@@ -145,6 +153,7 @@ interface EngineConfig {
     failureStreak: number;
     reviewQueue: ReviewQueueConfig;
     reviewLearning: ReviewLearningConfig;
+    gates: GatesConfig;
 }
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
@@ -152,6 +161,8 @@ interface EngineConfig {
  * validation error, so the profile composes without the target installed.
  */
 export declare function validateConfig(raw: unknown): EngineConfig;
+/** Validate the gate-only retirement switch fail-loud with its field and shape. */
+export declare function validateGates(raw: unknown): GatesConfig;
 /**
  * Validate the review-learning block. The defaults bound the lesson store and
  * the retro window; an invalid field fails plugin load with its range.

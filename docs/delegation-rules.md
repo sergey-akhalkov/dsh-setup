@@ -350,6 +350,24 @@ The export copies only a local task-scope `PASS` whose rule, change, and task id
 task; it refuses `ERROR`/`FINDINGS`, a foreign change, and a task-id mismatch, and it cannot invent
 an approval.
 
+### Gate-only retirement switch
+
+`gates.workflowOwned: false` moves enforcement of the task-review turn-stopping rule and the archive
+guard to the workflow definitions, while the review runtime stays exactly as documented here. The
+`delegate` tool, the review queue, runs, records, `task_progress` notes, the rule data, the
+whole-spec `spec-review` rule, and the task-progress and lane-assignment/lane-boundary gates remain.
+Only two signals stop: the task-review rule that refuses a close for a checked task without a
+`PASS`/`ERROR` record (including the completion-coverage branch for a freshly completed list), and
+the archive guard that refuses `openspec archive`/`mv`/`Move-Item`/`git mv` without a portable
+`PASS`. A `defer` `task-review` definition beside `gates.workflowOwned: false` is refused at load; the
+`spec-review` signal stays enabled, so `change-intake` keeps its deferred spec-review step and a
+missing spec review still steers. The default is `true`. Rollback is one config flip: set
+`gates.workflowOwned: true` and return the definition to `defer`; records, queue state, and notes are
+never rewritten. The tracked parity report at
+`packages/plugin-workflows/assets/parity/retire-legacy-gates.json` must pass
+(`pnpm workflows:parity --check`, once the release gate wires the script) before the switch is
+flipped in a shipped profile.
+
 ### Change-level approval and the archive gate
 
 `delegation_status` and `pnpm reviews:check` compute approval from the change, not from the session
