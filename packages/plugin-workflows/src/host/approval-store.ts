@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import {
+  link,
   lstat,
   mkdir,
   readdir,
@@ -167,10 +168,28 @@ export interface InstallOptions {
     workspace: string,
     approvals: ReadonlyMap<string, StoredApproval>,
   ) => Promise<void>
-  /** Test seam: the replacement/restore primitive; production renames. */
+  /** Test seam: the backup-link primitive; production hard-links. */
+  readonly link?: typeof link
+  /** Test seam: the restore primitive; production renames. */
   readonly rename?: typeof rename
   /** Test seam: the cleanup primitive; production unlinks. */
   readonly unlink?: typeof unlink
+  /**
+   * The revision precondition, checked inside the install transaction: null
+   * creates only, a hash replaces only the loaded bytes.
+   */
+  readonly expectedHash?: string | null
+}
+
+/** A revision precondition failed inside the install transaction. */
+export class InstallConflictError extends Error {
+  readonly revision: string | null
+
+  constructor(message: string, revision: string | null) {
+    super(message)
+    this.name = 'InstallConflictError'
+    this.revision = revision
+  }
 }
 
 /** Workspace-scoped install transaction queue: approvals are one shared file. */
@@ -184,6 +203,11 @@ function serializeInstall<T>(key: string, run: () => Promise<T>): Promise<T> {
     next.catch(() => undefined),
   )
   return next
+}
+
+/** Run one filesystem transaction under the workspace install lock. */
+export function runInstallTransaction<T>(workspace: string, run: () => Promise<T>): Promise<T> {
+  return serializeInstall(workspace, run)
 }
 
 /**
@@ -210,6 +234,7 @@ async function installOnce(
 ): Promise<InstallResult> {
   const move = options.rename ?? rename
   const remove = options.unlink ?? unlink
+  const makeLink = options.link ?? link
   const root = await realpath(workspace)
   const source = await realpath(isAbsolute(sourcePath) ? sourcePath : join(root, sourcePath)).catch(
     () => undefined,
@@ -239,12 +264,26 @@ async function installOnce(
   if (!isInside(directory, target) || dirname(target) !== directory) {
     throw new Error(`definition "${definition.id}" resolves outside the definitions directory`)
   }
-  // Keep the previous definition under a backup name (a rename, not a rewrite)
-  // so a failed approval write can restore it even when the disk is full.
+  // The revision precondition lives inside this serialized transaction, so a
+  // concurrent install cannot slip between the check and the replacement.
+  if (options.expectedHash !== undefined) {
+    const current = await readFile(target).catch(() => undefined)
+    const currentHash = current === undefined ? null : sha256(current)
+    if (options.expectedHash === null) {
+      if (currentHash !== null) {
+        throw new InstallConflictError(`definition "${definition.id}" already exists`, currentHash)
+      }
+    } else if (currentHash !== options.expectedHash) {
+      throw new InstallConflictError(`definition "${definition.id}" changed on disk`, currentHash)
+    }
+  }
+  // Keep the previous definition under a backup name with a hard link (the
+  // target stays readable throughout), so a failed approval write can restore
+  // it by rename even when the disk is full.
   const backup = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.bak`
   let hadPrevious = false
   try {
-    await move(target, backup)
+    await makeLink(target, backup)
     hadPrevious = true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error

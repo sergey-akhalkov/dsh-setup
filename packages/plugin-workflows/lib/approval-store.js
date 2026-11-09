@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile, } from 'node:fs/promises';
+import { link, lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile, } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { loadShippedDefinitions, readDefinitionFile, resolveOwnership, validateDefinition, workspaceDefinitionsDirectory, } from './definitions.js';
 import { isInside } from './fs-change.js';
@@ -102,6 +102,15 @@ async function writeApprovals(workspace, approvals) {
     const store = { v: APPROVAL_VERSION, approvals: record };
     await writeAtomic(approvalsPath(workspace), `${JSON.stringify(store, null, 2)}\n`);
 }
+/** A revision precondition failed inside the install transaction. */
+export class InstallConflictError extends Error {
+    revision;
+    constructor(message, revision) {
+        super(message);
+        this.name = 'InstallConflictError';
+        this.revision = revision;
+    }
+}
 /** Workspace-scoped install transaction queue: approvals are one shared file. */
 const INSTALL_QUEUES = new Map();
 function serializeInstall(key, run) {
@@ -109,6 +118,10 @@ function serializeInstall(key, run) {
     const next = previous.then(run, run);
     INSTALL_QUEUES.set(key, next.catch(() => undefined));
     return next;
+}
+/** Run one filesystem transaction under the workspace install lock. */
+export function runInstallTransaction(workspace, run) {
+    return serializeInstall(workspace, run);
 }
 /**
  * Validate a definition file, copy it atomically into the workspace definitions
@@ -123,6 +136,7 @@ export function installDefinition(workspace, sourcePath, auth, options = {}) {
 async function installOnce(workspace, sourcePath, auth, options) {
     const move = options.rename ?? rename;
     const remove = options.unlink ?? unlink;
+    const makeLink = options.link ?? link;
     const root = await realpath(workspace);
     const source = await realpath(isAbsolute(sourcePath) ? sourcePath : join(root, sourcePath)).catch(() => undefined);
     if (source === undefined) {
@@ -152,12 +166,27 @@ async function installOnce(workspace, sourcePath, auth, options) {
     if (!isInside(directory, target) || dirname(target) !== directory) {
         throw new Error(`definition "${definition.id}" resolves outside the definitions directory`);
     }
-    // Keep the previous definition under a backup name (a rename, not a rewrite)
-    // so a failed approval write can restore it even when the disk is full.
+    // The revision precondition lives inside this serialized transaction, so a
+    // concurrent install cannot slip between the check and the replacement.
+    if (options.expectedHash !== undefined) {
+        const current = await readFile(target).catch(() => undefined);
+        const currentHash = current === undefined ? null : sha256(current);
+        if (options.expectedHash === null) {
+            if (currentHash !== null) {
+                throw new InstallConflictError(`definition "${definition.id}" already exists`, currentHash);
+            }
+        }
+        else if (currentHash !== options.expectedHash) {
+            throw new InstallConflictError(`definition "${definition.id}" changed on disk`, currentHash);
+        }
+    }
+    // Keep the previous definition under a backup name with a hard link (the
+    // target stays readable throughout), so a failed approval write can restore
+    // it by rename even when the disk is full.
     const backup = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.bak`;
     let hadPrevious = false;
     try {
-        await move(target, backup);
+        await makeLink(target, backup);
         hadPrevious = true;
     }
     catch (error) {

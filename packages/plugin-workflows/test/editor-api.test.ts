@@ -297,6 +297,48 @@ describe('editor definition writes', () => {
     )
   })
 
+  it('refuses a stale editor update after a concurrent install', async () => {
+    const workspace = await tempWorkspace()
+    const source = join(workspace, 'initial.json')
+    await writeFile(source, `${JSON.stringify(DEFINITION, null, 2)}\n`)
+    const original = await installDefinition(workspace, source, AUTH)
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const routes = createEditorRoutes(
+      services(workspace, {
+        install: async (target, stagingPath, auth, options) => {
+          await gate
+          return installDefinition(target, stagingPath, auth, options)
+        },
+      }),
+    )
+    const pending = call(routes, EDITOR_DEFINITION_ROUTE, {
+      method: 'PUT',
+      body: {
+        id: 'editor-demo',
+        definition: { ...DEFINITION, name: 'Editor stale', version: 2 },
+        expectedRevision: original.hash,
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // A command install (the shared install path) lands while the editor save
+    // is waiting for its transaction.
+    const commandUpdate = { ...DEFINITION, name: 'Command update', version: 3 }
+    const commandSource = join(workspace, 'command.json')
+    await writeFile(commandSource, writtenBytes(commandUpdate))
+    await installDefinition(workspace, commandSource, AUTH)
+    release()
+    const result = await pending
+    expect(result.status).toBe(409)
+    expect(result.body.revision).toBe(revision(commandUpdate))
+    const loaded = await loadApprovedDefinitions(workspace, { auth: AUTH })
+    expect(loaded.definitions.find((entry) => entry.id === 'editor-demo')?.name).toBe(
+      'Command update',
+    )
+  })
+
   it('keeps both approvals when two definitions are created concurrently', async () => {
     const workspace = await tempWorkspace()
     const routes = createEditorRoutes(services(workspace))

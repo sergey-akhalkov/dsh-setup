@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { installDefinition, writeAtomic } from './approval-store.js';
+import { InstallConflictError, installDefinition, runInstallTransaction, writeAtomic, } from './approval-store.js';
 import { CHANGE_NAME } from './command-parse.js';
 import { DEFINITION_ID, loadShippedDefinitions, validateDefinition, workspaceDefinitionsDirectory, } from './definitions.js';
 import { DRAFTS_ROOT, readDraft } from './drafts.js';
@@ -376,55 +376,30 @@ async function saveDefinition(services, workspace, id, raw, expected) {
     const target = join(directory, `${id}.json`);
     if (dirname(target) !== directory)
         return json(400, { error: 'the definition id is unsafe' });
-    return serialize(`definition:${target}`, async () => {
-        let current;
-        try {
-            current = revisionOf(await readFile(target));
+    // installDefinition validates, checks the revision inside its workspace
+    // transaction, writes atomically, and records the approval; on failure it
+    // restores the previous file, so a failed save changes nothing.
+    const staging = join(await ensureDirectory(workspace, STAGING_DIRECTORY), `.editor-${String(process.pid)}-${randomBytes(4).toString('hex')}.json`);
+    try {
+        await writeFile(staging, serialized(definition), 'utf8');
+        await (services.install ?? installDefinition)(workspace, staging, auth, {
+            expectedHash: 'create' in expected ? null : expected.hash,
+        });
+    }
+    catch (error) {
+        if (error instanceof InstallConflictError) {
+            return json(409, { revision: error.revision });
         }
-        catch {
-            current = null;
+        const text = errorMessage(error);
+        if (/outside the workspace|not a file|not valid JSON/u.test(text)) {
+            return json(400, { errors: definitionErrors(error) });
         }
-        if ('create' in expected) {
-            if (current !== null)
-                return json(409, { revision: current });
-            // Reserve the name (and prove the directory writable) before the install.
-            try {
-                await writeFile(target, '', { flag: 'wx' });
-            }
-            catch (error) {
-                if (error.code === 'EEXIST') {
-                    return json(409, { revision: await fileRevision(target) });
-                }
-                throw error;
-            }
-        }
-        else {
-            if (current === null)
-                return json(409, { revision: null });
-            if (current !== expected.hash)
-                return json(409, { revision: current });
-        }
-        // installDefinition validates, writes atomically, and records the approval;
-        // on failure it restores the previous file, so a failed save changes nothing.
-        const staging = join(await ensureDirectory(workspace, STAGING_DIRECTORY), `.editor-${String(process.pid)}-${randomBytes(4).toString('hex')}.json`);
-        try {
-            await writeFile(staging, serialized(definition), 'utf8');
-            await (services.install ?? installDefinition)(workspace, staging, auth);
-        }
-        catch (error) {
-            if ('create' in expected)
-                await unlink(target).catch(() => undefined);
-            const text = errorMessage(error);
-            if (/outside the workspace|not a file|not valid JSON/u.test(text)) {
-                return json(400, { errors: definitionErrors(error) });
-            }
-            return json(400, { error: text.slice(0, 300) });
-        }
-        finally {
-            await unlink(staging).catch(() => undefined);
-        }
-        return json(200, { revision: revisionOf(serialized(definition)) });
-    });
+        return json(400, { error: text.slice(0, 300) });
+    }
+    finally {
+        await unlink(staging).catch(() => undefined);
+    }
+    return json(200, { revision: revisionOf(serialized(definition)) });
 }
 /** Delete one local definition after the revision and active-run checks. */
 async function deleteDefinition(workspace, id, expected) {
@@ -432,7 +407,7 @@ async function deleteDefinition(workspace, id, expected) {
     const target = join(directory, `${id}.json`);
     if (dirname(target) !== directory)
         return json(400, { error: 'the definition id is unsafe' });
-    return serialize(`definition:${target}`, async () => {
+    return runInstallTransaction(workspace, async () => {
         if (await hasLinkedAncestor(workspace)) {
             return json(400, { error: 'a workflow directory is a link and is refused' });
         }

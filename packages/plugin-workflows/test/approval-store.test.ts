@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -375,6 +385,33 @@ it('restores the installed file when the approval write fails', async () => {
 })
 
 describe('install transaction isolation', () => {
+  it('keeps the previous definition readable while replacing it', async () => {
+    const workspace = await tempWorkspace()
+    const first = join(workspace, 'readable-first.json')
+    await writeFile(
+      first,
+      `${JSON.stringify(definitionFor('readable-demo', 'Original'), null, 2)}\n`,
+    )
+    await installDefinition(workspace, first, auth())
+    const second = join(workspace, 'readable-second.json')
+    await writeFile(
+      second,
+      `${JSON.stringify(definitionFor('readable-demo', 'Changed'), null, 2)}\n`,
+    )
+    let observed = ''
+    await installDefinition(workspace, second, auth(), {
+      link: async (from, to) => {
+        // The atomic replacement must not remove the target first: a read at
+        // this point still sees the previous definition.
+        observed = await readFile(from, 'utf8')
+        await link(from, to)
+      },
+    })
+    expect(observed).toContain('Original')
+    const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
+    expect(loaded.definitions.find((entry) => entry.id === 'readable-demo')?.name).toBe('Changed')
+  })
+
   it('keeps both approvals when two definitions install concurrently', async () => {
     const workspace = await tempWorkspace()
     const first = join(workspace, 'concurrent-a.json')
@@ -407,7 +444,7 @@ describe('install transaction isolation', () => {
     let renames = 0
     const failingRename = async (from: string, to: string): Promise<void> => {
       renames += 1
-      if (renames === 2) {
+      if (renames === 1) {
         throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
       }
       await rename(from, to)
