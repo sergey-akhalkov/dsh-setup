@@ -51,20 +51,17 @@ function evidenceOf(step: RunStepView): OverlayEvidence | undefined {
   return { kind: 'evidence', ref: step.evidence }
 }
 
-/** A run step id the projection synthesized for a violation row is not a step. */
-function isViolationRow(id: string): boolean {
-  return id.startsWith('violation:')
-}
-
 export function overlayFor(run: RunView | undefined, definition: GraphDefinition): Overlay {
   const known = new Set(definition.steps.map((step) => step.id))
-  const steps: Record<string, OverlayStep> = {}
+  // Null prototype: a valid step id such as "constructor" must not collide
+  // with an inherited Object.prototype key.
+  const steps: Record<string, OverlayStep> = Object.create(null) as Record<string, OverlayStep>
   const orphans: OverlayOrphan[] = []
   const notices: string[] = []
-  const runSteps = new Map<string, RunStepView>()
   for (const step of run?.steps ?? []) {
-    if (isViolationRow(step.id)) continue
-    runSteps.set(step.id, step)
+    // The host projection synthesizes one display row per violation; those
+    // rows are marked synthetic so a real step id is never mistaken for one.
+    if (step.synthetic === true) continue
     if (!known.has(step.id)) {
       orphans.push({
         id: step.id,
@@ -89,7 +86,7 @@ export function overlayFor(run: RunView | undefined, definition: GraphDefinition
       notices.push(violation.reason)
       continue
     }
-    const target = steps[id]
+    const target = Object.hasOwn(steps, id) ? steps[id] : undefined
     if (target === undefined) {
       notices.push(`step "${id}": ${violation.reason}`)
       continue
@@ -125,7 +122,9 @@ export function overlayFor(run: RunView | undefined, definition: GraphDefinition
 export function withOverlay(nodes: readonly DiagramNode[], overlay: Overlay): DiagramNode[] {
   return nodes.map((node) => {
     if (node.kind === 'trigger' || node.kind === 'end' || node.step === undefined) return node
-    const step = overlay.steps[node.step.id]
+    const step = Object.hasOwn(overlay.steps, node.step.id)
+      ? overlay.steps[node.step.id]
+      : undefined
     if (step === undefined) return node
     return {
       ...node,

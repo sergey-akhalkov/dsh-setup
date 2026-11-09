@@ -171,15 +171,17 @@ function settingsFields(props: PropertiesProps): ReactNode {
         <input
           value={allowTools}
           aria-label="Allowed tools"
-          onChange={(event) =>
+          onChange={(event) => {
+            const names = event.currentTarget.value
+              .split(',')
+              .map((name) => name.trim())
+              .filter((name) => name !== '')
             patch({
               ...settings,
-              allowTools: event.currentTarget.value
-                .split(',')
-                .map((name) => name.trim())
-                .filter((name) => name !== ''),
+              // The host rejects an empty allowlist; omit it when unused.
+              ...(names.length === 0 ? { allowTools: undefined } : { allowTools: names }),
             })
-          }
+          }}
         />
       </label>
       <JsonField
@@ -325,15 +327,15 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           ))}
         </select>
       </label>
-      {step.human === undefined ? null : (
+      {step.executor === 'human' ? (
         <label>
           Human timeout
           <select
-            value={step.human.timeoutAction ?? 'block'}
+            value={step.human?.timeoutAction ?? 'block'}
             aria-label="Human timeout action"
             onChange={(event) =>
               props.onPatch(node.id, {
-                human: { ...step.human, timeoutAction: event.currentTarget.value },
+                human: { ...(step.human ?? {}), timeoutAction: event.currentTarget.value },
               })
             }
           >
@@ -341,7 +343,7 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
             <option value="cancel">cancel</option>
           </select>
         </label>
-      )}
+      ) : null}
       {step.tool === undefined ? null : (
         <JsonField
           key={`tool:${node.id}`}
@@ -403,7 +405,13 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
               aria-label="Loop list key"
               onChange={(event) =>
                 props.onPatch(node.id, {
-                  loop: { ...loop, list: event.currentTarget.value },
+                  loop: {
+                    ...loop,
+                    // An empty list means "no list"; omit it rather than send "".
+                    ...(event.currentTarget.value === ''
+                      ? { list: undefined }
+                      : { list: event.currentTarget.value }),
+                  },
                 })
               }
             />

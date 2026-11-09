@@ -26,6 +26,8 @@ export interface RunStep {
   /** The producer-owned class of a blocked or failed step. */
   readonly failureClass?: string
   readonly reason?: string
+  /** A display row synthesized for a violation, not a real step. */
+  readonly synthetic?: boolean
 }
 
 /** A visible refusal or bypass, exposed as the run record wrote it. */
@@ -889,6 +891,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         id: `violation:${String(index)}`,
         title: 'VIOLATION',
         state: typeof violation.kind === 'string' ? redactText(violation.kind) : 'VIOLATION',
+        synthetic: true,
         ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
         ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
       })

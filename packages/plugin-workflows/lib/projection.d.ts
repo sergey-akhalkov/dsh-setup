@@ -22,6 +22,8 @@ export interface RunStep {
     /** The producer-owned class of a blocked or failed step. */
     readonly failureClass?: string;
     readonly reason?: string;
+    /** A display row synthesized for a violation, not a real step. */
+    readonly synthetic?: boolean;
 }
 /** A visible refusal or bypass, exposed as the run record wrote it. */
 export interface RunViolationView {

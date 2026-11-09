@@ -492,6 +492,69 @@ describe('palette and property panel', () => {
     expect(first).not.toBe(second)
   })
 
+  it('clears optional settings and loop fields without an unsavable definition', () => {
+    let state = openNew(blankDefinition(new Set(['clear-demo'])))
+    const render = (): unknown =>
+      call(ui, 'PropertyPanel', {
+        state,
+        selected: nodeIdOf('step-1'),
+        onDefinitionPatch: (patch: Record<string, unknown>) => {
+          state = patchDefinition(state, patch)
+        },
+        onPatch: (id: string, patch: Record<string, unknown>) => {
+          state = patchStep(state, id, patch)
+        },
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+    const find = (label: string): Element | undefined =>
+      elements(render()).find(
+        (element) =>
+          (element.type === 'input' || element.type === 'select') &&
+          element.props['aria-label'] === label,
+      )
+    fire(find('Allowed tools'), 'onChange', 'shell')
+    expect(state.document.definition.settings.allowTools).toEqual(['shell'])
+    fire(find('Allowed tools'), 'onChange', '')
+    expect(state.document.definition.settings.allowTools).toBeUndefined()
+    expect(validateDefinition(state.document.definition).settings.allowTools).toBeUndefined()
+    state = patchStep(state, nodeIdOf('step-1'), { executor: 'loop' })
+    fire(find('Loop list key'), 'onChange', 'items')
+    expect(state.document.definition.steps[0]?.loop?.list).toBe('items')
+    fire(find('Loop list key'), 'onChange', '')
+    expect(state.document.definition.steps[0]?.loop?.list).toBeUndefined()
+    expect(validateDefinition(state.document.definition).steps[0]?.loop?.list).toBeUndefined()
+  })
+
+  it('offers the human timeout for a valid human step without a config object', () => {
+    let state = openNew(blankDefinition(new Set(['human-demo'])))
+    state = patchStep(state, nodeIdOf('step-1'), { executor: 'human' })
+    state = patchStep(state, nodeIdOf('step-1'), { human: undefined })
+    expect(state.document.definition.steps[0]?.human).toBeUndefined()
+    expect(validateDefinition(state.document.definition).steps[0]?.executor).toBe('human')
+    const tree = call(ui, 'PropertyPanel', {
+      state,
+      selected: nodeIdOf('step-1'),
+      onDefinitionPatch: () => {},
+      onPatch: (id: string, patch: Record<string, unknown>) => {
+        state = patchStep(state, id, patch)
+      },
+      onConnect: () => {},
+      onDelete: () => {},
+      onRename: () => {},
+    })
+    const timeout = elements(tree).find(
+      (element) =>
+        element.type === 'select' && element.props['aria-label'] === 'Human timeout action',
+    )
+    fire(timeout, 'onChange', 'cancel')
+    expect(state.document.definition.steps[0]?.human?.timeoutAction).toBe('cancel')
+    expect(validateDefinition(state.document.definition).steps[0]?.human?.timeoutAction).toBe(
+      'cancel',
+    )
+  })
+
   it('opens the property panel for the selected node', () => {
     const state = editor()
     const step = DEFINITION.steps[1]

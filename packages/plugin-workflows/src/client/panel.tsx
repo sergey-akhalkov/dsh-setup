@@ -66,6 +66,8 @@ export interface RunStepView {
   /** The producer-owned class of a blocked or failed step. */
   readonly failureClass?: string
   readonly reason?: string
+  /** A display row synthesized for a violation, not a real step. */
+  readonly synthetic?: boolean
 }
 
 export interface RunViolationView {

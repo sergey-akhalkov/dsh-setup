@@ -11368,18 +11368,13 @@ window.__ModuleLoader__.load({
       if (step.evidence === void 0) return void 0;
       return { kind: "evidence", ref: step.evidence };
     }
-    function isViolationRow(id2) {
-      return id2.startsWith("violation:");
-    }
     function overlayFor(run, definition) {
       const known = new Set(definition.steps.map((step) => step.id));
-      const steps = {};
+      const steps = /* @__PURE__ */ Object.create(null);
       const orphans = [];
       const notices = [];
-      const runSteps = /* @__PURE__ */ new Map();
       for (const step of run?.steps ?? []) {
-        if (isViolationRow(step.id)) continue;
-        runSteps.set(step.id, step);
+        if (step.synthetic === true) continue;
         if (!known.has(step.id)) {
           orphans.push({
             id: step.id,
@@ -11404,7 +11399,7 @@ window.__ModuleLoader__.load({
           notices.push(violation.reason);
           continue;
         }
-        const target = steps[id2];
+        const target = Object.hasOwn(steps, id2) ? steps[id2] : void 0;
         if (target === void 0) {
           notices.push(`step "${id2}": ${violation.reason}`);
           continue;
@@ -11431,7 +11426,7 @@ window.__ModuleLoader__.load({
     function withOverlay(nodes, overlay) {
       return nodes.map((node) => {
         if (node.kind === "trigger" || node.kind === "end" || node.step === void 0) return node;
-        const step = overlay.steps[node.step.id];
+        const step = Object.hasOwn(overlay.steps, node.step.id) ? overlay.steps[node.step.id] : void 0;
         if (step === void 0) return node;
         return {
           ...node,
@@ -11620,10 +11615,14 @@ window.__ModuleLoader__.load({
             {
               value: allowTools,
               "aria-label": "Allowed tools",
-              onChange: (event) => patch({
-                ...settings,
-                allowTools: event.currentTarget.value.split(",").map((name) => name.trim()).filter((name) => name !== "")
-              })
+              onChange: (event) => {
+                const names = event.currentTarget.value.split(",").map((name) => name.trim()).filter((name) => name !== "");
+                patch({
+                  ...settings,
+                  // The host rejects an empty allowlist; omit it when unused.
+                  ...names.length === 0 ? { allowTools: void 0 } : { allowTools: names }
+                });
+              }
             }
           )
         ] }),
@@ -11777,15 +11776,15 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        step.human === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+        step.executor === "human" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
           "Human timeout",
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
             "select",
             {
-              value: step.human.timeoutAction ?? "block",
+              value: step.human?.timeoutAction ?? "block",
               "aria-label": "Human timeout action",
               onChange: (event) => props.onPatch(node.id, {
-                human: { ...step.human, timeoutAction: event.currentTarget.value }
+                human: { ...step.human ?? {}, timeoutAction: event.currentTarget.value }
               }),
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "block", children: "block" }),
@@ -11793,7 +11792,7 @@ window.__ModuleLoader__.load({
               ]
             }
           )
-        ] }),
+        ] }) : null,
         step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
           JsonField,
           {
@@ -11862,7 +11861,11 @@ window.__ModuleLoader__.load({
                 value: loop.list ?? "",
                 "aria-label": "Loop list key",
                 onChange: (event) => props.onPatch(node.id, {
-                  loop: { ...loop, list: event.currentTarget.value }
+                  loop: {
+                    ...loop,
+                    // An empty list means "no list"; omit it rather than send "".
+                    ...event.currentTarget.value === "" ? { list: void 0 } : { list: event.currentTarget.value }
+                  }
                 })
               }
             )

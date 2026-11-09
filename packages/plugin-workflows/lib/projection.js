@@ -673,6 +673,7 @@ export async function engineRuns(workspace) {
                 id: `violation:${String(index)}`,
                 title: 'VIOLATION',
                 state: typeof violation.kind === 'string' ? redactText(violation.kind) : 'VIOLATION',
+                synthetic: true,
                 ...(typeof violation.at === 'number' ? { at: violation.at } : {}),
                 ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
             });

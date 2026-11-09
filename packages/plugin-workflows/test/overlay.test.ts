@@ -175,4 +175,64 @@ describe('run overlay', () => {
       ),
     ).toBe(true)
   })
+
+  it('keeps a real step whose id starts with violation:', () => {
+    const definition: GraphDefinition = {
+      ...DEFINITION,
+      steps: DEFINITION.steps.map((step, index) =>
+        index === 0 ? { ...step, id: 'violation:approval' } : step,
+      ),
+    }
+    const graph = definitionToGraph(definition)
+    const overlay = overlayFor(
+      run({
+        steps: [
+          {
+            id: 'violation:approval',
+            title: 'approval',
+            state: 'blocked',
+            failureClass: 'no-answer',
+            evidenceRef: { kind: 'figma', ref: 'v1' },
+            reason: 'no answer was recorded',
+          },
+        ],
+        violations: [{ stepId: 'violation:approval', at: 1_200, reason: 'bypassed' }],
+      }),
+      definition,
+    )
+    expect(overlay.steps['violation:approval']).toMatchObject({
+      state: 'blocked',
+      failureClass: 'no-answer',
+      evidence: { kind: 'figma', ref: 'v1' },
+      violations: ['bypassed'],
+    })
+    const node = withOverlay(graph.nodes, overlay).find(
+      (entry) => entry.step?.id === 'violation:approval',
+    )
+    expect(node).toMatchObject({
+      runState: 'blocked',
+      failureClass: 'no-answer',
+      evidence: { kind: 'figma', ref: 'v1' },
+      violations: ['bypassed'],
+    })
+  })
+
+  it('does not crash on inherited object keys before a run is selected', () => {
+    const definition: GraphDefinition = {
+      ...DEFINITION,
+      steps: DEFINITION.steps.map((step) =>
+        step.id === 'requirements' ? { ...step, id: 'constructor' } : step,
+      ),
+    }
+    const graph = definitionToGraph(definition)
+    expect(() => withOverlay(graph.nodes, overlayFor(undefined, definition))).not.toThrow()
+    const overlay = overlayFor(
+      run({ steps: [{ id: 'constructor', title: 'constructor', state: 'running' }] }),
+      definition,
+    )
+    expect(overlay.steps['constructor']?.state).toBe('running')
+    expect(
+      withOverlay(graph.nodes, overlay).find((node) => node.step?.id === 'constructor')?.runState,
+    ).toBe('running')
+  })
 })
