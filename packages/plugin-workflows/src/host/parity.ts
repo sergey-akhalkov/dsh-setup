@@ -860,7 +860,14 @@ export function checkpointCloseIssue(input: {
     )
   })
   const stale = input.fresh === false
-  const outcome = typeof record.outcome === 'string' ? record.outcome : ''
+  // The producer can fail to overwrite an older done record; the latest
+  // validated arguments are the authoritative attempted outcome.
+  const outcome =
+    typeof rawArguments?.outcome === 'string'
+      ? rawArguments.outcome
+      : typeof record.outcome === 'string'
+        ? record.outcome
+        : ''
   if (outcome !== 'continue') {
     return stale
       ? 'the checkpoint is older than the configured step interval; call work_checkpoint again before the close'

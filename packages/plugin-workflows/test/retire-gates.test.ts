@@ -1091,6 +1091,60 @@ describe('owned verification evidence', () => {
     expect(issue).toBeUndefined()
   })
 
+  it('uses the latest attempted checkpoint outcome over a stale record', () => {
+    const issue = checkpointCloseIssue({
+      record: {
+        outcome: 'done',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'worker',
+          action: 'worker_start',
+          blockingLanes: ['edit'],
+          targets: ['.'],
+        },
+      },
+      checkpointArguments: { outcome: 'continue' },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [],
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: false,
+      workspace: '/repo/app',
+    })
+    expect(issue).toContain('execute the bottleneck remedy')
+  })
+
+  it('does not treat a call that started before the checkpoint as later', () => {
+    const issue = checkpointCloseIssue({
+      record: {
+        outcome: 'continue',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'worker',
+          action: 'worker_start',
+          blockingLanes: ['edit'],
+          targets: ['.'],
+        },
+      },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        { toolName: 'spawn_teammate', arguments: {}, ok: true, seq: 3, detail: 'started' },
+      ],
+      checkpointSeq: 5,
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: false,
+      workspace: '/repo/app',
+    })
+    expect(issue).toContain('execute the bottleneck remedy')
+  })
+
   it('matches the legacy rtk wrapper contract', () => {
     expect(commandMatches('pnpm check', 'pnpm check')).toBe(true)
     expect(commandMatches('pnpm check', 'rtk pnpm check')).toBe(true)

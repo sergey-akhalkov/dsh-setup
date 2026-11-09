@@ -882,6 +882,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const sessionToolCalls = new Map<string, ToolCallObservation[]>()
   /** A monotonic observation counter; eviction must not reuse sequence numbers. */
   const observationSeq = new Map<string, number>()
+  /** Invocation order per call, so a result recorded later keeps its call order. */
+  const pendingCallSeq = new Map<string, number>()
   const nextObservationSeq = (session: string): number => {
     const next = observationSeq.get(session) ?? 0
     observationSeq.set(session, next + 1)
@@ -1436,12 +1438,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: isShellTool ? shellOutcome.ok : !result.isError,
           at: journal.time(),
           detail: text.slice(0, 500),
-          seq: nextObservationSeq(sessionId),
+          seq: pendingCallSeq.get(String(exec.callId)) ?? nextObservationSeq(sessionId),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
+        pendingCallSeq.delete(String(exec.callId))
         const command = isShellTool ? shellCommandOf(exec) : undefined
         if (
           command !== undefined &&
@@ -1845,12 +1848,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: true,
           at: journal.time(),
           detail: JSON.stringify(first.result).slice(0, 500),
-          seq: nextObservationSeq(sessionId),
+          seq: pendingCallSeq.get(String(request.callId)) ?? nextObservationSeq(sessionId),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
+        pendingCallSeq.delete(String(request.callId))
         const command = request.arguments.command
         if (typeof command === 'string' && (request.name === 'pwsh' || request.name === 'bash')) {
           const results = sessionShellResults.get(sessionId) ?? []
