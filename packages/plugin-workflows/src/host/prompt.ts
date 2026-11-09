@@ -9,6 +9,13 @@ import type { WorkflowRun } from './runs.js'
 
 export const ACTIVE_RUNS_CONTEXT = 'workflows-active-runs'
 export const MAX_ACTIVE_RUN_LINES = 5
+/** One rendered line never exceeds this bound, whatever the identifiers hold. */
+export const MAX_ACTIVE_RUN_LINE_CHARS = 240
+
+/** Collapse control characters and bound one data-derived prompt line. */
+function oneLine(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]+/gu, ' ').slice(0, MAX_ACTIVE_RUN_LINE_CHARS)
+}
 
 /** One bounded line for an active run, or '' when there is none. */
 export function renderActiveRunsContext(runs: readonly WorkflowRun[]): string {
@@ -21,10 +28,12 @@ export function renderActiveRunsContext(runs: readonly WorkflowRun[]): string {
     active.length > MAX_ACTIVE_RUN_LINES ? active.slice(0, MAX_ACTIVE_RUN_LINES - 1) : active
   const lines = listed.map((run) => {
     const pending = pendingStep(run)
-    return `- ${run.definition}: step ${pending ?? 'end'} (${run.status}) run ${run.id}`
+    return oneLine(`- ${run.definition}: step ${pending ?? 'end'} (${run.status}) run ${run.id}`)
   })
   if (active.length > MAX_ACTIVE_RUN_LINES) {
-    lines.push(`- ${String(active.length - (MAX_ACTIVE_RUN_LINES - 1))} more active run(s)`)
+    lines.push(
+      oneLine(`- ${String(active.length - (MAX_ACTIVE_RUN_LINES - 1))} more active run(s)`),
+    )
   }
   return lines.join('\n')
 }
@@ -35,6 +44,8 @@ export interface ActiveRunsPromptTarget {
       readonly name: string
       readonly order: number
       readonly required: boolean
+      /** Data-derived text: never interpolate model-controlled identifiers. */
+      readonly interpolate?: boolean
       readonly text: (context?: { readonly scope?: unknown }) => string
     }): () => void
   }
@@ -53,6 +64,7 @@ export function registerActiveRunsContext(
     name: ACTIVE_RUNS_CONTEXT,
     order: 500,
     required: false,
+    interpolate: false,
     text: (context?: { readonly scope?: unknown }) => renderActiveRunsContext(activeRuns(context)),
   }
   // Keep the service receiver: the real method reads its private layer state.

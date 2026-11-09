@@ -478,6 +478,47 @@ describe('workflows command and prompt context', () => {
     const lines = renderActiveRunsContext(many).split('\n')
     expect(lines.length).toBeLessThanOrEqual(5)
     expect(lines.at(-1)).toContain('more active run')
+    // Multiline and oversized identifiers stay on one bounded line.
+    const multiline = {
+      ...runFor('/workspace'),
+      definition: 'a\nb\nc',
+      id: 'run-multiline',
+    }
+    const normalized = renderActiveRunsContext([multiline])
+    expect(normalized.split('\n')).toHaveLength(1)
+    expect(normalized.length).toBeLessThanOrEqual(240)
+    const huge = { ...runFor('/workspace'), definition: 'x'.repeat(100_000) }
+    const bounded = renderActiveRunsContext([huge])
+    expect(bounded.split('\n')).toHaveLength(1)
+    expect(bounded.length).toBeLessThanOrEqual(240)
+  })
+
+  it('registers data-derived text without interpolation', () => {
+    const registered: Array<{
+      name: string
+      interpolate?: boolean
+      text: (context?: { scope?: unknown }) => string
+    }> = []
+    const ok = registerActiveRunsContext(
+      {
+        systemPrompt: {
+          context: (contribution) => {
+            registered.push(contribution)
+            return () => {}
+          },
+        },
+        effect: (callback) => callback(),
+      },
+      () => [
+        {
+          ...runFor('/workspace'),
+          steps: [{ ...runFor('/workspace').steps[0]!, id: '{{unknown_workflow_step}}' }],
+        },
+      ],
+    )
+    expect(ok).toBe(true)
+    expect(registered[0]?.interpolate).toBe(false)
+    expect(registered[0]?.text()).toContain('{{unknown_workflow_step}}')
   })
 
   it('names the branch pending step, not the array-first one', () => {

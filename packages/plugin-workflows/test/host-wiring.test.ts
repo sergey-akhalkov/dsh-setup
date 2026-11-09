@@ -83,7 +83,11 @@ function fakeHost(
   readonly agent: Record<string, unknown>
   readonly commands: Array<Record<string, unknown>>
   readonly toolDefinitions: Array<Record<string, unknown>>
-  readonly promptContributions: Array<{ name: string; text: () => string }>
+  readonly promptContributions: Array<{
+    name: string
+    text: (context?: { scope?: unknown }) => string
+    interpolate?: boolean
+  }>
   readonly steers: readonly unknown[]
   readonly toolExecutions: Array<{
     readonly id: string
@@ -112,7 +116,11 @@ function fakeHost(
   }
   const commands: Array<Record<string, unknown>> = []
   const toolDefinitions: Array<Record<string, unknown>> = []
-  const promptContributions: Array<{ name: string; text: () => string }> = []
+  const promptContributions: Array<{
+    name: string
+    text: (context?: { scope?: unknown }) => string
+    interpolate?: boolean
+  }> = []
   const tools: Record<string, unknown> = {
     get: (name: string) =>
       ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(name)
@@ -220,7 +228,11 @@ function fakeHost(
       }
       if (name === 'systemPrompt') {
         return {
-          context: (contribution: { name: string; text: () => string }) => {
+          context: (contribution: {
+            name: string
+            text: (context?: { scope?: unknown }) => string
+            interpolate?: boolean
+          }) => {
             promptContributions.push(contribution)
             return () => {}
           },
