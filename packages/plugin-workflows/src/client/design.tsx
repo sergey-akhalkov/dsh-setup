@@ -20,6 +20,7 @@ import {
   openNew,
   patchDefinition,
   patchStep,
+  reconcileSave,
   reload,
   save,
   saveAsCopy,
@@ -162,22 +163,37 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     if (editor === undefined) return
     setLoading(true)
     setMessage(undefined)
-    const result = await save(editor, { api, taken })
-    setEditor(result)
-    if (result.status === 'saved') {
-      await refreshLibrary()
-      await loadRuns(result.document.definition.id)
+    try {
+      const result = await save(editor, { api, taken })
+      setEditor((current) => {
+        if (current === undefined) return result
+        if (current === editor) return result
+        // An edit landed while the save was in flight: keep it and the draft.
+        return reconcileSave(editor, current, result)
+      })
+      if (result.status === 'saved') {
+        await refreshLibrary()
+        await loadRuns(result.document.definition.id)
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const reloadCurrent = async (): Promise<void> => {
     if (editor === undefined) return
     setLoading(true)
-    const result = await reload(editor, api)
-    setEditor(result)
-    await loadRuns(result.document.definition.id)
-    setLoading(false)
+    try {
+      const result = await reload(editor, api)
+      setEditor(result)
+      await loadRuns(result.document.definition.id)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
+    }
   }
 
   const removeCurrent = async (): Promise<void> => {
@@ -187,16 +203,21 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       return
     }
     setLoading(true)
-    const outcome = await deleteDefinition(editor, api)
-    setEditor(outcome.deleted ? undefined : outcome.state)
-    setConfirmDelete(false)
-    if (outcome.deleted) {
-      setSelected(undefined)
-      setRuns([])
-      setRunId(undefined)
-      await refreshLibrary()
+    try {
+      const outcome = await deleteDefinition(editor, api)
+      setEditor(outcome.deleted ? undefined : outcome.state)
+      setConfirmDelete(false)
+      if (outcome.deleted) {
+        setSelected(undefined)
+        setRuns([])
+        setRunId(undefined)
+        await refreshLibrary()
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const startBlank = (): void => {
@@ -239,11 +260,18 @@ export function DesignMode(props: DesignModeProps): ReactNode {
 
   const copyCurrent = async (): Promise<void> => {
     if (editor === undefined) return
-    const result = await saveAsCopy(editor, { api, taken })
-    setEditor(result)
-    if (result.status === 'saved') {
-      await refreshLibrary()
-      await loadRuns(result.document.definition.id)
+    setLoading(true)
+    try {
+      const result = await saveAsCopy(editor, { api, taken })
+      setEditor(result)
+      if (result.status === 'saved') {
+        await refreshLibrary()
+        await loadRuns(result.document.definition.id)
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -584,7 +612,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           <button type="button" onClick={() => guard(() => void reloadCurrent())}>
             {t('design.reload')}
           </button>
-          <button type="button" onClick={() => void copyCurrent()}>
+          <button type="button" onClick={() => void copyCurrent()} disabled={loading}>
             {t('design.saveCopy')}
           </button>
           {conflict.nextId === undefined ? null : (

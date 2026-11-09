@@ -10512,6 +10512,35 @@ window.__ModuleLoader__.load({
     function nextVersion(state) {
       return state.document.revision === null ? 1 : state.document.definition.version + 1;
     }
+    function transportFailure(state, label, error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ...state,
+        status: "error",
+        message: `${label}: ${message.slice(0, 200)}`
+      };
+    }
+    function reconcileSave(captured, current, saved) {
+      if (current === captured) return saved;
+      const definition = {
+        ...current.document.definition,
+        version: saved.document.definition.version
+      };
+      return {
+        ...current,
+        document: {
+          ...current.document,
+          definition,
+          revision: saved.document.revision,
+          source: saved.document.source
+        },
+        diagram: { ...current.diagram, definition },
+        dirty: true,
+        status: "dirty",
+        conflict: void 0,
+        message: saved.status === "error" ? saved.message : void 0
+      };
+    }
     async function save(state, context) {
       if (state.document.source === "shipped") {
         return {
@@ -10525,12 +10554,19 @@ window.__ModuleLoader__.load({
       }
       const definition = { ...clone(state.document.definition), version: nextVersion(state) };
       const expected = state.document.revision;
-      const saving = { ...state, status: "saving", message: void 0, conflict: void 0 };
-      const result = await context.api.saveDefinition(
-        state.document.definition.id,
-        definition,
-        expected
-      );
+      const saving = {
+        ...state,
+        dirty: true,
+        status: "saving",
+        message: void 0,
+        conflict: void 0
+      };
+      let result;
+      try {
+        result = await context.api.saveDefinition(state.document.definition.id, definition, expected);
+      } catch (error) {
+        return transportFailure(saving, "the save failed", error);
+      }
       if (!result.ok) {
         const failed2 = failure(saving, result);
         if (result.kind !== "conflict" || expected !== null) return failed2;
@@ -10562,7 +10598,12 @@ window.__ModuleLoader__.load({
     }
     async function saveLayout(state, api) {
       const layout = layoutOf(state.diagram, state.layout);
-      const result = await api.saveLayout(layout, state.layoutRevision);
+      let result;
+      try {
+        result = await api.saveLayout(layout, state.layoutRevision);
+      } catch (error) {
+        return transportFailure({ ...state, layout, dirty: true }, "the layout save failed", error);
+      }
       if (result.ok) {
         return { ...state, layout, layoutRevision: result.revision };
       }
@@ -10570,6 +10611,7 @@ window.__ModuleLoader__.load({
         return {
           ...state,
           layout,
+          dirty: true,
           conflict: { kind: "layout", currentRevision: result.revision },
           status: "error",
           message: "the layout changed on disk; reload the layout or save a copy"
@@ -10579,6 +10621,7 @@ window.__ModuleLoader__.load({
         return {
           ...state,
           layout,
+          dirty: true,
           issues: [
             ...state.issues,
             ...result.errors.map((entry) => ({ path: entry.path, message: entry.message }))
@@ -10590,6 +10633,7 @@ window.__ModuleLoader__.load({
       return {
         ...state,
         layout,
+        dirty: true,
         status: "error",
         message: `the layout save failed: ${result.error}`
       };
@@ -10643,7 +10687,15 @@ window.__ModuleLoader__.load({
         context.taken,
         copyName ?? `${state.document.definition.name} copy`
       );
-      const copy = openNew(definition);
+      const base = openNew(definition);
+      const nodes = base.diagram.nodes.map((node) => {
+        if (node.step === void 0) return node;
+        const current = state.diagram.nodes.find((entry) => entry.step?.id === node.step?.id);
+        return current === void 0 ? node : { ...node, position: current.position };
+      });
+      const diagram = { ...base.diagram, nodes, definition };
+      const layout = { ...layoutOf(diagram, state.layout), id: definition.id };
+      const copy = { ...base, diagram, layout, dirty: true, status: "dirty" };
       return save({ ...copy, mode: state.mode }, context);
     }
     async function deleteDefinition(state, api) {
@@ -11556,21 +11608,35 @@ window.__ModuleLoader__.load({
         if (editor === void 0) return;
         setLoading(true);
         setMessage(void 0);
-        const result = await save(editor, { api, taken });
-        setEditor(result);
-        if (result.status === "saved") {
-          await refreshLibrary();
-          await loadRuns(result.document.definition.id);
+        try {
+          const result = await save(editor, { api, taken });
+          setEditor((current) => {
+            if (current === void 0) return result;
+            if (current === editor) return result;
+            return reconcileSave(editor, current, result);
+          });
+          if (result.status === "saved") {
+            await refreshLibrary();
+            await loadRuns(result.document.definition.id);
+          }
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : String(error));
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       };
       const reloadCurrent = async () => {
         if (editor === void 0) return;
         setLoading(true);
-        const result = await reload(editor, api);
-        setEditor(result);
-        await loadRuns(result.document.definition.id);
-        setLoading(false);
+        try {
+          const result = await reload(editor, api);
+          setEditor(result);
+          await loadRuns(result.document.definition.id);
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : String(error));
+        } finally {
+          setLoading(false);
+        }
       };
       const removeCurrent = async () => {
         if (editor === void 0) return;
@@ -11579,16 +11645,21 @@ window.__ModuleLoader__.load({
           return;
         }
         setLoading(true);
-        const outcome = await deleteDefinition(editor, api);
-        setEditor(outcome.deleted ? void 0 : outcome.state);
-        setConfirmDelete(false);
-        if (outcome.deleted) {
-          setSelected(void 0);
-          setRuns([]);
-          setRunId(void 0);
-          await refreshLibrary();
+        try {
+          const outcome = await deleteDefinition(editor, api);
+          setEditor(outcome.deleted ? void 0 : outcome.state);
+          setConfirmDelete(false);
+          if (outcome.deleted) {
+            setSelected(void 0);
+            setRuns([]);
+            setRunId(void 0);
+            await refreshLibrary();
+          }
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : String(error));
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       };
       const startBlank = () => {
         const next = openNew(blankDefinition(taken));
@@ -11627,11 +11698,18 @@ window.__ModuleLoader__.load({
       };
       const copyCurrent = async () => {
         if (editor === void 0) return;
-        const result = await saveAsCopy(editor, { api, taken });
-        setEditor(result);
-        if (result.status === "saved") {
-          await refreshLibrary();
-          await loadRuns(result.document.definition.id);
+        setLoading(true);
+        try {
+          const result = await saveAsCopy(editor, { api, taken });
+          setEditor(result);
+          if (result.status === "saved") {
+            await refreshLibrary();
+            await loadRuns(result.document.definition.id);
+          }
+        } catch (error) {
+          setMessage(error instanceof Error ? error.message : String(error));
+        } finally {
+          setLoading(false);
         }
       };
       const useNextId = () => {
@@ -11958,7 +12036,7 @@ window.__ModuleLoader__.load({
         conflict === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", role: "alert", "data-conflict": conflict.kind, children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { children: editor?.message ?? t("design.conflict") }),
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => guard(() => void reloadCurrent()), children: t("design.reload") }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => void copyCurrent(), children: t("design.saveCopy") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { type: "button", onClick: () => void copyCurrent(), disabled: loading, children: t("design.saveCopy") }),
           conflict.nextId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("button", { type: "button", onClick: useNextId, children: [
             t("design.useId"),
             " ",

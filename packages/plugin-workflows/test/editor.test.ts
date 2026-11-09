@@ -16,6 +16,7 @@ import {
   openDraft,
   openNew,
   patchStep,
+  reconcileSave,
   renameDefinition,
   type SaveResult,
   savable,
@@ -285,6 +286,28 @@ describe('draft, dirty tracking, and save', () => {
     expect(copied.document.definition.id).toBe('demo-copy')
   })
 
+  it('keeps the current node positions in a saved copy and stays dirty if it fails', async () => {
+    const { api, store } = fakeApi()
+    const moved = moveStep(opened(), nodeIdOf('one'), { x: 999, y: 888 })
+    const copied = await saveAsCopy(moved, { api, taken: TAKEN })
+    expect(copied.status).toBe('saved')
+    const layout = store.layouts.get('demo-copy')?.layout as {
+      id: string
+      positions: Record<string, { x: number; y: number }>
+    }
+    expect(layout.id).toBe('demo-copy')
+    expect(layout.positions['one']).toEqual({ x: 999, y: 888 })
+
+    const failing = await saveAsCopy(moved, {
+      api: fakeApi({
+        save: () => ({ ok: false, kind: 'conflict', status: 409, revision: 'rev-1' }),
+      }).api,
+      taken: TAKEN,
+    })
+    expect(failing.document.revision).toBeNull()
+    expect(failing.dirty).toBe(true)
+  })
+
   it('installs a draft only through the create-only save', async () => {
     const { api, calls } = fakeApi()
     const draft = openDraft('intake-draft', { ...definition, id: 'draft-demo', version: 7 })
@@ -334,6 +357,49 @@ describe('revision contract', () => {
     expect(result.conflict?.kind).toBe('layout')
     expect(result.document.revision).toBe('rev-new-2')
     expect(result.status).toBe('error')
+    // The positions are still unsaved, so a navigation must warn.
+    expect(result.dirty).toBe(true)
+  })
+
+  it('keeps the draft when a transport failure rejects the save', async () => {
+    const { api, store } = fakeApi({
+      save: () => {
+        throw new Error('the network is offline')
+      },
+    })
+    const dirty = patchStep(opened(), nodeIdOf('one'), { title: 'Mine' })
+    const result = await save(dirty, { api, taken: TAKEN })
+    expect(result.status).toBe('error')
+    expect(result.message).toContain('offline')
+    expect(result.dirty).toBe(true)
+    expect(result.document.definition.steps[0]?.title).toBe('Mine')
+    expect(store.definitions.get('demo')?.definition).toEqual(definition)
+  })
+
+  it('reconciles an edit made while the save was in flight', () => {
+    const captured = opened()
+    const current = patchStep(captured, nodeIdOf('one'), { title: 'During save' })
+    const saved: EditorState = {
+      ...captured,
+      document: {
+        ...captured.document,
+        definition: { ...captured.document.definition, version: 5 },
+        revision: 'rev-9',
+        source: 'local',
+      },
+      diagram: {
+        ...captured.diagram,
+        definition: { ...captured.diagram.definition, version: 5 },
+      },
+      dirty: false,
+      status: 'saved',
+    }
+    expect(reconcileSave(captured, captured, saved)).toBe(saved)
+    const merged = reconcileSave(captured, current, saved)
+    expect(merged.document.definition.steps[0]?.title).toBe('During save')
+    expect(merged.document.revision).toBe('rev-9')
+    expect(merged.document.definition.version).toBe(5)
+    expect(merged.dirty).toBe(true)
   })
 })
 

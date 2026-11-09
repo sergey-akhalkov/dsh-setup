@@ -447,6 +447,47 @@ export interface SaveContext {
   readonly taken: ReadonlySet<string>
 }
 
+/** A transport rejection is a save failure that keeps the draft. */
+function transportFailure(state: EditorState, label: string, error: unknown): EditorState {
+  const message = error instanceof Error ? error.message : String(error)
+  return {
+    ...state,
+    status: 'error',
+    message: `${label}: ${message.slice(0, 200)}`,
+  }
+}
+
+/**
+ * Merge a completed save with edits the user made while the request was in
+ * flight: keep their graph and field edits, adopt the saved revision/version,
+ * and stay dirty so the newer edits cannot be lost.
+ */
+export function reconcileSave(
+  captured: EditorState,
+  current: EditorState,
+  saved: EditorState,
+): EditorState {
+  if (current === captured) return saved
+  const definition = {
+    ...current.document.definition,
+    version: saved.document.definition.version,
+  }
+  return {
+    ...current,
+    document: {
+      ...current.document,
+      definition,
+      revision: saved.document.revision,
+      source: saved.document.source,
+    },
+    diagram: { ...current.diagram, definition },
+    dirty: true,
+    status: 'dirty',
+    conflict: undefined,
+    message: saved.status === 'error' ? saved.message : undefined,
+  }
+}
+
 /**
  * Save the definition, then its layout. Expected revisions are independent: the
  * first layout save sends null and a layout conflict never rolls back the
@@ -465,12 +506,19 @@ export async function save(state: EditorState, context: SaveContext): Promise<Ed
   }
   const definition = { ...clone(state.document.definition), version: nextVersion(state) }
   const expected = state.document.revision
-  const saving = { ...state, status: 'saving' as const, message: undefined, conflict: undefined }
-  const result = await context.api.saveDefinition(
-    state.document.definition.id,
-    definition,
-    expected,
-  )
+  const saving = {
+    ...state,
+    dirty: true,
+    status: 'saving' as const,
+    message: undefined,
+    conflict: undefined,
+  }
+  let result: SaveResult
+  try {
+    result = await context.api.saveDefinition(state.document.definition.id, definition, expected)
+  } catch (error) {
+    return transportFailure(saving, 'the save failed', error)
+  }
   if (!result.ok) {
     const failed = failure(saving, result)
     if (result.kind !== 'conflict' || expected !== null) return failed
@@ -504,7 +552,12 @@ export async function save(state: EditorState, context: SaveContext): Promise<Ed
 
 async function saveLayout(state: EditorState, api: EditorApi): Promise<EditorState> {
   const layout = layoutOf(state.diagram, state.layout)
-  const result = await api.saveLayout(layout, state.layoutRevision)
+  let result: SaveResult
+  try {
+    result = await api.saveLayout(layout, state.layoutRevision)
+  } catch (error) {
+    return transportFailure({ ...state, layout, dirty: true }, 'the layout save failed', error)
+  }
   if (result.ok) {
     return { ...state, layout, layoutRevision: result.revision }
   }
@@ -512,6 +565,7 @@ async function saveLayout(state: EditorState, api: EditorApi): Promise<EditorSta
     return {
       ...state,
       layout,
+      dirty: true,
       conflict: { kind: 'layout', currentRevision: result.revision },
       status: 'error',
       message: 'the layout changed on disk; reload the layout or save a copy',
@@ -521,6 +575,7 @@ async function saveLayout(state: EditorState, api: EditorApi): Promise<EditorSta
     return {
       ...state,
       layout,
+      dirty: true,
       issues: [
         ...state.issues,
         ...result.errors.map((entry) => ({ path: entry.path, message: entry.message })),
@@ -532,6 +587,7 @@ async function saveLayout(state: EditorState, api: EditorApi): Promise<EditorSta
   return {
     ...state,
     layout,
+    dirty: true,
     status: 'error',
     message: `the layout save failed: ${result.error}`,
   }
@@ -583,7 +639,7 @@ export async function reload(state: EditorState, api: EditorApi): Promise<Editor
   }
 }
 
-/** Save a conflict as a create-only copy under the next free id. */
+/** Save a conflict as a create-only copy while keeping the current canvas. */
 export async function saveAsCopy(
   state: EditorState,
   context: SaveContext,
@@ -594,7 +650,15 @@ export async function saveAsCopy(
     context.taken,
     copyName ?? `${state.document.definition.name} copy`,
   )
-  const copy = openNew(definition)
+  const base = openNew(definition)
+  const nodes = base.diagram.nodes.map((node) => {
+    if (node.step === undefined) return node
+    const current = state.diagram.nodes.find((entry) => entry.step?.id === node.step?.id)
+    return current === undefined ? node : { ...node, position: current.position }
+  })
+  const diagram = { ...base.diagram, nodes, definition }
+  const layout = { ...layoutOf(diagram, state.layout), id: definition.id }
+  const copy: EditorState = { ...base, diagram, layout, dirty: true, status: 'dirty' }
   return save({ ...copy, mode: state.mode }, context)
 }
 
