@@ -98,6 +98,15 @@ describe('parity load gate and verify settings', () => {
     expect(verify.settings.maxBlocks).toBe(8)
   })
 
+  it('accepts the intake spec-review defer only while that signal is real', () => {
+    const intake = shipped('change-intake')
+    const enabled = new Set(['delegation-rules/spec-review'])
+    expect(resolveOwnership(intake, new Set(['delegation-rules']), enabled).issues).toEqual([])
+    const disabled = resolveOwnership(intake, new Set(['delegation-rules']), new Set())
+    expect(disabled.issues.join('\n')).toMatch(/spec-review/u)
+    expect(disabled.issues.join('\n')).toMatch(/gate-only switch is off|no enforcing legacy gate/u)
+  })
+
   it('never embeds a shell command in the verify template', () => {
     const check = shipped('verify').steps[0]
     expect(check?.evidence).toEqual({ kind: 'check', source: 'verify-settings' })

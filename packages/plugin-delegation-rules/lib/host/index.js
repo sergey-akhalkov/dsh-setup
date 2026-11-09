@@ -5898,9 +5898,11 @@ function provideStatus(ctx, name, value) {
 export function apply(ctx, config = {}, options = {}) {
     const validated = validateConfig(config);
     // The workflow engine resolves per-signal legacy ownership from this status;
-    // the review runtime stays mounted either way.
+    // the review runtime stays mounted either way. The spec-review signal is real
+    // only while a strict or soft `spec-ready` review rule is configured to steer.
     provideStatus(ctx, 'delegationRulesStatus', Object.freeze({
         workflowOwned: validated.gates.workflowOwned,
+        specReview: validated.rules.some((rule) => rule.when === 'spec-ready' && rule.contract === 'review' && rule.gate !== 'none'),
     }));
     const state = new DelegationState();
     // Optional services are read through ctx.get(), not the service property: a

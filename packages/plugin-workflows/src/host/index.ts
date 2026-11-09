@@ -586,11 +586,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     try {
       if (installed.has('delegation-rules')) {
         // The spec-review, progress, and lane gates stay on under either switch
-        // value; only the task-review rule and the archive gate follow it.
-        for (const signal of ['spec-review', 'task-progress', 'lane-assignment', 'lane-boundary']) {
+        // value; only the task-review rule and the archive gate follow it. The
+        // spec-review signal exists only while a steering rule is configured.
+        const status = ctx.get('delegationRulesStatus') as
+          | { workflowOwned?: unknown; specReview?: unknown }
+          | undefined
+        for (const signal of ['task-progress', 'lane-assignment', 'lane-boundary']) {
           enabled.add(`delegation-rules/${signal}`)
         }
-        const status = ctx.get('delegationRulesStatus') as { workflowOwned?: unknown } | undefined
+        if (status?.specReview !== false) enabled.add('delegation-rules/spec-review')
         if (status?.workflowOwned !== false) {
           enabled.add('delegation-rules/task-review')
           enabled.add('delegation-rules/archive')

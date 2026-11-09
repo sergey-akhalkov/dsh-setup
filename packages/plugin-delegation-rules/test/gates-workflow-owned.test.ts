@@ -61,11 +61,13 @@ function configWith(workflowOwned: boolean): BundleConfigLike {
       },
       { id: 'task-progress', when: 'implementation-work', contract: 'note', gate: 'strict' },
       { id: 'lane-fanout', when: 'lane-assignment', contract: 'note', gate: 'strict' },
+      { id: 'lane-boundary', when: 'lane-boundary', contract: 'note', gate: 'strict' },
     ],
   })
 }
 
 const planUnchecked = plan.replace('- [x] 1.1 First task', '- [ ] 1.1 First task')
+const planAll = plan.replace('- [ ] 2.1 Doc task', '- [x] 2.1 Doc task')
 
 async function fixture(workflowOwned: boolean) {
   const workspace = await makeWorkspace()
@@ -97,7 +99,10 @@ async function snapshotFiles(directory: string): Promise<Map<string, Buffer>> {
 describe('delegation.gates.workflowOwned: false', () => {
   it('stops the task-review and archive gates but keeps the spec-review rule', async () => {
     const { root, dir, harness } = await fixture(false)
-    expect(harness.provided.get('delegationRulesStatus')).toEqual({ workflowOwned: false })
+    expect(harness.provided.get('delegationRulesStatus')).toEqual({
+      workflowOwned: false,
+      specReview: true,
+    })
     await mkdir(join(root, 'src'), { recursive: true })
     await harness.preStep(1)
     await harness.writeResult(
@@ -105,9 +110,9 @@ describe('delegation.gates.workflowOwned: false', () => {
       '# Proposal\n\nWhy.\n',
       '# Proposal\n\nWhy changed.\n',
     )
-    await harness.writeResult(join(dir, 'tasks.md'), planUnchecked, plan)
+    await harness.writeResult(join(dir, 'tasks.md'), planUnchecked, planAll)
     await writeFile(join(dir, 'proposal.md'), '# Proposal\n\nWhy changed.\n', 'utf8')
-    await writeFile(join(dir, 'tasks.md'), plan, 'utf8')
+    await writeFile(join(dir, 'tasks.md'), planAll, 'utf8')
     await harness.turnStopping(1)
     const steer = steerTexts(harness.agent).join('\n')
     expect(steer).toContain('whole-spec review')
@@ -166,28 +171,78 @@ describe('delegation.gates.workflowOwned: false', () => {
     )
     harness.git.status = ' M packages/engine/src/engine.ts\0'
     harness.git.diff = 'diff --git a/packages/engine/src/engine.ts b/packages/engine/src/engine.ts'
-    await harness.turnStopping(1)
-    expect(steerTexts(harness.agent).join('\n')).toContain('changed implementation files')
-
-    // A fresh note satisfies the gate; a later write makes it stale again.
     const noted = await harness.toolText('task_progress', {
       task: '2.1 Doc task',
       status: 'in-progress',
       reason: 'writing the docs',
     })
     expect(noted).toContain('progress note written')
-    const stale = await fixture(false)
-    await stale.harness.preStep(1)
-    harness.git.status = ' M packages/engine/src/engine.ts\0'
-    await stale.harness.toolText('task_progress', {
-      task: '2.1 Doc task',
-      status: 'in-progress',
-      reason: 'writing the docs',
+    // A matched note satisfies the progress rule before the worktree moves on.
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent).join('\n')).not.toContain('rule "task-progress"')
+
+    // A later write makes the same note stale and the progress rule steers again.
+    harness.git.status = ' M packages/engine/src/engine.ts\0 M docs/a.md\0'
+    harness.git.diff = 'diff --git a/docs/a.md b/docs/a.md'
+    await harness.turnStopping(1)
+    expect(steerTexts(harness.agent).join('\n')).toContain('rule "task-progress"')
+  })
+
+  it('keeps the lane-boundary gate steering', async () => {
+    const boundary = `# Tasks
+
+## 1. Code (owns \`src/**\`)
+
+- [ ] 1.1 First code
+
+## 2. Docs (owns \`docs/a.md\`)
+
+- [ ] 2.1 Write docs
+`
+    const { dir, harness } = await fixture(false)
+    await harness.preStep(1)
+    await harness.writeResult(
+      join(dir, 'tasks.md'),
+      boundary,
+      boundary.replace('- [ ] 1.1 First code', '- [x] 1.1 First code'),
+    )
+    await writeFile(
+      join(dir, 'tasks.md'),
+      boundary.replace('- [ ] 1.1 First code', '- [x] 1.1 First code'),
+      'utf8',
+    )
+    await harness.turnStopping(1)
+    const message = steerTexts(harness.agent).join('\n')
+    expect(message).toContain('rule "lane-boundary"')
+    expect(message).toContain('is complete')
+  })
+
+  it('reports the real spec-review signal state for per-signal ownership', async () => {
+    const without = await fixture(false)
+    const noRule = new Harness({
+      cwd: without.root,
+      config: {
+        ...defaultTestConfig(),
+        rules: [
+          {
+            id: 'spec-review',
+            when: 'spec-ready',
+            to: 'codex',
+            contract: 'review',
+            phase: 'spec',
+            scope: 'whole',
+            gate: 'none',
+            instruction: 'bundled:review-spec',
+          },
+        ],
+        gates: { workflowOwned: false },
+      },
+      agents: providers(),
     })
-    stale.harness.git.status = ' M packages/engine/src/engine.ts\0 M docs/a.md\0'
-    stale.harness.git.diff = 'diff --git a/docs/a.md b/docs/a.md'
-    await stale.harness.turnStopping(1)
-    expect(steerTexts(stale.harness.agent).join('\n')).toContain('task_progress')
+    expect(noRule.provided.get('delegationRulesStatus')).toMatchObject({ specReview: false })
+    expect(without.harness.provided.get('delegationRulesStatus')).toMatchObject({
+      specReview: true,
+    })
   })
 
   it('keeps the lane-assignment gate steering', async () => {

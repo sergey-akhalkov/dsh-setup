@@ -7441,12 +7441,16 @@ function provideStatus(ctx: Context, name: string, value: unknown): void {
 export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOptions = {}): void {
   const validated = validateConfig(config)
   // The workflow engine resolves per-signal legacy ownership from this status;
-  // the review runtime stays mounted either way.
+  // the review runtime stays mounted either way. The spec-review signal is real
+  // only while a strict or soft `spec-ready` review rule is configured to steer.
   provideStatus(
     ctx,
     'delegationRulesStatus',
     Object.freeze({
       workflowOwned: validated.gates.workflowOwned,
+      specReview: validated.rules.some(
+        (rule) => rule.when === 'spec-ready' && rule.contract === 'review' && rule.gate !== 'none',
+      ),
     }),
   )
   const state = new DelegationState()

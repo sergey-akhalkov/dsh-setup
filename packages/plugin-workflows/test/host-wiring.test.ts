@@ -218,7 +218,7 @@ function fakeHost(
       if (name === 'tools') return tools
       // The migrated profile: the workflow-owned legacy gates are off while the
       // spec-review, progress, and lane signals stay enabled.
-      if (name === 'delegationRulesStatus') return { workflowOwned: false }
+      if (name === 'delegationRulesStatus') return { workflowOwned: false, specReview: true }
       if (name === 'goalContinuityStatus') return { automation: false }
       if (name === 'verificationGateStatus') return { steering: false }
       if (name === 'userQuestions' && options.userQuestions === true) {
