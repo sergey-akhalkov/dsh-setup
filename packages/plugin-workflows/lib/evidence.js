@@ -614,7 +614,7 @@ function normalizeCheckCommand(value) {
 function shownCommands(commands) {
     const limited = commands
         .slice(0, 3)
-        .map((command) => `"${command}"`)
+        .map((command) => `"${command.length > 120 ? `${command.slice(0, 120)}…` : command}"`)
         .join(' or ');
     return commands.length > 3 ? `${limited} (+${String(commands.length - 3)} more)` : limited;
 }
@@ -660,28 +660,32 @@ function verifyCheck(context, item) {
     if (afterWrite.length === 0) {
         return checkFailure(`no configured verification command completed after the last code write; run ${shown}`, item);
     }
+    // The legacy gate clears the obligation on a successful check, and a later
+    // failed attempt does not re-dirty the turn; keep that parity.
+    const successful = afterWrite
+        .filter((candidate) => candidate.ok !== false && candidate.exitCode === 0)
+        .reduce((last, candidate) => (last === undefined || candidate.at >= last.at ? candidate : last), undefined);
     const latest = afterWrite.reduce((last, candidate) => candidate.at >= last.at ? candidate : last);
-    if (latest.ok === false) {
-        return checkFailure(`"${latest.command}" did not complete successfully`, item);
-    }
-    if (latest.timedOut === true)
-        return checkFailure(`"${latest.command}" timed out`, item);
-    if (latest.signal !== undefined) {
-        return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item);
-    }
-    if (latest.sandboxDenied === true) {
-        return checkFailure(`"${latest.command}" was refused by the sandbox`, item);
-    }
-    if (latest.exitCode !== 0) {
-        return checkFailure(`"${latest.command}" exited ${String(latest.exitCode)}; a zero exit is required`, item);
+    if (successful === undefined) {
+        if (latest.timedOut === true)
+            return checkFailure(`"${latest.command}" timed out`, item);
+        if (latest.signal !== undefined) {
+            return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item);
+        }
+        if (latest.sandboxDenied === true) {
+            return checkFailure(`"${latest.command}" was refused by the sandbox`, item);
+        }
+        return checkFailure(latest.exitCode === 0
+            ? `"${latest.command}" did not complete successfully`
+            : `"${latest.command}" exited ${String(latest.exitCode)}; a zero exit is required`, item);
     }
     return {
         ok: true,
         evidence: {
             kind: 'check',
-            callId: latest.callId,
-            at: latest.at,
-            detail: latest.command,
+            callId: successful.callId,
+            at: successful.at,
+            detail: successful.command,
         },
     };
 }

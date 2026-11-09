@@ -800,7 +800,7 @@ function normalizeCheckCommand(value: string): string {
 function shownCommands(commands: readonly string[]): string {
   const limited = commands
     .slice(0, 3)
-    .map((command) => `"${command}"`)
+    .map((command) => `"${command.length > 120 ? `${command.slice(0, 120)}…` : command}"`)
     .join(' or ')
   return commands.length > 3 ? `${limited} (+${String(commands.length - 3)} more)` : limited
 }
@@ -854,22 +854,29 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
       item,
     )
   }
+  // The legacy gate clears the obligation on a successful check, and a later
+  // failed attempt does not re-dirty the turn; keep that parity.
+  const successful = afterWrite
+    .filter((candidate) => candidate.ok !== false && candidate.exitCode === 0)
+    .reduce<(typeof afterWrite)[number] | undefined>(
+      (last, candidate) => (last === undefined || candidate.at >= last.at ? candidate : last),
+      undefined,
+    )
   const latest = afterWrite.reduce((last, candidate) =>
     candidate.at >= last.at ? candidate : last,
   )
-  if (latest.ok === false) {
-    return checkFailure(`"${latest.command}" did not complete successfully`, item)
-  }
-  if (latest.timedOut === true) return checkFailure(`"${latest.command}" timed out`, item)
-  if (latest.signal !== undefined) {
-    return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item)
-  }
-  if (latest.sandboxDenied === true) {
-    return checkFailure(`"${latest.command}" was refused by the sandbox`, item)
-  }
-  if (latest.exitCode !== 0) {
+  if (successful === undefined) {
+    if (latest.timedOut === true) return checkFailure(`"${latest.command}" timed out`, item)
+    if (latest.signal !== undefined) {
+      return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item)
+    }
+    if (latest.sandboxDenied === true) {
+      return checkFailure(`"${latest.command}" was refused by the sandbox`, item)
+    }
     return checkFailure(
-      `"${latest.command}" exited ${String(latest.exitCode)}; a zero exit is required`,
+      latest.exitCode === 0
+        ? `"${latest.command}" did not complete successfully`
+        : `"${latest.command}" exited ${String(latest.exitCode)}; a zero exit is required`,
       item,
     )
   }
@@ -877,9 +884,9 @@ function verifyCheck(context: EvidenceContext, item: string | undefined): Eviden
     ok: true,
     evidence: {
       kind: 'check',
-      callId: latest.callId,
-      at: latest.at,
-      detail: latest.command,
+      callId: successful.callId,
+      at: successful.at,
+      detail: successful.command,
     },
   }
 }

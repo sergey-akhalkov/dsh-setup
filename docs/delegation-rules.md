@@ -372,10 +372,13 @@ flipped in a shipped profile.
 ### Migration and settings
 
 Migrate in this order: the tracked parity report passes for the current and the retired behavior;
-flip the two gate-only switches in one config change; install the `own` definitions; keep the legacy
-rows installed for one release; delete them only after a clean release. The workflows row carries the
-mirrored settings: `checkpointApplicability` (`minToolCalls`, `requireWrite`, `bottleneckAge`,
-`stepInterval`, `enforceParallel`) and `verify.commands`/`verify.maxBlocks`. The release gate runs
+flip the two gate-only switches and the three definitions to `own` in one config change (the loader
+refuses `own` while its signal is enabled and `defer` while it is disabled, so a half-flipped state
+fails loudly); keep the legacy provider rows installed for one release so rollback is a config flip;
+delete them only after a clean release. The workflows row carries the mirrored settings:
+`checkpointApplicability` (`minToolCalls`, `requireWrite`, `bottleneckAge`, `stepInterval`,
+`enforceParallel`) and `verify.commands`/`verify.maxBlocks`. The parity settings matrix must cover at
+least two non-empty command lists and two positive caps with one above 128. The release gate runs
 `node scripts/workflows-parity.ts --check` (the `pnpm workflows:parity` alias is wired with the
 release job). Rollback is per signal as described above; the whole-spec `spec-review`, task-progress,
 and lane gates are never part of the flip.

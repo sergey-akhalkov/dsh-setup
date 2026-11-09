@@ -2118,7 +2118,7 @@ export function apply(ctx, config = {}) {
                 const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand));
                 const lastCheckAt = (sessionShellResults.get(sessionId) ?? [])
                     .filter((result) => result.foreground &&
-                    result.ok === true &&
+                    result.ok !== false &&
                     result.exitCode === 0 &&
                     result.signal === undefined &&
                     result.timedOut !== true &&

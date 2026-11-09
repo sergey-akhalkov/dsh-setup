@@ -2479,7 +2479,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             .filter(
               (result) =>
                 result.foreground &&
-                result.ok === true &&
+                result.ok !== false &&
                 result.exitCode === 0 &&
                 result.signal === undefined &&
                 result.timedOut !== true &&
