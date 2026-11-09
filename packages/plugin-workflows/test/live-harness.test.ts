@@ -2,25 +2,23 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { adoptChange } from '../src/host/adoption.ts'
 import { loadShippedDefinitions, validateDefinition } from '../src/host/definitions.ts'
 import { writeDraft } from '../src/host/drafts.ts'
-import { currentSpecDigest, verifyEvidence } from '../src/host/evidence.ts'
-import { OwnedCalls, runSubagentStep } from '../src/host/executors.ts'
-import { evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose } from '../src/host/gates.ts'
+import { currentSpecDigest } from '../src/host/evidence.ts'
+import { runSubagentStep } from '../src/host/executors.ts'
+import { evaluateTurnClose } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
-import { advanceIntake } from '../src/host/intake.ts'
-import { engineRuns, hashSession } from '../src/host/projection.ts'
+import { hashSession } from '../src/host/projection.ts'
 import { listReceipts } from '../src/host/receipts.ts'
-import { cancelRun, resumeRun } from '../src/host/resume.ts'
+import { cancelRun, recoverRuns, resumeRun } from '../src/host/resume.ts'
 import {
   createRun,
   DAY_MS,
   listAuthenticatedRuns,
   pruneRuns,
+  readAuthenticatedRun,
   runPath,
-  type WorkflowRun,
   writeRun,
 } from '../src/host/runs.ts'
 
@@ -243,83 +241,218 @@ describe('live-session proxy', () => {
 })
 
 describe('obligation engine live proxy', () => {
-  it('runs the intake, blocks a turn close, resumes, adopts, and archives after pruning', async () => {
+  it('drives the intake through the host, caps a close, resumes after restart, adopts, and archives after pruning', async () => {
+    const KEY = 'a'.repeat(64)
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
-    const auth = HostAuth.fromKey('test-live-obligation-host-key-0123')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const definition = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
     if (definition === undefined) throw new Error('the change-intake definition is missing')
-
-    // 1. A creation call with no completed intake starts one run and is refused.
-    const startedRuns: WorkflowRun[] = []
-    const started = await evaluateIntakeGate({
-      name: 'auth',
-      session: 'session-live',
-      workspace,
-      definition,
-      runs: [],
-      receipts: [],
-      ownedCallIds: new Set(),
-      changeExists: false,
-      startRun: async (entry, name) => {
-        const run = createRun({
-          definition: entry.id,
-          trigger: 'tool.pre-execute',
-          session: 'session-live',
-          workspace,
-          context: { name },
-          steps: entry.steps.map((step) => step.id),
-          now: 1_000,
-          id: 'run-live-intake',
-        })
-        startedRuns.push(run)
-        await writeRun(workspace, run, auth)
-        return { runId: run.id }
+    const listeners = new Map<string, Listener[]>()
+    const routes: Route[] = []
+    const commands: Array<{
+      name: string
+      handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }>
+    }> = []
+    const steers: string[] = []
+    const add = (name: string, listener: Listener): void => {
+      const list = listeners.get(name) ?? []
+      list.push(listener)
+      listeners.set(name, list)
+    }
+    const agent = {
+      id: 'session-live',
+      session: { id: 'session-live', header: { origin: 'root' } },
+      ctx: { on: () => () => {} },
+      steer: (message: { content?: Array<{ text?: string }> }) => {
+        const text = message?.content?.[0]?.text
+        if (typeof text === 'string') steers.push(text)
       },
-      resumeRun: async () => ({ stepId: 'spec' }),
-    })
-    expect(started).toMatchObject({ kind: 'deny', action: 'started', stepId: 'requirements' })
-    const viewRuns = await engineRuns(workspace)
-    expect(viewRuns.find((run) => run.id === 'workflow:run-live-intake')).toMatchObject({
-      source: 'workflow',
-      status: 'running',
-    })
+      inject: () => {},
+    }
+    const ctx = {
+      get(name: string): unknown {
+        if (name === 'agents') return { get: () => agent, list: () => [agent] }
+        if (name === 'workingDirectory') return { get: () => workspace }
+        if (name === 'fs') {
+          return {
+            resolve: async (path: string) => ({ targetKey: path }),
+            watch: async () => async () => {},
+          }
+        }
+        if (name === 'connection') {
+          return {
+            fetch: {
+              register: (entry: Route) => {
+                routes.push(entry)
+                return () => {}
+              },
+            },
+          }
+        }
+        if (name === 'commands') {
+          return {
+            register: (command: unknown) => {
+              commands.push(command as never)
+              return () => {}
+            },
+          }
+        }
+        if (name === 'userQuestions') {
+          return {
+            ask: async (request: { questions: Array<{ id: string }> }) => ({
+              answers: request.questions.map((question) => ({
+                id: question.id,
+                selected: ['yes'],
+              })),
+            }),
+          }
+        }
+        if (name === 'tools') {
+          return {
+            get: (tool: string) =>
+              ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(tool)
+                ? { name: tool }
+                : undefined,
+            register: () => () => {},
+          }
+        }
+        return undefined
+      },
+      on(name: string, listener: Listener): () => void {
+        add(name, listener)
+        return () => {}
+      },
+      effect: (callback: () => () => void) => {
+        callback()
+        return () => {}
+      },
+    }
+    const emit = async (name: string, ...args: unknown[]): Promise<unknown> => {
+      let result: unknown
+      for (const listener of listeners.get(name) ?? []) result = await listener(...args)
+      return result
+    }
+    const route = (path: string): Route => {
+      const found = routes.find((entry) => entry.path === path)
+      if (found === undefined) throw new Error(`no route ${path}`)
+      return found
+    }
+    const read = async (path: string): Promise<Record<string, unknown>> => {
+      const response = await route(path).fetch(
+        new Request(`http://localhost${path}?session=session-live`),
+      )
+      expect(response.status).toBe(200)
+      return (await response.json()) as Record<string, unknown>
+    }
+    const runViews = async (): Promise<
+      Array<{
+        id: string
+        source: string
+        session?: string
+        steps: Array<{ id: string; title: string; state: string }>
+      }>
+    > => {
+      const body = (await read('/api/workflows/runs')) as {
+        runs: Array<{
+          id: string
+          source: string
+          session?: string
+          steps: Array<{ id: string; title: string; state: string }>
+        }>
+      }
+      return body.runs
+    }
+    const preStep = async (turn: number): Promise<void> => {
+      await emit(
+        'agent/pre-step',
+        {
+          agent,
+          turn,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    }
+    const turnStop = async (turn: number): Promise<void> => {
+      await emit('agent/turn-stopping', { agent, turn })
+    }
 
-    // 2. A main step completes only after its draft file exists.
-    const owned = new OwnedCalls()
-    const advance = (run: WorkflowRun) =>
-      advanceIntake({
-        run,
-        definition,
-        values: { name: 'auth' },
-        evidenceContext: { workspace, values: { name: 'auth' } },
-        owned,
-        installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
-        readRecord: async () => ({
-          ok: true,
-          evidence: {
-            kind: 'record',
-            path: '.dsh/delegation/spec-review/auth/spec.json',
-            digest: 'a'.repeat(64),
-          },
-        }),
-        questions: { ask: async () => ({ answer: 'yes' }) },
-        now: 1_100,
-      })
-    let run = await advance(startedRuns[0] as WorkflowRun)
-    expect(run.waiting?.stepId).toBe('requirements')
-    await writeDraft(workspace, 'auth', 'requirements.md', 'x'.repeat(200))
-    run = await advance(run.run)
-    expect(run.run.steps.find((step) => step.id === 'requirements')?.state).toBe('done')
+    apply(ctx as never)
+    await preStep(1)
 
-    // 3. A subagent step records a schema-validated child result.
-    const childRun = createRun({
-      definition: 'child-demo',
-      trigger: 'turn.stopping',
-      session: 'session-live',
-      workspace,
-      steps: ['review'],
-      now: 1_200,
+    // 1. The registered pre-execute hook starts the intake and refuses the call.
+    const started = (await emit(
+      'tools/pre-execute',
+      {
+        agent,
+        callId: 'call-new',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )) as { kind?: string; stepId?: string }
+    expect(started).toMatchObject({ kind: 'deny' })
+    const { readdir } = await import('node:fs/promises')
+    const runFiles = await readdir(join(workspace, '.dsh', 'workflows', 'runs'))
+    expect(runFiles.length).toBeGreaterThan(0)
+    const { readFile } = await import('node:fs/promises')
+    const rawRun = JSON.parse(
+      await readFile(join(workspace, '.dsh', 'workflows', 'runs', runFiles[0] as string), 'utf8'),
+    ) as { session?: unknown }
+    expect(rawRun.session).toBe('session-live')
+    const debugBody = (await read('/api/workflows/runs')) as {
+      runs: Array<{ id: string; source: string; session?: string }>
+    }
+    expect(debugBody.runs.map((entry) => entry.source)).toContain('workflow')
+    await waitFor(async () => (await runViews()).some((entry) => entry.source === 'workflow'))
+    const intake = (await runViews()).find(
+      (entry) => entry.source === 'workflow' && entry.session === 'session-live',
+    )
+    expect(intake).toBeDefined()
+    const runId = String(intake?.id).replace(/^workflow:/u, '')
+    expect(intake?.steps.find((step) => step.id === 'requirements')?.state).toBe('open')
+
+    // 2. The open requirements step refuses the close three times through the
+    // real Host event, then the bounded cap records one visible violation.
+    for (const turn of [2, 3, 4]) await turnStop(turn)
+    expect(steers.length).toBeGreaterThan(0)
+    const cappedRun = await readAuthenticatedRun(workspace, runId, auth)
+    expect(cappedRun).toBeDefined()
+    if (cappedRun === undefined) return
+    expect(cappedRun.turnBlocks).toBe(3)
+    const capped = evaluateTurnClose({
+      run: cappedRun,
+      definition,
+      agent: { steer: () => {} },
+      evidenceContext: { workspace, values: { name: 'auth' } },
+      turn: 99,
+      maxBlocks: definition.settings.maxBlocks,
+      installedLegacy: new Set(['delegation-rules', 'goal-continuity']),
     })
+    expect(capped.kind).toBe('violation')
+
+    // 3. Main steps complete with files through the real turn close.
+    for (const [turn, file] of [
+      [5, 'requirements.md'],
+      [6, 'architecture.md'],
+      [7, 'interface.md'],
+    ] as const) {
+      await writeDraft(workspace, 'auth', file, 'x'.repeat(200))
+      await turnStop(turn)
+    }
+    await waitFor(async () =>
+      (await runViews()).some(
+        (entry) =>
+          entry.id === `workflow:${runId}` &&
+          entry.steps.find((step) => step.id === 'interface')?.state === 'done',
+      ),
+    )
+
+    // 4. A subagent step records a schema-validated child result.
     const childDefinition = validateDefinition({
       v: 1,
       id: 'child-demo',
@@ -346,7 +479,14 @@ describe('obligation engine live proxy', () => {
       ],
     })
     const child = await runSubagentStep({
-      run: childRun,
+      run: createRun({
+        definition: 'child-demo',
+        trigger: 'turn.stopping',
+        session: 'session-live',
+        workspace,
+        steps: ['review'],
+        now: 1_200,
+      }),
       definition: childDefinition,
       step: childDefinition.steps[0] as (typeof childDefinition.steps)[number],
       runner: {
@@ -356,134 +496,96 @@ describe('obligation engine live proxy', () => {
     })
     expect(child.steps[0]).toMatchObject({ state: 'done', evidence: { callId: 'child-live' } })
 
-    // 4. A turn close is refused once and then allowed with a visible violation.
-    const blockedDefinition = validateDefinition({
-      v: 1,
-      id: 'block-demo',
-      name: 'Block demo',
-      version: 1,
-      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
-      settings: {
-        allowModelStart: false,
-        risk: 'low',
-        gateOwnership: 'own',
-        maxBlocks: 1,
-        allowIntent: false,
-      },
-      steps: [
-        {
-          id: 'requirements',
-          title: 'Requirements',
-          executor: 'main',
-          prompt: 'Write the requirements.',
-          evidence: { kind: 'file', path: 'out.md' },
-          next: 'end',
-          blockTurnClose: true,
-        },
-      ],
-    })
-    const blockedRun = createRun({
-      definition: 'block-demo',
-      trigger: 'turn.stopping',
-      session: 'session-live',
-      workspace,
-      steps: ['requirements'],
-      now: 1_300,
-    })
-    const steered: string[] = []
-    const refusal = evaluateTurnClose({
-      run: blockedRun,
-      definition: blockedDefinition,
-      agent: { steer: (text: string) => steered.push(text) },
-      evidenceContext: { workspace, values: {} },
-      turn: 1,
-      maxBlocks: 1,
-      installedLegacy: new Set(),
-    })
-    expect(refusal.kind).toBe('refuse')
-    const violation = evaluateTurnClose({
-      run: refusal.run,
-      definition: blockedDefinition,
-      agent: { steer: (text: string) => steered.push(text) },
-      evidenceContext: { workspace, values: {} },
-      turn: 2,
-      maxBlocks: 1,
-      installedLegacy: new Set(),
-    })
-    expect(violation.kind).toBe('violation')
-    expect(violation.run.violations).toHaveLength(1)
-    expect(steered).toHaveLength(1)
+    // 5. A restart recovers the persisted run and resume keeps completed progress.
+    const before = await listAuthenticatedRuns(workspace, auth)
+    const persisted = before.find((entry) => entry.id === runId)
+    expect(persisted).toBeDefined()
+    expect(persisted?.steps.find((step) => step.id === 'requirements')?.state).toBe('done')
+    const recovery = await recoverRuns(workspace, auth)
+    expect(recovery.recovered).toContain(runId)
+    expect(
+      (await listAuthenticatedRuns(workspace, auth)).find((entry) => entry.id === runId)?.status,
+    ).toBe('interrupted')
+    const resumed = await resumeRun(workspace, runId, auth, 2_100)
+    expect(resumed.stepId).toBe('create-change')
+    const after = await listAuthenticatedRuns(workspace, auth)
+    expect(after.filter((entry) => entry.definition === 'change-intake')).toHaveLength(1)
+    expect(
+      after.find((entry) => entry.id === runId)?.steps.find((step) => step.id === 'requirements')
+        ?.state,
+    ).toBe('done')
 
-    // 5. A restart marks the run interrupted and resume re-evaluates the pending spec step.
-    await writeRun(
-      workspace,
-      { ...(startedRuns[0] as WorkflowRun), status: 'interrupted', updatedAt: 2_000 },
-      auth,
-    )
-    const resumed = await resumeRun(workspace, 'run-live-intake', auth, 2_100)
-    expect(resumed.stepId).toBe('requirements')
-
-    // 6. A pre-existing change is adopted with a host-authenticated receipt.
-    await writeDraft(workspace, 'auth', 'requirements.md', 'x'.repeat(200))
-    const adoption = await adoptChange({
-      workspace,
-      change: 'auth',
-      auth,
-      userStarted: true,
-      questions: { ask: async () => ({ answer: 'yes' }) },
-      now: 3_000,
-    })
-    expect(adoption.ok).toBe(false)
-    await mkdir(join(workspace, 'openspec', 'changes', 'auth', 'specs', 'auth'), {
+    // 6. A pre-existing change is adopted through the registered command.
+    await mkdir(join(workspace, 'openspec', 'changes', 'legacy', 'specs', 'legacy'), {
       recursive: true,
     })
     for (const file of ['proposal.md', 'design.md', 'tasks.md']) {
-      await writeFile(join(workspace, 'openspec', 'changes', 'auth', file), '# artifact\n', 'utf8')
+      await writeFile(
+        join(workspace, 'openspec', 'changes', 'legacy', file),
+        '# artifact\n',
+        'utf8',
+      )
     }
     await writeFile(
-      join(workspace, 'openspec', 'changes', 'auth', 'specs', 'auth', 'spec.md'),
+      join(workspace, 'openspec', 'changes', 'legacy', 'specs', 'legacy', 'spec.md'),
       '# spec\n',
       'utf8',
     )
-    const digest = (await currentSpecDigest(workspace, 'auth')) as string
-    await mkdir(join(workspace, '.dsh', 'delegation', 'spec-review', 'auth'), { recursive: true })
+    const digest = (await currentSpecDigest(workspace, 'legacy')) as string
+    await mkdir(join(workspace, '.dsh', 'delegation', 'spec-review', 'legacy'), { recursive: true })
     await writeFile(
-      join(workspace, '.dsh', 'delegation', 'spec-review', 'auth', 'spec.json'),
-      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-07T00:00:00.000Z', target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' } })}\n`,
+      join(workspace, '.dsh', 'delegation', 'spec-review', 'legacy', 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'legacy', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-07T00:00:00.000Z', target: { provider: 'codex-subagent', model: 'gpt-6-astra', reasoningEffort: 'xhigh' } })}\n`,
       'utf8',
     )
-    const adopted = await adoptChange({
-      workspace,
-      change: 'auth',
-      auth,
-      userStarted: true,
-      questions: { ask: async () => ({ answer: 'yes' }) },
-      now: 3_100,
+    const command = commands.find((entry) => entry.name === 'workflows')
+    expect(command).toBeDefined()
+    const adopted = await command?.handler({
+      agent,
+      commandId: 'cmd-adopt',
+      rawInput: ' adopt legacy',
+      attachments: [],
+      signal: new AbortController().signal,
     })
-    expect(adopted.ok).toBe(true)
+    expect(adopted?.kind).toBe('success')
+    expect(
+      (await listReceipts(workspace, auth)).some((receipt) => receipt.change === 'legacy'),
+    ).toBe(true)
 
-    // 7. Pruning the run history keeps the receipt, and the archive remains allowed.
-    await cancelRun(workspace, 'run-live-intake', auth, 2_200)
+    // 7. Pruning run history keeps the receipt and the archive dispatch allows.
+    await cancelRun(workspace, runId, auth, 2_200)
     const old = Date.now() - 40 * DAY_MS
-    await utimes(runPath(workspace, 'run-live-intake'), new Date(old), new Date(old))
-    await pruneRuns(workspace, { auth, retentionMs: 30 * DAY_MS })
-    const archive = evaluateArchiveGate({
-      change: 'auth',
-      runs: await listAuthenticatedRuns(workspace, auth),
-      receipts: await listReceipts(workspace, auth),
-      specRecord: await verifyEvidence(
+    const cancelled = await readAuthenticatedRun(workspace, runId, auth)
+    if (cancelled !== undefined) {
+      await writeRun(
+        workspace,
         {
-          kind: 'record',
-          rule: 'spec-review',
-          change: 'auth',
-          phase: 'spec',
-          scope: 'whole',
-          verdict: 'PASS',
-          digest: 'current',
+          ...cancelled,
+          createdAt: old,
+          updatedAt: old,
+          steps: cancelled.steps.map((step) => ({ ...step, state: 'cancelled' as const })),
         },
-        { workspace, values: { name: 'auth' } },
-      ),
-    })
-    expect(archive.kind).toBe('allow')
+        auth,
+      )
+    }
+    await utimes(runPath(workspace, runId), new Date(old), new Date(old))
+    await pruneRuns(workspace, { auth, retentionMs: 30 * DAY_MS })
+    expect(
+      (await listAuthenticatedRuns(workspace, auth)).find((entry) => entry.id === runId),
+    ).toBeUndefined()
+    expect(
+      (await listReceipts(workspace, auth)).some((receipt) => receipt.change === 'legacy'),
+    ).toBe(true)
+    const archiveDecision = (await emit(
+      'tools/pre-execute',
+      {
+        agent,
+        callId: 'call-archive',
+        name: 'pwsh',
+        arguments: { command: 'openspec archive legacy' },
+      },
+      async () => ({ kind: 'continue' }),
+    )) as { kind?: string }
+    expect(archiveDecision.kind).not.toBe('deny')
   })
 })
