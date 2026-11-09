@@ -2414,8 +2414,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   (entry) => entry.id === step.id,
                 )
                 if (resolved?.ownership !== 'own') return
+                // An explicit user run or resume gets a fresh bounded budget.
+                const budgeted: WorkflowRun = {
+                  ...run,
+                  steps: run.steps.map((entry) =>
+                    entry.id === step.id ? { ...entry, attempts: 0 } : entry,
+                  ),
+                }
                 const steered = requestMainStep({
-                  run,
+                  run: budgeted,
                   definition,
                   step,
                   agent: {
@@ -2432,7 +2439,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   maxAttempts: definition.settings.maxBlocks,
                   now: journal.time(),
                 })
-                if (steered.run !== run) await writeRun(workspace, steered.run, auth)
+                if (!steered.steered) {
+                  throw new Error(
+                    `the pending step "${step.id}" could not be steered: ${steered.reason}`,
+                  )
+                }
+                await writeRun(workspace, steered.run, auth)
               }
               const host: WorkflowCommandHost = {
                 workspace,

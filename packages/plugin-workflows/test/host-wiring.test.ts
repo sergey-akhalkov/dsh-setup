@@ -3225,6 +3225,76 @@ describe('/workflows command starts and resumes work', () => {
     expect(steered).not.toContain('Join step.')
   })
 
+  it('resumes a step whose previous steer budget is exhausted', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const budget = {
+      v: 1,
+      id: 'budget-demo',
+      name: 'Budget demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'budget.json'), `${JSON.stringify(budget)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'budget.json'), auth)
+    const runs = await import('../src/host/runs.ts')
+    const base = runs.createRun({
+      definition: 'budget-demo',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['observe'],
+      id: 'run-budget',
+      now: 5_000,
+    })
+    const exhausted = {
+      ...base,
+      steps: base.steps.map((step) => ({ ...step, state: 'blocked' as const, attempts: 3 })),
+    }
+    await runs.writeRun(workspace, runs.setRunStatus(exhausted, 'interrupted', 5_100), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    const resumed = await command?.handler({
+      agent: host.agent,
+      commandId: 'cmd-resume-budget',
+      rawInput: ' resume run-budget',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(resumed?.kind).toBe('success')
+    expect(host.steers).toHaveLength(1)
+    await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const completed = await runs.readAuthenticatedRun(workspace, 'run-budget', auth)
+    expect(completed?.status).toBe('completed')
+  })
+
   it('installs a definition and runs it without a restart', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
