@@ -2412,6 +2412,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 )
                 const step = definition.steps.find((entry) => entry.id === pending?.id)
                 if (step === undefined) return
+                // A deferred step is never steered; only its legacy gate steers.
+                const resolved = resolveOwnership(definition, installedLegacySources()).steps.find(
+                  (entry) => entry.id === step.id,
+                )
+                if (resolved?.ownership !== 'own') return
                 const steered = requestMainStep({
                   run,
                   definition,

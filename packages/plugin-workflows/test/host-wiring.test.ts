@@ -3090,6 +3090,55 @@ describe('/workflows command starts and resumes work', () => {
     const resumedRun = await runs.readAuthenticatedRun(workspace, 'run-resume-demo', auth)
     expect(resumedRun?.status).toBe('completed')
   })
+
+  it('does not steer a deferred pending step on resume', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const runs = await import('../src/host/runs.ts')
+    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    const base = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-resume-deferred',
+      now: 3_000,
+    })
+    const withDone = {
+      ...base,
+      steps: base.steps.map((step) =>
+        step.id === 'spec-review' || step.id === 'approval'
+          ? step
+          : { ...step, state: 'done' as const },
+      ),
+    }
+    await runs.writeRun(workspace, runs.setRunStatus(withDone, 'interrupted', 3_100), auth)
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    const resumed = await command?.handler({
+      agent: host.agent,
+      commandId: 'cmd-resume-deferred',
+      rawInput: ' resume run-resume-deferred',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(resumed?.kind).toBe('success')
+    expect(host.steers).toHaveLength(0)
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-resume-deferred', auth)
+    expect(stored?.steps.find((step) => step.id === 'spec-review')?.state).toBe('open')
+  })
 })
 
 describe('workflows tool live wiring', () => {
