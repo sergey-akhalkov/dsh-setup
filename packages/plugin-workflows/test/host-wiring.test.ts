@@ -985,14 +985,14 @@ describe('verify command contract', () => {
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const verify = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-      (entry) => entry.definition === 'verify',
+      (entry) => entry.definition.id === 'verify',
     )
     expect(verify?.status).not.toBe('completed')
     await shell('check-2', 'rtk pnpm check')
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     await new Promise((resolve) => setTimeout(resolve, 100))
     const settled = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-      (entry) => entry.definition === 'verify',
+      (entry) => entry.definition.id === 'verify',
     )
     expect(settled?.status).toBe('completed')
   })

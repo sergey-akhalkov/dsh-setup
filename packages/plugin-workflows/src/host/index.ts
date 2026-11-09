@@ -2668,7 +2668,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // writes the current turn's record, so supersede it (keeping its
           // violation history) instead of demanding the old record forever.
           if (
-            run.definition === 'retro' &&
+            run.definition.id === 'retro' &&
             (run.status === 'running' || run.status === 'blocked') &&
             typeof run.context.checkpoint === 'string' &&
             checkpointTurnOf(run.context.checkpoint) !== payload.turn

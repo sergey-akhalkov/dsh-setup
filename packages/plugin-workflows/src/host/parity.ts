@@ -926,9 +926,7 @@ export function checkpointCloseIssue(input: {
   const amendedBottleneck = rawArguments?.bottleneck
   const normalizeBottleneck = (value: Record<string, unknown>): string => {
     const normalizedPath = (entry: unknown): unknown =>
-      typeof entry === 'string'
-        ? entry.replaceAll('\\', '/').replace(/\/+$/u, '')
-        : entry
+      typeof entry === 'string' ? entry.replaceAll('\\', '/').replace(/\/+$/u, '') : entry
     const sorted = (entry: unknown): unknown =>
       Array.isArray(entry) ? [...entry].map(normalizedPath).map(String).sort() : entry
     return JSON.stringify({

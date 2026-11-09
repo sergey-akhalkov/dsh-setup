@@ -8,6 +8,7 @@ import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
 import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
+import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
 import { commandMatches, ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
@@ -542,7 +543,7 @@ export function apply(ctx, config = {}) {
         try {
             const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event);
             const run = createRun({
-                definition: definition.id,
+                definition: { id: definition.id, name: definition.name, version: definition.version },
                 trigger: definition.trigger.kind,
                 session: event.session ?? '',
                 workspace,
@@ -871,7 +872,7 @@ export function apply(ctx, config = {}) {
                     if (row.reason !== 'not-applicable')
                         continue;
                     const definitionId = row.id.slice('definition:'.length);
-                    const existing = knownRuns.find((run) => run.definition === definitionId &&
+                    const existing = knownRuns.find((run) => run.definition.id === definitionId &&
                         run.session === input.session &&
                         (run.status === 'running' || run.status === 'blocked'));
                     if (existing === undefined)
@@ -1049,7 +1050,11 @@ export function apply(ctx, config = {}) {
                                             turn: payload.turn,
                                         });
                                         const run = createRun({
-                                            definition: definition.id,
+                                            definition: {
+                                                id: definition.id,
+                                                name: definition.name,
+                                                version: definition.version,
+                                            },
                                             trigger: 'intent',
                                             session: sessionId,
                                             workspace: activeWorkspace,
@@ -1662,7 +1667,7 @@ export function apply(ctx, config = {}) {
         reserveStart(workspace);
         try {
             const run = createRun({
-                definition: definition.id,
+                definition: { id: definition.id, name: definition.name, version: definition.version },
                 trigger: definition.trigger.kind,
                 session: sessionId,
                 workspace,
@@ -2151,7 +2156,7 @@ export function apply(ctx, config = {}) {
                 const metricsCheckAt = turnMetrics.get(sessionId)?.lastCheckAt;
                 const checkTimes = [bufferCheckAt, metricsCheckAt].filter((entry) => entry !== undefined);
                 const lastCheckAt = checkTimes.length === 0 ? undefined : Math.max(...checkTimes);
-                const completedVerify = runs.find((run) => run.definition === 'verify' &&
+                const completedVerify = runs.find((run) => run.definition.id === 'verify' &&
                     run.session === sessionId &&
                     run.status === 'completed' &&
                     Number(run.dedupeKey?.split('\u0000').at(-1)) === payload.turn);
@@ -2221,7 +2226,7 @@ export function apply(ctx, config = {}) {
             const advanced = new Map();
             const definitionOf = new Map();
             for (const run of ordered) {
-                const definition = definitions.find((entry) => entry.id === run.definition);
+                const definition = definitions.find((entry) => entry.id === run.definition.id);
                 if (definition === undefined)
                     continue;
                 // A retro run must not complete on the record alone: while the host
@@ -2249,7 +2254,7 @@ export function apply(ctx, config = {}) {
                 // A prior turn's retro obligation is obsolete: work_checkpoint only
                 // writes the current turn's record, so supersede it (keeping its
                 // violation history) instead of demanding the old record forever.
-                if (run.definition === 'retro' &&
+                if (run.definition.id === 'retro' &&
                     (run.status === 'running' || run.status === 'blocked') &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) !== payload.turn) {
@@ -2329,7 +2334,7 @@ export function apply(ctx, config = {}) {
             // later in the same turn: re-check the current-turn record on every
             // close and steer when the obligation reappears.
             if (!refusedThisClose && workflowOwnsCheckpoint) {
-                const currentRetro = runs.find((run) => run.definition === 'retro' &&
+                const currentRetro = runs.find((run) => run.definition.id === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn &&
                     run.session === sessionId &&
@@ -2338,7 +2343,8 @@ export function apply(ctx, config = {}) {
                     const issue = checkpointGateIssue(workspace, currentRetro.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
                     const blocks = currentRetro.turnBlocksTurn === payload.turn ? (currentRetro.turnBlocks ?? 0) : 0;
                     const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3;
-                    if (issue !== undefined && blocks < limit) {
+                    const alreadyUnchecked = (currentRetro.violations ?? []).some((violation) => violation.reason?.includes('checkpoint freshness refused') === true);
+                    if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
                         await writeRun(workspace, {
                             ...incrementTurnBlocks(currentRetro, journal.time()),
                             turnBlocksTurn: payload.turn,
@@ -2524,7 +2530,7 @@ export function apply(ctx, config = {}) {
                         const run = await readAuthenticatedRun(workspace, runId, auth);
                         if (run === undefined)
                             return;
-                        const definition = definitions.find((entry) => entry.id === run.definition);
+                        const definition = definitions.find((entry) => entry.id === run.definition.id);
                         if (definition === undefined)
                             return;
                         const step = definition.steps.find((entry) => entry.id === pendingStep(run));
@@ -2630,9 +2636,18 @@ export function apply(ctx, config = {}) {
         lastEventAtFor: (session) => sessionEventAt.get(session),
         triggers,
         definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
+        definitionEntriesFor: (workspace) => listEditorDefinitions(workspace),
+        definitionDocumentFor: (workspace, id) => readEditorDefinitionDocument(workspace, id),
         receiptsFor: async (workspace) => {
             const auth = storedAuth;
             return auth === undefined ? [] : listReceipts(workspace, auth);
         },
+    });
+    // The Design mode's write API shares the read API's carrier and host key, so a
+    // saved definition is approved exactly as a `/workflows install` would be.
+    registerEditorRoutes(ctx, {
+        agents: services.agents,
+        workingDirectory: services.workingDirectory,
+        auth: async () => (storedAuth === undefined ? ensureAuth() : storedAuth),
     });
 }

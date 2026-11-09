@@ -35,6 +35,8 @@ export function evaluateTurnClose(input) {
         // A failed task-review dispatch is an unresolved obligation: it must not
         // let the run terminal-allow before the review retry path is used.
         const blocksForTurn = (run) => run.turnBlocksTurn === input.turn ? (run.turnBlocks ?? 0) : 0;
+        // A new turn starts from zero, not from the previous turn's count.
+        const budgetRun = (run) => run.turnBlocksTurn === input.turn ? run : { ...run, turnBlocks: 0 };
         const markTurn = (run) => ({
             ...run,
             turnBlocksTurn: input.turn,
@@ -90,7 +92,7 @@ export function evaluateTurnClose(input) {
             }
             return {
                 kind: 'refuse',
-                run: markTurn(incrementTurnBlocks(input.run, at)),
+                run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
                 stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
                 text: ownedText,
             };
@@ -111,7 +113,9 @@ export function evaluateTurnClose(input) {
         // A new turn also starts a fresh request budget: without this reset the
         // previous turn's attempts would hit the request bound before the fresh
         // maxBlocks budget could steer.
-        const steeringRun = input.run.turnBlocksTurn === input.turn ? input.run : resetStepAttempts(input.run, step.id);
+        const steeringRun = input.run.turnBlocksTurn === input.turn
+            ? input.run
+            : resetStepAttempts(budgetRun(input.run), step.id);
         const steered = requestMainStep({
             run: steeringRun,
             definition: input.definition,

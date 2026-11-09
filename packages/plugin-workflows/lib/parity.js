@@ -732,9 +732,7 @@ export function checkpointCloseIssue(input) {
     // Compare normalized fields so equivalent spellings are not a change.
     const amendedBottleneck = rawArguments?.bottleneck;
     const normalizeBottleneck = (value) => {
-        const normalizedPath = (entry) => typeof entry === 'string'
-            ? entry.replaceAll('\\', '/').replace(/\/+$/u, '')
-            : entry;
+        const normalizedPath = (entry) => typeof entry === 'string' ? entry.replaceAll('\\', '/').replace(/\/+$/u, '') : entry;
         const sorted = (entry) => Array.isArray(entry) ? [...entry].map(normalizedPath).map(String).sort() : entry;
         return JSON.stringify({
             id: typeof value.id === 'string' ? value.id.trim() : value.id,
