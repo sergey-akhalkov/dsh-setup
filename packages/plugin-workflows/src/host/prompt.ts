@@ -35,7 +35,7 @@ export interface ActiveRunsPromptTarget {
       readonly name: string
       readonly order: number
       readonly required: boolean
-      readonly text: () => string
+      readonly text: (context?: { readonly scope?: unknown }) => string
     }): () => void
   }
   effect?(callback: () => () => void): () => void
@@ -44,17 +44,20 @@ export interface ActiveRunsPromptTarget {
 /** Register the dynamic context when the host's system-prompt service exists. */
 export function registerActiveRunsContext(
   ctx: ActiveRunsPromptTarget,
-  activeRuns: () => readonly WorkflowRun[],
+  activeRuns: (context?: { readonly scope?: unknown }) => readonly WorkflowRun[],
 ): boolean {
-  const register = ctx.systemPrompt?.context
-  if (typeof register !== 'function') return false
+  const target = ctx.systemPrompt
+  const register = target?.context
+  if (target === undefined || typeof register !== 'function') return false
   const contribution = {
     name: ACTIVE_RUNS_CONTEXT,
     order: 500,
     required: false,
-    text: () => renderActiveRunsContext(activeRuns()),
+    text: (context?: { readonly scope?: unknown }) => renderActiveRunsContext(activeRuns(context)),
   }
-  if (typeof ctx.effect === 'function') ctx.effect(() => register(contribution))
-  else register(contribution)
+  // Keep the service receiver: the real method reads its private layer state.
+  const add = (): (() => void) => register.call(target, contribution)
+  if (typeof ctx.effect === 'function') ctx.effect(add)
+  else add()
   return true
 }

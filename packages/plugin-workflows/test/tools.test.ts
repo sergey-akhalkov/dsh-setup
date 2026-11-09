@@ -496,7 +496,7 @@ describe('workflows command and prompt context', () => {
   })
 
   it('registers the dynamic context only when the system-prompt service exists', () => {
-    const registered: Array<{ name: string; text: () => string }> = []
+    const registered: Array<{ name: string; text: (context?: unknown) => string }> = []
     const ok = registerActiveRunsContext(
       {
         systemPrompt: {
@@ -513,5 +513,26 @@ describe('workflows command and prompt context', () => {
     expect(registered[0]?.name).toBe('workflows-active-runs')
     expect(registered[0]?.text()).toBe('')
     expect(registerActiveRunsContext({}, () => [])).toBe(false)
+  })
+
+  it('keeps the service receiver and passes the assembly scope to the provider', () => {
+    const layers: Array<{ name: string; text: (context?: { scope?: unknown }) => string }> = []
+    const service = {
+      layers,
+      context(contribution: { name: string; text: (context?: { scope?: unknown }) => string }) {
+        if (this.layers === undefined) throw new TypeError('lost receiver')
+        this.layers.push(contribution)
+        return () => {}
+      },
+    }
+    expect(
+      registerActiveRunsContext(
+        { systemPrompt: service, effect: (callback) => callback() },
+        (context) => (context?.scope === 'session-1' ? [runFor('/workspace')] : []),
+      ),
+    ).toBe(true)
+    expect(layers).toHaveLength(1)
+    expect(layers[0]?.text({ scope: 'session-1' })).toContain('model-start')
+    expect(layers[0]?.text({ scope: 'other' })).toBe('')
   })
 })

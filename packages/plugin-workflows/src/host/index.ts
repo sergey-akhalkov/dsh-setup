@@ -620,12 +620,51 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
       writeRunSync(workspace, run, auth)
+      void refreshPromptRuns(workspace)
       return { ok: true, runId: run.id }
     } catch (error) {
       return { ok: false, reason: runFailure(error) }
     } finally {
       releaseStart(workspace)
     }
+  }
+  /** The prompt's active runs per workspace, refreshed after every transition. */
+  const promptRunsByWorkspace = new Map<string, WorkflowRun[]>()
+  const sessionWorkspaces = new Map<string, string>()
+  let promptWorkspace: string | undefined
+  const refreshPromptRuns = async (workspace: string): Promise<void> => {
+    const auth = storedAuth
+    if (auth === undefined) return
+    try {
+      const runs = await listAuthenticatedRuns(workspace, auth)
+      promptRunsByWorkspace.set(
+        workspace,
+        runs.filter(
+          (run) =>
+            run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
+        ),
+      )
+      promptWorkspace = workspace
+    } catch {
+      // Keep the last good prompt when a refresh cannot read the store.
+    }
+  }
+  /** The session a prompt assembly scope names, when the engine supplies one. */
+  const scopeSession = (scope: unknown): string | undefined => {
+    if (typeof scope === 'string') return scope
+    if (scope === null || typeof scope !== 'object') return undefined
+    const record = scope as Record<string, unknown>
+    for (const key of ['sessionId', 'session', 'id']) {
+      if (typeof record[key] === 'string') return record[key] as string
+    }
+    return undefined
+  }
+  /** The active runs for the assembly's session, or the last refreshed workspace. */
+  const activePromptRuns = (context?: { readonly scope?: unknown }): WorkflowRun[] => {
+    const session = scopeSession(context?.scope)
+    const workspace =
+      session === undefined ? promptWorkspace : (sessionWorkspaces.get(session) ?? promptWorkspace)
+    return workspace === undefined ? [] : (promptRunsByWorkspace.get(workspace) ?? [])
   }
   /** Mark unfinished runs from a previous process interrupted, never completed. */
   const recoveries = new Map<string, Promise<void>>()
@@ -647,6 +686,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (!pluginDisposed) {
           // Retention runs at boot, before the next session adds history.
           await pruneRuns(workspace, { auth })
+          await refreshPromptRuns(workspace)
         }
       } catch (error) {
         console.error(
@@ -663,6 +703,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const workspace = workspaceFor(services, session)
       if (workspace !== undefined) {
         activeSession.set(workspace, String(session.id))
+        sessionWorkspaces.set(String(session.id), workspace)
         const header = session.header as {
           origin?: string
           delegationDepth?: number
@@ -1445,28 +1486,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   /** Dedupe keys whose triggering call has not finished starting its run yet. */
   const inFlightTriggers = new Set<string>()
-  /** The prompt's active runs per workspace, refreshed after every transition. */
-  const promptRunsByWorkspace = new Map<string, WorkflowRun[]>()
-  let promptWorkspace: string | undefined
-  const refreshPromptRuns = async (workspace: string): Promise<void> => {
-    const auth = storedAuth
-    if (auth === undefined) return
-    try {
-      const runs = await listAuthenticatedRuns(workspace, auth)
-      promptRunsByWorkspace.set(
-        workspace,
-        runs.filter(
-          (run) =>
-            run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
-        ),
-      )
-      promptWorkspace = workspace
-    } catch {
-      // Keep the last good prompt when a refresh cannot read the store.
-    }
-  }
-  const activePromptRuns = (): WorkflowRun[] =>
-    promptWorkspace === undefined ? [] : (promptRunsByWorkspace.get(promptWorkspace) ?? [])
   const optionalService = <T>(name: string): T | undefined => {
     try {
       return (ctx as unknown as { get?: (serviceName: string) => unknown }).get?.(name) as

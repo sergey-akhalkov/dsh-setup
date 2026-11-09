@@ -76,6 +76,7 @@ function fakeHost(
     readonly toolExecute?: boolean
     readonly userQuestions?: boolean
     readonly answer?: string
+    readonly workspaces?: Readonly<Record<string, string>>
   } = {},
 ): {
   readonly ctx: Record<string, unknown>
@@ -186,7 +187,16 @@ function fakeHost(
     },
     get(name: string): unknown {
       if (name === 'agents') return { get: () => agent, list: () => [agent] }
-      if (name === 'workingDirectory') return { get: () => workspace }
+      if (name === 'workingDirectory') {
+        return {
+          get: (session?: { id?: string } | string) => {
+            const id = typeof session === 'string' ? session : session?.id
+            return id !== undefined && options.workspaces?.[id] !== undefined
+              ? options.workspaces[id]
+              : workspace
+          },
+        }
+      }
       if (name === 'fs') {
         return {
           resolve: async (path: unknown) => ({ targetKey: String(path) }),
@@ -3460,6 +3470,138 @@ describe('active-runs prompt context', () => {
     )
     expect(otherContribution).toBeDefined()
     expect(otherContribution?.text()).toBe('')
+  })
+
+  it('keeps two workspaces separate in one plugin instance', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspaceA = await tempWorkspace()
+    const workspaceB = await tempWorkspace()
+    const demo = {
+      v: 1,
+      id: 'demo',
+      name: 'Demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    for (const workspace of [workspaceA, workspaceB]) {
+      await writeFile(join(workspace, 'demo.json'), `${JSON.stringify(demo)}\n`, 'utf8')
+      await installDefinition(workspace, join(workspace, 'demo.json'), auth)
+    }
+    const host = fakeHost(workspaceA, { workspaces: { 'session-2': workspaceB } })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const contribution = host.promptContributions.find(
+      (entry) => entry.name === 'workflows-active-runs',
+    )
+    expect(contribution).toBeDefined()
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | {
+          handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }>
+        }
+      | undefined
+    expect(command).toBeDefined()
+    if (contribution === undefined || command === undefined) return
+    const otherAgent = {
+      ...host.agent,
+      id: 'session-2',
+      session: { id: 'session-2', header: { origin: 'root' } },
+    }
+    await host.emit('agent/created', { agent: otherAgent })
+    const start = (agent: Record<string, unknown>, id: string): Promise<{ kind?: string }> =>
+      command.handler({
+        agent,
+        commandId: `cmd-${id}`,
+        rawInput: ' run demo',
+        attachments: [],
+        signal: new AbortController().signal,
+      })
+    await start(host.agent, 'a')
+    await start(otherAgent, 'b')
+    const runs = await import('../src/host/runs.ts')
+    const runA = (await runs.listAuthenticatedRuns(workspaceA, auth)).find(
+      (entry) => entry.definition === 'demo',
+    )
+    const runB = (await runs.listAuthenticatedRuns(workspaceB, auth)).find(
+      (entry) => entry.definition === 'demo',
+    )
+    expect(runA).toBeDefined()
+    expect(runB).toBeDefined()
+    await waitFor(
+      () =>
+        contribution.text({ scope: 'session-1' }).includes(runA?.id ?? 'missing') &&
+        contribution.text({ scope: 'session-2' }).includes(runB?.id ?? 'missing'),
+    )
+    const textA = contribution.text({ scope: 'session-1' })
+    const textB = contribution.text({ scope: 'session-2' })
+    expect(textA).not.toContain(runB?.id ?? 'missing')
+    expect(textB).not.toContain(runA?.id ?? 'missing')
+  })
+
+  it('shows recovered and automatically started runs before turn close', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const base = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['requirements'],
+      id: 'run-recovered',
+      now: 6_000,
+    })
+    const recovered = {
+      ...base,
+      steps: base.steps.map((step) => ({ ...step, state: 'open' as const })),
+    }
+    await runs.writeRun(workspace, runs.setRunStatus(recovered, 'interrupted', 6_100), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const contribution = host.promptContributions.find(
+      (entry) => entry.name === 'workflows-active-runs',
+    )
+    expect(contribution).toBeDefined()
+    await waitFor(
+      () => contribution?.text({ scope: 'session-1' }).includes('run-recovered') === true,
+    )
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'call-auto',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await waitFor(
+      () => contribution?.text({ scope: 'session-1' }).includes('change-intake') === true,
+    )
   })
 })
 
