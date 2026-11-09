@@ -97,6 +97,8 @@ export interface WorkflowRun {
   readonly violations: readonly RunViolation[]
   /** The trigger identity that produced this run, for dedupe after reload. */
   readonly dedupeKey?: string
+  /** The turn the current turnBlocks budget belongs to. */
+  readonly turnBlocksTurn?: number
 }
 
 /** The persisted file shape; the signature covers every other field. */
@@ -129,6 +131,8 @@ export interface CreateRunInput {
   readonly now?: number
   readonly id?: string
   readonly dedupeKey?: string
+  /** The turn the current turnBlocks budget belongs to. */
+  readonly turnBlocksTurn?: number
 }
 
 /** Build a new running run with every step open. */
