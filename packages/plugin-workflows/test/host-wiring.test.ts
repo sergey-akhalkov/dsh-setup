@@ -929,6 +929,75 @@ describe('checkpoint rollback', () => {
   })
 })
 
+describe('verify command contract', () => {
+  it('does not accept an unconfigured rtk-prefixed invocation', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['rtk pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    const shell = (callId: string, command: string) =>
+      host.emit(
+        'tools/result',
+        { agent: host.agent, callId, name: 'pwsh', arguments: { command } },
+        {
+          isError: false,
+          content: [{ type: 'text', text: 'ok' }],
+          value: {
+            kind: 'foreground',
+            cwd: workspace,
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            aborted: false,
+            timeoutMs: 120_000,
+            stdout: { text: '', truncated: false },
+            stderr: { text: '', truncated: false },
+          },
+        },
+      )
+    await shell('check-1', 'pnpm check')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBeGreaterThan(0)
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const verify = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'verify',
+    )
+    expect(verify?.status).not.toBe('completed')
+    await shell('check-2', 'rtk pnpm check')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const settled = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'verify',
+    )
+    expect(settled?.status).toBe('completed')
+  })
+})
+
 describe('parity report refusal at runtime', () => {
   const runReport = async (variant?: {
     report?: unknown

@@ -1451,10 +1451,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           shellOutcome.ok &&
           shellOutcome.background !== true &&
           (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
-          verifySettings.commands.some(
-            (configured) =>
-              configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''),
-          )
+          verifySettings.commands.some((configured) => commandMatches(configured, command))
         ) {
           metrics.lastCheckAt = journal.time()
         }
@@ -1498,6 +1495,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // Observability never breaks tool dispatch; the failure is published.
         publishListenerError(workspace, error)
       }
+    }),
+  )
+
+  // Invocation order: a call that started before a checkpoint amendment but
+  // returned after it must not count as a later remedy call.
+  listen(() =>
+    ctx.on('tools/pre-execute', async (exec: Readonly<ToolExecution>, next) => {
+      try {
+        const agent = exec.agent
+        if (agent !== undefined) {
+          const session = agent.session
+          if (workspaceFor(services, session) !== undefined) {
+            pendingCallSeq.set(String(exec.callId), nextObservationSeq(String(session.id)))
+          }
+        }
+      } catch (error) {
+        publishListenerError('', error)
+      }
+      return next()
     }),
   )
 

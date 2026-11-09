@@ -1181,7 +1181,7 @@ export function apply(ctx, config = {}) {
                 shellOutcome.ok &&
                 shellOutcome.background !== true &&
                 (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
-                verifySettings.commands.some((configured) => configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''))) {
+                verifySettings.commands.some((configured) => commandMatches(configured, command))) {
                 metrics.lastCheckAt = journal.time();
             }
             // A background or unreadable shell result cannot satisfy a check.
@@ -1222,6 +1222,23 @@ export function apply(ctx, config = {}) {
             // Observability never breaks tool dispatch; the failure is published.
             publishListenerError(workspace, error);
         }
+    }));
+    // Invocation order: a call that started before a checkpoint amendment but
+    // returned after it must not count as a later remedy call.
+    listen(() => ctx.on('tools/pre-execute', async (exec, next) => {
+        try {
+            const agent = exec.agent;
+            if (agent !== undefined) {
+                const session = agent.session;
+                if (workspaceFor(services, session) !== undefined) {
+                    pendingCallSeq.set(String(exec.callId), nextObservationSeq(String(session.id)));
+                }
+            }
+        }
+        catch (error) {
+            publishListenerError('', error);
+        }
+        return next();
     }));
     // DSH dispatches `subagent/start` and `subagent/end` inside the delegating
     // parent's scoped context and passes only the run info to listeners. A
