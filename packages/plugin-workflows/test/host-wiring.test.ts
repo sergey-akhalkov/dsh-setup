@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { apply, definitionEventsOf } from '../src/host/index.ts'
@@ -904,6 +905,121 @@ describe('checkpoint rollback', () => {
     )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.steers).toHaveLength(0)
+  })
+})
+
+describe('parity report refusal at runtime', () => {
+  const runReport = async (file: string | undefined): Promise<string[]> => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const previous = process.env.DSH_WORKFLOWS_PARITY_REPORT
+    if (file === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
+    else process.env.DSH_WORKFLOWS_PARITY_REPORT = file
+    try {
+      const workspace = await tempWorkspace()
+      const host = fakeHost(workspace)
+      apply(host.ctx as never)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 1,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      for (const [index, name] of ['read', 'read', 'read', 'write'].entries()) {
+        await host.emit(
+          'tools/result',
+          {
+            agent: host.agent,
+            callId: 'call-' + String(index),
+            name,
+            arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+          },
+          { isError: false, content: [{ type: 'text', text: 'ok' }] },
+        )
+      }
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      const runs = await import('../src/host/runs.ts')
+      const { HostAuth } = await import('../src/host/host-auth.ts')
+      const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+      return (await runs.listAuthenticatedRuns(workspace, auth)).map((entry) => entry.definition)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_WORKFLOWS_PARITY_REPORT
+      else process.env.DSH_WORKFLOWS_PARITY_REPORT = previous
+    }
+  }
+
+  it('refuses the bound definitions for a missing, failed, or hash-mismatched report', async () => {
+    const real = fileURLToPath(
+      new URL('../assets/parity/retire-legacy-gates.json', import.meta.url),
+    )
+    const report = JSON.parse(await readFile(real, 'utf8')) as Record<string, unknown>
+    const directory = await mkdtemp(join(tmpdir(), 'parity-refusal-'))
+    const missing = join(directory, 'missing.json')
+    const failed = join(directory, 'failed.json')
+    const mismatch = join(directory, 'mismatch.json')
+    const failedReport = structuredClone(report) as { gates: Record<string, { status: string }> }
+    for (const gate of Object.values(failedReport.gates)) gate.status = 'fail'
+    const mismatchReport = structuredClone(report) as { templates: Record<string, string> }
+    for (const key of Object.keys(mismatchReport.templates)) {
+      mismatchReport.templates[key] = 'sha256-' + 'a'.repeat(64)
+    }
+    await writeFile(failed, JSON.stringify(failedReport), 'utf8')
+    await writeFile(mismatch, JSON.stringify(mismatchReport), 'utf8')
+    for (const file of [missing, failed, mismatch]) {
+      const definitions = await runReport(file)
+      expect(definitions).not.toContain('verify')
+      expect(definitions).not.toContain('retro')
+    }
+  })
+
+  it('loads with the shipped report and honors profile maxBlocks 129', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const definitions = await runReport(undefined)
+    expect(definitions).toContain('verify')
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'], maxBlocks: 129 } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers).toHaveLength(1)
+    for (let close = 0; close < 140; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    const settled = host.steers.length
+    expect(settled).toBeLessThanOrEqual(130)
+    for (let close = 0; close < 2; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    expect(host.steers.length).toBe(settled)
   })
 })
 

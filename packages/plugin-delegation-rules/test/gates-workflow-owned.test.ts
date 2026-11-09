@@ -101,6 +101,7 @@ describe('delegation.gates.workflowOwned: false', () => {
     expect(harness.provided.get('delegationRulesStatus')).toEqual({
       workflowOwned: false,
       specReview: true,
+      taskReview: true,
     })
     await mkdir(join(root, 'src'), { recursive: true })
     await harness.preStep(1)
@@ -214,6 +215,40 @@ describe('delegation.gates.workflowOwned: false', () => {
     const message = steerTexts(harness.agent).join('\n')
     expect(message).toContain('rule "lane-boundary"')
     expect(message).toContain('is complete')
+  })
+
+  it('reports an inert task-review rule as not steering', async () => {
+    const { root } = await fixture(false)
+    const none = new Harness({
+      cwd: root,
+      config: {
+        ...defaultTestConfig(),
+        gates: { workflowOwned: false },
+        rules: [
+          {
+            id: 'spec-review',
+            when: 'spec-ready',
+            to: 'codex',
+            contract: 'review',
+            phase: 'spec',
+            scope: 'whole',
+            gate: 'none',
+            instruction: 'bundled:review-spec',
+          },
+        ],
+      },
+      agents: providers(),
+    })
+    expect(none.provided.get('delegationRulesStatus')).toMatchObject({
+      specReview: false,
+      taskReview: false,
+    })
+    const empty = new Harness({
+      cwd: root,
+      config: { ...defaultTestConfig(), gates: { workflowOwned: false }, rules: [] },
+      agents: providers(),
+    })
+    expect(empty.provided.get('delegationRulesStatus')).toMatchObject({ taskReview: false })
   })
 
   it('reports the real spec-review signal state for per-signal ownership', async () => {

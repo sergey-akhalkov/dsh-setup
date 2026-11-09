@@ -960,6 +960,123 @@ describe('owned verification evidence', () => {
     expect(atCap.kind).toBe('violation')
   })
 
+  it('keeps the checkpoint refusal capped across repeated closes', () => {
+    const definition = shipped('retro')
+    let run = createRun({
+      definition: 'retro',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { checkpoint: 'checkpoint-1-aaaaaaaa' },
+      steps: ['checkpoint', 'verify'],
+      now: 1_000,
+    })
+    const kinds: string[] = []
+    for (let close = 0; close < 5; close += 1) {
+      const outcome = evaluateTurnClose({
+        run,
+        definition,
+        agent: { steer: () => undefined },
+        evidenceContext: { workspace: '/workspace', values: {} },
+        turn: 1,
+        maxBlocks: 3,
+        installedLegacy: new Set(),
+        enabledLegacy: enabledOff(),
+        checkpointIssue: { text: 'execute the bottleneck remedy' },
+      })
+      kinds.push(outcome.kind)
+      run = outcome.run
+    }
+    expect(kinds).toEqual(['refuse', 'refuse', 'refuse', 'violation', 'violation'])
+  })
+
+  it('bounds a very long written path in the refusal', () => {
+    const definition = shipped('verify')
+    const longPath = `${'nested/'.repeat(250)}file.ts`
+    const outcome = evaluateTurnClose({
+      run: createRun({
+        definition: 'verify',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace: '/workspace',
+        context: {},
+        steps: ['check'],
+        now: 1_000,
+      }),
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: {
+        workspace: '/workspace',
+        values: {},
+        checkCommands: ['pnpm check'],
+        lastWriteAt: 100,
+        lastWritePath: longPath,
+        shellResults: [],
+      },
+      turn: 1,
+      maxBlocks: 129,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+    })
+    expect(outcome.kind).toBe('refuse')
+    if (outcome.kind === 'refuse') expect(outcome.text.length).toBeLessThan(2500)
+  })
+
+  it('prefers the persisted successful check over buffered failures', async () => {
+    const check = await verifyEvidence(
+      { kind: 'check', source: 'verify-settings' },
+      {
+        workspace: '/workspace',
+        values: {},
+        checkCommands: ['pnpm check'],
+        lastWriteAt: 100,
+        lastCheckAt: 120,
+        shellResults: [
+          {
+            callId: 'c1',
+            command: 'pnpm check',
+            at: 130,
+            exitCode: 1,
+            foreground: true,
+            ok: false,
+          },
+        ],
+      },
+    )
+    expect(check.ok).toBe(true)
+  })
+
+  it('resolves a bare root remedy target against the workspace drive', () => {
+    const workspace =
+      process.platform === 'win32'
+        ? (process.env.WINDIR?.slice(0, 2) ?? 'C:') + '/repo/app'
+        : '/repo/app'
+    const issue = checkpointCloseIssue({
+      record: {
+        outcome: 'continue',
+        lanes: [],
+        bottleneck: {
+          id: 'guard',
+          owner: 'lead',
+          action: 'lead_action',
+          blockingLanes: ['edit'],
+          targets: ['/'],
+        },
+      },
+      checkpointId: 'checkpoint-1-aaaaaaaa',
+      observations: [
+        { toolName: 'write', arguments: { file_path: 'src/app.ts' }, ok: true, at: 300 },
+      ],
+      bottleneckAge: 2,
+      checkpointAt: 100,
+      fresh: true,
+      workerVisible: true,
+      enforceParallel: true,
+      workspace,
+    })
+    expect(issue).toBeUndefined()
+  })
+
   it('requires a passing configured command after the last code write', async () => {
     const passing = await check({
       workspace: '/workspace',

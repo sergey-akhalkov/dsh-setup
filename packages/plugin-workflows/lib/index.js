@@ -447,7 +447,7 @@ export function apply(ctx, config = {}) {
                 }
                 if (status?.specReview !== false)
                     enabled.add('delegation-rules/spec-review');
-                if (status?.workflowOwned !== false) {
+                if (status?.workflowOwned !== false && status?.taskReview !== false) {
                     enabled.add('delegation-rules/task-review');
                     enabled.add('delegation-rules/archive');
                 }

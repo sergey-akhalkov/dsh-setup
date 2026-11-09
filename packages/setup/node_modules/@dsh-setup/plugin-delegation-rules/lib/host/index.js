@@ -5888,6 +5888,10 @@ export function apply(ctx, config = {}, options = {}) {
     provideStatus(ctx, 'delegationRulesStatus', Object.freeze({
         workflowOwned: validated.gates.workflowOwned,
         specReview: validated.rules.some((rule) => rule.when === 'spec-ready' && rule.contract === 'review' && rule.gate !== 'none'),
+        taskReview: validated.rules.some((rule) => rule.when === 'spec-task-ready' &&
+            rule.contract === 'review' &&
+            rule.scope === 'task' &&
+            rule.gate !== 'none'),
     }));
     const state = new DelegationState();
     // Optional services are read through ctx.get(), not the service property: a

@@ -216,16 +216,6 @@
       disabled: true
     - id: dsh-setup-workflows
       name: "@dsh-setup/plugin-workflows"
-      config:
-        checkpointApplicability:
-          minToolCalls: 4
-          requireWrite: true
-          bottleneckAge: 2
-          stepInterval: 40
-          enforceParallel: true
-        verify:
-          commands: []
-          maxBlocks: 8
     - id: dsh-setup-working-principles
       name: "@dsh-setup/plugin-working-principles"
 - id: agent-default-model
@@ -565,6 +555,14 @@
         instruction: bundled:review-integration
       - id: lane-fanout
         when: lane-assignment
+        contract: note
+        gate: strict
+      - id: task-progress
+        when: implementation-work
+        contract: note
+        gate: strict
+      - id: lane-boundary
+        when: lane-boundary
         contract: note
         gate: strict
     timeouts:

@@ -301,16 +301,33 @@ function main(): number {
         }
       })
 
-      step('compose the installed but disabled verification-gate row', () => {
+      step('compose the verification-gate row disabled with no configuration', () => {
         const row = rowBlock(dump.stdout, 'dsh-setup-verification-gate')
         if (row === '') throw new Error('verification-gate row is missing')
         if (!rowHasLine(row, 'disabled: true')) {
           throw new Error('verification-gate row is not disabled')
         }
-        const workflows = rowBlock(dump.stdout, 'dsh-setup-workflows')
-        if (workflows === '') throw new Error('workflows row is missing')
-        if (!workflows.includes('commands:') || !workflows.includes('maxBlocks: 8')) {
-          throw new Error('the setup shipped no verify settings')
+        if (row.includes('config:') || row.includes('commands:')) {
+          throw new Error('the setup shipped verification-gate configuration')
+        }
+      })
+
+      step('ship the retained task-progress and lane-boundary gates', () => {
+        const row = rowBlock(dump.stdout, 'dsh-setup-delegation-rules')
+        if (row === '') throw new Error('delegation-rules row is missing')
+        for (const [id, when] of [
+          ['task-progress', 'implementation-work'],
+          ['lane-boundary', 'lane-boundary'],
+        ] as const) {
+          const index = row.indexOf(`id: ${id}`)
+          if (index === -1) throw new Error(`delegation-rules row lacks the "${id}" rule`)
+          const window = row.slice(index, index + 160)
+          if (!window.includes(`when: ${when}`)) {
+            throw new Error(`the "${id}" rule has the wrong trigger`)
+          }
+          if (!window.includes('gate: strict')) {
+            throw new Error(`the "${id}" rule is not strict`)
+          }
         }
       })
 
