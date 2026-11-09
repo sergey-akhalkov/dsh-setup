@@ -537,7 +537,7 @@ async function deleteDefinition(
     }
     if (current !== expected.hash) return json(409, { revision: current })
     const active = (await listRuns(workspace)).filter(
-      (run) => run.definition === id && isOpenRun(run),
+      (run) => run.definition.id === id && isOpenRun(run),
     )
     if (active.length > 0) {
       return json(409, {

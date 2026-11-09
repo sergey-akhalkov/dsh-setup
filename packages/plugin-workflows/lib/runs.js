@@ -53,7 +53,7 @@ export function classifyFailure(reason) {
     // A missing call's detail may mention a recorded call; classify it first.
     if (/no call|not observed|no evidence|not recorded/u.test(text))
         return 'no-call';
-    if (/digest|hash|signature|tampered|record/u.test(text))
+    if (/digest|hash|signature|tampered|record[- ]?mismatch/u.test(text))
         return 'record-mismatch';
     if (/answer|question/u.test(text))
         return 'no-answer';
@@ -73,17 +73,34 @@ export function runPath(workspace, id) {
 export function newRunId(now = Date.now()) {
     return `run-${now.toString(36)}-${randomBytes(4).toString('hex')}`;
 }
+/** Normalize an input or stored definition identity to the persisted object. */
+export function definitionRefOf(definition, legacyName, legacyVersion) {
+    if (typeof definition === 'string') {
+        return {
+            id: definition,
+            name: typeof legacyName === 'string' && legacyName !== '' ? legacyName : definition,
+            version: typeof legacyVersion === 'number' ? legacyVersion : 0,
+        };
+    }
+    if (typeof definition === 'object' && definition !== null) {
+        const record = definition;
+        if (typeof record.id === 'string') {
+            return {
+                id: record.id,
+                name: typeof record.name === 'string' && record.name !== '' ? record.name : record.id,
+                version: typeof record.version === 'number' ? record.version : 0,
+            };
+        }
+    }
+    return { id: 'workflow', name: 'workflow', version: 0 };
+}
 /** Build a new running run with every step open. */
 export function createRun(input) {
     const at = input.now ?? Date.now();
     return {
         v: RUN_VERSION,
         id: input.id ?? newRunId(at),
-        definition: input.definition,
-        ...(input.definitionName === undefined ? {} : { definitionName: input.definitionName }),
-        ...(input.definitionVersion === undefined
-            ? {}
-            : { definitionVersion: input.definitionVersion }),
+        definition: definitionRefOf(input.definition, input.definitionName, input.definitionVersion),
         trigger: input.trigger,
         session: input.session,
         workspaceKey: input.workspace,
@@ -147,6 +164,22 @@ export async function writeRun(workspace, run, auth, options = {}) {
         throw error;
     }
 }
+/**
+ * Read one stored record. Legacy files wrote `definition` as an id string plus
+ * separate name/version fields; the record is normalized on read so every
+ * consumer sees the structured identity, while the raw shape still verifies.
+ */
+function normalizeStoredRun(record) {
+    const definition = record.definition;
+    const legacy = typeof definition === 'string';
+    if (!legacy && !(typeof definition === 'object' && definition !== null))
+        return undefined;
+    const { definitionName, definitionVersion, ...rest } = record;
+    return {
+        ...rest,
+        definition: definitionRefOf(definition, definitionName, definitionVersion),
+    };
+}
 function parseStored(value) {
     if (typeof value !== 'object' || value === null)
         return undefined;
@@ -155,12 +188,16 @@ function parseStored(value) {
     if (rest.v !== RUN_VERSION ||
         typeof rest.id !== 'string' ||
         !Array.isArray(rest.steps) ||
-        typeof rest.definition !== 'string' ||
+        (typeof rest.definition !== 'string' &&
+            !(typeof rest.definition === 'object' &&
+                rest.definition !== null &&
+                typeof rest.definition.id === 'string')) ||
         typeof rest.status !== 'string' ||
         !RUN_STATUSES.includes(rest.status)) {
         return undefined;
     }
-    return { run: rest, signature };
+    const run = normalizeStoredRun(rest);
+    return run === undefined ? undefined : { raw: rest, run, signature };
 }
 /**
  * Read and authenticate one run. An unsigned, modified, or forged file reads as
@@ -177,7 +214,9 @@ export async function readAuthenticatedRun(workspace, id, auth) {
     const read = await readStored(workspace, id);
     if (read === undefined)
         return undefined;
-    if (!auth.verify(RUN_DOMAIN, read.run, read.signature))
+    // Verify the bytes as written: a legacy string record's signature covers its
+    // legacy shape, then the normalized run is safe to use.
+    if (!auth.verify(RUN_DOMAIN, read.raw, read.signature))
         return undefined;
     // The host key is shared by every workspace, so a signed run copied into
     // another workspace must not authorize anything there.
@@ -268,21 +307,24 @@ export function settleStep(run, stepId, state, patch = {}) {
     }
     const at = patch.at ?? Date.now();
     const evidence = patch.evidence === undefined ? undefined : withEvidenceRef(patch.evidence);
-    const failureClass = state === 'blocked' || state === 'failed'
-        ? (patch.failureClass ?? classifyFailure(patch.reason))
-        : undefined;
+    const failed = state === 'blocked' || state === 'failed';
+    const failureClass = failed ? (patch.failureClass ?? classifyFailure(patch.reason)) : undefined;
+    const previous = run.steps.find((step) => step.id === stepId);
+    // A step that leaves blocked/failed keeps neither the stale class nor the
+    // obsolete failure reason; only an explicit new reason survives a success.
+    const reason = failed ? (patch.reason ?? previous?.reason) : patch.reason;
     return {
         ...run,
         updatedAt: at,
         steps: run.steps.map((step) => step.id === stepId
-            ? {
-                ...step,
+            ? (({ failureClass: _oldClass, reason: _oldReason, ...base }) => ({
+                ...base,
                 state,
                 at,
                 ...(evidence === undefined ? {} : { evidence }),
-                ...(patch.reason === undefined ? {} : { reason: patch.reason }),
+                ...(reason === undefined ? {} : { reason }),
                 ...(failureClass === undefined ? {} : { failureClass }),
-            }
+            }))(step)
             : step),
     };
 }

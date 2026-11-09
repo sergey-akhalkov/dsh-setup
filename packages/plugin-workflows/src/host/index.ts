@@ -616,9 +616,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     try {
       const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event)
       const run = createRun({
-        definition: definition.id,
-        definitionName: definition.name,
-        definitionVersion: definition.version,
+        definition: { id: definition.id, name: definition.name, version: definition.version },
+
         trigger: definition.trigger.kind,
         session: event.session ?? '',
         workspace,
@@ -970,7 +969,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const definitionId = row.id.slice('definition:'.length)
           const existing = knownRuns.find(
             (run) =>
-              run.definition === definitionId &&
+              run.definition.id === definitionId &&
               run.session === input.session &&
               (run.status === 'running' || run.status === 'blocked'),
           )
@@ -1157,9 +1156,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                         turn: payload.turn,
                       })
                       const run = createRun({
-                        definition: definition.id,
-                        definitionName: definition.name,
-                        definitionVersion: definition.version,
+                        definition: {
+                          id: definition.id,
+                          name: definition.name,
+                          version: definition.version,
+                        },
                         trigger: 'intent',
                         session: sessionId,
                         workspace: activeWorkspace,
@@ -1777,9 +1778,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     reserveStart(workspace)
     try {
       const run = createRun({
-        definition: definition.id,
-        definitionName: definition.name,
-        definitionVersion: definition.version,
+        definition: { id: definition.id, name: definition.name, version: definition.version },
+
         trigger: definition.trigger.kind,
         session: sessionId,
         workspace,
@@ -2274,7 +2274,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
         const installedLegacy = installedLegacySources()
         for (const run of ordered) {
-          const definition = definitions.find((entry) => entry.id === run.definition)
+          const definition = definitions.find((entry) => entry.id === run.definition.id)
           if (definition === undefined) continue
           const current = await advanceRun(
             workspace,
@@ -2490,7 +2490,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               const steerPending = async (agent: Agent, runId: string): Promise<void> => {
                 const run = await readAuthenticatedRun(workspace, runId, auth)
                 if (run === undefined) return
-                const definition = definitions.find((entry) => entry.id === run.definition)
+                const definition = definitions.find((entry) => entry.id === run.definition.id)
                 if (definition === undefined) return
                 const step = definition.steps.find((entry) => entry.id === pendingStep(run))
                 if (step === undefined) return

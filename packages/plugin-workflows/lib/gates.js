@@ -101,10 +101,10 @@ function intakeName(run) {
     return typeof name === 'string' ? name : undefined;
 }
 function isCompletedIntake(run, name) {
-    return (run.definition === 'change-intake' && run.status === 'completed' && intakeName(run) === name);
+    return (run.definition.id === 'change-intake' && run.status === 'completed' && intakeName(run) === name);
 }
 function isResumableIntake(run, name, session) {
-    return (run.definition === 'change-intake' &&
+    return (run.definition.id === 'change-intake' &&
         (run.status === 'interrupted' || run.status === 'blocked') &&
         intakeName(run) === name &&
         run.session === session);
@@ -135,7 +135,7 @@ export async function evaluateIntakeGate(input) {
     if (input.callId !== undefined && input.ownedCallIds.has(input.callId)) {
         return { kind: 'allow', reason: 'the call id is owned by the intake run' };
     }
-    const running = input.runs.find((run) => run.definition === 'change-intake' &&
+    const running = input.runs.find((run) => run.definition.id === 'change-intake' &&
         run.status === 'running' &&
         run.session === input.session &&
         intakeName(run) === name);

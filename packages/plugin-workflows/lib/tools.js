@@ -165,7 +165,7 @@ export async function executeWorkflowsTool(value, host) {
             if (run === undefined)
                 fail(`run "${request.runId}" is not authenticated`);
             const current = run.steps.find((step) => step.state === 'open' || step.state === 'blocked');
-            return bounded(`run ${run.id} [${run.status}] ${run.definition}; next ${current?.id ?? 'end'}; ${run.steps
+            return bounded(`run ${run.id} [${run.status}] ${run.definition.name} (${run.definition.id}); next ${current?.id ?? 'end'}; ${run.steps
                 .map((step) => `${step.id}:${step.state}`)
                 .join(' ')}`);
         }
@@ -177,7 +177,7 @@ export async function executeWorkflowsTool(value, host) {
             }
             const run = await sessionRun(host, request.runId);
             const step = host.definitions
-                .find((definition) => definition.id === run.definition)
+                .find((definition) => definition.id === run.definition.id)
                 ?.steps.find((entry) => entry.id === request.stepId);
             if (step === undefined || step.evidence === undefined)
                 fail('the step has no evidence contract');

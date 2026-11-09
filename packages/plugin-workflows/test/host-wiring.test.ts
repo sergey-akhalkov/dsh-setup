@@ -445,7 +445,7 @@ describe('retro applicability through the journal path', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     // No checkpoint record for this turn: the run and its step stay blocked.
     const blockedRetro = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-      (entry) => entry.definition === 'retro',
+      (entry) => entry.definition.id === 'retro',
     )
     expect(blockedRetro?.steps[0]?.state).toBe('blocked')
     const { sessionRuns } = await import('../src/host/projection.ts')
@@ -533,7 +533,7 @@ describe('retro fresh checkpoint', () => {
     let retroRun: { id: string } | undefined
     await waitFor(async () => {
       retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-        (entry) => entry.definition === 'retro',
+        (entry) => entry.definition.id === 'retro',
       )
       return retroRun !== undefined
     })
@@ -610,7 +610,7 @@ describe('retro applicability evidence', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const retroRuns = async (): Promise<Array<{ id: string }>> =>
       (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-        (entry) => entry.definition === 'retro',
+        (entry) => entry.definition.id === 'retro',
       )
 
     // Three reads plus a failed write is not a write: no run.
@@ -690,7 +690,7 @@ describe('retro applicability evidence', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const retroRuns = async (): Promise<Array<{ id: string }>> =>
       (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-        (entry) => entry.definition === 'retro',
+        (entry) => entry.definition.id === 'retro',
       )
 
     // Short, read-only, and written question-ending turns are all not-applicable.
@@ -795,7 +795,7 @@ describe('retro applicability evidence', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const retroRuns = async (): Promise<Array<{ id: string }>> =>
       (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-        (entry) => entry.definition === 'retro',
+        (entry) => entry.definition.id === 'retro',
       )
 
     // A subagent turn that would otherwise be applicable creates no run.
@@ -866,7 +866,7 @@ describe('task-review runtime from a tasks.md change', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const taskRuns = async (): Promise<Array<{ id: string; context: Record<string, unknown> }>> =>
       (await runs.listAuthenticatedRuns(workspace, auth))
-        .filter((entry) => entry.definition === 'task-review')
+        .filter((entry) => entry.definition.id === 'task-review')
         .map((entry) => ({ id: entry.id, context: entry.context }))
     await waitFor(async () => (await taskRuns()).length === 2)
     const created = await taskRuns()
@@ -2614,7 +2614,7 @@ describe('intake runtime', () => {
       change: 'auth',
     })
     const all = await runs.listAuthenticatedRuns(workspace, auth)
-    expect(all.filter((entry) => entry.definition === 'change-intake')).toHaveLength(1)
+    expect(all.filter((entry) => entry.definition.id === 'change-intake')).toHaveLength(1)
   })
 })
 
@@ -2799,7 +2799,7 @@ describe('intake end-to-end in a fake host', () => {
       host.emit('agent/turn-stopping', { agent: host.agent, turn })
     const intakeRuns = async (): Promise<Array<{ id: string; status: string }>> =>
       (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-        (run) => run.definition === 'change-intake',
+        (run) => run.definition.id === 'change-intake',
       )
     const draft = async (file: string, text: string): Promise<void> => {
       const directory = join(workspace, '.dsh', 'workflows', 'drafts', 'auth')
@@ -3090,7 +3090,7 @@ describe('/workflows command starts and resumes work', () => {
     expect(host.steers).toHaveLength(1)
     expect(JSON.stringify(host.steers[0])).toContain('Observe')
     const run = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-      (entry) => entry.definition === 'demo',
+      (entry) => entry.definition.id === 'demo',
     )
     expect(run).toBeDefined()
     await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
@@ -3457,7 +3457,7 @@ describe('active-runs prompt context', () => {
     await invoke(' run demo')
     await waitFor(() => contribution.text().includes('demo'))
     const second = (await runs.listAuthenticatedRuns(workspace, auth))
-      .filter((entry) => entry.definition === 'demo')
+      .filter((entry) => entry.definition.id === 'demo')
       .at(-1)
     const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
       | {
@@ -3552,10 +3552,10 @@ describe('active-runs prompt context', () => {
     await start(otherAgent, 'b')
     const runs = await import('../src/host/runs.ts')
     const runA = (await runs.listAuthenticatedRuns(workspaceA, auth)).find(
-      (entry) => entry.definition === 'demo',
+      (entry) => entry.definition.id === 'demo',
     )
     const runB = (await runs.listAuthenticatedRuns(workspaceB, auth)).find(
-      (entry) => entry.definition === 'demo',
+      (entry) => entry.definition.id === 'demo',
     )
     expect(runA).toBeDefined()
     expect(runB).toBeDefined()
@@ -3786,7 +3786,7 @@ describe('unapproved active definitions', () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(
       (await runs.listAuthenticatedRuns(unapproved, auth)).filter(
-        (entry) => entry.definition === 'active-demo',
+        (entry) => entry.definition.id === 'active-demo',
       ),
     ).toHaveLength(0)
 
@@ -3801,7 +3801,7 @@ describe('unapproved active definitions', () => {
     await fireChange(approved, approvedHost, approvedChange)
     await waitFor(async () =>
       (await runs.listAuthenticatedRuns(approved, auth)).some(
-        (entry) => entry.definition === 'active-demo',
+        (entry) => entry.definition.id === 'active-demo',
       ),
     )
   })
