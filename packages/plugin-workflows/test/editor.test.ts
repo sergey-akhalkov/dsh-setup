@@ -629,4 +629,23 @@ describe('pre-check and host error mapping', () => {
     expect(added).toBeDefined()
     expect(state.issues.some((issue) => issue.nodeId === added?.id)).toBe(true)
   })
+
+  it('applies add, connect, field edit, and delete to the definition', () => {
+    let state = addStep(opened(), 'human')
+    const added = state.diagram.nodes.at(-1)
+    if (added === undefined) throw new Error('missing added node')
+    state = patchStep(state, added.id, { title: 'Confirm with the owner' })
+    expect(state.document.definition.steps.at(-1)?.title).toBe('Confirm with the owner')
+    state = connectSteps(state, added.id, nodeIdOf('two'), 'next')
+    expect(
+      state.diagram.edges.some(
+        (edge) => edge.source === added.id && edge.target === nodeIdOf('two'),
+      ),
+    ).toBe(true)
+    const before = state.document.definition.steps.length
+    state = deleteStep(state, added.id)
+    expect(state.document.definition.steps).toHaveLength(before - 1)
+    expect(state.diagram.nodes.some((node) => node.id === added.id)).toBe(false)
+    expect(state.diagram.edges.some((edge) => edge.source === added.id)).toBe(false)
+  })
 })

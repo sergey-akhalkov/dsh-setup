@@ -228,6 +228,24 @@ describe('palette and property panel', () => {
     expect(deleted).toEqual([nodeIdOf('requirements')])
   })
 
+  it('opens the property panel for the selected node', () => {
+    const state = editor()
+    const step = DEFINITION.steps[1]
+    if (step === undefined) throw new Error('missing template step')
+    const tree = call(ui, 'PropertyPanel', {
+      state,
+      selected: nodeIdOf(step.id),
+      onDefinitionPatch: () => {},
+      onPatch: () => {},
+      onConnect: () => {},
+      onDelete: () => {},
+    })
+    const title = elements(tree).find(
+      (element) => element.type === 'input' && element.props['aria-label'] === 'Step title',
+    )
+    expect(title?.props.value).toBe(step.title)
+  })
+
   it('patches a step through the shared state machine', () => {
     const patched = patchStep(editor(), nodeIdOf('approval'), { title: 'Owner sign-off' })
     expect(patched.document.definition.steps.at(-1)?.title).toBe('Owner sign-off')
