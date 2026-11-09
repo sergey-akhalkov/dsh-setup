@@ -365,8 +365,20 @@ missing spec review still steers. The default is `true`. Rollback is one config 
 `gates.workflowOwned: true` and return the definition to `defer`; records, queue state, and notes are
 never rewritten. The tracked parity report at
 `packages/plugin-workflows/assets/parity/retire-legacy-gates.json` must pass
-(`pnpm workflows:parity --check`, once the release gate wires the script) before the switch is
+(`node scripts/workflows-parity.ts --check`; the release gate wires the `pnpm workflows:parity`
+alias) before the switch is
 flipped in a shipped profile.
+
+### Migration and settings
+
+Migrate in this order: the tracked parity report passes for the current and the retired behavior;
+flip the two gate-only switches in one config change; install the `own` definitions; keep the legacy
+rows installed for one release; delete them only after a clean release. The workflows row carries the
+mirrored settings: `checkpointApplicability` (`minToolCalls`, `requireWrite`, `bottleneckAge`,
+`stepInterval`, `enforceParallel`) and `verify.commands`/`verify.maxBlocks`. The release gate runs
+`node scripts/workflows-parity.ts --check` (the `pnpm workflows:parity` alias is wired with the
+release job). Rollback is per signal as described above; the whole-spec `spec-review`, task-progress,
+and lane gates are never part of the flip.
 
 ### Change-level approval and the archive gate
 

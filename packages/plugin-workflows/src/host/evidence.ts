@@ -771,7 +771,7 @@ function sameCheckDirectory(left: string, right: string): boolean {
 }
 
 /** True when a write target is planning scratch or documentation, not code. */
-function ignoredWrite(path: string): boolean {
+export function ignoredWrite(path: string): boolean {
   const normalized = path.replaceAll('\\', '/')
   if (/\.md$/iu.test(normalized)) return true
   return /(?:^|\/)(?:\.dsh|\.tmp|node_modules|openspec)\//iu.test(normalized)

@@ -110,6 +110,8 @@ export declare function currentSpecDigest(workspace: string, change: string): Pr
 export declare function hostToolName(name: string): string;
 /** Whether an observed tool is the declared tool; `shell` matches the host shell. */
 export declare function toolNameMatches(declared: string, observed: string): boolean;
+/** True when a write target is planning scratch or documentation, not code. */
+export declare function ignoredWrite(path: string): boolean;
 /** When the turn last wrote a non-documentation file, from its tool calls. */
 export declare function lastCodeWriteAt(calls: readonly ToolCallObservation[]): number | undefined;
 /** Resolve every workspace-relative path an evidence contract will check. */

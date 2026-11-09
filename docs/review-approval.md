@@ -140,6 +140,8 @@ archive gate and reads the same `reviews/<taskId>.json` portable PASS records, i
 marker's reviewer binding; the refusal names the missing tasks and the review calls. The legacy
 switch and the definition flip are one config change, and the tracked parity report
 (`assets/parity/retire-legacy-gates.json`) covers the four move forms before either ships.
+The owned gate has one deliberate difference: it archives **one change per command**. A multi-source
+move is refused even when every source has approvals, so archive each change with its own command.
 Rollback is the reverse pair: `gates.workflowOwned: true` and the definition back to `defer`.
 
 ## Hooks, push, and CI

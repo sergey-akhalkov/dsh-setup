@@ -9,7 +9,7 @@ import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './comman
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { evaluateEvent } from './evaluate.js';
-import { lastCodeWriteAt, verifyEvidence, } from './evidence.js';
+import { ignoredWrite, lastCodeWriteAt, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose, } from './gates.js';
@@ -1138,8 +1138,10 @@ export function apply(ctx, config = {}) {
                 if ((exec.name === 'write' || exec.name === 'edit') &&
                     typeof args.file_path === 'string') {
                     metrics.written += 1;
-                    metrics.lastWriteAt = journal.time();
-                    metrics.lastWritePath = args.file_path;
+                    if (!ignoredWrite(args.file_path)) {
+                        metrics.lastWriteAt = journal.time();
+                        metrics.lastWritePath = args.file_path;
+                    }
                 }
                 if (WORKER_TOOL_NAMES.has(exec.name) &&
                     (exec.name !== 'delegate' || delegateStarted(text))) {

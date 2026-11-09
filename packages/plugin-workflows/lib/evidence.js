@@ -585,7 +585,7 @@ function sameCheckDirectory(left, right) {
     return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 /** True when a write target is planning scratch or documentation, not code. */
-function ignoredWrite(path) {
+export function ignoredWrite(path) {
     const normalized = path.replaceAll('\\', '/');
     if (/\.md$/iu.test(normalized))
         return true;

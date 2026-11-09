@@ -25,6 +25,7 @@ import {
 } from './definitions.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
+  ignoredWrite,
   lastCodeWriteAt,
   type ShellResultObservation,
   type ToolCallObservation,
@@ -1400,8 +1401,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             typeof args.file_path === 'string'
           ) {
             metrics.written += 1
-            metrics.lastWriteAt = journal.time()
-            metrics.lastWritePath = args.file_path
+            if (!ignoredWrite(args.file_path)) {
+              metrics.lastWriteAt = journal.time()
+              metrics.lastWritePath = args.file_path
+            }
           }
           if (
             WORKER_TOOL_NAMES.has(exec.name) &&
