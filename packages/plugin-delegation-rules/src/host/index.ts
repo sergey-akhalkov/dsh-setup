@@ -7442,6 +7442,13 @@ export function apply(ctx: Context, config: BundleConfig = {}, options: ApplyOpt
       specReview: validated.rules.some(
         (rule) => rule.when === 'spec-ready' && rule.contract === 'review' && rule.gate !== 'none',
       ),
+      taskReview: validated.rules.some(
+        (rule) =>
+          rule.when === 'spec-task-ready' &&
+          rule.contract === 'review' &&
+          rule.scope === 'task' &&
+          rule.gate !== 'none',
+      ),
     }),
   )
   const state = new DelegationState()

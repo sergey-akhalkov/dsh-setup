@@ -104,6 +104,10 @@ export function parityAssetDirectory(): string {
 }
 
 export function shippedParityReportPath(): string {
+  // Test seam: the release check always uses the shipped asset unless a host
+  // sets this override explicitly for loader-refusal regressions.
+  const override = process.env.DSH_WORKFLOWS_PARITY_REPORT
+  if (override !== undefined && override !== '') return override
   return join(parityAssetDirectory(), PARITY_REPORT_NAME)
 }
 

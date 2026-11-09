@@ -21,6 +21,8 @@ export interface IntakeAdvanceInput {
     /** The deferred-step record reader; it must not call delegate. */
     readonly readRecord?: (step: Step) => Promise<EvidenceCheck>;
     readonly installedLegacy: ReadonlySet<string>;
+    /** `${plugin}/${signal}` entries that would actually steer. */
+    readonly enabledLegacy?: ReadonlySet<string>;
     /** When present, a completed intake writes its host-authenticated receipt. */
     readonly auth?: HostAuth;
     readonly now?: number;

@@ -628,13 +628,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // value; only the task-review rule and the archive gate follow it. The
         // spec-review signal exists only while a steering rule is configured.
         const status = ctx.get('delegationRulesStatus') as
-          | { workflowOwned?: unknown; specReview?: unknown }
+          | { workflowOwned?: unknown; specReview?: unknown; taskReview?: unknown }
           | undefined
         for (const signal of ['task-progress', 'lane-assignment', 'lane-boundary']) {
           enabled.add(`delegation-rules/${signal}`)
         }
         if (status?.specReview !== false) enabled.add('delegation-rules/spec-review')
-        if (status?.workflowOwned !== false) {
+        if (status?.workflowOwned !== false && status?.taskReview !== false) {
           enabled.add('delegation-rules/task-review')
           enabled.add('delegation-rules/archive')
         }

@@ -81,9 +81,9 @@ result contract is a code extension.
 
 The trigger vocabulary is fixed. `manual` rules must use `gate: none`; `failure-streak` rules
 must not be strict (an answer writes no record). `lane-boundary` is deprecated and kept only for
-existing profiles; the shipped defaults include the strict `lane-fanout` rule and no automatic
-progress rule, and the `implementation-work` and `lane-assignment` triggers remain available to
-profile rules.
+existing profiles; the shipped defaults include the strict `lane-fanout`, `task-progress`, and
+`lane-boundary` rules, and the `implementation-work` and `lane-assignment` triggers remain
+overridable.
 
 The change-scoped triggers evaluate only for changes attributed to the current session. A session
 is involved in a change when it created or modified it in this workspace; observation, a
@@ -604,13 +604,15 @@ The shipped defaults live in this package's composition fragment:
 | `bug-fix`            | `manual`                  | patch                              | none   |
 | `integration-review` | `implementation-complete` | review, whole, phase `integration` | soft   |
 | `lane-fanout`        | `lane-assignment`         | note                               | strict |
+| `task-progress`      | `implementation-work`     | note                               | strict |
+| `lane-boundary`      | `lane-boundary`           | note                               | strict |
 
-The shipped set includes the strict `lane-fanout` rule: a multi-lane change must start one tagged
-worker per unassigned lane or record a per-lane serial note before the turn closes. It
-intentionally omits an automatic `task-progress` rule. The `implementation-work` and
-`lane-assignment` triggers and the `note` contract remain available to profile rules; the
-goal-continuity `work-checkpoints` capability owns the pause-time progress and parallel decision
-and requires a `work_checkpoint` call at each substantial pause.
+The shipped set includes the strict `lane-fanout`, `task-progress`, and `lane-boundary` rules: a
+multi-lane change must start one tagged worker per unassigned lane or record a per-lane serial note
+before the turn closes, and a code-changing turn must show a newly checked-and-reviewed task or a
+progress note matching the current worktree. The triggers and the `note` contract remain
+overridable; the goal-continuity `work-checkpoints` capability still owns the pause-time progress
+and parallel decision and requires a `work_checkpoint` call at each substantial pause.
 
 `advisor` is a manual, read-only second opinion. Use it only when the decision is expensive to
 reverse, security or data integrity is at stake, the design spans modules, or two attempts have

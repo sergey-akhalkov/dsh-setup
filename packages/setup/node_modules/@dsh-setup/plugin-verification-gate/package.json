@@ -1,7 +1,7 @@
 {
   "name": "@dsh-setup/plugin-verification-gate",
   "version": "0.28.0",
-  "description": "Verification gate: a code-changing turn cannot close until one configured check command succeeds after the last edit",
+  "description": "Legacy verification gate, disabled by default once the workflows verify definition owns the close; while enabled it refuses a code-changing turn until one configured check succeeds after the last edit",
   "license": "MIT",
   "icon": "./icon.svg",
   "type": "module",

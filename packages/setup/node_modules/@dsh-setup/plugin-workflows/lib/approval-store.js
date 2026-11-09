@@ -218,7 +218,7 @@ async function ensureDefinitionsDirectory(workspace) {
  * The fallback paths (a linked directory, an unreadable directory) must not
  * bypass these rules, so they call this too.
  */
-function applyLoadRules(definitions, userConfirmed, installedLegacy, errors) {
+function applyLoadRules(definitions, userConfirmed, installedLegacy, enabledLegacy, errors) {
     const confirmed = [];
     for (const definition of definitions) {
         if (definition.trigger.kind === 'intent' &&
@@ -233,7 +233,7 @@ function applyLoadRules(definitions, userConfirmed, installedLegacy, errors) {
         return { definitions: confirmed, errors };
     const kept = [];
     for (const definition of confirmed) {
-        const resolution = resolveOwnership(definition, installedLegacy);
+        const resolution = resolveOwnership(definition, installedLegacy, enabledLegacy);
         if (resolution.issues.length === 0)
             kept.push(definition);
         else
@@ -257,21 +257,21 @@ export async function loadApprovedDefinitions(workspace, options) {
     const directory = workspaceDefinitionsDirectory(workspace);
     const root = await realpath(workspace).catch(() => undefined);
     if (root !== undefined && !(await unlinkedAncestors(root, DEFINITION_SEGMENTS))) {
-        return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+        return applyLoadRules(shipped, new Set(), options.installedLegacy, options.enabledLegacy, [
             ...errors,
             'a workflow directory ancestor is a link; the workspace definitions are refused',
         ]);
     }
     const directoryInfo = await lstat(directory).catch(() => undefined);
     if (directoryInfo?.isSymbolicLink() === true) {
-        return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+        return applyLoadRules(shipped, new Set(), options.installedLegacy, options.enabledLegacy, [
             ...errors,
             'the workspace definitions directory is a link and is refused; use a real directory',
         ]);
     }
     const realDirectory = await realpath(directory).catch(() => undefined);
     if (realDirectory !== undefined && (root === undefined || !isInside(root, realDirectory))) {
-        return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+        return applyLoadRules(shipped, new Set(), options.installedLegacy, options.enabledLegacy, [
             ...errors,
             'the workspace definitions directory escapes the workspace and is refused',
         ]);
@@ -341,7 +341,7 @@ export async function loadApprovedDefinitions(workspace, options) {
         if (!shipped.some((entry) => entry.id === id))
             definitions.push(definition);
     }
-    return applyLoadRules(definitions, new Set(local.keys()), options.installedLegacy, errors);
+    return applyLoadRules(definitions, new Set(local.keys()), options.installedLegacy, options.enabledLegacy, errors);
 }
 /** Read one local installed definition regardless of approval; test/debug seam. */
 export async function readLocalDefinition(workspace, id) {

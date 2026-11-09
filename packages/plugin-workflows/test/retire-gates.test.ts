@@ -1047,7 +1047,10 @@ describe('owned verification evidence', () => {
   })
 
   it('resolves a bare root remedy target against the workspace drive', () => {
-    const workspace = process.platform === 'win32' ? 'D:/repo/app' : '/repo/app'
+    const workspace =
+      process.platform === 'win32'
+        ? (process.env.WINDIR?.slice(0, 2) ?? 'C:') + '/repo/app'
+        : '/repo/app'
     const issue = checkpointCloseIssue({
       record: {
         outcome: 'continue',

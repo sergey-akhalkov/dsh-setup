@@ -107,7 +107,7 @@ describe('setup lazy MCP configuration', () => {
     const patch = readFileSync(join(repoRoot, 'packages', 'setup', 'cordis.patch.yml'), 'utf8')
     for (const { guidanceRowId } of FIXTURES) expect(patch).toContain(guidanceRowId)
     expect(patch).not.toContain('@deepseek-ai/dsh-mcp-client')
-    expect(patch).not.toContain('disabled:')
+    expect(patch.match(/disabled: true/gu) ?? []).toHaveLength(1)
     expect(patch).toContain('serverName: nuphus-mcp')
     expect(patch).toContain('serverName: serena')
   })
