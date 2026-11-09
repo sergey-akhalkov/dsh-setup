@@ -1223,23 +1223,6 @@ export function apply(ctx, config = {}) {
             publishListenerError(workspace, error);
         }
     }));
-    // Invocation order: a call that started before a checkpoint amendment but
-    // returned after it must not count as a later remedy call.
-    listen(() => ctx.on('tools/pre-execute', async (exec, next) => {
-        try {
-            const agent = exec.agent;
-            if (agent !== undefined) {
-                const session = agent.session;
-                if (workspaceFor(services, session) !== undefined) {
-                    pendingCallSeq.set(String(exec.callId), nextObservationSeq(String(session.id)));
-                }
-            }
-        }
-        catch (error) {
-            publishListenerError('', error);
-        }
-        return next();
-    }));
     // DSH dispatches `subagent/start` and `subagent/end` inside the delegating
     // parent's scoped context and passes only the run info to listeners. A
     // listener bound to one agent's context sees that agent's own delegations;
@@ -1742,6 +1725,11 @@ export function apply(ctx, config = {}) {
             const agent = exec.agent;
             if (agent === undefined)
                 return await next();
+            // Invocation order: a call that started before a checkpoint amendment
+            // but returned after it must not count as a later remedy call.
+            if (workspaceFor(services, agent.session) !== undefined) {
+                pendingCallSeq.set(String(exec.callId), nextObservationSeq(String(agent.session.id)));
+            }
             const workspace = workspaceFor(services, agent.session);
             if (workspace === undefined)
                 return await next();
