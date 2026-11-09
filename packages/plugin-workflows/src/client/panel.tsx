@@ -461,6 +461,11 @@ export function RunDetail(props: { run: RunView; t: Translate; session?: string 
         <span>{t(`runs.source.${run.source}`)}</span>
         <span>{t(`runs.attribution.${run.attribution}`)}</span>
         <span>{t(`runs.status.${run.status}`)}</span>
+        {run.definition === undefined ? null : (
+          <span className="dsh-wf-muted" data-run-definition={run.definition.id}>
+            {`${run.definition.name} · v${String(run.definition.version)}`}
+          </span>
+        )}
       </div>
       {run.record === undefined ? null : (
         <p className="dsh-wf-muted">
@@ -494,13 +499,24 @@ export function RunDetail(props: { run: RunView; t: Translate; session?: string 
               <td>{step.title}</td>
               <td>
                 {step.state}
+                {step.failureClass === undefined ? null : (
+                  <span className="dsh-wf-issue" data-failure-class={step.failureClass}>
+                    {' '}
+                    {step.failureClass}
+                  </span>
+                )}
                 {step.reason === undefined ? null : (
                   <span className="dsh-wf-error"> {step.reason}</span>
                 )}
               </td>
               <td>{step.at === undefined ? '—' : formatTime(step.at, t)}</td>
               <td>
-                {step.evidence === undefined ? (
+                {step.evidenceRef !== undefined ? (
+                  <span className="dsh-wf-node-evidence" data-evidence-kind={step.evidenceRef.kind}>
+                    {step.evidenceRef.kind}
+                    {step.evidenceRef.ref === undefined ? '' : `: ${step.evidenceRef.ref}`}
+                  </span>
+                ) : step.evidence === undefined ? (
                   '—'
                 ) : props.session === undefined || !isRecordEvidence(step.evidence) ? (
                   step.evidence

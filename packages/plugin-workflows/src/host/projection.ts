@@ -3,6 +3,7 @@ import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isInside } from './fs-change.js'
 import { redactPayload, redactText } from './redact.js'
+import { definitionRefOf } from './runs.js'
 
 /**
  * Read-only run projection over the process records the setup already writes:
@@ -813,7 +814,8 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       parsed.value.v !== 1 ||
       typeof parsed.value.id !== 'string' ||
       // A parseable file that is not a run record is a diagnostic, not a run.
-      typeof parsed.value.definition !== 'string' ||
+      (typeof parsed.value.definition !== 'string' &&
+        !(isRecord(parsed.value.definition) && typeof parsed.value.definition.id === 'string')) ||
       typeof parsed.value.status !== 'string' ||
       typeof parsed.value.session !== 'string' ||
       !Array.isArray(parsed.value.steps)
@@ -896,20 +898,24 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         ...(typeof violation.detail === 'string' ? { evidence: safeError(violation.detail) } : {}),
       })
     }
-    const definitionId = redactText(String(record.definition ?? 'workflow'))
-    const definitionName =
-      typeof record.definitionName === 'string' ? safeText(record.definitionName) : undefined
+    const definitionRef = definitionRefOf(
+      parsed.value.definition,
+      parsed.value.definitionName,
+      parsed.value.definitionVersion,
+    )
+    const definitionId = redactText(definitionRef.id)
+    const definitionName = definitionRef.name
     const definition: RunDefinitionView = {
       id: definitionId,
-      name: definitionName ?? definitionId,
-      version: typeof record.definitionVersion === 'number' ? record.definitionVersion : 0,
+      name: safeText(definitionName) ?? definitionId,
+      version: definitionRef.version,
     }
     runs.push({
       id: `workflow:${redactText(typeof record.id === 'string' ? record.id : id)}`,
       source: 'workflow',
       ...(session === undefined ? {} : { session }),
       attribution: session === undefined ? 'unattributed' : 'local',
-      title: `${redactText(String(record.definition ?? 'workflow'))} intake`,
+      title: `${definitionId} intake`,
       startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       status,
       steps,

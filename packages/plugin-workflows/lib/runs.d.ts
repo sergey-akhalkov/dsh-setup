@@ -49,6 +49,12 @@ export interface RunViolation {
     readonly step?: string;
     readonly detail: string;
 }
+/** The definition identity a run records at creation; copied, never looked up. */
+export interface RunDefinitionRef {
+    readonly id: string;
+    readonly name: string;
+    readonly version: number;
+}
 export interface WorkflowRun {
     /** The branch or loop successor selected by the last executed edge. */
     readonly nextStep?: string;
@@ -56,11 +62,8 @@ export interface WorkflowRun {
     readonly branchPath?: readonly string[];
     readonly v: typeof RUN_VERSION;
     readonly id: string;
-    readonly definition: string;
-    /** The definition name in effect when the run started; copied, never looked up. */
-    readonly definitionName?: string;
-    /** The definition version in effect when the run started; copied, not looked up. */
-    readonly definitionVersion?: number;
+    /** The definition identity in effect when the run started. */
+    readonly definition: RunDefinitionRef;
     readonly trigger: string;
     readonly session: string;
     readonly workspaceKey: string;
@@ -84,7 +87,8 @@ export declare function runPath(workspace: string, id: string): string;
 /** A fresh stable run id. */
 export declare function newRunId(now?: number): string;
 export interface CreateRunInput {
-    readonly definition: string;
+    readonly definition: string | RunDefinitionRef;
+    /** Legacy input fields, normalized into `definition` before persistence. */
     readonly definitionName?: string;
     readonly definitionVersion?: number;
     readonly trigger: string;
@@ -96,6 +100,8 @@ export interface CreateRunInput {
     readonly id?: string;
     readonly dedupeKey?: string;
 }
+/** Normalize an input or stored definition identity to the persisted object. */
+export declare function definitionRefOf(definition: unknown, legacyName?: unknown, legacyVersion?: unknown): RunDefinitionRef;
 /** Build a new running run with every step open. */
 export declare function createRun(input: CreateRunInput): WorkflowRun;
 /** Persist one run atomically and sign its authoritative state. */

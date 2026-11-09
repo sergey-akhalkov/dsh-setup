@@ -564,7 +564,7 @@ describe('obligation engine live proxy', () => {
     const resumed = await resumeRun(workspace, runId, auth, 2_100)
     expect(resumed.stepId).toBe('create-change')
     const after = await listAuthenticatedRuns(workspace, auth)
-    expect(after.filter((entry) => entry.definition === 'change-intake')).toHaveLength(1)
+    expect(after.filter((entry) => entry.definition.id === 'change-intake')).toHaveLength(1)
     expect(
       after.find((entry) => entry.id === runId)?.steps.find((step) => step.id === 'requirements')
         ?.state,

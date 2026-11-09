@@ -190,13 +190,13 @@ function intakeName(run: WorkflowRun): string | undefined {
 
 function isCompletedIntake(run: WorkflowRun, name: string): boolean {
   return (
-    run.definition === 'change-intake' && run.status === 'completed' && intakeName(run) === name
+    run.definition.id === 'change-intake' && run.status === 'completed' && intakeName(run) === name
   )
 }
 
 function isResumableIntake(run: WorkflowRun, name: string, session: string): boolean {
   return (
-    run.definition === 'change-intake' &&
+    run.definition.id === 'change-intake' &&
     (run.status === 'interrupted' || run.status === 'blocked') &&
     intakeName(run) === name &&
     run.session === session
@@ -231,7 +231,7 @@ export async function evaluateIntakeGate(input: IntakeGateInput): Promise<Intake
   }
   const running = input.runs.find(
     (run) =>
-      run.definition === 'change-intake' &&
+      run.definition.id === 'change-intake' &&
       run.status === 'running' &&
       run.session === input.session &&
       intakeName(run) === name,

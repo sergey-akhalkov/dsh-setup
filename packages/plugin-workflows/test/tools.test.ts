@@ -254,7 +254,10 @@ describe('workflows tool', () => {
         asks.push('start')
         yesCalls.starts += 1
         const run = runFor('/workspace', `run-${String(yesCalls.starts)}`)
-        return { run: { ...run, definition: entry.id }, firstStep: 'requirements' }
+        return {
+          run: { ...run, definition: { id: entry.id, name: entry.id, version: 0 } },
+          firstStep: 'requirements',
+        }
       },
     }
     expect(
@@ -481,13 +484,16 @@ describe('workflows command and prompt context', () => {
     // Multiline and oversized identifiers stay on one bounded line.
     const multiline = {
       ...runFor('/workspace'),
-      definition: 'a\nb\nc',
+      definition: { id: 'a\\nb\\nc', name: 'a\\nb\\nc', version: 0 },
       id: 'run-multiline',
     }
     const normalized = renderActiveRunsContext([multiline])
     expect(normalized.split('\n')).toHaveLength(1)
     expect(normalized.length).toBeLessThanOrEqual(240)
-    const huge = { ...runFor('/workspace'), definition: 'x'.repeat(100_000) }
+    const huge = {
+      ...runFor('/workspace'),
+      definition: { id: 'x'.repeat(100_000), name: 'x'.repeat(100_000), version: 0 },
+    }
     const bounded = renderActiveRunsContext([huge])
     expect(bounded.split('\n')).toHaveLength(1)
     expect(bounded.length).toBeLessThanOrEqual(240)
@@ -505,7 +511,7 @@ describe('workflows command and prompt context', () => {
     // A long definition still leaves room for the current step.
     const longDefinition = {
       ...runFor('/workspace'),
-      definition: 'd'.repeat(240),
+      definition: { id: 'd'.repeat(240), name: 'd'.repeat(240), version: 0 },
       steps: [{ ...baseStep, id: 'requirements', state: 'open' as const }],
     }
     const longText = renderActiveRunsContext([longDefinition])

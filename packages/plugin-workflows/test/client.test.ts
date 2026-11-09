@@ -372,6 +372,37 @@ describe('Workflows Client half', () => {
     ).toContain('runs.empty')
   })
 
+  it('shows a deleted definition’s recorded identity and structured failure evidence', () => {
+    const module = loadModule()
+    const run = {
+      id: 'workflow:run-1',
+      source: 'workflow',
+      session: 'session-1',
+      attribution: 'local',
+      title: 'change-intake intake',
+      startedAt: 1,
+      status: 'done',
+      definition: { id: 'change-intake', name: 'OpenSpec change intake', version: 7 },
+      steps: [
+        {
+          id: 'requirements',
+          title: 'Requirements',
+          state: 'failed',
+          at: 2,
+          failureClass: 'rejected-answer',
+          evidenceRef: { kind: 'record', ref: '.dsh/record.json' },
+          reason: 'the answer was rejected',
+        },
+      ],
+      violations: [],
+    }
+    const text = childText(renderTree(module.RunDetail?.({ run, t: translate })))
+    expect(text).toContain('OpenSpec change intake')
+    expect(text).toContain('v7')
+    expect(text).toContain('rejected-answer')
+    expect(text).toContain('record: .dsh/record.json')
+  })
+
   it('shows a malformed-record run as an error row and a retry control', () => {
     const module = loadModule()
     const malformed = {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,6 +11,7 @@ import {
   addViolation,
   classifyFailure,
   createRun,
+  readAuthenticatedRun,
   runsDirectory,
   setRunStatus,
   settleStep,
@@ -50,18 +51,77 @@ describe('run provenance record', () => {
       steps: ['one'],
       now: 1_000,
     })
-    expect(run).toMatchObject({
-      definition: 'observed',
-      definitionName: 'Observed workflow',
-      definitionVersion: 4,
-    })
+    expect(run.definition).toEqual({ id: 'observed', name: 'Observed workflow', version: 4 })
+    expect(run).not.toHaveProperty('definitionName')
+    expect(run).not.toHaveProperty('definitionVersion')
     await writeRun(workspace, run, auth())
+    const stored = JSON.parse(
+      await readFile(join(runsDirectory(workspace), `${run.id}.json`), 'utf8'),
+    ) as { definition: unknown; definitionName?: unknown; definitionVersion?: unknown }
+    expect(stored.definition).toEqual({ id: 'observed', name: 'Observed workflow', version: 4 })
+    expect(stored).not.toHaveProperty('definitionName')
+    expect(stored).not.toHaveProperty('definitionVersion')
     const views = await engineRuns(workspace)
     expect(views[0]?.definition).toEqual({
       id: 'observed',
       name: 'Observed workflow',
       version: 4,
     })
+  })
+
+  it('normalizes a legacy string record on read without breaking its signature', async () => {
+    const workspace = await tempWorkspace()
+    const current = createRun({
+      definition: { id: 'legacy', name: 'Legacy', version: 1 },
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['one'],
+      now: 1_000,
+    })
+    const legacy = {
+      ...current,
+      definition: 'legacy',
+      definitionName: 'Old name',
+      definitionVersion: 2,
+    }
+    const directory = runsDirectory(workspace)
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, `${current.id}.json`),
+      `${JSON.stringify({ ...legacy, signature: auth().sign('workflows/run/v1', legacy) }, null, 2)}\n`,
+    )
+    const read = await readAuthenticatedRun(workspace, current.id, auth())
+    expect(read?.definition).toEqual({ id: 'legacy', name: 'Old name', version: 2 })
+    expect(read).not.toHaveProperty('definitionName')
+  })
+
+  it('clears a failure class and reason when a blocked step completes', async () => {
+    const workspace = await tempWorkspace()
+    let run = createRun({
+      definition: { id: 'recovery', name: 'Recovery', version: 1 },
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['one'],
+      now: 1_000,
+    })
+    run = settleStep(run, 'one', 'blocked', {
+      at: 1_100,
+      reason: 'no answer was recorded',
+    })
+    expect(run.steps[0]?.failureClass).toBe('no-answer')
+    run = settleStep(run, 'one', 'done', {
+      at: 1_200,
+      evidence: { kind: 'declaration' },
+    })
+    expect(run.steps[0]?.failureClass).toBeUndefined()
+    expect(run.steps[0]?.reason).toBeUndefined()
+    await writeRun(workspace, run, auth())
+    const view = (await engineRuns(workspace))[0]
+    const step = view?.steps.find((entry) => entry.id === 'one')
+    expect(step?.failureClass).toBeUndefined()
+    expect(step?.reason).toBeUndefined()
   })
 
   it('keeps the recorded name and version readable after the definition is deleted', async () => {
