@@ -528,8 +528,21 @@ export function reconcileCopy(
   saved: EditorState,
 ): EditorState {
   if (current === captured) return saved
+  // A layout-only edit leaves the rejected definition bytes unchanged, so the
+  // failed copy's host field feedback still identifies the right fields.
+  const definitionChanged =
+    JSON.stringify(captured.document.definition) !== JSON.stringify(current.document.definition)
+  const issues = [
+    ...current.issues.filter((issue) => issue.kind !== 'host'),
+    ...(definitionChanged ? [] : saved.issues.filter((issue) => issue.kind === 'host')),
+  ].filter(
+    (issue, index, all) =>
+      all.findIndex((other) => other.path === issue.path && other.message === issue.message) ===
+      index,
+  )
   return {
     ...current,
+    issues,
     dirty: true,
     status: 'dirty',
     // A failed copy keeps its conflict so the next-id / save-as-copy recovery

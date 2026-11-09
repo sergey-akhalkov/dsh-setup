@@ -500,6 +500,16 @@ describe('revision contract', () => {
     expect(recovering.message).toContain('already exists')
     expect(recovering.document.definition.steps[0]?.title).toBe('During copy')
     expect(recovering.dirty).toBe(true)
+
+    const withFieldError: EditorState = {
+      ...failedCopy,
+      issues: [{ path: 'settings.maxBlocks', message: 'must be a positive integer', kind: 'host' }],
+    }
+    const moved = moveStep(captured, nodeIdOf('one'), { x: 5, y: 6 })
+    const mergedMove = reconcileCopy(captured, moved, withFieldError)
+    expect(mergedMove.issues.some((issue) => issue.kind === 'host')).toBe(true)
+    const edited = patchStep(captured, nodeIdOf('one'), { title: 'Fixed' })
+    expect(reconcileCopy(captured, edited, withFieldError).issues).toEqual([])
   })
 })
 

@@ -264,30 +264,52 @@ export function createWorkflowRoutes(services) {
                 }
             }
             const definitions = services.definitionsFor?.(resolved.workspace) ?? [];
+            const byId = new Map(definitions.map((definition) => [definition.id, definition]));
             const entries = await services.definitionEntriesFor?.(resolved.workspace);
-            const byId = new Map((entries?.definitions ?? []).map((entry) => [entry.id, entry]));
+            const summary = (definition) => ({
+                id: definition.id,
+                name: definition.name,
+                version: definition.version,
+                trigger: definition.trigger,
+                risk: definition.settings.risk,
+                allowModelStart: definition.settings.allowModelStart,
+                gateOwnership: definition.settings.gateOwnership,
+                steps: definition.steps.map((step) => ({
+                    id: step.id,
+                    title: step.title,
+                    executor: step.executor,
+                    ownership: step.ownership ?? 'own',
+                    blockTurnClose: step.blockTurnClose === true,
+                })),
+            });
+            const rows = [];
+            const covered = new Set();
+            // The editor store is authoritative for the list: a local definition
+            // created after the runtime cache loaded must still appear.
+            for (const entry of entries?.definitions ?? []) {
+                covered.add(entry.id);
+                let definition = byId.get(entry.id);
+                if (definition === undefined && services.definitionDocumentFor !== undefined) {
+                    const document = await services
+                        .definitionDocumentFor(resolved.workspace, entry.id)
+                        .catch(() => undefined);
+                    definition = document?.definition;
+                }
+                rows.push({
+                    ...(definition === undefined
+                        ? { id: entry.id, name: entry.name, version: entry.version }
+                        : summary(definition)),
+                    source: entry.source,
+                    revision: entry.revision,
+                });
+            }
+            for (const definition of definitions) {
+                if (!covered.has(definition.id))
+                    rows.push(summary(definition));
+            }
             return json(200, {
                 session: resolved.session,
-                definitions: definitions.map((definition) => {
-                    const entry = byId.get(definition.id);
-                    return {
-                        id: definition.id,
-                        name: definition.name,
-                        version: definition.version,
-                        trigger: definition.trigger,
-                        risk: definition.settings.risk,
-                        allowModelStart: definition.settings.allowModelStart,
-                        gateOwnership: definition.settings.gateOwnership,
-                        steps: definition.steps.map((step) => ({
-                            id: step.id,
-                            title: step.title,
-                            executor: step.executor,
-                            ownership: step.ownership ?? 'own',
-                            blockTurnClose: step.blockTurnClose === true,
-                        })),
-                        ...(entry === undefined ? {} : { source: entry.source, revision: entry.revision }),
-                    };
-                }),
+                definitions: rows,
                 ...(entries?.errors === undefined || entries.errors.length === 0
                     ? {}
                     : { errors: entries.errors }),

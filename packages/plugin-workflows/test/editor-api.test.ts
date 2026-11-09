@@ -212,11 +212,21 @@ describe('literal read routes', () => {
             source: 'local',
             revision: 'rev-1',
           },
+          {
+            id: 'fresh-local',
+            name: 'Fresh local',
+            version: 1,
+            source: 'local',
+            revision: 'rev-2',
+          },
         ],
       }),
-      definitionDocumentFor: async () => ({
-        definition: validateDefinition(DEFINITION),
-        revision: 'rev-1',
+      definitionDocumentFor: async (_workspace, id) => ({
+        definition:
+          id === 'fresh-local'
+            ? validateDefinition({ ...DEFINITION, id: 'fresh-local', name: 'Fresh local' })
+            : validateDefinition(DEFINITION),
+        revision: id === 'fresh-local' ? 'rev-2' : 'rev-1',
         source: 'local',
       }),
     })
@@ -243,6 +253,11 @@ describe('literal read routes', () => {
       listed.body.definitions as { id: string; revision: string; source: string }[]
     ).find((entry) => entry.id === 'editor-demo')
     expect(listedLocal).toMatchObject({ revision: 'rev-1', source: 'local' })
+    // A local definition newer than the runtime cache is still listed.
+    const fresh = (
+      listed.body.definitions as { id: string; revision: string; source: string; name: string }[]
+    ).find((entry) => entry.id === 'fresh-local')
+    expect(fresh).toMatchObject({ revision: 'rev-2', source: 'local', name: 'Fresh local' })
     const one = await fetchRoute(DEFINITIONS_ROUTE, 'id=editor-demo')
     expect(one.status).toBe(200)
     expect(one.body).toMatchObject({ revision: 'rev-1', source: 'local' })

@@ -10564,8 +10564,16 @@ window.__ModuleLoader__.load({
     }
     function reconcileCopy(captured, current, saved) {
       if (current === captured) return saved;
+      const definitionChanged = JSON.stringify(captured.document.definition) !== JSON.stringify(current.document.definition);
+      const issues = [
+        ...current.issues.filter((issue) => issue.kind !== "host"),
+        ...definitionChanged ? [] : saved.issues.filter((issue) => issue.kind === "host")
+      ].filter(
+        (issue, index2, all) => all.findIndex((other) => other.path === issue.path && other.message === issue.message) === index2
+      );
       return {
         ...current,
+        issues,
         dirty: true,
         status: "dirty",
         // A failed copy keeps its conflict so the next-id / save-as-copy recovery
