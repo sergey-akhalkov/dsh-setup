@@ -429,6 +429,7 @@ function applyLoadRules(
   definitions: readonly Definition[],
   userConfirmed: ReadonlySet<string>,
   installedLegacy: ReadonlySet<string> | undefined,
+  enabledLegacy: ReadonlySet<string> | undefined,
   errors: string[],
 ): ApprovedDefinitions {
   const confirmed: Definition[] = []
@@ -448,7 +449,7 @@ function applyLoadRules(
   if (installedLegacy === undefined) return { definitions: confirmed, errors }
   const kept: Definition[] = []
   for (const definition of confirmed) {
-    const resolution = resolveOwnership(definition, installedLegacy)
+    const resolution = resolveOwnership(definition, installedLegacy, enabledLegacy)
     if (resolution.issues.length === 0) kept.push(definition)
     else errors.push(...resolution.issues)
   }
@@ -469,6 +470,8 @@ export async function loadApprovedDefinitions(
     readonly shipped?: readonly Definition[]
     /** The legacy sources the profile installs; absent skips ownership checks. */
     readonly installedLegacy?: ReadonlySet<string>
+    /** The legacy signals that would actually steer; absent means installed = enabled. */
+    readonly enabledLegacy?: ReadonlySet<string>
   },
 ): Promise<ApprovedDefinitions> {
   const shipped = options.shipped ?? loadShippedDefinitions()
@@ -479,21 +482,21 @@ export async function loadApprovedDefinitions(
   const directory = workspaceDefinitionsDirectory(workspace)
   const root = await realpath(workspace).catch(() => undefined)
   if (root !== undefined && !(await unlinkedAncestors(root, DEFINITION_SEGMENTS))) {
-    return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+    return applyLoadRules(shipped, new Set(), options.installedLegacy, options.enabledLegacy, [
       ...errors,
       'a workflow directory ancestor is a link; the workspace definitions are refused',
     ])
   }
   const directoryInfo = await lstat(directory).catch(() => undefined)
   if (directoryInfo?.isSymbolicLink() === true) {
-    return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+    return applyLoadRules(shipped, new Set(), options.installedLegacy, options.enabledLegacy, [
       ...errors,
       'the workspace definitions directory is a link and is refused; use a real directory',
     ])
   }
   const realDirectory = await realpath(directory).catch(() => undefined)
   if (realDirectory !== undefined && (root === undefined || !isInside(root, realDirectory))) {
-    return applyLoadRules(shipped, new Set(), options.installedLegacy, [
+    return applyLoadRules(shipped, new Set(), options.installedLegacy, options.enabledLegacy, [
       ...errors,
       'the workspace definitions directory escapes the workspace and is refused',
     ])
@@ -559,7 +562,13 @@ export async function loadApprovedDefinitions(
   for (const [id, definition] of local) {
     if (!shipped.some((entry) => entry.id === id)) definitions.push(definition)
   }
-  return applyLoadRules(definitions, new Set(local.keys()), options.installedLegacy, errors)
+  return applyLoadRules(
+    definitions,
+    new Set(local.keys()),
+    options.installedLegacy,
+    options.enabledLegacy,
+    errors,
+  )
 }
 
 /** Read one local installed definition regardless of approval; test/debug seam. */

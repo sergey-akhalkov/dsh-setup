@@ -65,6 +65,8 @@ export interface BlockReviewConfig {
 
 /** Work-checkpoint policy nested under `checkpoint`. */
 export interface CheckpointConfig {
+  /** Gate-only retirement switch: false keeps the tool and record, disables every checkpoint gate (default true). */
+  automation?: boolean
   /** Require a checkpoint at a substantial pause (default true). */
   enabled?: boolean
   /** A turn needs at least this many tool calls before the checkpoint is required (default 4). */
@@ -127,6 +129,8 @@ export interface ResolvedBlockReviewConfig {
 
 /** Fully resolved work-checkpoint policy; the plugin never runs on partial values. */
 export interface ResolvedCheckpointConfig {
+  /** Retained for tool/record availability; false means the gates are silent. */
+  readonly automation: boolean
   readonly enabled: boolean
   readonly minToolCalls: number
   readonly requireWrite: boolean
@@ -172,6 +176,7 @@ export const DEFAULT_BLOCK_REVIEW_CONFIG: ResolvedBlockReviewConfig = Object.fre
 
 /** Documented work-checkpoint defaults; the composition fragment repeats them. */
 export const DEFAULT_CHECKPOINT_CONFIG: ResolvedCheckpointConfig = Object.freeze({
+  automation: true,
   enabled: true,
   minToolCalls: 4,
   requireWrite: true,
@@ -321,7 +326,9 @@ function resolveCheckpoint(raw: unknown): ResolvedCheckpointConfig {
     }
   }
 
-  const boolean = (field: 'enabled' | 'requireWrite' | 'enforceParallel'): boolean => {
+  const boolean = (
+    field: 'automation' | 'enabled' | 'requireWrite' | 'enforceParallel',
+  ): boolean => {
     const value = record[field]
     if (value === undefined) return DEFAULT_CHECKPOINT_CONFIG[field]
     if (typeof value !== 'boolean') throw fieldError(`checkpoint.${field}`, 'must be a boolean')
@@ -338,6 +345,7 @@ function resolveCheckpoint(raw: unknown): ResolvedCheckpointConfig {
   }
 
   return Object.freeze({
+    automation: boolean('automation'),
     enabled: boolean('enabled'),
     minToolCalls: integer('minToolCalls'),
     requireWrite: boolean('requireWrite'),
@@ -3234,6 +3242,9 @@ function installCheckpointGate(
   config: ResolvedCheckpointConfig,
   stateFor: (agent: Agent) => AgentState,
 ): void {
+  // Gate-only retirement: the tool and its record stay; every listener that
+  // steers or refuses a turn close is off. A false switch is a hard no-op.
+  if (!config.automation) return
   // A running root turn gets one request at each step interval, never a wake.
   ctx.on('agent/pre-step', (payload, next) => {
     try {
@@ -3522,6 +3533,16 @@ function installReviewerPresetHiding(ctx: Context): void {
   })
 }
 
+/** Provide the ownership status once; an older host or a test double may lack provide(). */
+function provideStatus(ctx: Context, name: string, value: unknown): void {
+  try {
+    if (typeof ctx.get === 'function' && ctx.get(name) !== undefined) return
+    ctx.provide(name, value)
+  } catch {
+    // The switch is still read from this plugin's own config.
+  }
+}
+
 /**
  * Install the continuity supervisor, the block-review gate, and the work
  * checkpoint. The configuration is validated at load, so a bad profile fails
@@ -3529,6 +3550,15 @@ function installReviewerPresetHiding(ctx: Context): void {
  */
 export function apply(ctx: Context, config?: Config): void {
   const resolved = resolveConfig(config)
+  // The workflow engine resolves per-signal legacy ownership from this status:
+  // `automation: false` means the checkpoint gates will not steer.
+  provideStatus(
+    ctx,
+    'goalContinuityStatus',
+    Object.freeze({
+      automation: resolved.enabled && resolved.checkpoint.enabled && resolved.checkpoint.automation,
+    }),
+  )
   if (!resolved.enabled) return
   if (resolved.blockReview.enabled) {
     installReviewerScope(ctx, resolved.blockReview.reviewerPreset)

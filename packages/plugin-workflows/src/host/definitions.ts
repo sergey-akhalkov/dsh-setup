@@ -53,7 +53,7 @@ export const DEDUPE_BY_TRIGGER: Record<DefinitionTriggerKind, readonly DedupePol
 }
 
 /** The one applicability decision a definition may declare for a trigger. */
-export const APPLICABILITY_KINDS = ['checkpoint-required'] as const
+export const APPLICABILITY_KINDS = ['checkpoint-required', 'code-write'] as const
 export type ApplicabilityKind = (typeof APPLICABILITY_KINDS)[number]
 
 /** The structured command match an intent trigger accepts. */
@@ -141,7 +141,10 @@ export interface RecordEvidence {
   readonly rule: string
   /** Matched when declared; a checkpoint record carries no change. */
   readonly change?: string
-  readonly verdict: string
+  /** The single accepted verdict; exactly one of verdict/verdicts is required. */
+  readonly verdict?: string
+  /** Every accepted verdict; for a task review that is PASS or ERROR. */
+  readonly verdicts?: readonly string[]
   /** Workspace-relative record path; derived from rule/change/phase when absent. */
   readonly path?: string
   readonly phase?: string
@@ -162,7 +165,9 @@ export interface ToolCallEvidence {
 
 export interface CheckEvidence {
   readonly kind: 'check'
-  readonly command: string
+  readonly command?: string
+  /** erify-settings reads the validated profile command list. */
+  readonly source?: 'verify-settings' | 'task-review-coverage'
 }
 
 export interface HumanEvidence {
@@ -294,6 +299,7 @@ const RECORD_KEYS = new Set([
   'rule',
   'change',
   'verdict',
+  'verdicts',
   'path',
   'phase',
   'scope',
@@ -302,7 +308,7 @@ const RECORD_KEYS = new Set([
   'source',
 ])
 const TOOL_EVIDENCE_KEYS = new Set(['kind', 'name', 'command', 'args'])
-const CHECK_KEYS = new Set(['kind', 'command'])
+const CHECK_KEYS = new Set(['kind', 'command', 'source'])
 const HUMAN_EVIDENCE_KEYS = new Set(['kind', 'answer'])
 const DECLARATION_KEYS = new Set(['kind'])
 const TOOL_SPEC_KEYS = new Set(['name', 'command', 'args'])
@@ -506,10 +512,27 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
     }
     case 'record': {
       assertKnown(raw, RECORD_KEYS, definition, field)
+      const verdict =
+        raw.verdict === undefined
+          ? undefined
+          : nonEmptyString(raw.verdict, definition, `${field}.verdict`)
+      let verdicts: readonly string[] | undefined
+      if (raw.verdicts !== undefined) {
+        if (!Array.isArray(raw.verdicts) || raw.verdicts.length === 0) {
+          fail(definition, `${field}.verdicts`, 'must be a non-empty list of verdicts')
+        }
+        verdicts = raw.verdicts.map((entry, index) =>
+          nonEmptyString(entry, definition, `${field}.verdicts[${String(index)}]`),
+        )
+      }
+      if ((verdict === undefined) === (verdicts === undefined)) {
+        fail(definition, field, 'must declare exactly one of verdict or verdicts')
+      }
       const record: RecordEvidence = {
         kind: 'record',
         rule: nonEmptyString(raw.rule, definition, `${field}.rule`),
-        verdict: nonEmptyString(raw.verdict, definition, `${field}.verdict`),
+        ...(verdict === undefined ? {} : { verdict }),
+        ...(verdicts === undefined ? {} : { verdicts }),
         ...(raw.change === undefined
           ? {}
           : { change: nonEmptyString(raw.change, definition, `${field}.change`) }),
@@ -564,7 +587,27 @@ function evidence(raw: unknown, definition: string, field: string): Evidence {
     }
     case 'check': {
       assertKnown(raw, CHECK_KEYS, definition, field)
-      return { kind: 'check', command: nonEmptyString(raw.command, definition, `${field}.command`) }
+      const source =
+        raw.source === undefined
+          ? undefined
+          : isOneOf(
+              raw.source,
+              ['verify-settings', 'task-review-coverage'] as const,
+              definition,
+              `${field}.source`,
+            )
+      const command =
+        raw.command === undefined
+          ? undefined
+          : nonEmptyString(raw.command, definition, `${field}.command`)
+      if ((command === undefined) === (source === undefined)) {
+        fail(definition, field, 'must declare exactly one of command or source')
+      }
+      return {
+        kind: 'check',
+        ...(command === undefined ? {} : { command }),
+        ...(source === undefined ? {} : { source }),
+      }
     }
     case 'human': {
       assertKnown(raw, HUMAN_EVIDENCE_KEYS, definition, field)
@@ -1060,10 +1103,37 @@ export interface OwnershipResolution {
 /** The legacy plugins this engine knows how to defer to. */
 export const KNOWN_LEGACY_SOURCES = ['delegation-rules', 'goal-continuity'] as const
 
-function retirementRemedy(plugin: string, signal: string, installed: boolean): string {
-  return installed
-    ? `"${plugin}/${signal}" is installed while this step claims ownership; keep it deferred until the "retire-legacy-gates" change moves ownership`
-    : `"${plugin}/${signal}" is not installed; install it or move ownership in the "retire-legacy-gates" change`
+/** Whether one legacy signal would actually steer right now. */
+function signalEnabled(
+  plugin: string,
+  signal: string,
+  installed: ReadonlySet<string>,
+  enabled: ReadonlySet<string> | undefined,
+): boolean {
+  if (enabled === undefined) return installed.has(plugin)
+  return enabled.has(`${plugin}/${signal}`)
+}
+
+/** The legacy signal state a load or gate decision resolves against. */
+export interface LegacySignalState {
+  readonly installed: ReadonlySet<string>
+  /** `${plugin}/${signal}` entries that would actually steer. */
+  readonly enabled: ReadonlySet<string>
+}
+
+function retirementRemedy(
+  plugin: string,
+  signal: string,
+  state: 'not-installed' | 'disabled' | 'enabled',
+): string {
+  const key = `"${plugin}/${signal}"`
+  if (state === 'enabled') {
+    return `${key} is still enabled in the profile; flip its gate-only switch (checkpoint.automation, delegation.gates.workflowOwned, or the verification row) in the same retire-legacy-gates config change`
+  }
+  if (state === 'disabled') {
+    return `${key} is installed but its gate-only switch is off; a deferred definition would have no enforcing legacy gate — enable the switch or move ownership in the "retire-legacy-gates" change`
+  }
+  return `${key} is not installed; install it or move ownership in the "retire-legacy-gates" change`
 }
 
 /** One issue line that names the definition, optional step, and remedy. */
@@ -1072,34 +1142,50 @@ function issue(
   step: string | undefined,
   plugin: string,
   signal: string,
-  installed: boolean,
+  state: 'not-installed' | 'disabled' | 'enabled',
 ): string {
   const subject = step === undefined ? '' : `step "${step}" `
-  return `workflow definition "${definition}": ${subject}${retirementRemedy(plugin, signal, installed)}`
+  return `workflow definition "${definition}": ${subject}${retirementRemedy(plugin, signal, state)}`
 }
 
 /**
- * Resolve ownership per definition and step against the installed legacy
- * sources. A `defer` needs its source installed; an `own` step may not declare
- * an installed source for the same behavior. A deferred definition defers every
- * step, so only a definition-level `own` can carry a deferred step such as
- * `spec-review`.
+ * Resolve ownership per definition and step against the installed and enabled
+ * legacy sources. A `defer` needs an enabled source; an `own` step may not
+ * declare an enabled source for the same behavior. A deferred definition
+ * defers every step, so only a definition-level `own` can carry a deferred
+ * step such as `spec-review`.
  */
 export function resolveOwnership(
   definition: Definition,
   installed: ReadonlySet<string>,
+  enabledSignals?: ReadonlySet<string>,
 ): OwnershipResolution {
   const issues: string[] = []
   const settings = definition.settings
   const definitionDeferred = settings.gateOwnership === 'defer'
+  const stateOf = (plugin: string, signal: string): 'not-installed' | 'disabled' | 'enabled' => {
+    if (!installed.has(plugin)) return 'not-installed'
+    return signalEnabled(plugin, signal, installed, enabledSignals) ? 'enabled' : 'disabled'
+  }
   if (definitionDeferred) {
     const legacy = settings.legacy
-    if (legacy !== undefined && !installed.has(legacy.plugin)) {
-      issues.push(issue(definition.id, undefined, legacy.plugin, legacy.signal, false))
+    if (legacy !== undefined && stateOf(legacy.plugin, legacy.signal) !== 'enabled') {
+      issues.push(
+        issue(
+          definition.id,
+          undefined,
+          legacy.plugin,
+          legacy.signal,
+          stateOf(legacy.plugin, legacy.signal),
+        ),
+      )
     }
-  } else if (settings.legacy !== undefined && installed.has(settings.legacy.plugin)) {
+  } else if (
+    settings.legacy !== undefined &&
+    stateOf(settings.legacy.plugin, settings.legacy.signal) === 'enabled'
+  ) {
     issues.push(
-      issue(definition.id, undefined, settings.legacy.plugin, settings.legacy.signal, true),
+      issue(definition.id, undefined, settings.legacy.plugin, settings.legacy.signal, 'enabled'),
     )
   }
   const steps = definition.steps.map((step): ResolvedStepOwnership => {
@@ -1111,19 +1197,38 @@ export function resolveOwnership(
           `workflow definition "${definition.id}": step "${step.id}" claims ownership inside a deferred definition; a deferred definition defers every step`,
         )
       }
-      if (step.legacy !== undefined && !installed.has(step.legacy.plugin)) {
-        issues.push(issue(definition.id, step.id, step.legacy.plugin, step.legacy.signal, false))
+      if (
+        step.legacy !== undefined &&
+        stateOf(step.legacy.plugin, step.legacy.signal) !== 'enabled'
+      ) {
+        issues.push(
+          issue(
+            definition.id,
+            step.id,
+            step.legacy.plugin,
+            step.legacy.signal,
+            stateOf(step.legacy.plugin, step.legacy.signal),
+          ),
+        )
       }
     } else if (ownership === 'defer') {
       if (legacy === undefined) {
         issues.push(
           `workflow definition "${definition.id}": step "${step.id}" declares a defer without a legacy source`,
         )
-      } else if (!installed.has(legacy.plugin)) {
-        issues.push(issue(definition.id, step.id, legacy.plugin, legacy.signal, false))
+      } else if (stateOf(legacy.plugin, legacy.signal) !== 'enabled') {
+        issues.push(
+          issue(
+            definition.id,
+            step.id,
+            legacy.plugin,
+            legacy.signal,
+            stateOf(legacy.plugin, legacy.signal),
+          ),
+        )
       }
-    } else if (legacy !== undefined && installed.has(legacy.plugin)) {
-      issues.push(issue(definition.id, step.id, legacy.plugin, legacy.signal, true))
+    } else if (legacy !== undefined && stateOf(legacy.plugin, legacy.signal) === 'enabled') {
+      issues.push(issue(definition.id, step.id, legacy.plugin, legacy.signal, 'enabled'))
     }
     return { id: step.id, ownership, ...(legacy === undefined ? {} : { legacy }) }
   })

@@ -48,6 +48,8 @@ export interface MainStepRequest {
     readonly turn: number;
     readonly maxAttempts?: number;
     readonly now?: number;
+    /** A host-computed refusal detail prepended to the step steer. */
+    readonly note?: string;
 }
 export type MainStepResult = {
     readonly steered: true;

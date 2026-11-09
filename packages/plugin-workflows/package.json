@@ -25,6 +25,7 @@
     "locale/*.json",
     "assets/triggers/*.json",
     "assets/definitions/*.json",
+    "assets/parity/*.json",
     "lib/index.js",
     "lib/index.d.ts",
     "lib/client.js",

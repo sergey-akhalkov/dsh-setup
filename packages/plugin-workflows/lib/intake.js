@@ -30,7 +30,7 @@ function waitingFor(step, context) {
 export async function advanceIntake(input) {
     const at = input.now ?? Date.now();
     let run = input.run;
-    const resolved = resolveOwnership(input.definition, input.installedLegacy);
+    const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy);
     for (let guard = 0; guard < input.definition.steps.length + 1; guard += 1) {
         const pending = firstPending(run, input.definition);
         // Only a fully done definition completes; a failed or cancelled step stops
@@ -59,7 +59,19 @@ export async function advanceIntake(input) {
             }
             return { run: completedRun, completed: true };
         }
-        if (pending.state === 'failed' ||
+        if (pending.state === 'failed' &&
+            pending.step.executor === 'tool' &&
+            input.definition.id === 'task-review') {
+            // A rejected dispatch stays retryable: reset the tool step so the next
+            // close dispatches it again instead of closing without the obligation.
+            run = {
+                ...run,
+                steps: run.steps.map((entry) => entry.id === pending.step.id
+                    ? { ...entry, state: 'open', evidence: undefined, reason: undefined }
+                    : entry),
+            };
+        }
+        else if (pending.state === 'failed' ||
             pending.state === 'cancelled' ||
             pending.state === 'missing') {
             return { run, completed: false };
@@ -79,6 +91,7 @@ export async function advanceIntake(input) {
                 definition: input.definition,
                 stepId: step.id,
                 installedLegacy: input.installedLegacy,
+                ...(input.enabledLegacy === undefined ? {} : { enabledLegacy: input.enabledLegacy }),
                 readRecord: input.readRecord,
                 now: at,
             });
@@ -119,7 +132,13 @@ export async function advanceIntake(input) {
                     ...(input.signal === undefined ? {} : { signal: input.signal }),
                 });
                 if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
-                    return { run, completed: false, waiting: waitingFor(step, input.evidenceContext) };
+                    // A failed dispatch is a blocking obligation only for the owned
+                    // review retry; other workflows keep their terminal failure.
+                    return {
+                        run: input.definition.id === 'task-review' ? setRunStatus(run, 'blocked', at) : run,
+                        completed: false,
+                        waiting: waitingFor(step, input.evidenceContext),
+                    };
                 }
             }
             const check = await verifyEvidence(step.evidence ?? { kind: 'declaration' }, input.evidenceContext);

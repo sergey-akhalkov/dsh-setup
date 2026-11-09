@@ -17,10 +17,19 @@ export interface CheckpointApplicabilityConfig {
     readonly minToolCalls?: number;
     /** Require a write or a started worker; default true. */
     readonly requireWrite?: boolean;
+    /** Consecutive checkpoints a bottleneck may persist before a route change; default 2. */
+    readonly bottleneckAge?: number;
+    /** Steps after the latest checkpoint before it is stale; default 40. */
+    readonly stepInterval?: number;
+    /** Require a tagged worker start for computed parallel lanes; default true. */
+    readonly enforceParallel?: boolean;
 }
 export interface ResolvedCheckpointApplicability {
     readonly minToolCalls: number;
     readonly requireWrite: boolean;
+    readonly bottleneckAge: number;
+    readonly stepInterval: number;
+    readonly enforceParallel: boolean;
 }
 export declare const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability;
 /**
@@ -35,5 +44,10 @@ export interface WorkflowsConfig {
     readonly maxRuns?: number;
     /** The retro applicability settings; must mirror the goal-continuity row. */
     readonly checkpointApplicability?: CheckpointApplicabilityConfig;
+    /** The validate-only profile settings for the `verify` definition. */
+    readonly verify?: {
+        readonly commands?: readonly string[];
+        readonly maxBlocks?: number;
+    };
 }
 export declare function apply(ctx: Context, config?: WorkflowsConfig): void;

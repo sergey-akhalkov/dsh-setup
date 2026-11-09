@@ -104,6 +104,14 @@ export interface BundleConfig {
     failureStreak?: number;
     reviewQueue?: Partial<ReviewQueueConfig>;
     reviewLearning?: Partial<ReviewLearningConfig>;
+    /** Gate-only retirement switch (default `workflowOwned: true`). */
+    gates?: {
+        workflowOwned?: boolean;
+    };
+}
+/** Resolved gate ownership: false moves the task-review and archive gates to the workflow. */
+export interface GatesConfig {
+    readonly workflowOwned: boolean;
 }
 /** Test seams; production uses the filesystem, git, and the wall clock. */
 export interface ApplyOptions {
@@ -145,6 +153,7 @@ interface EngineConfig {
     failureStreak: number;
     reviewQueue: ReviewQueueConfig;
     reviewLearning: ReviewLearningConfig;
+    gates: GatesConfig;
 }
 /**
  * Validate one row configuration. Configuration mistakes fail the row with the
@@ -152,6 +161,8 @@ interface EngineConfig {
  * validation error, so the profile composes without the target installed.
  */
 export declare function validateConfig(raw: unknown): EngineConfig;
+/** Validate the gate-only retirement switch fail-loud with its field and shape. */
+export declare function validateGates(raw: unknown): GatesConfig;
 /**
  * Validate the review-learning block. The defaults bound the lesson store and
  * the retro window; an invalid field fails plugin load with its range.
@@ -214,6 +225,15 @@ interface ReviewRecord {
     failureClass?: FailureClass;
 }
 type Finding = ReviewFinding;
+type RecordState = {
+    kind: 'missing';
+} | {
+    kind: 'malformed';
+    error: string;
+} | {
+    kind: 'record';
+    record: ReviewRecord;
+};
 /** Hash every change artifact, normalizing `tasks.md` checkbox state. */
 export declare function specDigest(changeDir: string, signal?: AbortSignal): Promise<string>;
 /** One immutable review checkout; the digest binds to `tree`. */
@@ -257,6 +277,8 @@ export declare function sweepReviewSnapshots(cwd: string, runGit: GitRunner, now
 export declare function discardReviewSnapshot(cwd: string, runId: string, runGit: GitRunner, 
 /** Test seam: the filesystem remover, so a failed removal can be injected. */
 remove?: (path: string) => Promise<void>): Promise<void>;
+/** A gate match: PASS/ERROR only, identified, with an optional current-digest check. */
+export declare function recordSatisfies(state: RecordState, change: string, scope: ReviewScope, digest: string | undefined, taskId?: string): boolean;
 interface ParsedVerdict {
     verdict: 'PASS' | 'FINDINGS';
     findings: Finding[];

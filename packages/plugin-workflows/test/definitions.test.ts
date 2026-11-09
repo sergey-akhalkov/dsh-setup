@@ -400,7 +400,7 @@ describe('ownership and the installed legacy profile', () => {
     step.ownership = 'own'
     const definition = validateDefinition(own)
     expect(resolveOwnership(definition, profile('delegation-rules')).issues.join('\n')).toMatch(
-      /step "requirements".*"delegation-rules\/task-review" is installed.*retire-legacy-gates/u,
+      /step "requirements".*"delegation-rules\/task-review" is still enabled.*retire-legacy-gates/u,
     )
     expect(resolveOwnership(definition, profile()).issues).toEqual([])
   })

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
 import type {
   AllEvidence,
@@ -13,6 +14,7 @@ import type {
 } from './definitions.js'
 import { globMatches } from './evaluate.js'
 import { isInside } from './fs-change.js'
+import { reviewerBinding, taskReviewCoverage } from './parity.js'
 import { checkpointRecordError, localRecordError, portableRecordError } from './projection.js'
 import type { RunEvidence } from './runs.js'
 
@@ -59,6 +61,14 @@ export interface ToolCallObservation {
   readonly arguments: Readonly<Record<string, unknown>>
   readonly ok: boolean
   readonly at?: number
+  /** The turn the call was observed in; absent on older in-memory entries. */
+  readonly turn?: number
+  /** The pre-step index the call was observed at, for checkpoint freshness. */
+  readonly step?: number
+  /** A bounded result text, for classifying delegate starts/answers. */
+  readonly detail?: string
+  /** The observation order, for remedy/call ordering. */
+  readonly seq?: number
 }
 
 /** One completed foreground shell result the verifier may match against. */
@@ -94,6 +104,14 @@ export interface EvidenceContext {
   readonly shellResults?: readonly ShellResultObservation[]
   /** The step's request time; a check must run after it. */
   readonly stepStartedAt?: number
+  /** The validated erify.commands profile setting; empty keeps verify inert. */
+  readonly checkCommands?: readonly string[]
+  /** When the turn last wrote a non-documentation file; absent means no code write. */
+  readonly lastWriteAt?: number
+  /** The latest written path, for the bounded refusal text. */
+  readonly lastWritePath?: string
+  /** The latest successful configured check, retained across buffer eviction. */
+  readonly lastCheckAt?: number
   /** Recorded user answers for the step's question. */
   readonly answers?: readonly HumanAnswerObservation[]
   /** Whether the step is marked nonCritical, the only declaration consumer. */
@@ -618,8 +636,58 @@ async function recordCheck(
   if (task !== undefined && record.taskId !== task.text) {
     return mismatch(`the record task is not "${task.text}"`, path.text, item)
   }
-  if (record.verdict !== evidence.verdict) {
-    return mismatch(`the record verdict is not "${evidence.verdict}"`, path.text, item)
+  const accepted =
+    evidence.verdicts !== undefined
+      ? evidence.verdicts
+      : evidence.verdict === undefined
+        ? []
+        : [evidence.verdict]
+  if (accepted.length === 0 || !accepted.includes(String(record.verdict))) {
+    return mismatch(
+      `the record verdict "${String(record.verdict)}" is not one of: ${accepted.join(', ')}`,
+      path.text,
+      item,
+    )
+  }
+  // The marker's reviewer binding applies to intermediate PASS and ERROR
+  // records too: an old record from another reviewer is not this review.
+  if (evidence.rule === 'task-review') {
+    const binding = reviewerBinding(context.workspace)
+    if (binding?.invalid !== undefined) {
+      return mismatch(`${binding.invalid}; fix openspec/review-approval.json`, path.text, item)
+    }
+    const target = (record.target ?? {}) as { provider?: unknown; model?: unknown }
+    if (binding?.provider !== undefined && target.provider !== binding.provider) {
+      return mismatch(
+        `the record target provider "${String(target.provider)}" is not the bound "${binding.provider}"`,
+        path.text,
+        item,
+      )
+    }
+    if (binding?.model !== undefined && target.model !== binding.model) {
+      return mismatch(
+        `the record target model "${String(target.model)}" is not the bound "${binding.model}"`,
+        path.text,
+        item,
+      )
+    }
+  }
+  // Legacy ERROR exclusions: a queue fault or a discarded-input verdict is not
+  // a usable review; finish the writes and re-run.
+  if (evidence.rule === 'task-review' && record.verdict === 'ERROR') {
+    const failureClass = (record as { failureClass?: unknown }).failureClass
+    const error = (record as { error?: unknown }).error
+    const discarded =
+      failureClass === 'reviewed-inputs-changed' ||
+      (typeof error === 'string' &&
+        (error.startsWith('queue-internal-error') || error.includes('reviewed inputs changed')))
+    if (discarded) {
+      return mismatch(
+        'the ERROR record discarded its verdict (the reviewed inputs moved or the queue failed); finish the writes and re-run the review',
+        path.text,
+        item,
+      )
+    }
   }
   if (evidence.digest === 'current') {
     if (change === undefined) {
@@ -642,7 +710,7 @@ async function recordCheck(
       kind: 'record',
       path: path.text,
       ...(typeof record.digest === 'string' ? { digest: record.digest } : {}),
-      detail: `record ${evidence.rule} ${evidence.verdict}`,
+      detail: `record ${evidence.rule} ${accepted.join('|')}`,
     },
   }
 }
@@ -701,11 +769,157 @@ function toolCheck(
 }
 
 /** Whether a recorded working directory names the workspace root. */
-function sameCheckDirectory(left: string, right: string): boolean {
+export function sameCheckDirectory(left: string, right: string): boolean {
   const norm = (value: string): string => value.replaceAll('\\', '/').replace(/\/+$/u, '')
   const a = norm(left)
   const b = norm(right)
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** True when a write target is planning scratch or documentation, not code. */
+export function ignoredWrite(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/')
+  if (/\.md$/iu.test(normalized)) return true
+  return /(?:^|\/)(?:\.dsh|\.tmp|node_modules|openspec)\//iu.test(normalized)
+}
+
+/** When the turn last wrote a non-documentation file, from its tool calls. */
+export function lastCodeWriteAt(
+  calls: readonly ToolCallObservation[],
+  workspace?: string,
+): number | undefined {
+  let last: number | undefined
+  for (const call of calls) {
+    if (!call.ok || call.at === undefined) continue
+    if (call.name !== 'edit' && call.name !== 'write') continue
+    const raw = call.arguments.file_path ?? call.arguments.path
+    if (typeof raw !== 'string' || raw.trim() === '') continue
+    const resolved = workspace === undefined ? raw : resolve(workspace, raw)
+    if (ignoredWrite(resolved)) continue
+    if (last === undefined || call.at > last) last = call.at
+  }
+  return last
+}
+
+/** The legacy command comparison: trim, then strip at most one leading `rtk `. */
+function normalizeCheckCommand(value: string): string {
+  return value.trim().replace(/^rtk\s+/u, '')
+}
+
+function shownCommands(commands: readonly string[]): string {
+  const limited = commands
+    .slice(0, 3)
+    .map((command) => `"${command.length > 120 ? `${command.slice(0, 120)}…` : command}"`)
+    .join(' or ')
+  return commands.length > 3 ? `${limited} (+${String(commands.length - 3)} more)` : limited
+}
+
+function checkFailure(detail: string, item: string | undefined): EvidenceCheck {
+  return failure('check-failed', detail, undefined, item)
+}
+
+/**
+ * The owned verification check: a configured command must have completed
+ * successfully after the turn's last code write. No code write or no
+ * configured command keeps the step inert, exactly like the legacy gate.
+ */
+function verifyCheck(context: EvidenceContext, item: string | undefined): EvidenceCheck {
+  const commands = context.checkCommands ?? []
+  if (commands.length === 0) {
+    return {
+      ok: true,
+      evidence: {
+        kind: 'check',
+        callId: 'no-command',
+        at: 0,
+        detail: 'no configured verification command; the verify definition is inert',
+      },
+    }
+  }
+  const lastWrite = context.lastWriteAt
+  if (lastWrite === undefined) {
+    return {
+      ok: true,
+      evidence: {
+        kind: 'check',
+        callId: 'no-code-write',
+        at: 0,
+        detail: 'no code write in this turn',
+      },
+    }
+  }
+  const accepted = new Set(commands.map(normalizeCheckCommand))
+  const results = (context.shellResults ?? []).filter(
+    (candidate) =>
+      candidate.foreground &&
+      accepted.has(normalizeCheckCommand(candidate.command)) &&
+      (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)),
+  )
+  const afterWrite = results.filter((candidate) => candidate.at > lastWrite)
+  const shown = shownCommands(commands)
+  const target =
+    context.lastWritePath === undefined
+      ? ''
+      : ` (last write: ${context.lastWritePath.slice(0, 120)})`
+  if (afterWrite.length === 0) {
+    if (context.lastCheckAt !== undefined && context.lastCheckAt > lastWrite) {
+      return {
+        ok: true,
+        evidence: {
+          kind: 'check',
+          callId: 'persisted-check',
+          at: context.lastCheckAt,
+          detail: 'a configured check succeeded after the last write',
+        },
+      }
+    }
+    return checkFailure(
+      `no configured verification command completed after the last code write${target}; run ${shown}`,
+      item,
+    )
+  }
+  // The legacy gate clears the obligation on a successful check, and a later
+  // failed attempt does not re-dirty the turn; keep that parity.
+  const successful = afterWrite
+    .filter(
+      (candidate) =>
+        candidate.ok !== false &&
+        candidate.exitCode === 0 &&
+        candidate.timedOut !== true &&
+        candidate.signal === undefined &&
+        candidate.sandboxDenied !== true,
+    )
+    .reduce<(typeof afterWrite)[number] | undefined>(
+      (last, candidate) => (last === undefined || candidate.at >= last.at ? candidate : last),
+      undefined,
+    )
+  const latest = afterWrite.reduce((last, candidate) =>
+    candidate.at >= last.at ? candidate : last,
+  )
+  if (successful === undefined) {
+    if (latest.timedOut === true) return checkFailure(`"${latest.command}" timed out`, item)
+    if (latest.signal !== undefined) {
+      return checkFailure(`"${latest.command}" was stopped by ${latest.signal}`, item)
+    }
+    if (latest.sandboxDenied === true) {
+      return checkFailure(`"${latest.command}" was refused by the sandbox`, item)
+    }
+    return checkFailure(
+      latest.exitCode === 0
+        ? `"${latest.command}" did not complete successfully`
+        : `"${latest.command}" exited ${String(latest.exitCode)}; a zero exit is required`,
+      item,
+    )
+  }
+  return {
+    ok: true,
+    evidence: {
+      kind: 'check',
+      callId: successful.callId,
+      at: successful.at,
+      detail: successful.command,
+    },
+  }
 }
 
 function checkResult(
@@ -713,7 +927,48 @@ function checkResult(
   context: EvidenceContext,
   item: string | undefined,
 ): EvidenceCheck {
-  const command = resolveEvidenceText(evidence.command, context, item)
+  if (evidence.source === 'verify-settings') return verifyCheck(context, item)
+  if (evidence.source === 'task-review-coverage') {
+    const change = context.values.name
+    if (typeof change !== 'string') {
+      return checkFailure('the completion coverage check has no change name', item)
+    }
+    // An intermediate close (unchecked tasks remain) defers completion
+    // coverage; only the final checked list needs portable approvals.
+    const tasksMarkdown = (() => {
+      try {
+        return readFileSync(
+          join(context.workspace, 'openspec', 'changes', change, 'tasks.md'),
+          'utf8',
+        )
+      } catch {
+        return undefined
+      }
+    })()
+    if (tasksMarkdown !== undefined && /^\s*-\s*\[ \]\s+\d+(?:\.\d+)*\s+\S/mu.test(tasksMarkdown)) {
+      return {
+        ok: true,
+        evidence: {
+          kind: 'check',
+          callId: 'task-review-intermediate',
+          at: Date.now(),
+          detail: 'unchecked tasks remain; completion coverage is deferred',
+        },
+      }
+    }
+    const coverage = taskReviewCoverage(context.workspace, change)
+    if (!coverage.ok) return checkFailure(coverage.gaps.join('; '), item)
+    return {
+      ok: true,
+      evidence: {
+        kind: 'check',
+        callId: 'task-review-coverage',
+        at: Date.now(),
+        detail: 'every checked task has a portable task-review PASS',
+      },
+    }
+  }
+  const command = resolveEvidenceText(evidence.command ?? '', context, item)
   if (!command.ok) return command
   const startedAt = context.stepStartedAt
   if (startedAt === undefined || !Number.isFinite(startedAt)) {
@@ -898,7 +1153,7 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
       }
       const constraints = [
         `rule=${show(value.rule) ?? value.rule}`,
-        `verdict=${value.verdict}`,
+        `verdict=${value.verdict ?? (value.verdicts ?? []).join('|')}`,
         show(value.change) === undefined ? '' : `change=${String(show(value.change))}`,
         show(value.phase) === undefined ? '' : `phase=${String(show(value.phase))}`,
         show(value.scope) === undefined ? '' : `scope=${String(show(value.scope))}`,
@@ -917,7 +1172,10 @@ export function describeEvidence(value: Evidence, context: EvidenceContext): str
       return `completed tool call ${value.name}${command === undefined ? '' : ` "${command.ok ? command.text : value.command}"`}${args}`
     }
     case 'check': {
-      const command = resolveEvidenceText(value.command, context, undefined)
+      if (value.source === 'verify-settings') {
+        return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write${context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath})`}`
+      }
+      const command = resolveEvidenceText(value.command ?? '', context, undefined)
       return `foreground command "${command.ok ? command.text : value.command}" exits 0`
     }
     case 'human':

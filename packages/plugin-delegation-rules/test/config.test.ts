@@ -115,6 +115,18 @@ describe('configuration validation', () => {
     ).toMatchObject({ enabled: true, concurrency: 4, maxAttempts: 5 })
   })
 
+  it('accepts the gate-only gates.workflowOwned switch and defaults it true', () => {
+    expect(validateConfig({}).gates).toEqual({ workflowOwned: true })
+    expect(validateConfig({ gates: { workflowOwned: false } }).gates).toEqual({
+      workflowOwned: false,
+    })
+    expect(() => validateConfig({ gates: { workflowOwned: 'off' } })).toThrow(
+      /gates\.workflowOwned/u,
+    )
+    expect(() => validateConfig({ gates: { unknown: true } })).toThrow(/gates: unknown field/u)
+    expect(() => validateConfig({ gates: false })).toThrow(/gates must be a mapping/u)
+  })
+
   it('accepts an explicit empty rule list and the no-rules state', () => {
     expect(validateConfig({ rules: [] }).rules).toEqual([])
   })

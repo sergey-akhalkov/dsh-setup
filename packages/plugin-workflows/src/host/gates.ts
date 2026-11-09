@@ -43,6 +43,12 @@ export interface TurnCloseInput {
   readonly origin?: 'root' | 'subagent'
   /** The legacy plugins the profile installs. */
   readonly installedLegacy: ReadonlySet<string>
+  /** `${plugin}/signal` entries that would actually steer; absent means installed = enabled. */
+  readonly enabledLegacy?: ReadonlySet<string>
+  /** The owned completion-coverage decision for this turn, when it applies. */
+  readonly completion?: { readonly ok: boolean; readonly text?: string }
+  /** The owned checkpoint remedy/age decision for this turn, when it applies. */
+  readonly checkpointIssue?: { readonly text: string }
   readonly now?: number
   readonly onError?: (error: unknown) => void
 }
@@ -62,8 +68,9 @@ export function selectBlockingStep(
   run: WorkflowRun,
   definition: Definition,
   installedLegacy: ReadonlySet<string>,
+  enabledLegacy?: ReadonlySet<string>,
 ): Step | undefined {
-  const resolved = resolveOwnership(definition, installedLegacy)
+  const resolved = resolveOwnership(definition, installedLegacy, enabledLegacy)
   const ownership = new Map(resolved.steps.map((step) => [step.id, step.ownership]))
   for (const step of definition.steps) {
     if (!stepIsOpen(run, step.id)) continue
@@ -80,6 +87,34 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
     if (input.origin === 'subagent') {
       return { kind: 'allow', run: input.run, reason: 'a subagent turn is exempt' }
     }
+    // A failed task-review dispatch is an unresolved obligation: it must not
+    // let the run terminal-allow before the review retry path is used.
+    if (input.definition.id === 'task-review') {
+      const failed = input.definition.steps.find(
+        (step) =>
+          step.blockTurnClose === true &&
+          input.run.steps.find((entry) => entry.id === step.id)?.state === 'failed',
+      )
+      if (failed !== undefined) {
+        const blocks = input.run.turnBlocks ?? 0
+        if (blocks >= input.maxBlocks) {
+          const detail = `step "${failed.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`
+          return {
+            kind: 'violation',
+            run: resetTurnBlocks(addViolation(input.run, detail, { step: failed.id, at }), at),
+            detail,
+          }
+        }
+        const text = `step "${failed.id}" has a failed dispatch; retry it before the close`
+        input.agent.steer(text)
+        return {
+          kind: 'refuse',
+          run: incrementTurnBlocks(input.run, at),
+          stepId: failed.id,
+          text,
+        }
+      }
+    }
     // A terminal run is never revived by a later steer.
     if (
       input.run.status === 'completed' ||
@@ -92,7 +127,33 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
       }
     }
-    const step = selectBlockingStep(input.run, input.definition, input.installedLegacy)
+    const step = selectBlockingStep(
+      input.run,
+      input.definition,
+      input.installedLegacy,
+      input.enabledLegacy,
+    )
+    // A host-computed owned decision (completion coverage or the checkpoint
+    // remedy/age rule) refuses before the generic step walk.
+    const ownedText =
+      input.checkpointIssue?.text ??
+      (input.completion?.ok === false
+        ? (input.completion.text ?? 'the completion coverage is incomplete')
+        : undefined)
+    if (ownedText !== undefined && step === undefined) {
+      const blocks = input.run.turnBlocks ?? 0
+      if (blocks >= input.maxBlocks) {
+        const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`
+        const run = resetTurnBlocks(addViolation(input.run, detail, { at }), at)
+        return { kind: 'violation', run, detail }
+      }
+      return {
+        kind: 'refuse',
+        run: incrementTurnBlocks(input.run, at),
+        stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
+        text: ownedText,
+      }
+    }
     if (step === undefined) {
       return {
         kind: 'allow',
@@ -117,6 +178,7 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
       evidenceContext: input.evidenceContext,
       turn: input.turn,
       maxAttempts: input.maxBlocks,
+      ...(ownedText === undefined ? {} : { note: ownedText }),
       now: at,
     })
     const run = incrementTurnBlocks(steered.run, at)
@@ -128,6 +190,25 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
           kind: 'violation',
           run: resetStepAttempts(resetTurnBlocks(recorded, at), step.id),
           detail,
+        }
+      }
+      // A failed dispatch stays an obligation until the run advances/retries;
+      // never let the close pass silently on the failed step.
+      if (steered.reason.includes('already failed')) {
+        const blocks = input.run.turnBlocks ?? 0
+        if (blocks >= input.maxBlocks) {
+          const detail = `step "${step.id}" has a failed dispatch; the close is allowed once as a VIOLATION, never as a pass`
+          return {
+            kind: 'violation',
+            run: resetTurnBlocks(addViolation(input.run, detail, { step: step.id, at }), at),
+            detail,
+          }
+        }
+        return {
+          kind: 'refuse',
+          run,
+          stepId: step.id,
+          text: `step "${step.id}" has a failed dispatch; retry it before the close`,
         }
       }
       const message = `step "${step.id}" could not be steered: ${steered.reason}`
@@ -288,6 +369,8 @@ export interface DeferredStepInput {
   readonly definition: Definition
   readonly stepId: string
   readonly installedLegacy: ReadonlySet<string>
+  /** `${plugin}/${signal}` entries that would actually steer. */
+  readonly enabledLegacy?: ReadonlySet<string>
   /** The existing legacy reader; it never dispatches an executor. */
   readonly readRecord: (step: Step) => Promise<EvidenceCheck>
   readonly now?: number
@@ -310,7 +393,7 @@ export interface DeferredStepResult {
  */
 export async function runDeferredStep(input: DeferredStepInput): Promise<DeferredStepResult> {
   const at = input.now ?? Date.now()
-  const resolved = resolveOwnership(input.definition, input.installedLegacy)
+  const resolved = resolveOwnership(input.definition, input.installedLegacy, input.enabledLegacy)
   const ownership = resolved.steps.find((step) => step.id === input.stepId)
   const step = input.definition.steps.find((entry) => entry.id === input.stepId)
   if (step === undefined) throw new Error(`the definition has no step "${input.stepId}"`)
@@ -332,12 +415,16 @@ export async function runDeferredStep(input: DeferredStepInput): Promise<Deferre
       stepId: input.stepId,
     }
   }
-  if (!input.installedLegacy.has(ownership.legacy.plugin)) {
+  const signalEnabled =
+    input.enabledLegacy === undefined
+      ? input.installedLegacy.has(ownership.legacy.plugin)
+      : input.enabledLegacy.has(`${ownership.legacy.plugin}/${ownership.legacy.signal}`)
+  if (!signalEnabled) {
     return {
       run: setRunStatus(
         settleStep(input.run, input.stepId, 'blocked', {
           at,
-          reason: `the legacy source "${ownership.legacy.plugin}/${ownership.legacy.signal}" is not installed; the retire-legacy-gates change owns the transition`,
+          reason: `the legacy source "${ownership.legacy.plugin}/${ownership.legacy.signal}" is not enabled; the retire-legacy-gates change owns the transition`,
         }),
         'blocked',
         at,
@@ -550,6 +637,8 @@ export interface ArchiveGateInput {
   readonly receipts: readonly WorkflowReceipt[]
   /** The whole-spec `PASS` record, already verified against the current digest. */
   readonly specRecord: EvidenceCheck
+  /** The owned per-task portable PASS coverage, computed from the workspace. */
+  readonly taskReview?: { readonly ok: boolean; readonly text?: string }
 }
 
 export type ArchiveGateDecision =
@@ -583,9 +672,13 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
     .map((run) => ({ run, open: openRequiredStep(run) }))
     .find((entry) => entry.open !== undefined)
   if (blocked !== undefined && blocked.open !== undefined) {
+    const coverage =
+      input.taskReview !== undefined && !input.taskReview.ok
+        ? `; ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}`
+        : ''
     return {
       kind: 'deny',
-      reason: `the archive of "${input.change}" is refused: run "${blocked.run.id}" step "${blocked.open.step}" is open and has no verified evidence`,
+      reason: `the archive of "${input.change}" is refused: run "${blocked.run.id}" step "${blocked.open.step}" is open and has no verified evidence${coverage}`,
     }
   }
   const completed = related.find((run) => isCompletedIntake(run, input.change))
@@ -602,6 +695,13 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
       reason: `the archive of "${input.change}" is refused: the current whole-spec PASS record is ${
         input.specRecord.failure.reason === 'missing-file' ? 'missing' : 'stale or invalid'
       } (${input.specRecord.failure.detail.slice(0, 200)})`,
+    }
+  }
+  if (input.taskReview !== undefined && !input.taskReview.ok) {
+    const relatedRun = related.find((run) => run.definition === 'task-review')
+    return {
+      kind: 'deny',
+      reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}${relatedRun === undefined ? '' : ` (related review run "${relatedRun.id}")`}`,
     }
   }
   return {

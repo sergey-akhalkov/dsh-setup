@@ -123,6 +123,8 @@ export interface MainStepRequest {
   readonly turn: number
   readonly maxAttempts?: number
   readonly now?: number
+  /** A host-computed refusal detail prepended to the step steer. */
+  readonly note?: string
 }
 
 export type MainStepResult =
@@ -153,12 +155,13 @@ export function requestMainStep(input: MainStepRequest): MainStepResult {
   // requested, so the run never holds an open step no steer can describe.
   let text: string
   try {
-    text = renderMainSteer({
+    const rendered = renderMainSteer({
       run: input.run,
       definition: input.definition,
       step: input.step,
       evidenceContext: input.evidenceContext,
     })
+    text = input.note === undefined ? rendered : `${input.note.slice(0, 600)}\n\n${rendered}`
   } catch (error) {
     return {
       steered: false,
@@ -906,15 +909,20 @@ function resolveToolValue(
   | { readonly ok: false; readonly detail: string } {
   if (typeof value === 'string') {
     for (const match of value.matchAll(/\{([a-zA-Z][a-zA-Z0-9-]*)\}/gu)) {
-      if (match[1] !== 'name') {
+      const placeholder = match[1] ?? ''
+      if (placeholder !== 'name' && placeholder !== 'taskId') {
         return {
           ok: false,
-          detail: `unsupported placeholder "{${match[1] ?? ''}}" in a tool call`,
+          detail: `unsupported placeholder "{${placeholder}}" in a tool call`,
         }
       }
-      const entry = context.values.name
-      if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
-        return { ok: false, detail: `the name value "${String(entry)}" is not a change name` }
+      const entry = context.values[placeholder]
+      if (placeholder === 'name') {
+        if (typeof entry !== 'string' || !CHANGE_NAME.test(entry)) {
+          return { ok: false, detail: `the name value "${String(entry)}" is not a change name` }
+        }
+      } else if (typeof entry !== 'string' || !/^[0-9a-f]{16}$/u.test(entry)) {
+        return { ok: false, detail: `the taskId value "${String(entry)}" is not a task id` }
       }
     }
     const resolved = resolveEvidenceText(value, context)

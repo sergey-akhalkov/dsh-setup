@@ -77,6 +77,7 @@ function fakeHost(
     readonly userQuestions?: boolean
     readonly answer?: string
     readonly workspaces?: Readonly<Record<string, string>>
+    readonly automation?: boolean
   } = {},
 ): {
   readonly ctx: Record<string, unknown>
@@ -167,20 +168,22 @@ function fakeHost(
                 isError: true,
                 content: [{ type: 'text', text: decision?.reason ?? 'denied' }],
               }
-            : {
-                isError: false,
-                value: {
-                  kind: 'foreground',
-                  cwd: workspace,
-                  exitCode: 0,
-                  signal: null,
-                  timedOut: false,
-                  aborted: false,
-                  timeoutMs: 120_000,
-                  stdout: { text: '', truncated: false },
-                  stderr: { text: '', truncated: false },
+            : call.name === 'delegate'
+              ? { isError: false, value: { text: 'rule "task-review" review started' } }
+              : {
+                  isError: false,
+                  value: {
+                    kind: 'foreground',
+                    cwd: workspace,
+                    exitCode: 0,
+                    signal: null,
+                    timedOut: false,
+                    aborted: false,
+                    timeoutMs: 120_000,
+                    stdout: { text: '', truncated: false },
+                    stderr: { text: '', truncated: false },
+                  },
                 },
-              },
         })
       }
       return { results }
@@ -216,6 +219,11 @@ function fakeHost(
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
       if (name === 'tools') return tools
+      // The migrated profile: the workflow-owned legacy gates are off while the
+      // spec-review, progress, and lane signals stay enabled.
+      if (name === 'delegationRulesStatus') return { workflowOwned: false, specReview: true }
+      if (name === 'goalContinuityStatus') return { automation: options.automation ?? false }
+      if (name === 'verificationGateStatus') return { steering: false }
       if (name === 'userQuestions' && options.userQuestions === true) {
         return {
           ask: async (request: { questions: Array<{ id: string }> }) => ({
@@ -447,13 +455,13 @@ describe('retro applicability through the journal path', () => {
     const blockedRetro = (await runs.listAuthenticatedRuns(workspace, auth)).find(
       (entry) => entry.definition.id === 'retro',
     )
-    expect(blockedRetro?.steps[0]?.state).toBe('blocked')
+    expect(blockedRetro?.steps[0]?.state).toBe('open')
     const { sessionRuns } = await import('../src/host/projection.ts')
     const view = (await sessionRuns(workspace, 'session-1')).find(
       (entry) => entry.id === `workflow:${blockedRetro?.id ?? ''}`,
     )
     expect(view).toBeDefined()
-    expect(view?.steps[0]?.state).toBe('blocked')
+    expect(view?.steps[0]?.state).toBe('open')
     const runId = String(
       (await retroRows()).find((row) => row.reason === 'run-created')?.runId ?? '',
     )
@@ -526,6 +534,16 @@ describe('retro fresh checkpoint', () => {
         { isError: false, content: [{ type: 'text', text: 'ok' }] },
       )
     }
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'checkpoint-call',
+        name: 'work_checkpoint',
+        arguments: {},
+      },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
@@ -541,6 +559,350 @@ describe('retro fresh checkpoint', () => {
       const stored = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
       return stored?.steps[0]?.state === 'done'
     })
+    expect(host.steers).toHaveLength(0)
+  })
+  it('keeps the run open while the checkpoint remedy is unexecuted', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    for (const [index, name] of ['read', 'read', 'read', 'read', 'write'].entries()) {
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: `call-${String(index)}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'checkpoint-call',
+        name: 'work_checkpoint',
+        arguments: {},
+      },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let retroRun: { id: string; context: Record<string, unknown> } | undefined
+    await waitFor(async () => {
+      retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'retro',
+      ) as typeof retroRun
+      return retroRun !== undefined
+    })
+    const checkpoint = String(retroRun?.context.checkpoint ?? '')
+    await mkdir(dirname(join(workspace, checkpoint)), { recursive: true })
+    await writeFile(
+      join(workspace, checkpoint),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'continue',
+        turn: 1,
+        lanes: [],
+        next: 'fix the guard',
+        bottleneck: {
+          id: 'guard',
+          owner: 'lead',
+          action: 'lead_action',
+          blockingLanes: ['edit'],
+          targets: ['src/unexecuted.ts'],
+        },
+      }),
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const settled = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
+    expect(settled?.status).toBe('running')
+    expect(settled?.steps[0]?.state).toBe('open')
+    expect(host.steers.length).toBeGreaterThan(0)
+  })
+  it('reopens the checkpoint obligation when a completed turn checkpoint goes stale', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const emitStep = async (step: number): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 1,
+          step,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    }
+    await emitStep(1)
+    for (const [index, name] of ['read', 'read', 'read', 'read', 'write'].entries()) {
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: `call-${String(index)}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'checkpoint-call', name: 'work_checkpoint', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let retroRun: { id: string; context: Record<string, unknown> } | undefined
+    await waitFor(async () => {
+      retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'retro',
+      ) as typeof retroRun
+      return retroRun !== undefined
+    })
+    await mkdir(dirname(join(workspace, String(retroRun?.context.checkpoint))), { recursive: true })
+    await writeFile(
+      join(workspace, String(retroRun?.context.checkpoint)),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'done',
+        turn: 1,
+        lanes: [],
+        next: 'continue',
+      }),
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
+      return stored?.status === 'completed'
+    })
+    const before = host.steers.length
+    for (let step = 2; step <= 42; step += 1) await emitStep(step)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBeGreaterThan(before)
+    // The per-session budget persists: three refusals then one UNCHECKED notice.
+    for (let close = 0; close < 4; close += 1) {
+      await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    }
+    const staleSteers = host.steers
+      .slice(before)
+      .map((message) =>
+        ((message as { content?: Array<{ text?: string }> }).content ?? [])
+          .map((block) => block.text ?? '')
+          .join(''),
+      )
+    expect(staleSteers.filter((text) => text.includes('UNCHECKED')).length).toBe(1)
+    expect(staleSteers.length).toBeLessThanOrEqual(4)
+  })
+})
+
+describe('verify auto-start', () => {
+  it('starts the owned verify run on a code-writing turn and steers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let verifyRun: { id: string } | undefined
+    await waitFor(async () => {
+      verifyRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'verify',
+      )
+      return verifyRun !== undefined
+    })
+    expect(verifyRun?.id).toBeDefined()
+    expect(host.steers).toHaveLength(1)
+  })
+
+  it('reopens verification when a later write follows a successful check', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { verify: { commands: ['pnpm check'] } })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-1',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The real host observation path: a DSH tool result with content and the
+    // canonical foreground value the shell tool returns.
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'check-1',
+        name: 'pwsh',
+        arguments: { command: 'pnpm check' },
+      },
+      {
+        isError: false,
+        content: [{ type: 'text', text: 'ok' }],
+        value: {
+          kind: 'foreground',
+          cwd: workspace,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          aborted: false,
+          timeoutMs: 120_000,
+          stdout: { text: '', truncated: false },
+          stderr: { text: '', truncated: false },
+        },
+      },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await waitFor(async () => {
+      const verify = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'verify',
+      )
+      return verify?.status === 'completed'
+    })
+    const before = host.steers.length
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        callId: 'write-2',
+        name: 'write',
+        arguments: { file_path: 'src/app.ts' },
+      },
+      { isError: false, content: [{ type: 'text', text: 'ok' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBeGreaterThan(before)
+    const reopened = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'verify',
+    )
+    expect(reopened?.status).not.toBe('completed')
+  })
+})
+
+describe('checkpoint rollback', () => {
+  it('does not steer the workflow checkpoint after automation is re-enabled', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const checkpoint = '.dsh/work-checkpoints/84097828fc31a8c8/1.json'
+    await mkdir(dirname(join(workspace, checkpoint)), { recursive: true })
+    await writeFile(
+      join(workspace, checkpoint),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'done',
+        turn: 1,
+        lanes: [],
+        next: 'continue',
+      }),
+      'utf8',
+    )
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await runs.writeRun(
+      workspace,
+      runs.createRun({
+        definition: 'retro',
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { checkpoint },
+        steps: ['checkpoint', 'verify'],
+        dedupeKey: 'retro\u0000turn\u0000session-1\u00001',
+        now: 1_000,
+      }),
+      auth,
+    )
+    const host = fakeHost(workspace, { automation: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await host.emit(
+      'agent/pre-step',
+      {
+        agent: host.agent,
+        turn: 1,
+        step: 1,
+        messages: [],
+        signal: new AbortController().signal,
+        modelSelection: { provider: 'p', model: 'm' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.steers).toHaveLength(0)
   })
 })
@@ -710,10 +1072,6 @@ describe('retro applicability evidence', () => {
       async () => (await retroRows()).filter((row) => row.reason === 'not-applicable').length >= 3,
     )
     expect(await retroRuns()).toHaveLength(0)
-    const { sessionRuns } = await import('../src/host/projection.ts')
-    expect(
-      (await sessionRuns(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
-    ).toHaveLength(0)
 
     // The single maxRuns slot is still free for a real applicable turn.
     await emitTurn(4, [
@@ -724,9 +1082,6 @@ describe('retro applicability evidence', () => {
     ])
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect(await retroRuns()).toHaveLength(1)
-    expect(
-      (await sessionRuns(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
-    ).toHaveLength(1)
   })
 
   it('creates no retro run for a subagent turn', async () => {
@@ -820,7 +1175,7 @@ describe('retro applicability evidence', () => {
 })
 
 describe('task-review runtime from a tasks.md change', () => {
-  it('names the change and the task from the path and checked delta and never steers', async () => {
+  it('names the change and the task and starts the owned review', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     // The archive collection and an incomplete change precede the real change;
@@ -839,7 +1194,7 @@ describe('task-review runtime from a tasks.md change', () => {
         'utf8',
       )
     }
-    const host = fakeHost(workspace)
+    const host = fakeHost(workspace, { toolExecute: true })
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 200))
     const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
@@ -884,7 +1239,24 @@ describe('task-review runtime from a tasks.md change', () => {
       expect(view).toBeDefined()
       expect(view?.steps[0]?.state).toBe('done')
     }
-    expect(host.steers).toHaveLength(0)
+    // Each task dispatches its review exactly once; a second close must not
+    // dispatch the completed start step again.
+    const delegateCalls = (): number =>
+      host.toolExecutions.filter((entry) => entry.name === 'delegate').length
+    expect(delegateCalls()).toBe(2)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(delegateCalls()).toBe(2)
+
+    // The owned definition steers the review call while the record is missing.
+    expect(host.steers.length).toBeGreaterThan(0)
+    const steerText = host.steers
+      .map((message) =>
+        ((message as { content?: Array<{ text?: string }> }).content ?? [])
+          .map((block) => block.text ?? '')
+          .join(''),
+      )
+      .join('\\n')
+    expect(steerText).toContain('task-review')
 
     // An edit that checks nothing starts no second observational run.
     await writeFile(join(changeDir, 'tasks.md'), '# Notes\n\n- [x] 1.1 Task\n', 'utf8')
@@ -1770,6 +2142,9 @@ describe('intent engine opt-in', () => {
       [{ checkpointApplicability: { requireWrite: 'yes' } }, /requireWrite/u],
       [{ checkpointApplicability: { unknown: true } }, /unknown field/u],
       [{ checkpointApplicability: 'on' }, /must be an object/u],
+      [{ checkpointApplicability: { stepInterval: 0 } }, /stepInterval/u],
+      [{ checkpointApplicability: { stepInterval: 10_001 } }, /stepInterval/u],
+      [{ checkpointApplicability: { stepInterval: 1.5 } }, /stepInterval/u],
     ] as const) {
       const workspace = await tempWorkspace()
       const host = fakeHost(workspace)

@@ -719,3 +719,24 @@ export function portableRecordFromLocal(input) {
     }
     return { record: checked.record };
 }
+/**
+ * The real legacy gate match, extracted unchanged: a queue fault or a
+ * discarded-input ERROR is not a usable review.
+ */
+export function legacyRecordSatisfies(record, change, scope, digest, taskId) {
+    if (record.change !== change || record.scope !== scope)
+        return false;
+    if (record.verdict !== 'PASS' && record.verdict !== 'ERROR')
+        return false;
+    if (record.verdict === 'ERROR' && record.error?.startsWith('queue-internal-error') === true) {
+        return false;
+    }
+    if (record.verdict === 'ERROR' &&
+        (record.failureClass === 'reviewed-inputs-changed' ||
+            record.error?.includes('reviewed inputs changed') === true)) {
+        return false;
+    }
+    if (scope === 'task' && record.taskId !== taskId)
+        return false;
+    return digest === undefined || record.digest === digest;
+}

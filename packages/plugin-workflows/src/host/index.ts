@@ -30,7 +30,10 @@ import {
 } from './editor-api.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
+  ignoredWrite,
+  lastCodeWriteAt,
   type ShellResultObservation,
+  sameCheckDirectory,
   type ToolCallObservation,
   verifyEvidence,
 } from './evidence.js'
@@ -60,14 +63,27 @@ import {
   toolResultText,
   workflowsDirectory,
 } from './journal.js'
+import {
+  type CheckpointObservation,
+  checkpointGateIssue,
+  parityLoadIssues,
+  readParityReport,
+  resolveVerifySettings,
+  shippedParityReportPath,
+  taskReviewCompletion,
+  taskReviewCoverage,
+  withVerifySettings,
+} from './parity.js'
 import { registerActiveRunsContext } from './prompt.js'
 import { listReceipts } from './receipts.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
+  addViolation,
   completeNotApplicable,
   createRun,
   DEFAULT_MAX_RUNS,
   hasTamperedRuns,
+  incrementTurnBlocks,
   listAuthenticatedRuns,
   openRunCount,
   pruneRuns,
@@ -360,16 +376,28 @@ export interface CheckpointApplicabilityConfig {
   readonly minToolCalls?: number
   /** Require a write or a started worker; default true. */
   readonly requireWrite?: boolean
+  /** Consecutive checkpoints a bottleneck may persist before a route change; default 2. */
+  readonly bottleneckAge?: number
+  /** Steps after the latest checkpoint before it is stale; default 40. */
+  readonly stepInterval?: number
+  /** Require a tagged worker start for computed parallel lanes; default true. */
+  readonly enforceParallel?: boolean
 }
 
 export interface ResolvedCheckpointApplicability {
   readonly minToolCalls: number
   readonly requireWrite: boolean
+  readonly bottleneckAge: number
+  readonly stepInterval: number
+  readonly enforceParallel: boolean
 }
 
 export const DEFAULT_CHECKPOINT_APPLICABILITY: ResolvedCheckpointApplicability = Object.freeze({
   minToolCalls: 4,
   requireWrite: true,
+  bottleneckAge: 2,
+  stepInterval: 40,
+  enforceParallel: true,
 })
 
 /** Validate the row's checkpoint applicability fail-loud, naming the field. */
@@ -380,7 +408,13 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
   }
   const record = raw as Record<string, unknown>
   for (const key of Object.keys(record)) {
-    if (key !== 'minToolCalls' && key !== 'requireWrite') {
+    if (
+      key !== 'minToolCalls' &&
+      key !== 'requireWrite' &&
+      key !== 'bottleneckAge' &&
+      key !== 'stepInterval' &&
+      key !== 'enforceParallel'
+    ) {
       throw new Error(`workflows checkpointApplicability has an unknown field "${key}"`)
     }
   }
@@ -400,11 +434,45 @@ function resolveCheckpointApplicability(raw: unknown): ResolvedCheckpointApplica
   if (requireWrite !== undefined && typeof requireWrite !== 'boolean') {
     throw new Error('workflows checkpointApplicability.requireWrite must be a boolean')
   }
+  const bottleneckAge = record.bottleneckAge
+  if (
+    bottleneckAge !== undefined &&
+    (typeof bottleneckAge !== 'number' ||
+      !Number.isSafeInteger(bottleneckAge) ||
+      bottleneckAge < 1 ||
+      bottleneckAge > 1000)
+  ) {
+    throw new Error(
+      'workflows checkpointApplicability.bottleneckAge must be an integer between 1 and 1000',
+    )
+  }
+  const stepInterval = record.stepInterval
+  if (
+    stepInterval !== undefined &&
+    (typeof stepInterval !== 'number' ||
+      !Number.isSafeInteger(stepInterval) ||
+      stepInterval < 1 ||
+      stepInterval > 10_000)
+  ) {
+    throw new Error(
+      'workflows checkpointApplicability.stepInterval must be an integer between 1 and 10000',
+    )
+  }
+  const enforceParallel = record.enforceParallel
+  if (enforceParallel !== undefined && typeof enforceParallel !== 'boolean') {
+    throw new Error('workflows checkpointApplicability.enforceParallel must be a boolean')
+  }
   return {
     minToolCalls:
       (minToolCalls as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.minToolCalls,
     requireWrite:
       (requireWrite as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.requireWrite,
+    bottleneckAge:
+      (bottleneckAge as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.bottleneckAge,
+    stepInterval:
+      (stepInterval as number | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.stepInterval,
+    enforceParallel:
+      (enforceParallel as boolean | undefined) ?? DEFAULT_CHECKPOINT_APPLICABILITY.enforceParallel,
   }
 }
 
@@ -420,6 +488,8 @@ export interface WorkflowsConfig {
   readonly maxRuns?: number
   /** The retro applicability settings; must mirror the goal-continuity row. */
   readonly checkpointApplicability?: CheckpointApplicabilityConfig
+  /** The validate-only profile settings for the `verify` definition. */
+  readonly verify?: { readonly commands?: readonly string[]; readonly maxBlocks?: number }
 }
 
 export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
@@ -432,6 +502,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const engineAllowIntent = config.allowIntent === true
   const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS
   const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability)
+  const verifySettings = resolveVerifySettings(config.verify)
   // A malformed shipped trigger refuses the plugin load, naming the field.
   const triggers = loadCatalog()
   // A malformed or duplicate shipped definition refuses the plugin load too.
@@ -548,6 +619,45 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     return installed
   }
+  /**
+   * The legacy per-signal state: installed providers plus the signals whose
+   * gate-only switch is on. The legacy plugins publish their switch through a
+   * small status service; a missing service means the signal does not steer.
+   */
+  const legacySignalState = (): { installed: Set<string>; enabled: Set<string> } => {
+    const installed = installedLegacySources()
+    const enabled = new Set<string>()
+    try {
+      if (installed.has('delegation-rules')) {
+        // The spec-review, progress, and lane gates stay on under either switch
+        // value; only the task-review rule and the archive gate follow it. The
+        // spec-review signal exists only while a steering rule is configured.
+        const status = ctx.get('delegationRulesStatus') as
+          | { workflowOwned?: unknown; specReview?: unknown }
+          | undefined
+        for (const signal of ['task-progress', 'lane-assignment', 'lane-boundary']) {
+          enabled.add(`delegation-rules/${signal}`)
+        }
+        if (status?.specReview !== false) enabled.add('delegation-rules/spec-review')
+        if (status?.workflowOwned !== false) {
+          enabled.add('delegation-rules/task-review')
+          enabled.add('delegation-rules/archive')
+        }
+      }
+      const checkpoint = ctx.get('goalContinuityStatus') as { automation?: unknown } | undefined
+      if (checkpoint?.automation === true) {
+        enabled.add('goal-continuity/work_checkpoint')
+      }
+      const verification = ctx.get('verificationGateStatus') as { steering?: unknown } | undefined
+      if (verification !== undefined) {
+        installed.add('verification-gate')
+        if (verification.steering === true) enabled.add('verification-gate/verification-gate')
+      }
+    } catch {
+      // An unreadable status service proves nothing; the signal stays disabled.
+    }
+    return { installed, enabled }
+  }
   /** Load the shipped set plus the approved local overrides for one workspace. */
   const definitionLoads = new Map<string, Promise<void>>()
   const loadDefinitions = (workspace: string): Promise<void> => {
@@ -557,20 +667,35 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     const promise = (async () => {
       try {
         if (await hasLocalDefinitionFiles(workspace)) await ensureAuth()
+        const legacy = legacySignalState()
         const loaded = await loadApprovedDefinitions(workspace, {
           ...(storedAuth === undefined ? {} : { auth: storedAuth }),
-          installedLegacy: installedLegacySources(),
+          installedLegacy: legacy.installed,
+          enabledLegacy: legacy.enabled,
         })
+        // The release-bound parity report gates every `own` definition; the
+        // verified profile settings are applied only after its template check.
+        const parity = readParityReport()
+        const parityCheck = parityLoadIssues(
+          loaded.definitions,
+          parity.report,
+          shippedParityReportPath(),
+          parity.error,
+        )
+        const loadErrors = [...loaded.errors, ...parityCheck.issues]
+        const accepted = loaded.definitions
+          .filter((definition) => !parityCheck.refused.has(definition.id))
+          .map((definition) => withVerifySettings(definition, verifySettings))
         if (pluginDisposed) return
-        definitionsByWorkspace.set(workspace, loaded.definitions)
+        definitionsByWorkspace.set(workspace, accepted)
         // A run is authoritative only when signed, so an active definition
         // needs the host key ready before its first event.
-        if (loaded.definitions.some((definition) => definition.trigger.mode === 'active')) {
+        if (accepted.some((definition) => definition.trigger.mode === 'active')) {
           void ensureAuth()
         }
         // Definition-load refusals are diagnostics, not listener failures: they
         // must not overwrite the health strip's single last-error slot.
-        for (const message of loaded.errors) {
+        for (const message of loadErrors) {
           console.error(`workflows: ${message.slice(0, 300)}`)
         }
       } catch (error) {
@@ -751,11 +876,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     lastTool?: string
     written: number
     workers: number
+    /** Latest successful code write, independent of observation eviction. */
+    lastWriteAt?: number
+    lastWritePath?: string
+    /** Latest successful configured verification check. */
+    lastCheckAt?: number
   }
   const turnMetrics = new Map<string, TurnMetrics>()
   /** Bounded per-session observations the evidence verifier may consume. */
   const sessionToolCalls = new Map<string, ToolCallObservation[]>()
+  /** A monotonic observation counter; eviction must not reuse sequence numbers. */
+  const observationSeq = new Map<string, number>()
+  const nextObservationSeq = (session: string): number => {
+    const next = observationSeq.get(session) ?? 0
+    observationSeq.set(session, next + 1)
+    return next
+  }
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
+  /** The current pre-step index per session, for checkpoint freshness. */
+  const turnSteps = new Map<string, number>()
   /** The checked task ids last seen per session and change, for the delta. */
   const checkedTasksSeen = new Map<string, ReadonlySet<string>>()
   /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -934,6 +1073,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               return outcome
             },
             resolveApplicability: (definition) => {
+              if (definition.trigger.applicability === 'code-write') {
+                // The verify definition observes only a turn that wrote code.
+                if (rootSessions.get(input.session) !== true) return false
+                const calls = (sessionToolCalls.get(input.session) ?? []).filter(
+                  (call) => call.turn === undefined || call.turn === input.turn,
+                )
+                return (
+                  lastCodeWriteAt(calls, workspace) !== undefined ||
+                  (metrics?.turn === input.turn && metrics?.lastWriteAt !== undefined)
+                )
+              }
               if (definition.trigger.applicability !== 'checkpoint-required') return undefined
               // The legacy checkpoint gate excludes subagent sessions.
               if (rootSessions.get(input.session) !== true) return false
@@ -1085,6 +1235,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (workspace !== undefined) {
           const activeWorkspace = workspace
           turns.set(String(session.id), payload.turn)
+          turnSteps.set(String(session.id), payload.step)
           metricsFor(String(session.id), payload.turn)
           const origin = session.header.origin === 'subagent' ? 'subagent' : 'root'
           const summary = `step ${String(payload.step)}`
@@ -1269,6 +1420,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             typeof args.file_path === 'string'
           ) {
             metrics.written += 1
+            if (!ignoredWrite(args.file_path)) {
+              metrics.lastWriteAt = journal.time()
+              metrics.lastWritePath = args.file_path
+            }
           }
           if (
             WORKER_TOOL_NAMES.has(exec.name) &&
@@ -1288,10 +1443,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           name: exec.name,
           arguments: args,
           ok: isShellTool ? shellOutcome.ok : !result.isError,
+          at: journal.time(),
+          detail: text.slice(0, 500),
+          seq: nextObservationSeq(sessionId),
+          ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+          ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
         const command = isShellTool ? shellCommandOf(exec) : undefined
+        if (
+          command !== undefined &&
+          shellOutcome.ok &&
+          shellOutcome.background !== true &&
+          (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
+          verifySettings.commands.some(
+            (configured) =>
+              configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''),
+          )
+        ) {
+          metrics.lastCheckAt = journal.time()
+        }
         // A background or unreadable shell result cannot satisfy a check.
         if (command !== undefined && shellOutcome.background !== true) {
           const results = sessionShellResults.get(sessionId) ?? []
@@ -1656,8 +1828,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           agent,
         })
         const first = batch.results[0]
-        const outcome = shellOutcomeOf(first?.result)
-        if (first === undefined || outcome.background === true || !outcome.ok) {
+        if (first === undefined) {
+          return { ok: false, error: `the ${request.name} tool call failed` }
+        }
+        const isShellTool =
+          request.name === 'pwsh' || request.name === 'bash' || request.name === 'terminal_send'
+        const shell = isShellTool ? shellOutcomeOf(first.result) : undefined
+        if (shell !== undefined && (shell.background === true || !shell.ok)) {
+          return { ok: false, error: `the ${request.name} tool call failed` }
+        }
+        if (
+          shell === undefined &&
+          (first.result as { isError?: unknown } | undefined)?.isError === true
+        ) {
           return { ok: false, error: `the ${request.name} tool call failed` }
         }
         // The host already observed its own dispatch; record it for evidence
@@ -1669,6 +1852,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           name: request.name,
           arguments: { ...request.arguments },
           ok: true,
+          at: journal.time(),
+          detail: JSON.stringify(first.result).slice(0, 500),
+          seq: nextObservationSeq(sessionId),
+          ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
+          ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
         if (observed.length > 100) observed.shift()
         sessionToolCalls.set(sessionId, observed)
@@ -1680,11 +1868,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             command,
             at: journal.time(),
             foreground: true,
-            exitCode: outcome.exitCode,
-            ...(outcome.timedOut === true ? { timedOut: true } : {}),
-            ...(outcome.signal === undefined ? {} : { signal: outcome.signal }),
-            ...(outcome.sandboxDenied === true ? { sandboxDenied: true } : {}),
-            ...(outcome.cwd === undefined ? {} : { cwd: outcome.cwd }),
+            exitCode: shell?.exitCode ?? 0,
+            ...(shell?.timedOut === true ? { timedOut: true } : {}),
+            ...(shell?.signal === undefined ? {} : { signal: shell.signal }),
+            ...(shell?.sandboxDenied === true ? { sandboxDenied: true } : {}),
+            ...(shell?.cwd === undefined ? {} : { cwd: shell.cwd }),
           })
           if (results.length > 50) results.shift()
           sessionShellResults.set(sessionId, results)
@@ -1701,8 +1889,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     agent: Agent,
     auth: HostAuth,
     installedLegacy: ReadonlySet<string>,
+    enabledLegacy: ReadonlySet<string>,
     turn: number,
   ): Promise<WorkflowRun> => {
+    const writeMetrics = turnMetrics.get(String(agent.session.id))
     // Only a fully applicable deferred observation advances; a run whose
     // trigger is no longer applicable becomes terminal and pruneable.
     if (definition.trigger.applicability === 'checkpoint-required') {
@@ -1717,6 +1907,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         requireWrite: checkpointApplicability.requireWrite,
       })
       if (!applicable) {
+        const completed = completeNotApplicable(run, journal.time())
+        await writeRun(workspace, completed, auth)
+        return completed
+      }
+    }
+    if (definition.trigger.applicability === 'code-write') {
+      // The verify definition observes only a turn that wrote code; a
+      // documentation-only or inspection turn completes the run as inapplicable.
+      const calls = (sessionToolCalls.get(String(agent.session.id)) ?? []).filter(
+        (call) => call.turn === undefined || call.turn === turn,
+      )
+      const writeAt =
+        lastCodeWriteAt(calls, workspace) ??
+        (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined)
+      if (writeAt === undefined) {
         const completed = completeNotApplicable(run, journal.time())
         await writeRun(workspace, completed, auth)
         return completed
@@ -1741,6 +1946,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         values: run.context,
         toolCalls,
         shellResults,
+        checkCommands: verifySettings.commands,
+        ...(lastCodeWriteAt(toolCalls, workspace) === undefined &&
+        writeMetrics?.lastWriteAt === undefined
+          ? {}
+          : { lastWriteAt: lastCodeWriteAt(toolCalls, workspace) ?? writeMetrics?.lastWriteAt }),
+        ...(writeMetrics?.lastWritePath === undefined
+          ? {}
+          : { lastWritePath: writeMetrics.lastWritePath }),
+        ...(writeMetrics?.lastCheckAt === undefined
+          ? {}
+          : { lastCheckAt: writeMetrics.lastCheckAt }),
         ...(pending?.requestedAt === undefined ? {} : { stepStartedAt: pending.requestedAt }),
       },
       owned: ownedCalls,
@@ -1753,6 +1969,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           values: run.context,
         }),
       installedLegacy,
+      enabledLegacy,
       auth,
       now: journal.time(),
     })
@@ -2219,12 +2436,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               },
               { workspace, values: { name: archive.change } },
             )
+            const taskReviewOwned = definitions.some(
+              (definition) =>
+                definition.id === 'task-review' && definition.settings.gateOwnership === 'own',
+            )
+            const coverage = taskReviewOwned
+              ? taskReviewCoverage(workspace, archive.change)
+              : undefined
             const decision = evaluateArchiveGate({
               change: archive.change,
               tamperedRuns: auth === undefined ? false : await hasTamperedRuns(workspace, auth),
               runs: auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth),
               receipts: auth === undefined ? [] : await listReceipts(workspace, auth),
               specRecord,
+              ...(coverage === undefined
+                ? {}
+                : {
+                    taskReview: {
+                      ok: coverage.ok,
+                      ...(coverage.gaps.length === 0 ? {} : { text: coverage.gaps.join('; ') }),
+                    },
+                  }),
             })
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
           }
@@ -2263,6 +2495,62 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const definitions = await definitionsFor(workspace)
         const runs = await listAuthenticatedRuns(workspace, auth)
         const sessionId = String(payload.agent.session.id)
+        // A later code write invalidates a completed verification for the same
+        // turn; reopen the run so a fresh check is required before the close.
+        const verifyWriteAt =
+          turnMetrics.get(sessionId)?.turn === payload.turn
+            ? turnMetrics.get(sessionId)?.lastWriteAt
+            : undefined
+        if (verifyWriteAt !== undefined) {
+          const normalizeCommand = (value: string): string => value.trim().replace(/^rtk\s+/u, '')
+          const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand))
+          const bufferCheckAt = (sessionShellResults.get(sessionId) ?? [])
+            .filter(
+              (result) =>
+                result.foreground &&
+                result.ok !== false &&
+                result.exitCode === 0 &&
+                result.signal === undefined &&
+                result.timedOut !== true &&
+                result.sandboxDenied !== true &&
+                configuredCommands.has(normalizeCommand(result.command)) &&
+                (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)),
+            )
+            .map((result) => result.at)
+            .sort((left, right) => right - left)[0]
+          const metricsCheckAt = turnMetrics.get(sessionId)?.lastCheckAt
+          const checkTimes = [bufferCheckAt, metricsCheckAt].filter(
+            (entry): entry is number => entry !== undefined,
+          )
+          const lastCheckAt = checkTimes.length === 0 ? undefined : Math.max(...checkTimes)
+          const completedVerify = runs.find(
+            (run) =>
+              run.definition === 'verify' &&
+              run.session === sessionId &&
+              run.status === 'completed' &&
+              Number(run.dedupeKey?.split('\u0000').at(-1)) === payload.turn,
+          )
+          if (
+            completedVerify !== undefined &&
+            (lastCheckAt === undefined || verifyWriteAt > lastCheckAt)
+          ) {
+            const reopened: WorkflowRun = {
+              ...completedVerify,
+              status: 'running',
+              updatedAt: journal.time(),
+              turnBlocks: 0,
+              steps: completedVerify.steps.map((step) => ({
+                ...(Object.fromEntries(
+                  Object.entries(step).filter(([key]) => key !== 'evidence' && key !== 'reason'),
+                ) as typeof step),
+                state: 'open' as const,
+                attempts: 0,
+              })),
+            }
+            await writeRun(workspace, reopened, auth)
+            runs.splice(runs.indexOf(completedVerify), 1, reopened)
+          }
+        }
         const eligible = runs.filter(
           (run) =>
             run.session === sessionId && (run.status === 'running' || run.status === 'blocked'),
@@ -2272,19 +2560,123 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (ownerId !== undefined && owner === undefined) mainStepOwners.delete(sessionId)
         const ordered =
           owner === undefined ? eligible : [owner, ...eligible.filter((run) => run.id !== owner.id)]
-        const installedLegacy = installedLegacySources()
+        const legacy = legacySignalState()
+        const workflowOwnsCheckpoint = !legacy.enabled.has('goal-continuity/work_checkpoint')
+        const checkpointObservations = (session: string): CheckpointObservation[] =>
+          (sessionToolCalls.get(session) ?? []).map((call) => ({
+            toolName: call.name,
+            arguments: call.arguments,
+            ok: call.ok,
+            ...(call.at === undefined ? {} : { at: call.at }),
+            ...(call.detail === undefined ? {} : { detail: call.detail }),
+            ...(call.seq === undefined ? {} : { seq: call.seq }),
+          }))
+        const checkpointFreshness = (
+          session: string,
+          turn: number,
+        ): { fresh: boolean; checkpointAt?: number } => {
+          const calls = (sessionToolCalls.get(session) ?? []).filter(
+            (call) => call.name === 'work_checkpoint' && call.ok && call.turn === turn,
+          )
+          const last = calls.at(-1)
+          const steps = turnSteps.get(session) ?? 0
+          return {
+            fresh:
+              last !== undefined && steps - (last.step ?? 0) < checkpointApplicability.stepInterval,
+            ...(last?.at === undefined ? {} : { checkpointAt: last.at }),
+          }
+        }
+        const workerToolVisible = (agent: unknown): boolean => {
+          try {
+            const tools = ctx.get('tools') as
+              | { get?: (name: string, caller?: unknown) => unknown }
+              | undefined
+            return ['subagent', 'subagent_fork', 'spawn_teammate', 'workflow', 'delegate'].some(
+              (name) => tools?.get?.(name, agent) !== undefined,
+            )
+          } catch {
+            return true
+          }
+        }
+        const checkpointOptions = (turn: number) => ({
+          ...checkpointFreshness(sessionId, turn),
+          workerVisible: workerToolVisible(payload.agent),
+          enforceParallel: checkpointApplicability.enforceParallel,
+        })
+        const checkpointTurnOf = (path: string): number | undefined => {
+          const name = path.replaceAll('\\', '/').split('/').at(-1) ?? ''
+          const turn = Number(name.replace(/\.json$/u, ''))
+          return Number.isSafeInteger(turn) ? turn : undefined
+        }
+        let refusedThisClose = false
+        // Advance every run first: an owned tool step (the review start) must
+        // dispatch for every newly checked task before one close is refused.
+        const advanced = new Map<string, WorkflowRun>()
+        const definitionOf = new Map<string, Definition>()
         for (const run of ordered) {
           const definition = definitions.find((entry) => entry.id === run.definition.id)
           if (definition === undefined) continue
+          // A retro run must not complete on the record alone: while the host
+          // checkpoint remedy/age rule fails, keep the run open and steer.
+          if (
+            workflowOwnsCheckpoint &&
+            definition.id === 'retro' &&
+            typeof run.context.checkpoint === 'string' &&
+            checkpointTurnOf(run.context.checkpoint) === payload.turn
+          ) {
+            const DEBUG_ISSUE = checkpointGateIssue(
+              workspace,
+              run.context.checkpoint,
+              checkpointObservations(sessionId),
+              checkpointApplicability.bottleneckAge,
+              checkpointOptions(payload.turn),
+            )
+            if (DEBUG_ISSUE !== undefined) {
+              advanced.set(run.id, run)
+              definitionOf.set(run.id, definition)
+              continue
+            }
+          }
           const current = await advanceRun(
             workspace,
             run,
             definition,
             payload.agent,
             auth,
-            installedLegacy,
+            legacy.installed,
+            legacy.enabled,
             payload.turn,
           )
+          advanced.set(run.id, current)
+          definitionOf.set(run.id, definition)
+        }
+        for (const run of ordered) {
+          const current = advanced.get(run.id)
+          const definition = definitionOf.get(run.id)
+          if (current === undefined || definition === undefined) continue
+          const sessionCalls = sessionToolCalls.get(sessionId) ?? []
+          const observations = sessionCalls.map((call) => ({
+            toolName: call.name,
+            arguments: call.arguments,
+            ok: call.ok,
+            ...(call.at === undefined ? {} : { at: call.at }),
+            ...(call.detail === undefined ? {} : { detail: call.detail }),
+            ...(call.seq === undefined ? {} : { seq: call.seq }),
+          }))
+          const completion =
+            definition.id === 'task-review' && typeof current.context.name === 'string'
+              ? taskReviewCompletion(workspace, current.context.name)
+              : undefined
+          const checkpointIssue =
+            definition.id === 'retro' && typeof current.context.checkpoint === 'string'
+              ? checkpointGateIssue(
+                  workspace,
+                  current.context.checkpoint,
+                  observations,
+                  checkpointApplicability.bottleneckAge,
+                  checkpointOptions(payload.turn),
+                )
+              : undefined
           const outcome = evaluateTurnClose({
             run: current,
             definition,
@@ -2297,21 +2689,99 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   source: { kind: 'workflows-gate' },
                 } as never),
             },
-            evidenceContext: { workspace, values: current.context },
+            evidenceContext: {
+              workspace,
+              values: current.context,
+              ...(definition.id === 'verify'
+                ? {
+                    checkCommands: verifySettings.commands,
+                    ...(turnMetrics.get(sessionId)?.lastWriteAt === undefined
+                      ? {}
+                      : {
+                          lastWriteAt: turnMetrics.get(sessionId)?.lastWriteAt,
+                          ...(turnMetrics.get(sessionId)?.lastWritePath === undefined
+                            ? {}
+                            : { lastWritePath: turnMetrics.get(sessionId)?.lastWritePath }),
+                          ...(turnMetrics.get(sessionId)?.lastCheckAt === undefined
+                            ? {}
+                            : { lastCheckAt: turnMetrics.get(sessionId)?.lastCheckAt }),
+                        }),
+                  }
+                : {}),
+            },
             turn: payload.turn,
             maxBlocks: definition.settings.maxBlocks,
-            installedLegacy,
+            installedLegacy: legacy.installed,
+            enabledLegacy: legacy.enabled,
+            ...(completion === undefined ? {} : { completion }),
+            ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
             onError: (error) => publishListenerError(workspace, error),
           })
-          if (outcome.run !== run) await writeRun(workspace, outcome.run, auth)
+          if (outcome.run !== current) await writeRun(workspace, outcome.run, auth)
           // Keep the session's main-step owner until its step settles; a
           // second run may take over only after that.
           if (outcome.kind !== 'allow') {
+            refusedThisClose = true
             mainStepOwners.set(sessionId, run.id)
             break
           }
           if (owner !== undefined && run.id === owner.id) {
             mainStepOwners.delete(sessionId)
+          }
+        }
+        // A completed retro run must not hide a checkpoint that went stale
+        // later in the same turn: re-check the current-turn record on every
+        // close and steer when the obligation reappears.
+        if (!refusedThisClose && workflowOwnsCheckpoint) {
+          const currentRetro = runs.find(
+            (run) =>
+              run.definition === 'retro' &&
+              typeof run.context.checkpoint === 'string' &&
+              checkpointTurnOf(run.context.checkpoint) === payload.turn &&
+              run.session === sessionId &&
+              run.status !== 'cancelled',
+          )
+          if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
+            const issue = checkpointGateIssue(
+              workspace,
+              currentRetro.context.checkpoint,
+              checkpointObservations(sessionId),
+              checkpointApplicability.bottleneckAge,
+              checkpointOptions(payload.turn),
+            )
+            const blocks = currentRetro.turnBlocks ?? 0
+            const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3
+            const alreadyUnchecked = (currentRetro.violations ?? []).some(
+              (violation) => violation.detail?.includes('checkpoint freshness refused') === true,
+            )
+            if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
+              await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth)
+              payload.agent.steer({
+                id: randomUUID(),
+                role: 'user',
+                content: [{ type: 'text', text: issue.text }],
+                source: { kind: 'workflows-gate' },
+              } as never)
+              refusedThisClose = true
+            } else if (issue !== undefined && !alreadyUnchecked && blocks >= limit) {
+              const violated = addViolation(
+                currentRetro,
+                `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`,
+                { at: journal.time() },
+              )
+              await writeRun(workspace, violated, auth)
+              payload.agent.steer({
+                id: randomUUID(),
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: `Work checkpoint UNCHECKED: ${issue.text} This is not a pass.`,
+                  },
+                ],
+                source: { kind: 'workflows-gate' },
+              } as never)
+            }
           }
         }
         await refreshPromptRuns(workspace)
@@ -2337,9 +2807,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     evidenceContext: (run, step) => {
       const sessionId = String(agent.session.id)
       const state = run.steps.find((entry) => entry.id === step.id)
+      const calls = sessionToolCalls.get(sessionId) ?? []
+      const metrics = turnMetrics.get(sessionId)
+      const lastWrite = lastCodeWriteAt(calls, workspace) ?? metrics?.lastWriteAt
       return {
-        toolCalls: sessionToolCalls.get(sessionId) ?? [],
+        toolCalls: calls,
         shellResults: sessionShellResults.get(sessionId) ?? [],
+        checkCommands: verifySettings.commands,
+        ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
+        ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
+        ...(metrics?.lastCheckAt === undefined ? {} : { lastCheckAt: metrics.lastCheckAt }),
         ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
         ...(typeof state?.evidence?.answer === 'string'
           ? { answers: [{ answer: state.evidence.answer }] }
@@ -2495,9 +2972,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 const step = definition.steps.find((entry) => entry.id === pendingStep(run))
                 if (step === undefined) return
                 // A deferred step is never steered; only its legacy gate steers.
-                const resolved = resolveOwnership(definition, installedLegacySources()).steps.find(
-                  (entry) => entry.id === step.id,
-                )
+                const state = legacySignalState()
+                const resolved = resolveOwnership(
+                  definition,
+                  state.installed,
+                  state.enabled,
+                ).steps.find((entry) => entry.id === step.id)
                 if (resolved?.ownership !== 'own') return
                 // An explicit user run or resume gets a fresh bounded budget.
                 const budgeted: WorkflowRun = {
