@@ -73,8 +73,17 @@ export declare function definitionErrors(error: unknown): {
     path: string;
     message: string;
 }[];
+/** Local definitions plus the shipped set; a local file shadows its shipped id. */
+declare function listDefinitions(workspace: string): Promise<{
+    definitions: EditorDefinitionEntry[];
+    errors: string[];
+}>;
+/** The document plus the revision the next update must send back. */
+declare function readDefinitionDocument(workspace: string, id: string): Promise<DefinitionDocument | undefined>;
 /** Validate a layout sidecar; the engine ignores it, the editor must not crash on it. */
 export declare function validateLayout(raw: unknown, id: string): LayoutSidecar;
+/** The editor-facing names of the read helpers the literal read routes reuse. */
+export { listDefinitions as listEditorDefinitions, readDefinitionDocument as readEditorDefinitionDocument, };
 /** Build the editor write routes; the caller registers them on the carrier. */
 export declare function createEditorRoutes(services: EditorApiServices): FetchRoute[];
 /** Register the editor routes on the Host Fetch carrier; absent means no writes. */

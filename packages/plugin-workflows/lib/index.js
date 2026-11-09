@@ -8,7 +8,7 @@ import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
 import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
-import { registerEditorRoutes } from './editor-api.js';
+import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
 import { verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
@@ -2255,6 +2255,8 @@ export function apply(ctx, config = {}) {
         lastEventAtFor: (session) => sessionEventAt.get(session),
         triggers,
         definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
+        definitionEntriesFor: (workspace) => listEditorDefinitions(workspace),
+        definitionDocumentFor: (workspace, id) => readEditorDefinitionDocument(workspace, id),
         receiptsFor: async (workspace) => {
             const auth = storedAuth;
             return auth === undefined ? [] : listReceipts(workspace, auth);

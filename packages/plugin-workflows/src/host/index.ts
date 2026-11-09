@@ -23,7 +23,11 @@ import {
   resolveOwnership,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
-import { registerEditorRoutes } from './editor-api.js'
+import {
+  listEditorDefinitions,
+  readEditorDefinitionDocument,
+  registerEditorRoutes,
+} from './editor-api.js'
 import { evaluateEvent, type ObservedEvent } from './evaluate.js'
 import {
   type ShellResultObservation,
@@ -2599,6 +2603,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     lastEventAtFor: (session) => sessionEventAt.get(session),
     triggers,
     definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
+    definitionEntriesFor: (workspace) => listEditorDefinitions(workspace),
+    definitionDocumentFor: (workspace, id) => readEditorDefinitionDocument(workspace, id),
     receiptsFor: async (workspace) => {
       const auth = storedAuth
       return auth === undefined ? [] : listReceipts(workspace, auth)

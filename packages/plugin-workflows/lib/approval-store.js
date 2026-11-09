@@ -102,13 +102,27 @@ async function writeApprovals(workspace, approvals) {
     const store = { v: APPROVAL_VERSION, approvals: record };
     await writeAtomic(approvalsPath(workspace), `${JSON.stringify(store, null, 2)}\n`);
 }
+/** Workspace-scoped install transaction queue: approvals are one shared file. */
+const INSTALL_QUEUES = new Map();
+function serializeInstall(key, run) {
+    const previous = INSTALL_QUEUES.get(key) ?? Promise.resolve();
+    const next = previous.then(run, run);
+    INSTALL_QUEUES.set(key, next.catch(() => undefined));
+    return next;
+}
 /**
  * Validate a definition file, copy it atomically into the workspace definitions
  * directory, and record its content hash and host signature. The caller asks
  * the user first; this function is the host-only install path and the one the
- * editor save uses.
+ * editor save uses. Installs of one workspace are serialized because they share
+ * the approval file.
  */
-export async function installDefinition(workspace, sourcePath, auth, options = {}) {
+export function installDefinition(workspace, sourcePath, auth, options = {}) {
+    return serializeInstall(workspace, () => installOnce(workspace, sourcePath, auth, options));
+}
+async function installOnce(workspace, sourcePath, auth, options) {
+    const move = options.rename ?? rename;
+    const remove = options.unlink ?? unlink;
     const root = await realpath(workspace);
     const source = await realpath(isAbsolute(sourcePath) ? sourcePath : join(root, sourcePath)).catch(() => undefined);
     if (source === undefined) {
@@ -138,42 +152,65 @@ export async function installDefinition(workspace, sourcePath, auth, options = {
     if (!isInside(directory, target) || dirname(target) !== directory) {
         throw new Error(`definition "${definition.id}" resolves outside the definitions directory`);
     }
-    // The definition bytes and its approval are one install: on any later
-    // failure the previous file is restored, so neither half is left changed.
-    const previous = await readFile(target).catch(() => undefined);
-    await writeAtomic(target, bytes);
-    const rollback = async () => {
-        if (previous === undefined)
-            await unlink(target).catch(() => undefined);
-        else
-            await writeAtomic(target, previous).catch(() => undefined);
-    };
-    // A concurrent swap for a link must not be blessed: the written file itself
-    // has to resolve to the exact expected name inside the definitions directory.
-    const written = await realpath(target).catch(() => undefined);
-    if (written === undefined ||
-        dirname(written) !== directory ||
-        (await lstat(target)).isSymbolicLink()) {
-        await rollback();
-        throw new Error(`definition "${definition.id}" was replaced while installing; the approval was not recorded`);
-    }
-    // Sign the exact validated source bytes. Never re-read the writable
-    // destination: a write between the copy and the re-read must not be blessed.
-    const hash = sha256(bytes);
-    const record = {
-        hash,
-        signature: approvalSignature(auth, definition.id, hash),
-    };
-    const approvals = new Map(existing.approvals);
-    approvals.set(definition.id, record);
+    // Keep the previous definition under a backup name (a rename, not a rewrite)
+    // so a failed approval write can restore it even when the disk is full.
+    const backup = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.bak`;
+    let hadPrevious = false;
     try {
-        await (options.writeApprovals ?? writeApprovals)(workspace, approvals);
+        await move(target, backup);
+        hadPrevious = true;
     }
     catch (error) {
-        await rollback();
-        throw new Error(`the approval store could not be written (${errorMessage(error)}); the definition was not installed`);
+        if (error.code !== 'ENOENT')
+            throw error;
     }
-    return { definition, file: target, hash };
+    const restore = async () => {
+        if (!hadPrevious) {
+            await remove(target).catch(() => undefined);
+            return;
+        }
+        try {
+            await move(backup, target);
+        }
+        catch (error) {
+            throw new Error(`the previous definition could not be restored after a failed install (${errorMessage(error)}); its bytes are preserved at "${backup}"`);
+        }
+    };
+    try {
+        await writeAtomic(target, bytes);
+        // A concurrent swap for a link must not be blessed: the written file itself
+        // has to resolve to the exact expected name inside the definitions directory.
+        const written = await realpath(target).catch(() => undefined);
+        if (written === undefined ||
+            dirname(written) !== directory ||
+            (await lstat(target)).isSymbolicLink()) {
+            throw new Error(`definition "${definition.id}" was replaced while installing; the approval was not recorded`);
+        }
+        // Sign the exact validated source bytes. Never re-read the writable
+        // destination: a write between the copy and the re-read must not be blessed.
+        const hash = sha256(bytes);
+        const record = {
+            hash,
+            signature: approvalSignature(auth, definition.id, hash),
+        };
+        const approvals = new Map(existing.approvals);
+        approvals.set(definition.id, record);
+        try {
+            await (options.writeApprovals ?? writeApprovals)(workspace, approvals);
+        }
+        catch (error) {
+            throw new Error(`the approval store could not be written (${errorMessage(error)}); the definition was not installed`);
+        }
+        if (hadPrevious)
+            await remove(backup).catch(() => undefined);
+        return { definition, file: target, hash };
+    }
+    catch (error) {
+        if (hadPrevious || (await lstat(target).catch(() => undefined)) !== undefined) {
+            await restore();
+        }
+        throw error;
+    }
 }
 /**
  * Refuse any linked ancestor between the canonical workspace root and the

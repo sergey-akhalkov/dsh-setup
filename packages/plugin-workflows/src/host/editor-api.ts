@@ -35,6 +35,28 @@ export const EDITOR_LAYOUT_ROUTE = '/api/workflows/editor/layout'
 export const LAYOUT_VERSION = 1
 export const LAYOUT_DIRECTORY = ['.dsh', 'workflows', 'layout'] as const
 const STAGING_DIRECTORY = ['.dsh', 'workflows'] as const
+const DEFINITION_DIRECTORY = ['.dsh', 'workflows', 'definitions'] as const
+
+/**
+ * Whether any ancestor of the definitions directory (or the directory itself)
+ * is a link. The install path refuses links, and read/delete must match it so a
+ * junction — even one pointing at another directory inside the workspace —
+ * cannot make the editor read or delete a non-local definition.
+ */
+async function hasLinkedAncestor(workspace: string): Promise<boolean> {
+  const root = await realpath(workspace)
+  let current = root
+  for (const segment of DEFINITION_DIRECTORY) {
+    const candidate = join(current, segment)
+    const info = await lstat(candidate).catch(() => undefined)
+    if (info === undefined) return false
+    if (info.isSymbolicLink()) return true
+    const real = await realpath(candidate).catch(() => undefined)
+    if (real === undefined || !isInside(root, real)) return true
+    current = real
+  }
+  return false
+}
 
 export interface LayoutPosition {
   readonly x: number
@@ -167,7 +189,11 @@ async function ensureDirectory(workspace: string, segments: readonly string[]): 
     const candidate = join(current, segment)
     const info = await lstat(candidate).catch(() => undefined)
     if (info === undefined) {
-      await mkdir(candidate)
+      // Two concurrent creates may both see the missing directory; the loser
+      // of the mkdir race still lands on the same directory.
+      await mkdir(candidate).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error
+      })
     } else if (info.isSymbolicLink()) {
       throw new Error(`the workflow directory "${segments.join('/')}" uses a link and is refused`)
     }
@@ -194,6 +220,9 @@ async function readLocal(
   workspace: string,
   id: string,
 ): Promise<{ definition: Definition; revision: string; bytes: Buffer } | undefined> {
+  if (await hasLinkedAncestor(workspace)) {
+    throw new Error('a workflow directory is a link and is refused')
+  }
   const directory = workspaceDefinitionsDirectory(workspace)
   const target = join(directory, `${id}.json`)
   const info = await lstat(target).catch(() => undefined)
@@ -223,6 +252,19 @@ async function listDefinitions(
   const errors: string[] = []
   const shipped = loadShippedDefinitions()
   const local = new Map<string, EditorDefinitionEntry>()
+  if (await hasLinkedAncestor(workspace)) {
+    return {
+      definitions: shipped.map((definition) => ({
+        id: definition.id,
+        name: definition.name,
+        version: definition.version,
+        stepCount: definition.steps.length,
+        source: 'shipped',
+        revision: null,
+      })),
+      errors: ['a workflow directory is a link; local definitions are refused'],
+    }
+  }
   let names: string[] = []
   try {
     names = (await readdir(workspaceDefinitionsDirectory(workspace)))
@@ -473,6 +515,9 @@ async function deleteDefinition(
   const target = join(directory, `${id}.json`)
   if (dirname(target) !== directory) return json(400, { error: 'the definition id is unsafe' })
   return serialize(`definition:${target}`, async () => {
+    if (await hasLinkedAncestor(workspace)) {
+      return json(400, { error: 'a workflow directory is a link and is refused' })
+    }
     // Resolve the file before reading or deleting it: a linked definitions
     // directory must not let a delete reach a file outside the workspace.
     let resolved: string
@@ -625,6 +670,12 @@ async function containedLayoutRevision(workspace: string, id: string): Promise<s
   }
 }
 
+/** The editor-facing names of the read helpers the literal read routes reuse. */
+export {
+  listDefinitions as listEditorDefinitions,
+  readDefinitionDocument as readEditorDefinitionDocument,
+}
+
 /** Build the editor write routes; the caller registers them on the carrier. */
 export function createEditorRoutes(services: EditorApiServices): FetchRoute[] {
   return [
@@ -736,9 +787,13 @@ export function createEditorRoutes(services: EditorApiServices): FetchRoute[] {
         if (request.method === 'GET') {
           const id = idOf(request)
           if (id === null) return json(400, { error: 'a definition id is required' })
-          const document = await readDefinitionDocument(resolved.workspace, id)
-          if (document === undefined) return json(404, { error: 'the definition does not exist' })
-          return json(200, document)
+          try {
+            const document = await readDefinitionDocument(resolved.workspace, id)
+            if (document === undefined) return json(404, { error: 'the definition does not exist' })
+            return json(200, document)
+          } catch (error) {
+            return json(400, { errors: definitionErrors(error) })
+          }
         }
         if (request.method === 'DELETE') {
           const body = await bodyOf(request)

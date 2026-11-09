@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -372,4 +372,57 @@ it('restores the installed file when the approval write fails', async () => {
   await expect(
     readFile(join(workspaceDefinitionsDirectory(workspace), 'fresh-demo.json'), 'utf8'),
   ).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+describe('install transaction isolation', () => {
+  it('keeps both approvals when two definitions install concurrently', async () => {
+    const workspace = await tempWorkspace()
+    const first = join(workspace, 'concurrent-a.json')
+    const second = join(workspace, 'concurrent-b.json')
+    await writeFile(first, `${JSON.stringify(definitionFor('concurrent-a'), null, 2)}\n`)
+    await writeFile(second, `${JSON.stringify(definitionFor('concurrent-b'), null, 2)}\n`)
+    await Promise.all([
+      installDefinition(workspace, first, auth()),
+      installDefinition(workspace, second, auth()),
+    ])
+    const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
+    const ids = loaded.definitions.map((definition) => definition.id)
+    expect(ids).toContain('concurrent-a')
+    expect(ids).toContain('concurrent-b')
+  })
+
+  it('preserves the previous definition as a named backup when restore fails', async () => {
+    const workspace = await tempWorkspace()
+    const first = join(workspace, 'first.json')
+    await writeFile(
+      first,
+      `${JSON.stringify(definitionFor('restore-demo', 'Original'), null, 2)}\n`,
+    )
+    await installDefinition(workspace, first, auth())
+    const second = join(workspace, 'second.json')
+    await writeFile(
+      second,
+      `${JSON.stringify(definitionFor('restore-demo', 'Changed'), null, 2)}\n`,
+    )
+    let renames = 0
+    const failingRename = async (from: string, to: string): Promise<void> => {
+      renames += 1
+      if (renames === 2) {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      }
+      await rename(from, to)
+    }
+    await expect(
+      installDefinition(workspace, second, auth(), {
+        writeApprovals: async () => {
+          throw new Error('the approval store is full')
+        },
+        rename: failingRename as typeof rename,
+      }),
+    ).rejects.toThrow(/could not be restored/u)
+    const directory = workspaceDefinitionsDirectory(workspace)
+    const backups = (await readdir(directory)).filter((name) => name.endsWith('.bak'))
+    expect(backups).toHaveLength(1)
+    expect(await readFile(join(directory, backups[0] as string), 'utf8')).toContain('Original')
+  })
 })

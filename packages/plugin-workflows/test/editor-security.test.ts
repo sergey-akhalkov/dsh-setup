@@ -150,8 +150,45 @@ describe('editor trust boundary', () => {
     // check can refuse it. Without that check the old code returned 200 and
     // unlinked the file, so this assertion fails against the vulnerable path.
     expect(deleted.status).toBe(400)
-    expect(String(deleted.body.error)).toContain('escapes the workspace')
+    expect(String(deleted.body.error)).toContain('link')
     expect(await readFile(externalFile)).toEqual(externalBytes)
+  })
+
+  it('refuses a definitions junction that targets another workspace directory', async () => {
+    const workspace = await tempWorkspace()
+    const decoyDirectory = join(workspace, 'decoy-definitions')
+    await mkdir(decoyDirectory, { recursive: true })
+    const decoyFile = join(decoyDirectory, 'linked.json')
+    const decoyBytes = Buffer.from(
+      `${JSON.stringify({ ...DEFINITION, id: 'linked' }, null, 2)}\n`,
+      'utf8',
+    )
+    await writeFile(decoyFile, decoyBytes)
+    const definitions = join(workspace, '.dsh', 'workflows', 'definitions')
+    await mkdir(join(workspace, '.dsh', 'workflows'), { recursive: true })
+    try {
+      await symlink(decoyDirectory, definitions, 'junction')
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        return
+      }
+      throw error
+    }
+    const routes = createEditorRoutes(services({ s1: workspace }))
+    const revision = createHash('sha256').update(decoyBytes).digest('hex')
+    const deleted = await call(routes, EDITOR_DEFINITION_ROUTE, {
+      session: 's1',
+      method: 'DELETE',
+      body: { id: 'linked', expectedRevision: revision },
+    })
+    expect(deleted.status).toBe(400)
+    expect(String(deleted.body.error)).toContain('link')
+    expect(await readFile(decoyFile)).toEqual(decoyBytes)
+    const read = await call(routes, EDITOR_DEFINITION_ROUTE, {
+      session: 's1',
+      query: { id: 'linked' },
+    })
+    expect(read.status).toBe(400)
   })
 
   it('writes only the workspace owned by the requesting session', async () => {

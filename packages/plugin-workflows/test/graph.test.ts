@@ -279,8 +279,8 @@ describe('deterministic auto layout', () => {
   it('handles many branch paths joining one node without re-walking it', () => {
     const branches = Array.from({ length: 20 }, (_, index) => {
       const next = index === 19 ? 'join' : `branch-${String(index + 1)}`
-      // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
       return step(`branch-${String(index)}`, 'branch', {
+        // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
         branch: { predicate: {}, then: next, else: 'join' },
       })
     })

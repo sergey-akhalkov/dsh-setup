@@ -578,6 +578,39 @@ describe('pre-check and host error mapping', () => {
     expect(result.status).toBe('error')
     expect(result.issues.some((issue) => issue.kind === 'structural')).toBe(true)
     expect(calls.saveDefinition).toHaveLength(0)
+
+    const dangling = updateGraph(graph, graph.diagram.nodes, [
+      ...graph.diagram.edges,
+      { id: 'ghost', source: nodeIdOf('one'), target: 'ghost', kind: 'next' },
+    ])
+    expect(dangling.status).toBe('error')
+    const danglingCopy = await saveAsCopy(dangling, { api, taken: TAKEN })
+    expect(danglingCopy.status).toBe('error')
+    expect(calls.saveDefinition).toHaveLength(0)
+  })
+
+  it('keeps a pending host field error when only a node moved during save', () => {
+    const captured = opened()
+    const failed: EditorState = {
+      ...captured,
+      dirty: true,
+      status: 'error',
+      issues: [
+        {
+          nodeId: nodeIdOf('one'),
+          path: 'steps[0].title',
+          message: 'must not be empty',
+          kind: 'host',
+        },
+      ],
+      message: 'the host refused the definition',
+    }
+    const moved = moveStep(captured, nodeIdOf('one'), { x: 1, y: 2 })
+    const merged = reconcileSave(captured, moved, failed)
+    expect(merged.issues.some((issue) => issue.kind === 'host')).toBe(true)
+    const edited = patchStep(captured, nodeIdOf('one'), { title: 'Fixed' })
+    const dropped = reconcileSave(captured, edited, failed)
+    expect(dropped.issues).toEqual([])
   })
 
   it('adds a palette step as an unconnected node the pre-check names', () => {

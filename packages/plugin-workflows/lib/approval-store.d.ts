@@ -1,3 +1,4 @@
+import { rename, unlink } from 'node:fs/promises';
 import { type Definition } from './definitions.js';
 import type { HostAuth } from './host-auth.js';
 /**
@@ -40,12 +41,17 @@ export interface InstallResult {
 export interface InstallOptions {
     /** Test seam: the approval-store writer; production writes the real store. */
     readonly writeApprovals?: (workspace: string, approvals: ReadonlyMap<string, StoredApproval>) => Promise<void>;
+    /** Test seam: the replacement/restore primitive; production renames. */
+    readonly rename?: typeof rename;
+    /** Test seam: the cleanup primitive; production unlinks. */
+    readonly unlink?: typeof unlink;
 }
 /**
  * Validate a definition file, copy it atomically into the workspace definitions
  * directory, and record its content hash and host signature. The caller asks
  * the user first; this function is the host-only install path and the one the
- * editor save uses.
+ * editor save uses. Installs of one workspace are serialized because they share
+ * the approval file.
  */
 export declare function installDefinition(workspace: string, sourcePath: string, auth: HostAuth, options?: InstallOptions): Promise<InstallResult>;
 export interface ApprovedDefinitions {

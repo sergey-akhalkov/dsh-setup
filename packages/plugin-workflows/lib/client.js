@@ -10534,6 +10534,13 @@ window.__ModuleLoader__.load({
         ...current.document.definition,
         version: saved.document.definition.version
       };
+      const definitionChanged = JSON.stringify(captured.document.definition) !== JSON.stringify(current.document.definition);
+      const issues = [
+        ...current.issues.filter((issue) => issue.kind !== "host"),
+        ...definitionChanged ? [] : saved.issues.filter((issue) => issue.kind === "host")
+      ].filter(
+        (issue, index2, all) => all.findIndex((other) => other.path === issue.path && other.message === issue.message) === index2
+      );
       return {
         ...current,
         document: {
@@ -10543,6 +10550,7 @@ window.__ModuleLoader__.load({
           source: saved.document.source
         },
         diagram: { ...current.diagram, definition },
+        issues,
         // The layout file, not the current positions, owns the layout revision: a
         // successful save must advance it even when newer positions are still dirty.
         layoutRevision: saved.status === "saved" ? saved.layoutRevision : current.layoutRevision,
@@ -10716,18 +10724,23 @@ window.__ModuleLoader__.load({
       );
       const diagram = { ...state.diagram, definition };
       const layout = { ...layoutOf(diagram, state.layout), id: definition.id };
-      const issues = precheckGraph(diagram.nodes, diagram.edges);
+      const structural = [
+        ...state.issues.filter((issue) => issue.kind !== "host"),
+        ...precheckGraph(diagram.nodes, diagram.edges)
+      ].filter(
+        (issue, index2, all) => all.findIndex((other) => other.path === issue.path && other.message === issue.message) === index2
+      );
       const copy = {
         ...state,
         document: { definition, revision: null, source: "local" },
         diagram,
         layout,
         layoutRevision: null,
-        issues,
+        issues: structural,
         dirty: true,
         conflict: void 0,
-        status: issues.length > 0 ? "error" : "dirty",
-        ...issues.length === 0 ? {} : { message: "fix the highlighted graph issues first" }
+        status: structural.length > 0 ? "error" : "dirty",
+        ...structural.length === 0 ? {} : { message: "fix the highlighted graph issues first" }
       };
       return save({ ...copy, mode: state.mode }, context);
     }

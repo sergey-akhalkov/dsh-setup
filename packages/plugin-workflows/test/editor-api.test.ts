@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createWorkflowRoutes, DEFINITIONS_ROUTE, TEMPLATES_ROUTE } from '../src/host/api.ts'
 import { installDefinition, loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { loadShippedDefinitions, validateDefinition } from '../src/host/definitions.ts'
 import {
@@ -188,6 +189,67 @@ describe('editor read API', () => {
   })
 })
 
+describe('literal read routes', () => {
+  it('serves templates and definitions with revisions and one document by id', async () => {
+    const workspace = await tempWorkspace()
+    const readRoutes = createWorkflowRoutes({
+      agents: { get: () => ({ session: {} }) },
+      workingDirectory: { get: () => workspace },
+      journal: { read: async () => ({ records: [] }) } as never,
+      healthFor: () =>
+        ({
+          snapshot: () => ({ listenerCount: 5, journalWritable: true, triggerCount: 9 }),
+          stateFor: () => 'healthy',
+        }) as never,
+      triggers: [],
+      definitionsFor: () => [validateDefinition(DEFINITION)],
+      definitionEntriesFor: async () => ({
+        definitions: [
+          {
+            id: 'editor-demo',
+            name: 'Editor demo',
+            version: 1,
+            source: 'local',
+            revision: 'rev-1',
+          },
+        ],
+      }),
+      definitionDocumentFor: async () => ({
+        definition: validateDefinition(DEFINITION),
+        revision: 'rev-1',
+        source: 'local',
+      }),
+    })
+    const fetchRoute = async (
+      path: string,
+      query = '',
+    ): Promise<{ status: number; body: Record<string, unknown> }> => {
+      const route = readRoutes.find((entry) => entry.path === path)
+      if (route === undefined) throw new Error(`no route ${path}`)
+      const suffix = query === '' ? '' : `&${query}`
+      const response = await route.fetch(new Request(`http://localhost${path}?session=s1${suffix}`))
+      return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+    }
+    const templates = await fetchRoute(TEMPLATES_ROUTE)
+    expect(templates.status).toBe(200)
+    expect(
+      (templates.body.templates as { id: string; definition: { id: string } }[]).find(
+        (entry) => entry.id === 'change-intake',
+      )?.definition.id,
+    ).toBe('change-intake')
+    const listed = await fetchRoute(DEFINITIONS_ROUTE)
+    expect(listed.status).toBe(200)
+    const listedLocal = (
+      listed.body.definitions as { id: string; revision: string; source: string }[]
+    ).find((entry) => entry.id === 'editor-demo')
+    expect(listedLocal).toMatchObject({ revision: 'rev-1', source: 'local' })
+    const one = await fetchRoute(DEFINITIONS_ROUTE, 'id=editor-demo')
+    expect(one.status).toBe(200)
+    expect(one.body).toMatchObject({ revision: 'rev-1', source: 'local' })
+    expect((one.body.definition as { id: string }).id).toBe('editor-demo')
+  })
+})
+
 describe('editor definition writes', () => {
   it('creates through the shared install/approve path and reloads after a restart', async () => {
     const workspace = await tempWorkspace()
@@ -218,6 +280,28 @@ describe('editor definition writes', () => {
     expect(reloaded.definitions.find((entry) => entry.id === 'editor-demo')?.name).toBe(
       'Editor demo v2',
     )
+  })
+
+  it('keeps both approvals when two definitions are created concurrently', async () => {
+    const workspace = await tempWorkspace()
+    const routes = createEditorRoutes(services(workspace))
+    const first = { ...DEFINITION, id: 'concurrent-a', name: 'A' }
+    const second = { ...DEFINITION, id: 'concurrent-b', name: 'B' }
+    const [a, b] = await Promise.all([
+      call(routes, EDITOR_DEFINITION_ROUTE, {
+        method: 'PUT',
+        body: { id: 'concurrent-a', definition: first, expectedRevision: null },
+      }),
+      call(routes, EDITOR_DEFINITION_ROUTE, {
+        method: 'PUT',
+        body: { id: 'concurrent-b', definition: second, expectedRevision: null },
+      }),
+    ])
+    expect([a.status, b.status]).toEqual([200, 200])
+    const loaded = await loadApprovedDefinitions(workspace, { auth: AUTH })
+    const ids = loaded.definitions.map((definition) => definition.id)
+    expect(ids).toContain('concurrent-a')
+    expect(ids).toContain('concurrent-b')
   })
 
   it('refuses an invalid schema and a stale revision, writing nothing', async () => {

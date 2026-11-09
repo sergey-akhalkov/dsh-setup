@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
-import type { Definition } from './definitions.js'
+import { type Definition, loadShippedDefinitions } from './definitions.js'
 import { isInside } from './fs-change.js'
 import type { WorkflowHealth } from './health.js'
 import type { Journal, TriggerEvaluationRecord } from './journal.js'
@@ -23,6 +23,7 @@ export const TRIGGERS_ROUTE = '/api/workflows/triggers'
 export const HEALTH_ROUTE = '/api/workflows/health'
 export const EVIDENCE_ROUTE = '/api/workflows/evidence'
 export const DEFINITIONS_ROUTE = '/api/workflows/definitions'
+export const TEMPLATES_ROUTE = '/api/workflows/templates'
 export const RECEIPTS_ROUTE = '/api/workflows/receipts'
 
 /** Default and maximum page sizes. */
@@ -54,6 +55,25 @@ export interface WorkflowApiServices {
   readonly triggers: readonly Trigger[]
   /** The approved definitions of one workspace. */
   readonly definitionsFor?: (workspace: string) => readonly Definition[]
+  /** The editor's list view: source and revision per definition. */
+  readonly definitionEntriesFor?: (workspace: string) => Promise<{
+    readonly definitions: readonly {
+      readonly id: string
+      readonly name: string
+      readonly version: number
+      readonly source: 'shipped' | 'local'
+      readonly revision: string | null
+    }[]
+    readonly errors?: readonly string[]
+  }>
+  /** One definition document with the revision a write must send back. */
+  readonly definitionDocumentFor?: (
+    workspace: string,
+    id: string,
+  ) => Promise<
+    | { readonly definition: unknown; readonly revision: string | null; readonly source: string }
+    | undefined
+  >
   /** The authenticated receipts of one workspace. */
   readonly receiptsFor?: (workspace: string) => Promise<readonly WorkflowReceipt[]>
 }
@@ -292,24 +312,64 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
     route(DEFINITIONS_ROUTE, async (request) => {
       const resolved = resolveSession(services, request)
       if ('response' in resolved) return resolved.response
+      const id = new URL(request.url).searchParams.get('id')
+      if (id !== null && id !== '') {
+        // The carrier matches exact paths only, so one document is addressed by
+        // `id` on the literal definitions route rather than a path segment.
+        if (services.definitionDocumentFor === undefined) {
+          return json(404, { error: 'the definition does not exist' })
+        }
+        try {
+          const document = await services.definitionDocumentFor(resolved.workspace, id)
+          if (document === undefined) return json(404, { error: 'the definition does not exist' })
+          return json(200, document)
+        } catch (error) {
+          return json(400, { errors: [{ path: '', message: bounded(error) }] })
+        }
+      }
       const definitions = services.definitionsFor?.(resolved.workspace) ?? []
+      const entries = await services.definitionEntriesFor?.(resolved.workspace)
+      const byId = new Map((entries?.definitions ?? []).map((entry) => [entry.id, entry]))
       return json(200, {
         session: resolved.session,
-        definitions: definitions.map((definition) => ({
+        definitions: definitions.map((definition) => {
+          const entry = byId.get(definition.id)
+          return {
+            id: definition.id,
+            name: definition.name,
+            version: definition.version,
+            trigger: definition.trigger,
+            risk: definition.settings.risk,
+            allowModelStart: definition.settings.allowModelStart,
+            gateOwnership: definition.settings.gateOwnership,
+            steps: definition.steps.map((step) => ({
+              id: step.id,
+              title: step.title,
+              executor: step.executor,
+              ownership: step.ownership ?? 'own',
+              blockTurnClose: step.blockTurnClose === true,
+            })),
+            ...(entry === undefined ? {} : { source: entry.source, revision: entry.revision }),
+          }
+        }),
+        ...(entries?.errors === undefined || entries.errors.length === 0
+          ? {}
+          : { errors: entries.errors }),
+      })
+    }),
+    route(TEMPLATES_ROUTE, async (request) => {
+      const resolved = resolveSession(services, request)
+      if ('response' in resolved) return resolved.response
+      return json(200, {
+        session: resolved.session,
+        templates: loadShippedDefinitions().map((definition) => ({
           id: definition.id,
           name: definition.name,
           version: definition.version,
-          trigger: definition.trigger,
-          risk: definition.settings.risk,
-          allowModelStart: definition.settings.allowModelStart,
-          gateOwnership: definition.settings.gateOwnership,
-          steps: definition.steps.map((step) => ({
-            id: step.id,
-            title: step.title,
-            executor: step.executor,
-            ownership: step.ownership ?? 'own',
-            blockTurnClose: step.blockTurnClose === true,
-          })),
+          stepCount: definition.steps.length,
+          source: 'shipped',
+          revision: null,
+          definition,
         })),
       })
     }),
