@@ -706,6 +706,10 @@ function runnableLanes(lanes: readonly LanePlan[]): LanePlan[] {
   })
 }
 
+function isResourceScope(value: string): boolean {
+  return value.startsWith('resource:')
+}
+
 function scopeOverlaps(
   left: readonly string[],
   right: readonly string[],
@@ -715,6 +719,10 @@ function scopeOverlaps(
     (workspacePath(value, workspace) ?? '\\u0000').split('/').filter(Boolean)
   return left.some((a) =>
     right.some((b) => {
+      // Resource scopes are exact identifiers, never paths.
+      if (isResourceScope(a) || isResourceScope(b)) {
+        return isResourceScope(a) && isResourceScope(b) && a === b
+      }
       const x = parts(a)
       const y = parts(b)
       // The repository root contains every scope, including a '.' entry.
@@ -760,10 +768,24 @@ export function checkpointCloseIssue(input: {
   readonly enforceParallel?: boolean
   /** The workspace absolute/relative paths resolve against. */
   readonly workspace?: string
+  /** The validated tool arguments (unredacted), preferred over the record. */
+  readonly checkpointArguments?: Readonly<Record<string, unknown>>
 }): string | undefined {
   const workspace = input.workspace ?? process.cwd()
   const record = input.record
+  const rawArguments = isRecord(input.checkpointArguments) ? input.checkpointArguments : undefined
   if (record === undefined) return undefined
+  const lanesSource =
+    rawArguments !== undefined && Array.isArray(rawArguments.lanes)
+      ? { ...record, lanes: rawArguments.lanes }
+      : record
+  const rawBottleneck =
+    rawArguments !== undefined && isRecord(rawArguments.bottleneck)
+      ? {
+          ...record.bottleneck,
+          ...(rawArguments.bottleneck as CheckpointCloseRecord['bottleneck']),
+        }
+      : undefined
   const later = input.observations.filter(
     (entry) =>
       entry.ok &&
@@ -782,12 +804,12 @@ export function checkpointCloseIssue(input: {
     !stale &&
     input.enforceParallel !== false &&
     workerVisible &&
-    parallelPlan(record, workspace) &&
+    parallelPlan(lanesSource, workspace) &&
     !taggedWorkerStart(later, input.checkpointId)
   ) {
     return `the checkpoint has parallel runnable lanes; start one tagged worker whose arguments name "${input.checkpointId}", or amend the plan in a new work_checkpoint`
   }
-  const bottleneck = record.bottleneck
+  const bottleneck = rawBottleneck ?? record.bottleneck
   if (bottleneck === undefined) {
     return 'the checkpoint is a continue plan without a bottleneck; call work_checkpoint with lanes, a bottleneck, and its remedy before the close'
   }
@@ -893,6 +915,9 @@ export function checkpointGateIssue(
     typeof (record as { readonly checkpoint?: unknown }).checkpoint === 'string'
       ? (record as { readonly checkpoint: string }).checkpoint
       : ''
+  const toolArguments = observations
+    .filter((entry) => entry.ok && entry.toolName === 'work_checkpoint')
+    .at(-1)?.arguments
   const issue = checkpointCloseIssue({
     record,
     checkpointId: checkpoint,
@@ -900,6 +925,7 @@ export function checkpointGateIssue(
     bottleneckAge,
     ...options,
     workspace,
+    ...(toolArguments === undefined ? {} : { checkpointArguments: toolArguments }),
   })
   return issue === undefined ? undefined : { text: issue }
 }

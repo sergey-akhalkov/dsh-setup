@@ -355,6 +355,83 @@ describe('owned checkpoint decisions', () => {
     expect(workerOwned).toContain('user_decision')
   })
 
+  it('prefers the unredacted checkpoint arguments and treats resource scopes exactly', () => {
+    const record = {
+      outcome: 'continue' as const,
+      lanes: [],
+      bottleneck: {
+        id: 'guard',
+        owner: 'lead',
+        action: 'lead_action' as const,
+        blockingLanes: ['edit'],
+        targets: ['[workspace]\\src'],
+      },
+    }
+    expect(
+      checkpointCloseIssue({
+        record,
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [
+          {
+            toolName: 'write',
+            arguments: { file_path: 'src/app.ts' },
+            ok: true,
+            at: 300,
+          },
+          {
+            toolName: 'work_checkpoint',
+            arguments: { bottleneck: { targets: ['src'] }, lanes: [] },
+            ok: true,
+            at: 100,
+          },
+        ],
+        bottleneckAge: 2,
+        checkpointAt: 100,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+        workspace: '/workspace',
+        checkpointArguments: { bottleneck: { targets: ['src'] }, lanes: [] },
+      }),
+    ).toBeUndefined()
+
+    const lanes = [
+      { id: 'a', owner: 'lane-a', scope: ['.'], state: 'running' },
+      { id: 'b', owner: 'lane-b', scope: ['resource:database'], state: 'running' },
+    ]
+    expect(
+      checkpointCloseIssue({
+        record: { outcome: 'continue', lanes, bottleneck: undefined },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+        workspace: '/workspace',
+      }),
+    ).toContain('parallel runnable lanes')
+    expect(
+      checkpointCloseIssue({
+        record: {
+          outcome: 'continue',
+          lanes: [
+            { id: 'a', owner: 'lane-a', scope: ['resource:DB'], state: 'running' },
+            { id: 'b', owner: 'lane-b', scope: ['resource:db'], state: 'running' },
+          ],
+          bottleneck: undefined,
+        },
+        checkpointId: 'checkpoint-1-aaaaaaaa',
+        observations: [],
+        bottleneckAge: 2,
+        fresh: true,
+        workerVisible: true,
+        enforceParallel: true,
+        workspace: '/workspace',
+      }),
+    ).toContain('parallel runnable lanes')
+  })
+
   it('requires the remedy after the checkpoint and matches targets by path component', () => {
     const record = {
       outcome: 'continue' as const,

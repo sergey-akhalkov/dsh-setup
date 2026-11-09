@@ -129,6 +129,8 @@ export declare function checkpointCloseIssue(input: {
     readonly enforceParallel?: boolean;
     /** The workspace absolute/relative paths resolve against. */
     readonly workspace?: string;
+    /** The validated tool arguments (unredacted), preferred over the record. */
+    readonly checkpointArguments?: Readonly<Record<string, unknown>>;
 }): string | undefined;
 /** The completion branch: applies only when the task list is fully checked. */
 export declare function taskReviewCompletion(workspace: string, change: string): {

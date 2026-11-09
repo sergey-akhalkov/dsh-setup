@@ -132,6 +132,95 @@ describe('retirement parity report', () => {
     )
   })
 
+  it('fails when a shipped step stops enforcing or its evidence changes', async () => {
+    const { loadShippedDefinitions } = await import(
+      '../../packages/plugin-workflows/lib/definitions.js'
+    )
+    const { evaluateTurnClose } = await import('../../packages/plugin-workflows/lib/gates.js')
+    const { verifyEvidence } = await import('../../packages/plugin-workflows/lib/evidence.js')
+    const { createRun, settleStep } = await import('../../packages/plugin-workflows/lib/runs.js')
+    const shipped = loadShippedDefinitions()
+    const taskReview = shipped.find((entry) => entry.id === 'task-review')
+    const verify = shipped.find((entry) => entry.id === 'verify')
+    if (taskReview === undefined || verify === undefined) throw new Error('definitions missing')
+
+    const unblocked = {
+      ...taskReview,
+      steps: taskReview.steps.map((step) => ({ ...step, blockTurnClose: false })),
+    }
+    const reviewCase = {
+      id: 'task-review-without-blocking-close',
+      gate: 'task-review' as const,
+      legacy: { decision: 'refuse' as const, reason: 'legacy refuses the missing review' },
+      workflow: (): Promise<{ decision: 'allow' | 'refuse'; reason: string }> => {
+        let run = createRun({
+          definition: 'task-review',
+          trigger: 'fs.change',
+          session: 'session-1',
+          workspace: '/workspace',
+          context: { name: 'change-a', taskId: '0123456789abcdef' },
+          steps: ['start-review', 'await-review', 'complete-review'],
+          now: 1_000,
+        })
+        run = settleStep(run, 'start-review', 'done', { at: 1_001 })
+        const outcome = evaluateTurnClose({
+          run,
+          definition: unblocked,
+          agent: { steer: () => undefined },
+          evidenceContext: { workspace: '/workspace', values: {} },
+          turn: 1,
+          maxBlocks: 3,
+          installedLegacy: new Set(),
+          enabledLegacy: new Set(),
+        })
+        return Promise.resolve(
+          outcome.kind === 'allow'
+            ? { decision: 'allow', reason: 'the unblocked await step closed' }
+            : { decision: 'refuse', reason: 'the await step blocked' },
+        )
+      },
+    }
+
+    const rewordedEvidence = {
+      ...verify,
+      steps: verify.steps.map((step) =>
+        step.id === 'check'
+          ? {
+              ...step,
+              evidence: { kind: 'check' as const, source: 'task-review-coverage' as const },
+            }
+          : step,
+      ),
+    }
+    const evidenceCase = {
+      id: 'verify-with-incompatible-evidence',
+      gate: 'verification' as const,
+      legacy: { decision: 'allow' as const, reason: 'legacy allows the successful check' },
+      workflow: async (): Promise<{ decision: 'allow' | 'refuse'; reason: string }> => {
+        const step = rewordedEvidence.steps.find((entry) => entry.id === 'check')
+        if (step?.evidence === undefined) throw new Error('check evidence missing')
+        const check = await verifyEvidence(step.evidence, {
+          workspace: '/workspace',
+          values: {},
+          checkCommands: ['pnpm check'],
+          lastWriteAt: 100,
+          shellResults: [
+            { callId: 'c1', command: 'pnpm check', at: 120, exitCode: 0, foreground: true },
+          ],
+        })
+        return check.ok
+          ? { decision: 'allow', reason: 'the swapped evidence passed' }
+          : { decision: 'refuse', reason: 'the swapped evidence failed' }
+      },
+    }
+
+    const report = await buildParityReport(new Date(), [...PARITY_CASES, reviewCase, evidenceCase])
+    const text = report.mismatches.join('\n')
+    expect(text).toContain('task-review-without-blocking-close')
+    expect(text).toContain('verify-with-incompatible-evidence')
+    expect(parityExitCode(report)).toBe(1)
+  })
+
   it('fails when the verify definition stops blocking the close', async () => {
     const { loadShippedDefinitions } = await import(
       '../../packages/plugin-workflows/lib/definitions.js'

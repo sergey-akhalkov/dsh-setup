@@ -178,7 +178,10 @@ async function verifyWorkflow(input: {
   }>
 }): Promise<ParityDecision> {
   const definition = loadVerifyDefinition()
-  const evidence: Evidence = { kind: 'check', source: 'verify-settings' }
+  const evidence: Evidence = definition.steps.find((step) => step.id === 'check')?.evidence ?? {
+    kind: 'check',
+    source: 'verify-settings',
+  }
   const check = await verifyEvidence(evidence, {
     workspace: '/workspace',
     values: {},
