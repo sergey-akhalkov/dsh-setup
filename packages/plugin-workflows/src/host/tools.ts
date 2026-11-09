@@ -1,7 +1,6 @@
 import { CHANGE_NAME } from './command-parse.js'
-import type { Definition } from './definitions.js'
-import type { EvidenceContext } from './evidence.js'
-import { verifyEvidence } from './evidence.js'
+import type { Definition, Step } from './definitions.js'
+import { collectEvidencePaths, type EvidenceContext, verifyEvidence } from './evidence.js'
 import type { HumanQuestionService } from './executors.js'
 import type { HostAuth } from './host-auth.js'
 import { openRunCount, type WorkflowRun } from './runs.js'
@@ -54,6 +53,8 @@ export interface WorkflowsToolHost {
   listRuns(): Promise<readonly WorkflowRun[]>
   /** One authenticated run in the workspace, or undefined. */
   readRun(runId: string): Promise<WorkflowRun | undefined>
+  /** Trusted session observations the evidence verifier may consume. */
+  evidenceContext?(run: WorkflowRun, step: Step): Partial<EvidenceContext>
 }
 
 function fail(message: string): never {
@@ -220,11 +221,39 @@ export async function executeWorkflowsTool(
       if (request.evidence.kind !== step.evidence.kind) {
         fail(`the evidence kind must be "${step.evidence.kind}"`)
       }
-      const context: EvidenceContext = { workspace: host.workspace, values: run.context }
+      const context: EvidenceContext = {
+        workspace: host.workspace,
+        values: run.context,
+        ...(host.evidenceContext === undefined ? {} : host.evidenceContext(run, step)),
+      }
       const checked = await verifyEvidence(step.evidence, context)
       if (!checked.ok) {
         fail(
           `the host verifier refused the evidence: ${checked.failure.reason} (${checked.failure.detail})`,
+        )
+      }
+      // The submitted reference must be the evidence the host just verified.
+      const ref = request.evidence.ref.replaceAll('\\', '/').replace(/^\.\//u, '')
+      if (
+        ref === '' ||
+        ref.startsWith('/') ||
+        /^[A-Za-z]:\//u.test(ref) ||
+        ref.split('/').some((part) => part === '..')
+      ) {
+        fail(`the evidence reference "${request.evidence.ref}" is not workspace-relative`)
+      }
+      const accepted = new Set<string>()
+      for (const path of collectEvidencePaths(step.evidence, context)) {
+        accepted.add(path.replaceAll('\\', '/').replace(/^\.\//u, ''))
+      }
+      if (checked.evidence.path !== undefined) {
+        accepted.add(checked.evidence.path.replaceAll('\\', '/'))
+      }
+      if (checked.evidence.callId !== undefined) accepted.add(checked.evidence.callId)
+      if (typeof checked.evidence.answer === 'string') accepted.add(checked.evidence.answer)
+      if (!accepted.has(ref)) {
+        fail(
+          `the submitted reference "${request.evidence.ref}" is not the host-verified evidence for step "${request.stepId}"`,
         )
       }
       return `evidence verified for step "${request.stepId}"`

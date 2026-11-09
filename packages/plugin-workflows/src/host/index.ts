@@ -2250,6 +2250,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     maxRuns,
     ...(userQuestions === undefined ? {} : { questions: userQuestions }),
     now: () => journal.time(),
+    evidenceContext: (run, step) => {
+      const sessionId = String(agent.session.id)
+      const state = run.steps.find((entry) => entry.id === step.id)
+      return {
+        toolCalls: sessionToolCalls.get(sessionId) ?? [],
+        shellResults: sessionShellResults.get(sessionId) ?? [],
+        ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
+        ...(typeof state?.evidence?.answer === 'string'
+          ? { answers: [{ answer: state.evidence.answer }] }
+          : {}),
+      }
+    },
     listRuns: async () => {
       await recoverIfNeeded(workspace)
       return listAuthenticatedRuns(workspace, auth)

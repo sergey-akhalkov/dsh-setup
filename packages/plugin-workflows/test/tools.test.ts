@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { runWorkflowCommand } from '../src/host/commands.ts'
 import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
@@ -9,6 +12,16 @@ import {
   parseWorkflowsToolArgs,
   type WorkflowsToolHost,
 } from '../src/host/tools.ts'
+
+const TEMP_DIRECTORIES: string[] = []
+
+afterEach(async () => {
+  await Promise.all(
+    TEMP_DIRECTORIES.splice(0).map(async (directory) => {
+      await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    }),
+  )
+})
 
 function definition(id: string, overrides: Record<string, unknown> = {}): Definition {
   return validateDefinition({
@@ -215,6 +228,182 @@ describe('workflows tool', () => {
     expect(() => parseWorkflowsToolArgs({ action: 'install', path: 'x' })).toThrow(
       /action must be|unknown field/u,
     )
+  })
+
+  it('asks the user before a high-risk model start and refuses no, timeout, cancel, and failure', async () => {
+    const high = definition('high-risk', {
+      settings: {
+        allowModelStart: true,
+        risk: 'high',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+    })
+    const asks: string[] = []
+    const yesCalls: Calls = { starts: 0, resumes: 0, cancels: 0 }
+    const yesHost: WorkflowsToolHost = {
+      ...host([high], [], yesCalls),
+      questions: {
+        ask: async () => {
+          asks.push('ask')
+          return { answer: 'yes' }
+        },
+      },
+      startRun: async (entry) => {
+        asks.push('start')
+        yesCalls.starts += 1
+        const run = runFor('/workspace', `run-${String(yesCalls.starts)}`)
+        return { run: { ...run, definition: entry.id }, firstStep: 'requirements' }
+      },
+    }
+    expect(
+      await executeWorkflowsTool({ action: 'start', definitionId: 'high-risk' }, yesHost),
+    ).toContain('started')
+    expect(yesCalls.starts).toBe(1)
+    expect(asks).toEqual(['ask', 'start'])
+
+    for (const answer of [
+      { answer: 'no' },
+      { timedOut: true },
+      { cancelled: true },
+      new Error('the question service failed'),
+    ]) {
+      const calls: Calls = { starts: 0, resumes: 0, cancels: 0 }
+      const refusing: WorkflowsToolHost = {
+        ...host([high], [], calls),
+        questions: {
+          ask: async () => {
+            if (answer instanceof Error) throw answer
+            return answer
+          },
+        },
+        startRun: async () => {
+          calls.starts += 1
+          throw new Error('the high-risk start must not run')
+        },
+      }
+      await expect(
+        executeWorkflowsTool({ action: 'start', definitionId: 'high-risk' }, refusing),
+      ).rejects.toThrow()
+      expect(calls.starts).toBe(0)
+    }
+  })
+
+  it('verifies tool, check, human, and file evidence and binds the submitted reference', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'workflows-tools-'))
+    TEMP_DIRECTORIES.push(workspace)
+    await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
+    const entry = validateDefinition({
+      v: 1,
+      id: 'evidence-demo',
+      name: 'Evidence demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'tool-step',
+          title: 'Tool',
+          executor: 'main',
+          prompt: 'Run it.',
+          evidence: { kind: 'tool', name: 'shell', command: 'openspec validate auth --strict' },
+          next: 'check-step',
+        },
+        {
+          id: 'check-step',
+          title: 'Check',
+          executor: 'main',
+          prompt: 'Check it.',
+          evidence: { kind: 'check', command: 'openspec validate {name} --strict' },
+          next: 'human-step',
+        },
+        {
+          id: 'human-step',
+          title: 'Human',
+          executor: 'main',
+          prompt: 'Ask it.',
+          evidence: { kind: 'human', answer: 'yes' },
+          next: 'file-step',
+        },
+        {
+          id: 'file-step',
+          title: 'File',
+          executor: 'main',
+          prompt: 'Write it.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    })
+    const run = createRun({
+      definition: entry.id,
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: entry.steps.map((step) => step.id),
+      id: 'run-evidence',
+      now: 1_000,
+    })
+    const target: WorkflowsToolHost = {
+      ...host([entry], [run]),
+      workspace,
+      evidenceContext: () => ({
+        toolCalls: [
+          {
+            callId: 'call-tool',
+            name: 'pwsh',
+            arguments: { command: 'openspec validate auth --strict' },
+            ok: true,
+          },
+        ],
+        shellResults: [
+          {
+            callId: 'call-check',
+            command: 'openspec validate auth --strict',
+            at: 200,
+            exitCode: 0,
+            foreground: true,
+          },
+        ],
+        stepStartedAt: 100,
+        answers: [{ answer: 'yes' }],
+      }),
+    }
+    const evidence = (stepId: string, kind: string, ref: string): unknown => ({
+      action: 'evidence',
+      runId: 'run-evidence',
+      stepId,
+      evidence: { kind, ref },
+    })
+    expect(
+      await executeWorkflowsTool(evidence('tool-step', 'tool', 'call-tool') as never, target),
+    ).toContain('verified')
+    expect(
+      await executeWorkflowsTool(evidence('check-step', 'check', 'call-check') as never, target),
+    ).toContain('verified')
+    expect(
+      await executeWorkflowsTool(evidence('human-step', 'human', 'yes') as never, target),
+    ).toContain('verified')
+    expect(
+      await executeWorkflowsTool(evidence('file-step', 'file', 'out.md') as never, target),
+    ).toContain('verified')
+    await expect(
+      executeWorkflowsTool(evidence('tool-step', 'tool', 'other-call') as never, target),
+    ).rejects.toThrow(/not the host-verified evidence/u)
+    await expect(
+      executeWorkflowsTool(evidence('file-step', 'file', '../outside.txt') as never, target),
+    ).rejects.toThrow(/not workspace-relative/u)
+    await expect(
+      executeWorkflowsTool(evidence('file-step', 'file', 'missing.md') as never, target),
+    ).rejects.toThrow(/not the host-verified evidence/u)
   })
 })
 
