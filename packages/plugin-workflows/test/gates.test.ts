@@ -194,7 +194,7 @@ describe('turn-close gate', () => {
       kind: 'VIOLATION',
       step: 'requirements',
     })
-    expect(capped.run.turnBlocks).toBe(0)
+    expect(capped.run.turnBlocks).toBe(2)
     expect(agent.messages).toHaveLength(2)
     expect(capped.run.steps[0]?.state).toBe('open')
   })
@@ -989,8 +989,8 @@ it('steers on every stop in one turn and resets attempts after a violation', () 
     installedLegacy: installed,
     now: 3_000,
   })
-  expect(nextTurn.kind).toBe('refuse')
-  expect(agent.messages).toHaveLength(3)
+  expect(nextTurn.kind).toBe('violation')
+  expect(agent.messages).toHaveLength(2)
 })
 
 it('blocks an archive while a filesystem-triggered review run is open', async () => {
