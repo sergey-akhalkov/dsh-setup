@@ -75,6 +75,18 @@ describe('fresh-workspace migration', () => {
     expect(patch).toContain('stepInterval: 40')
     expect(patch).toContain('enforceParallel: true')
     for (const retained of ['spec-review', 'lane-fanout']) expect(patch).toContain(retained)
+    // Standalone plugin installs keep the legacy enforcement; only the setup
+    // bundle flips the retirement switches.
+    const goalFragment = readFileSync(
+      join(repoRoot, 'packages', 'plugin-goal-continuity', 'cordis.fragment.yml'),
+      'utf8',
+    )
+    expect(goalFragment).not.toContain('automation: false')
+    const delegationFragment = readFileSync(
+      join(repoRoot, 'packages', 'plugin-delegation-rules', 'cordis.fragment.yml'),
+      'utf8',
+    )
+    expect(delegationFragment).not.toContain('workflowOwned: false')
   })
 
   it('accepts two profile verify settings, including a cap above 128', () => {

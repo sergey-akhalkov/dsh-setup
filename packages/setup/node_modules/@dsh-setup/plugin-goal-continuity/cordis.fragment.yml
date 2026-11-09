@@ -33,7 +33,6 @@ rows:
         onExhausted: deny
       checkpoint:
         enabled: true
-        automation: false
         minToolCalls: 4
         requireWrite: true
         maxBlocks: 3

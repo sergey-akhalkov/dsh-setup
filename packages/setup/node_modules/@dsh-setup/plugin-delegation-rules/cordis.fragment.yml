@@ -115,8 +115,6 @@ rows:
         review: 600000
         answer: 300000
         patch: 1800000
-      gates:
-        workflowOwned: false
       failureStreak: 3
       # Local review learning: classed findings, a bounded lesson store, and a
       # deterministic retro. The defaults are restated here so a profile patch
