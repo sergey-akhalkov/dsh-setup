@@ -404,12 +404,46 @@ describe('editor layout writes', () => {
     expect(await readFile(layoutPath(workspace, 'editor-demo'), 'utf8')).toContain('"x": 50')
   })
 
-  it('refuses an oversized or malformed layout and a path escape', () => {
+  it('accepts engine-valid step ids and prototype-named position keys', async () => {
+    const workspace = await tempWorkspace()
+    const routes = createEditorRoutes(services(workspace))
+    const definition = {
+      ...DEFINITION,
+      id: 'edge-layout',
+      steps: [{ ...DEFINITION.steps[0], id: 'step_one' }],
+    }
+    await install(routes, definition)
+    const layout = {
+      v: 1,
+      id: 'edge-layout',
+      positions: {
+        step_one: { x: 10, y: 20 },
+        ['__proto__']: { x: 30, y: 40 },
+      },
+    }
+    const created = await call(routes, EDITOR_LAYOUT_ROUTE, {
+      method: 'PUT',
+      body: { id: 'edge-layout', layout, expectedRevision: null },
+    })
+    expect(created.status).toBe(200)
+    const read = await call(routes, EDITOR_LAYOUT_ROUTE, { query: { id: 'edge-layout' } })
+    expect(read.status).toBe(200)
+    const positions = (read.body.layout as { positions: Record<string, { x: number; y: number }> })
+      .positions
+    expect(positions.step_one).toEqual({ x: 10, y: 20 })
+    expect(Object.hasOwn(positions, '__proto__')).toBe(true)
+    expect(positions['__proto__']).toEqual({ x: 30, y: 40 })
+  })
+
+  it('refuses a malformed layout', () => {
     expect(() =>
       validateLayout({ v: 1, id: 'a', positions: { one: { x: 1, y: 2 } }, extra: 1 }, 'a'),
     ).toThrow()
+    // A position key is only a JSON name, never a filesystem path; it may hold
+    // an engine-valid step id such as "step_one" or "../x". Only an empty id is
+    // meaningless.
     expect(() =>
-      validateLayout({ v: 1, id: 'a', positions: { '../x': { x: 1, y: 2 } } }, 'a'),
+      validateLayout({ v: 1, id: 'a', positions: { ' ': { x: 1, y: 2 } } }, 'a'),
     ).toThrow()
     expect(() =>
       validateLayout({ v: 1, id: 'a', positions: { one: { x: 1, y: '2' } } }, 'a'),

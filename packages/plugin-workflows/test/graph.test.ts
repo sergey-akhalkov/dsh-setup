@@ -257,4 +257,41 @@ describe('deterministic auto layout', () => {
       expect(Number.isFinite(first[node.id]?.y)).toBe(true)
     }
   })
+
+  it('moves descendants of a late branch join into a later column', () => {
+    const definition = baseDefinition({
+      steps: [
+        // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+        step('a', 'branch', { branch: { predicate: {}, then: 'b', else: 'f' } }),
+        step('b', 'main', { next: 'c' }),
+        step('c', 'main', { next: 'd' }),
+        step('d', 'main', { next: 'f' }),
+        step('f', 'main', { next: 'g' }),
+        step('g', 'main', { next: 'end' }),
+      ],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const positions = autoPositions(graph.nodes, graph.edges)
+    expect(positions[nodeIdOf('f')]?.x).toBeGreaterThan(positions[nodeIdOf('d')]?.x ?? 0)
+    expect(positions[nodeIdOf('g')]?.x).toBeGreaterThan(positions[nodeIdOf('f')]?.x ?? 0)
+  })
+
+  it('handles many branch paths joining one node without re-walking it', () => {
+    const branches = Array.from({ length: 20 }, (_, index) => {
+      const next = index === 19 ? 'join' : `branch-${String(index + 1)}`
+      // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+      return step(`branch-${String(index)}`, 'branch', {
+        branch: { predicate: {}, then: next, else: 'join' },
+      })
+    })
+    const definition = baseDefinition({
+      steps: [...branches, step('join', 'main', { next: 'end' })],
+    }) as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const started = Date.now()
+    const positions = autoPositions(graph.nodes, graph.edges)
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(Object.keys(positions)).toHaveLength(graph.nodes.length)
+    expect(Number.isFinite(positions[nodeIdOf('join')]?.x)).toBe(true)
+  })
 })

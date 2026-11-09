@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { editorLayoutUrl } from '../src/client/editor-client.ts'
-import { definitionToGraph, type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
+import {
+  autoPositions,
+  definitionToGraph,
+  type GraphDefinition,
+  nodeIdOf,
+} from '../src/client/graph.ts'
 import { layoutOf, moveNode, parseLayout, withLayout } from '../src/client/layout.ts'
 import { installDefinition, loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
@@ -109,6 +114,35 @@ describe('layout sidecar', () => {
     })
     const layoutUrl = editorLayoutUrl('session-1', 'layout-demo')
     expect(layoutUrl).toContain('session=session-1')
+  })
+
+  it('never resolves a missing position from the object prototype', () => {
+    const definition = {
+      ...DEFINITION,
+      id: 'proto-demo',
+      steps: [
+        {
+          id: 'constructor',
+          title: 'Constructor',
+          executor: 'main',
+          prompt: 'One.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'end',
+        },
+      ],
+    } as unknown as GraphDefinition
+    const graph = definitionToGraph(definition)
+    const empty = parseLayout({ v: 1, id: 'proto-demo', positions: {} }, 'proto-demo')
+    const laid = withLayout(graph, empty)
+    const node = laid.nodes.find((entry) => entry.step?.id === 'constructor')
+    const automatic = autoPositions(graph.nodes, graph.edges)
+    expect(node?.position).toEqual(automatic[nodeIdOf('constructor')])
+    const saved = layoutOf(laid)
+    expect(Number.isFinite(saved.positions['constructor']?.x)).toBe(true)
+    expect(JSON.parse(JSON.stringify(saved)).positions.constructor).toEqual(
+      automatic[nodeIdOf('constructor')],
+    )
   })
 
   it('does not change the definition the engine loads or the run it starts', async () => {

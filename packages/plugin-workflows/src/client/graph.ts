@@ -141,7 +141,7 @@ export function definitionToGraph(
   positions: Readonly<Record<string, { readonly x: number; readonly y: number }>> = {},
 ): Diagram {
   const place = (id: string, fallback: number): { x: number; y: number } => {
-    const saved = positions[id]
+    const saved = Object.hasOwn(positions, id) ? positions[id] : undefined
     return saved === undefined ? { x: fallback * 220, y: 0 } : saved
   }
   const nodes: DiagramNode[] = [
@@ -390,34 +390,53 @@ export function precheckGraph(
   return issues
 }
 
-/** A stable layered fallback: trigger first, then one column per edge, ties by id. */
+/**
+ * A stable layered fallback: trigger first, then one column per edge. Depths are
+ * computed once in topological order, so a branch join waits for every
+ * predecessor and a late longer path moves its descendants with it (shared
+ * targets are never re-walked).
+ */
 export function autoPositions(
   nodes: readonly DiagramNode[],
   edges: readonly DiagramEdge[],
 ): Record<string, { x: number; y: number }> {
   const outgoing = new Map<string, DiagramEdge[]>()
+  const indegree = new Map<string, number>()
+  for (const node of nodes) indegree.set(node.id, 0)
   for (const entry of edges) {
     if (entry.kind === 'body') continue
     const list = outgoing.get(entry.source) ?? []
     list.push(entry)
     outgoing.set(entry.source, list)
+    indegree.set(entry.target, (indegree.get(entry.target) ?? 0) + 1)
   }
   const depth = new Map<string, number>()
-  const queue: string[] = [TRIGGER_NODE]
-  depth.set(TRIGGER_NODE, 0)
-  const order = new Map<string, number>()
-  let count = 0
-  while (queue.length > 0) {
-    const current = queue.shift() as string
-    if (!order.has(current)) order.set(current, count++)
-    const currentDepth = depth.get(current) ?? 0
-    for (const entry of (outgoing.get(current) ?? []).sort((left, right) =>
+  if (indegree.has(TRIGGER_NODE)) depth.set(TRIGGER_NODE, 0)
+  const order: string[] = []
+  const ready = nodes
+    .filter((node) => (indegree.get(node.id) ?? 0) === 0)
+    .map((node) => node.id)
+    .sort()
+  while (ready.length > 0) {
+    const current = ready.shift() as string
+    order.push(current)
+    const targets = (outgoing.get(current) ?? []).sort((left, right) =>
       left.target.localeCompare(right.target),
-    )) {
-      const next = Math.max(depth.get(entry.target) ?? 0, currentDepth + 1)
-      depth.set(entry.target, next)
-      if (!order.has(entry.target)) queue.push(entry.target)
+    )
+    for (const entry of targets) {
+      depth.set(entry.target, Math.max(depth.get(entry.target) ?? 0, (depth.get(current) ?? 0) + 1))
+      const remaining = (indegree.get(entry.target) ?? 0) - 1
+      indegree.set(entry.target, remaining)
+      if (remaining === 0) {
+        ready.push(entry.target)
+        ready.sort()
+      }
     }
+  }
+  // A malformed graph can leave unreachable nodes; keep them in a final column
+  // instead of looping forever.
+  for (const node of nodes) {
+    if (!order.includes(node.id)) order.push(node.id)
   }
   const columns = new Map<number, string[]>()
   for (const node of nodes) {
@@ -426,11 +445,10 @@ export function autoPositions(
     list.push(node.id)
     columns.set(column, list)
   }
-  const positions: Record<string, { x: number; y: number }> = {}
+  const positions = Object.create(null) as Record<string, { x: number; y: number }>
   for (const column of [...columns.keys()].sort((left, right) => left - right)) {
     const ids = (columns.get(column) ?? []).sort(
-      (left, right) =>
-        (order.get(left) ?? 0) - (order.get(right) ?? 0) || left.localeCompare(right),
+      (left, right) => order.indexOf(left) - order.indexOf(right) || left.localeCompare(right),
     )
     ids.forEach((id, row) => {
       positions[id] = { x: column * 240, y: row * 120 }

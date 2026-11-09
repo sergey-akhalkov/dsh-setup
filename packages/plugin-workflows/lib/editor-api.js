@@ -228,12 +228,12 @@ export function validateLayout(raw, id) {
         throw new Error('the layout id does not match the requested definition');
     if (!isRecord(raw.positions))
         throw new Error('the layout positions must be an object');
-    const positions = {};
+    const positions = Object.create(null);
     for (const [stepId, value] of Object.entries(raw.positions)) {
         // A step id is any non-empty string the definition validator accepts; the
         // layout key only names a position, so it never reaches a filesystem path.
-        if (stepId.trim() === '' || /[\\/]/u.test(stepId)) {
-            throw new Error(`the layout position "${stepId}" has an unsafe step id`);
+        if (stepId.trim() === '') {
+            throw new Error(`the layout position "${stepId}" has an empty step id`);
         }
         if (!isRecord(value) ||
             typeof value.x !== 'number' ||

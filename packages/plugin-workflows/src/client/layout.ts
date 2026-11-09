@@ -27,7 +27,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseLayout(raw: unknown, id: string): Layout | undefined {
   if (!isRecord(raw) || raw.v !== LAYOUT_VERSION || raw.id !== id) return undefined
   if (!isRecord(raw.positions)) return undefined
-  const positions: Record<string, LayoutPosition> = {}
+  const positions = Object.create(null) as Record<string, LayoutPosition>
   for (const [stepId, value] of Object.entries(raw.positions)) {
     if (
       !isRecord(value) ||
@@ -45,7 +45,10 @@ export function parseLayout(raw: unknown, id: string): Layout | undefined {
 
 /** Collect the step positions of the current canvas into the sidecar shape. */
 export function layoutOf(diagram: Diagram, previous?: Layout): Layout {
-  const positions: Record<string, LayoutPosition> = { ...(previous?.positions ?? {}) }
+  const positions = Object.assign(
+    Object.create(null) as Record<string, LayoutPosition>,
+    previous?.positions ?? {},
+  )
   for (const node of diagram.nodes) {
     if (node.kind === 'trigger' || node.kind === 'end' || node.step === undefined) continue
     positions[node.step.id] = { x: node.position.x, y: node.position.y }
@@ -64,7 +67,10 @@ export function withLayout(diagram: Diagram, layout?: Layout): Diagram {
   const automatic = autoPositions(diagram.nodes, diagram.edges)
   const nodes: DiagramNode[] = diagram.nodes.map((node) => {
     const stepId = node.step?.id
-    const saved = stepId === undefined ? undefined : layout?.positions[stepId]
+    const saved =
+      stepId !== undefined && layout !== undefined && Object.hasOwn(layout.positions, stepId)
+        ? layout.positions[stepId]
+        : undefined
     const fallback = automatic[node.id]
     const position = saved ?? fallback ?? node.position
     return { ...node, position }

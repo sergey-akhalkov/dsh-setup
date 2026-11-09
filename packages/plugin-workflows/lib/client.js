@@ -9967,7 +9967,7 @@ window.__ModuleLoader__.load({
     }
     function definitionToGraph(definition, positions = {}) {
       const place = (id2, fallback) => {
-        const saved = positions[id2];
+        const saved = Object.hasOwn(positions, id2) ? positions[id2] : void 0;
         return saved === void 0 ? { x: fallback * 220, y: 0 } : saved;
       };
       const nodes = [
@@ -10187,28 +10187,37 @@ window.__ModuleLoader__.load({
     }
     function autoPositions(nodes, edges) {
       const outgoing = /* @__PURE__ */ new Map();
+      const indegree = /* @__PURE__ */ new Map();
+      for (const node of nodes) indegree.set(node.id, 0);
       for (const entry of edges) {
         if (entry.kind === "body") continue;
         const list = outgoing.get(entry.source) ?? [];
         list.push(entry);
         outgoing.set(entry.source, list);
+        indegree.set(entry.target, (indegree.get(entry.target) ?? 0) + 1);
       }
       const depth = /* @__PURE__ */ new Map();
-      const queue = [TRIGGER_NODE];
-      depth.set(TRIGGER_NODE, 0);
-      const order = /* @__PURE__ */ new Map();
-      let count = 0;
-      while (queue.length > 0) {
-        const current = queue.shift();
-        if (!order.has(current)) order.set(current, count++);
-        const currentDepth = depth.get(current) ?? 0;
-        for (const entry of (outgoing.get(current) ?? []).sort(
+      if (indegree.has(TRIGGER_NODE)) depth.set(TRIGGER_NODE, 0);
+      const order = [];
+      const ready = nodes.filter((node) => (indegree.get(node.id) ?? 0) === 0).map((node) => node.id).sort();
+      while (ready.length > 0) {
+        const current = ready.shift();
+        order.push(current);
+        const targets = (outgoing.get(current) ?? []).sort(
           (left, right) => left.target.localeCompare(right.target)
-        )) {
-          const next = Math.max(depth.get(entry.target) ?? 0, currentDepth + 1);
-          depth.set(entry.target, next);
-          if (!order.has(entry.target)) queue.push(entry.target);
+        );
+        for (const entry of targets) {
+          depth.set(entry.target, Math.max(depth.get(entry.target) ?? 0, (depth.get(current) ?? 0) + 1));
+          const remaining = (indegree.get(entry.target) ?? 0) - 1;
+          indegree.set(entry.target, remaining);
+          if (remaining === 0) {
+            ready.push(entry.target);
+            ready.sort();
+          }
         }
+      }
+      for (const node of nodes) {
+        if (!order.includes(node.id)) order.push(node.id);
       }
       const columns = /* @__PURE__ */ new Map();
       for (const node of nodes) {
@@ -10217,10 +10226,10 @@ window.__ModuleLoader__.load({
         list.push(node.id);
         columns.set(column, list);
       }
-      const positions = {};
+      const positions = /* @__PURE__ */ Object.create(null);
       for (const column of [...columns.keys()].sort((left, right) => left - right)) {
         const ids = (columns.get(column) ?? []).sort(
-          (left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0) || left.localeCompare(right)
+          (left, right) => order.indexOf(left) - order.indexOf(right) || left.localeCompare(right)
         );
         ids.forEach((id2, row) => {
           positions[id2] = { x: column * 240, y: row * 120 };
@@ -10232,7 +10241,10 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/layout.ts
     var LAYOUT_VERSION = 1;
     function layoutOf(diagram, previous) {
-      const positions = { ...previous?.positions ?? {} };
+      const positions = Object.assign(
+        /* @__PURE__ */ Object.create(null),
+        previous?.positions ?? {}
+      );
       for (const node of diagram.nodes) {
         if (node.kind === "trigger" || node.kind === "end" || node.step === void 0) continue;
         positions[node.step.id] = { x: node.position.x, y: node.position.y };
@@ -10246,7 +10258,7 @@ window.__ModuleLoader__.load({
       const automatic = autoPositions(diagram.nodes, diagram.edges);
       const nodes = diagram.nodes.map((node) => {
         const stepId = node.step?.id;
-        const saved = stepId === void 0 ? void 0 : layout?.positions[stepId];
+        const saved = stepId !== void 0 && layout !== void 0 && Object.hasOwn(layout.positions, stepId) ? layout.positions[stepId] : void 0;
         const fallback = automatic[node.id];
         const position = saved ?? fallback ?? node.position;
         return { ...node, position };
