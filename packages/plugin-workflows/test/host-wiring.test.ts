@@ -3139,6 +3139,147 @@ describe('/workflows command starts and resumes work', () => {
     const stored = await runs.readAuthenticatedRun(workspace, 'run-resume-deferred', auth)
     expect(stored?.steps.find((step) => step.id === 'spec-review')?.state).toBe('open')
   })
+
+  it('steers the branch pending step, not the array-first step', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const branch = {
+      v: 1,
+      id: 'branch-demo',
+      name: 'Branch demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'join',
+          title: 'Join',
+          executor: 'main',
+          prompt: 'Join step.',
+          evidence: { kind: 'file', path: 'join.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+        {
+          id: 'yes',
+          title: 'Yes branch',
+          executor: 'main',
+          prompt: 'Yes step.',
+          evidence: { kind: 'file', path: 'yes.md' },
+          next: 'join',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'branch.json'), `${JSON.stringify(branch)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'branch.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const runs = await import('../src/host/runs.ts')
+    const base = runs.createRun({
+      definition: 'branch-demo',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      steps: ['join', 'yes'],
+      id: 'run-branch',
+      now: 4_000,
+    })
+    const run = {
+      ...base,
+      branchPath: ['yes', 'join'],
+      steps: base.steps.map((step) =>
+        step.id === 'join'
+          ? { ...step, state: 'open' as const }
+          : step.id === 'yes'
+            ? { ...step, state: 'blocked' as const }
+            : step,
+      ),
+    }
+    await runs.writeRun(workspace, runs.setRunStatus(run, 'interrupted', 4_100), auth)
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    const resumed = await command?.handler({
+      agent: host.agent,
+      commandId: 'cmd-resume-branch',
+      rawInput: ' resume run-branch',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(resumed?.kind).toBe('success')
+    expect(host.steers).toHaveLength(1)
+    const steered = JSON.stringify(host.steers[0])
+    expect(steered).toContain('Yes step.')
+    expect(steered).not.toContain('Join step.')
+  })
+
+  it('installs a definition and runs it without a restart', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const late = {
+      v: 1,
+      id: 'late-demo',
+      name: 'Late demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'late-demo.json'), `${JSON.stringify(late)}\n`, 'utf8')
+    const host = fakeHost(workspace, { userQuestions: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    if (command === undefined) return
+    const installed = await command.handler({
+      agent: host.agent,
+      commandId: 'cmd-install',
+      rawInput: ` install ${join(workspace, 'late-demo.json')}`,
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(installed.kind).toBe('success')
+    const started = await command.handler({
+      agent: host.agent,
+      commandId: 'cmd-run-late',
+      rawInput: ' run late-demo',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    expect(started.kind).toBe('success')
+    expect(started.text).toContain('step "observe"')
+  })
 })
 
 describe('workflows tool live wiring', () => {

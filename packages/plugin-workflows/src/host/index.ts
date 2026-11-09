@@ -53,7 +53,7 @@ import {
 } from './journal.js'
 import { registerActiveRunsContext } from './prompt.js'
 import { listReceipts } from './receipts.js'
-import { cancelRun, recoverRuns, resumeRun } from './resume.js'
+import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
   completeNotApplicable,
   createRun,
@@ -2407,10 +2407,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 if (run === undefined) return
                 const definition = definitions.find((entry) => entry.id === run.definition)
                 if (definition === undefined) return
-                const pending = run.steps.find(
-                  (step) => step.state === 'open' || step.state === 'blocked',
-                )
-                const step = definition.steps.find((entry) => entry.id === pending?.id)
+                const step = definition.steps.find((entry) => entry.id === pendingStep(run))
                 if (step === undefined) return
                 // A deferred step is never steered; only its legacy gate steers.
                 const resolved = resolveOwnership(definition, installedLegacySources()).steps.find(
@@ -2460,6 +2457,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 },
                 install: async (path) => {
                   const installed = await installDefinition(workspace, path, auth)
+                  // The next command must see the definition without a restart.
+                  definitionLoads.delete(workspace)
+                  definitionsByWorkspace.delete(workspace)
                   return { id: installed.definition.id }
                 },
                 adopt: async (name) => {
