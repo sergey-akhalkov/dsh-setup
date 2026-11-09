@@ -2,10 +2,15 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createWorkflowRoutes, DEFINITIONS_ROUTE, RECEIPTS_ROUTE } from '../src/host/api.ts'
+import {
+  createWorkflowRoutes,
+  DEFINITIONS_ROUTE,
+  EVIDENCE_ROUTE,
+  RECEIPTS_ROUTE,
+} from '../src/host/api.ts'
 import type { Definition } from '../src/host/definitions.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
-import { engineRuns } from '../src/host/projection.ts'
+import { engineRuns, sessionRuns } from '../src/host/projection.ts'
 import { issueAdoptionReceipt, listReceipts } from '../src/host/receipts.ts'
 import {
   addViolation,
@@ -104,6 +109,8 @@ describe('workflows view data', () => {
     const malformed = runs.find((run) => run.id === 'workflow:malformed')
     expect(malformed).toMatchObject({ status: 'unknown' })
     expect(malformed?.error).toBeDefined()
+    const sessionRows = await sessionRuns(workspace, 'session-1')
+    expect(sessionRows.find((run) => run.id === 'workflow:malformed')).toBeDefined()
   })
 
   it('serves the definitions and the authenticated adoption receipt', async () => {
@@ -140,5 +147,26 @@ describe('workflows view data', () => {
       await receiptsRoute?.fetch(new Request(`http://localhost${RECEIPTS_ROUTE}?session=s1`))
     )?.json()) as { receipts: Array<{ change: string; kind: string }> }
     expect(receiptsBody.receipts[0]).toMatchObject({ change: 'auth', kind: 'adoption' })
+
+    // A workflow run record link is served with the same containment and redaction.
+    const run = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: ['requirements'],
+      id: 'run-record-link',
+      now: 4_000,
+    })
+    await writeRun(workspace, run, auth())
+    const evidenceRoute = routes.find((entry) => entry.path === EVIDENCE_ROUTE)
+    expect(evidenceRoute).toBeDefined()
+    const evidenceResponse = await evidenceRoute?.fetch(
+      new Request(
+        `http://localhost${EVIDENCE_ROUTE}?session=s1&path=${encodeURIComponent('.dsh/workflows/runs/run-record-link.json')}`,
+      ),
+    )
+    expect(evidenceResponse?.status).toBe(200)
   })
 })

@@ -15,6 +15,7 @@ export interface TriggerEvaluation {
   readonly reason: string
   readonly path?: string
   readonly filter?: string
+  readonly runId?: string
   readonly detail?: string
 }
 
@@ -191,6 +192,7 @@ export const EN: Record<string, string> = {
   'whyNot.reason': 'Reason',
   'whyNot.path': 'Rejected path',
   'whyNot.filter': 'Filter',
+  'whyNot.run': 'Run',
   'whyNot.matched': 'matched',
   'whyNot.notMatched': 'not matched',
   'reason.would-fire': 'would fire',
@@ -345,6 +347,7 @@ export function WhyNotTable(props: { events: readonly JournalEvent[]; t: Transla
               <th>{t('whyNot.reason')}</th>
               <th>{t('whyNot.path')}</th>
               <th>{t('whyNot.filter')}</th>
+              <th>{t('whyNot.run')}</th>
             </tr>
           </thead>
           <tbody>
@@ -359,6 +362,7 @@ export function WhyNotTable(props: { events: readonly JournalEvent[]; t: Transla
                 <td>{t(`reason.${row.evaluation.reason}`)}</td>
                 <td>{row.evaluation.path ?? '—'}</td>
                 <td>{row.evaluation.filter ?? '—'}</td>
+                <td>{row.evaluation.runId ?? '—'}</td>
               </tr>
             ))}
           </tbody>

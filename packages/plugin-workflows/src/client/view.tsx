@@ -62,7 +62,7 @@ export const VIEW_CSS = `
 .dsh-wf-retry, .dsh-wf-more { align-self: flex-start; padding: 4px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }
 `
 
-interface Loaded {
+export interface Loaded {
   readonly health: HealthView
   readonly triggers: readonly TriggerView[]
   readonly events: Page<JournalEvent>
@@ -109,6 +109,59 @@ function pageOf<T>(body: { next?: string }, items: readonly T[]): Page<T> {
 /** A response from a previous session generation must never commit. */
 export function isStaleGeneration(requested: number, current: number): boolean {
   return requested !== current
+}
+
+/** The loaded view body; pure so it renders without hooks in tests. */
+export function WorkflowsLoaded(props: {
+  readonly loaded: Loaded
+  readonly t: Translate
+  readonly sessionId?: string
+  readonly selected?: string
+  readonly onSelect?: (run: RunView) => void
+  readonly onLoadEvents?: () => void
+  readonly onLoadRuns?: () => void
+  readonly pageStates?: PageStates
+}): ReactNode {
+  const { loaded, t, sessionId } = props
+  const selectedRun = loaded.runs.items.find((run) => run.id === props.selected)
+  const pageProps = (
+    kind: 'events' | 'runs',
+    next: string | undefined,
+  ): Record<string, unknown> => {
+    const page = props.pageStates?.[kind]
+    if (next === undefined || page?.key !== `${kind}:${next}`) return {}
+    if (page.phase === 'loading') return { loading: true }
+    return { error: page.message ?? t('state.error') }
+  }
+  return (
+    <>
+      <HealthStrip health={loaded.health} t={t} />
+      <DefinitionsTable definitions={loaded.definitions} t={t} />
+      <TriggersTable triggers={loaded.triggers} t={t} />
+      <ReceiptsList receipts={loaded.receipts} t={t} />
+      <EventList events={loaded.events.items} t={t} />
+      <LoadMore
+        next={loaded.events.next}
+        t={t}
+        onLoad={props.onLoadEvents ?? (() => {})}
+        {...pageProps('events', loaded.events.next)}
+      />
+      <RunsList
+        runs={loaded.runs.items}
+        t={t}
+        {...(props.selected === undefined ? {} : { selected: props.selected })}
+        onSelect={props.onSelect ?? (() => {})}
+      />
+      <LoadMore
+        next={loaded.runs.next}
+        t={t}
+        onLoad={props.onLoadRuns ?? (() => {})}
+        {...pageProps('runs', loaded.runs.next)}
+      />
+      {selectedRun === undefined ? null : <RunDetail run={selectedRun} t={t} session={sessionId} />}
+      <WhyNotTable events={loaded.events.items} t={t} />
+    </>
+  )
 }
 
 export function WorkflowsView(props: {
@@ -255,52 +308,22 @@ export function WorkflowsView(props: {
   }
 
   let body: ReactNode
-  const pageProps = (
-    kind: 'events' | 'runs',
-    next: string | undefined,
-  ): Record<string, unknown> => {
-    const page = pageStates[kind]
-    if (next === undefined || page?.key !== `${kind}:${next}`) return {}
-    if (page.phase === 'loading') return { loading: true }
-    return { error: page.message ?? t('state.error') }
-  }
   if (state.phase === 'loading') {
     body = <LoadingLine t={t} />
   } else if (state.phase === 'error') {
     body = <ErrorLine message={state.message ?? ''} t={t} onRetry={load} />
   } else {
-    const loaded = state.loaded as Loaded
-    const selectedRun = loaded.runs.items.find((run) => run.id === selected)
     body = (
-      <>
-        <HealthStrip health={loaded.health} t={t} />
-        <DefinitionsTable definitions={loaded.definitions} t={t} />
-        <TriggersTable triggers={loaded.triggers} t={t} />
-        <ReceiptsList receipts={loaded.receipts} t={t} />
-        <EventList events={loaded.events.items} t={t} />
-        <LoadMore
-          next={loaded.events.next}
-          t={t}
-          onLoad={mergeEvents}
-          {...pageProps('events', loaded.events.next)}
-        />
-        <RunsList
-          runs={loaded.runs.items}
-          t={t}
-          {...(selected === undefined ? {} : { selected })}
-          onSelect={(run) => setSelected(run.id)}
-        />
-        <LoadMore
-          next={loaded.runs.next}
-          t={t}
-          onLoad={mergeRuns}
-          {...pageProps('runs', loaded.runs.next)}
-        />
-        {selectedRun === undefined ? null : (
-          <RunDetail run={selectedRun} t={t} session={sessionId} />
-        )}
-        <WhyNotTable events={loaded.events.items} t={t} />
-      </>
+      <WorkflowsLoaded
+        loaded={state.loaded as Loaded}
+        t={t}
+        sessionId={sessionId}
+        selected={selected}
+        onSelect={(run) => setSelected(run.id)}
+        onLoadEvents={mergeEvents}
+        onLoadRuns={mergeRuns}
+        pageStates={pageStates}
+      />
     )
   }
   return (

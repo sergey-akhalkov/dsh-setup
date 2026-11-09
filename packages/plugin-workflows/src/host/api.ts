@@ -166,7 +166,12 @@ function route(path: string, handler: (request: Request) => Promise<Response>): 
 }
 
 /** Only settled record evidence inside the workspace may be served. */
-const EVIDENCE_PREFIXES = ['.dsh/delegation/', '.dsh/work-checkpoints/', 'openspec/changes/']
+const EVIDENCE_PREFIXES = [
+  '.dsh/delegation/',
+  '.dsh/work-checkpoints/',
+  '.dsh/workflows/runs/',
+  'openspec/changes/',
+]
 
 async function readEvidence(workspace: string, path: string): Promise<Response> {
   if (!EVIDENCE_PREFIXES.some((prefix) => path.startsWith(prefix))) {

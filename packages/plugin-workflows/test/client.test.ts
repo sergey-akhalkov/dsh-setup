@@ -52,6 +52,7 @@ interface LoadedModule {
   EN?: Record<string, string>
   apply?: (ctx: unknown) => void
   WorkflowsView?: (props: Record<string, unknown>) => unknown
+  WorkflowsLoaded?: (props: Record<string, unknown>) => unknown
   HealthStrip?: (props: Record<string, unknown>) => unknown
   TriggersTable?: (props: Record<string, unknown>) => unknown
   EventList?: (props: Record<string, unknown>) => unknown
@@ -513,5 +514,136 @@ describe('Workflows Client half', () => {
     const css = module.VIEW_CSS ?? ''
     expect(css).not.toMatch(/--dsw-[a-z0-9-]+\s*:/u)
     expect(css).toContain('var(--dsw-')
+  })
+})
+describe('Workflows loaded view', () => {
+  it('renders definitions, receipts, runs, a violation, a malformed row, and the trigger run id', () => {
+    const module = loadModule()
+    const t = (key: string): string =>
+      ({ 'definitions.heading': 'Definitions', 'receipts.heading': 'Receipts' })[key] ?? key
+    const step = (id: string, state: string, title = id) => ({
+      id,
+      title,
+      state,
+      at: 1_762_500_000_000,
+    })
+    const loaded = {
+      health: {
+        state: 'healthy',
+        listenerCount: 5,
+        triggerCount: 9,
+        journalWritable: true,
+        lastEventAt: 1_762_500_000_000,
+        lastCheckAt: 1_762_500_000_000,
+        session: 'session-1',
+      },
+      triggers: [
+        {
+          id: 'change-intake',
+          event: 'tool.pre-execute',
+          filter: { tool: 'shell' },
+          mode: 'active',
+          dedupe: 'name',
+        },
+      ],
+      events: {
+        items: [
+          {
+            at: 1_762_500_000_000,
+            kind: 'tool.pre-execute',
+            subject: 'auth',
+            triggers: [
+              { id: 'change-intake', matched: true, reason: 'run-created', runId: 'run-created-1' },
+            ],
+          },
+        ],
+      },
+      runs: {
+        items: [
+          {
+            id: 'workflow:run-running',
+            source: 'workflow',
+            session: 'session-1',
+            attribution: 'local',
+            title: 'change-intake intake',
+            startedAt: 1_762_500_000_000,
+            status: 'running',
+            steps: [step('requirements', 'open')],
+          },
+          {
+            id: 'workflow:run-blocked',
+            source: 'workflow',
+            session: 'session-1',
+            attribution: 'local',
+            title: 'change-intake intake',
+            startedAt: 1_762_500_000_001,
+            status: 'running',
+            steps: [step('spec-review', 'blocked'), step('violation:0', 'VIOLATION', 'VIOLATION')],
+          },
+          {
+            id: 'workflow:malformed',
+            source: 'workflow',
+            attribution: 'unattributed',
+            title: 'workflow intake',
+            startedAt: 0,
+            status: 'unknown',
+            steps: [],
+            error: 'the run record is not an object',
+          },
+        ],
+        next: undefined,
+      },
+      definitions: [
+        {
+          id: 'change-intake',
+          name: 'OpenSpec change intake',
+          version: 1,
+          trigger: 'tool.pre-execute',
+          mode: 'active',
+          gateOwnership: 'own',
+          steps: [
+            { id: 'requirements', title: 'Requirements', executor: 'main', ownership: 'own' },
+            { id: 'spec-review', title: 'Spec review', executor: 'tool', ownership: 'defer' },
+          ],
+        },
+      ],
+      receipts: [
+        {
+          change: 'auth',
+          kind: 'adoption',
+          digest: 'a'.repeat(64),
+          issuedAt: 1_762_500_000_000,
+        },
+      ],
+    }
+    const blocked = JSON.stringify(
+      renderTree(
+        module.WorkflowsLoaded?.({
+          loaded,
+          t,
+          sessionId: 'session-1',
+          selected: 'workflow:run-blocked',
+        }) as never,
+      ),
+    )
+    expect(blocked).toContain('Definitions')
+    expect(blocked).toContain('Receipts')
+    expect(blocked).toContain('workflow:run-running')
+    expect(blocked).toContain('workflow:run-blocked')
+    expect(blocked).toContain('VIOLATION')
+    expect(blocked).toContain('run-created-1')
+    expect(blocked).toContain('auth')
+    const malformed = JSON.stringify(
+      renderTree(
+        module.WorkflowsLoaded?.({
+          loaded,
+          t,
+          sessionId: 'session-1',
+          selected: 'workflow:malformed',
+        }) as never,
+      ),
+    )
+    expect(malformed).toContain('workflow:malformed')
+    expect(malformed).toContain('the run record is not an object')
   })
 })

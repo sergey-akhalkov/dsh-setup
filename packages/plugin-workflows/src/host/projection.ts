@@ -885,7 +885,12 @@ export async function sessionRuns(workspace: string, sessionId: string): Promise
     workspaceRuns(workspace),
   ])
   return [...checkpoints, ...workspaceRunsList]
-    .filter((run) => run.attribution !== 'unattributed' && run.session === sessionId)
+    .filter(
+      (run) =>
+        (run.attribution !== 'unattributed' && run.session === sessionId) ||
+        // Malformed workflow records are workspace diagnostics, not session rows.
+        (run.source === 'workflow' && run.error !== undefined),
+    )
     .sort(compareRuns)
 }
 
