@@ -49,7 +49,7 @@ export function evaluateTurnClose(input) {
             (input.completion?.ok === false
                 ? (input.completion.text ?? 'the completion coverage is incomplete')
                 : undefined);
-        if (ownedText !== undefined) {
+        if (ownedText !== undefined && step === undefined) {
             const blocks = input.run.turnBlocks ?? 0;
             if (blocks >= input.maxBlocks) {
                 const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`;
@@ -59,7 +59,7 @@ export function evaluateTurnClose(input) {
             return {
                 kind: 'refuse',
                 run: incrementTurnBlocks(input.run, at),
-                stepId: step?.id ?? input.definition.steps.at(-1)?.id ?? 'owned-rule',
+                stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
                 text: ownedText,
             };
         }

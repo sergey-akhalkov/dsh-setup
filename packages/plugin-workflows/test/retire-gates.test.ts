@@ -112,7 +112,7 @@ describe('parity load gate and verify settings', () => {
     const missing = parityLoadIssues(
       loadShippedDefinitions(),
       undefined,
-      'C:\\Users\\someone\\AppData\\Local\\Programs\\DeepSeek Harness\\resources\\app.asar\\dsh\\packages\\plugin-workflows\\assets\\parity\\retire-legacy-gates.json',
+      `${'very-long-install-prefix/'.repeat(20)}packages/plugin-workflows/assets/parity/retire-legacy-gates.json`,
       'the report file does not exist',
     )
     for (const issue of missing.issues) {
@@ -534,9 +534,14 @@ describe('owned task-review definition', () => {
     await mkdir(join(changeDir, 'reviews'), { recursive: true })
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n- [ ] 1.2 Later\n', 'utf8')
     const context = { workspace, values: { name: 'auth' } }
+    const intermediate = await verifyEvidence(
+      { kind: 'check', source: 'task-review-coverage' },
+      context,
+    )
+    expect(intermediate.ok).toBe(true)
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n', 'utf8')
     const missing = await verifyEvidence({ kind: 'check', source: 'task-review-coverage' }, context)
     expect(missing.ok).toBe(false)
-    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n', 'utf8')
     const id = (await import('../src/host/tasks.ts')).taskIdOf('Foreign')
     await writeFile(
       join(changeDir, 'reviews', `${id}.json`),
@@ -617,6 +622,59 @@ describe('owned task-review definition', () => {
     )
     expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
     await rm(workspace, { recursive: true, force: true })
+  })
+
+  it('defers completion coverage for an intermediate close and steers the final one', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n- [ ] 1.2 Later\n', 'utf8')
+    expect(
+      (
+        await verifyEvidence(
+          { kind: 'check', source: 'task-review-coverage' },
+          { workspace, values: { name: 'auth' } },
+        )
+      ).ok,
+    ).toBe(true)
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Foreign\n', 'utf8')
+    expect(
+      (
+        await verifyEvidence(
+          { kind: 'check', source: 'task-review-coverage' },
+          { workspace, values: { name: 'auth' } },
+        )
+      ).ok,
+    ).toBe(false)
+    await rm(workspace, { recursive: true, force: true })
+
+    const definition = shipped('task-review')
+    let run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { name: 'auth', taskId: '0123456789abcdef' },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    run = settleStep(run, 'start-review', 'done', { at: 1_001, evidence: { kind: 'declaration' } })
+    run = settleStep(run, 'await-review', 'done', { at: 1_002, evidence: { kind: 'declaration' } })
+    const steers: string[] = []
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: (text: string) => steers.push(text) },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 3,
+      maxBlocks: 3,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+      completion: { ok: false, text: 'checked task "1.1 Foreign" has no portable PASS' },
+    })
+    expect(outcome.kind).toBe('refuse')
+    expect(steers).toHaveLength(1)
+    expect(steers[0]).toContain('coverage')
   })
 
   it('requires portable PASS coverage for every checked task at completion', async () => {

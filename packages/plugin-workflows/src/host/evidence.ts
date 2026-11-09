@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
@@ -856,6 +857,29 @@ function checkResult(
     const change = context.values.name
     if (typeof change !== 'string') {
       return checkFailure('the completion coverage check has no change name', item)
+    }
+    // An intermediate close (unchecked tasks remain) defers completion
+    // coverage; only the final checked list needs portable approvals.
+    const tasksMarkdown = (() => {
+      try {
+        return readFileSync(
+          join(context.workspace, 'openspec', 'changes', change, 'tasks.md'),
+          'utf8',
+        )
+      } catch {
+        return undefined
+      }
+    })()
+    if (tasksMarkdown !== undefined && /^\s*-\s*\[ \]\s+\d+(?:\.\d+)*\s+\S/mu.test(tasksMarkdown)) {
+      return {
+        ok: true,
+        evidence: {
+          kind: 'check',
+          callId: 'task-review-intermediate',
+          at: Date.now(),
+          detail: 'unchecked tasks remain; completion coverage is deferred',
+        },
+      }
     }
     const coverage = taskReviewCoverage(context.workspace, change)
     if (!coverage.ok) return checkFailure(coverage.gaps.join('; '), item)
