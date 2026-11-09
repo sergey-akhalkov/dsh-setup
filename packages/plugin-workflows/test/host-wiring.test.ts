@@ -3714,6 +3714,64 @@ describe('workflows tool live wiring', () => {
   })
 })
 
+describe('unapproved active definitions', () => {
+  it('starts no run from an unapproved active local definition after reload', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const raw = {
+      v: 1,
+      id: 'active-demo',
+      name: 'Active demo',
+      version: 1,
+      trigger: {
+        kind: 'fs.change',
+        match: { path: 'openspec/changes/' },
+        mode: 'active',
+        dedupe: 'path',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    await mkdir(join(workspace, '.dsh', 'workflows', 'definitions'), { recursive: true })
+    await writeFile(
+      join(workspace, '.dsh', 'workflows', 'definitions', 'active-demo.json'),
+      JSON.stringify(raw),
+      'utf8',
+    )
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const active = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+      (entry) => entry.definition === 'active-demo',
+    )
+    expect(active).toHaveLength(0)
+  })
+})
+
 describe('archive gate on an unreadable run store', () => {
   it('refuses the archive when the run listing or stat fails and issues no authorization', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

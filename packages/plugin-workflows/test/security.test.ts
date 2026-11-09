@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -173,6 +173,28 @@ describe('workflow security', () => {
     if (credentialStep === undefined) throw new Error('missing step')
     credentialStep.prompt = 'Use sk-abcdefghijklmnopqrstuvwx to call the service.'
     expect(() => validateDefinition(withCredential)).toThrow(/credential-shaped value/u)
+  })
+
+  it('refuses a definition carrying a private key and installs nothing', async () => {
+    const workspace = await tempWorkspace()
+    const raw = definitionJson('pem-demo')
+    const step = (raw.steps as Array<Record<string, unknown>>)[0]
+    if (step === undefined) throw new Error('missing step')
+    step.prompt = '-----BEGIN RSA PRIVATE KEY-----\\nMIIE\\n-----END RSA PRIVATE KEY-----'
+    const source = join(workspace, 'pem-demo.json')
+    await writeFile(source, JSON.stringify(raw), 'utf8')
+    await expect(installDefinition(workspace, source, auth())).rejects.toThrow(
+      /credential-shaped value/u,
+    )
+    const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
+    expect(loaded.definitions.map((entry) => entry.id)).not.toContain('pem-demo')
+    await expect(
+      readFile(join(workspace, '.dsh/workflows/definitions/pem-demo.json'), 'utf8'),
+    ).rejects.toThrow()
+    const approvals = await readFile(join(workspace, '.dsh/workflows/approved.json'), 'utf8').catch(
+      () => '',
+    )
+    expect(approvals).not.toContain('pem-demo')
   })
 
   it('refuses a path escape and registers only host-generated owned call ids', async () => {

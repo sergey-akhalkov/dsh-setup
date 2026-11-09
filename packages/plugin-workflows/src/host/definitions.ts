@@ -16,7 +16,7 @@ export const DEFINITION_ID = /^[a-z0-9][a-z0-9-]*$/u
 
 /** A credential-shaped value a definition must never carry. */
 const CREDENTIAL_VALUE =
-  /\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----)\b/u
+  /\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/u
 
 /** The deterministic event kinds a definition trigger may observe. */
 export const OBLIGATION_EVENT_KINDS = [
