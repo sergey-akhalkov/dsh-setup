@@ -266,10 +266,11 @@ async function installOnce(
   }
   // The revision precondition lives inside this serialized transaction, so a
   // concurrent install cannot slip between the check and the replacement.
+  const createOnly = options.expectedHash === null
   if (options.expectedHash !== undefined) {
     const current = await readFile(target).catch(() => undefined)
     const currentHash = current === undefined ? null : sha256(current)
-    if (options.expectedHash === null) {
+    if (createOnly) {
       if (currentHash !== null) {
         throw new InstallConflictError(`definition "${definition.id}" already exists`, currentHash)
       }
@@ -282,15 +283,20 @@ async function installOnce(
   // it by rename even when the disk is full.
   const backup = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.bak`
   let hadPrevious = false
-  try {
-    await makeLink(target, backup)
-    hadPrevious = true
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  let createdByUs = false
+  if (!createOnly) {
+    try {
+      await makeLink(target, backup)
+      hadPrevious = true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
   }
   const restore = async (): Promise<void> => {
     if (!hadPrevious) {
-      await remove(target).catch(() => undefined)
+      // Remove the target only when this transaction created it; a competitor's
+      // file that made an exclusive create fail must stay untouched.
+      if (createdByUs) await remove(target).catch(() => undefined)
       return
     }
     try {
@@ -302,7 +308,33 @@ async function installOnce(
     }
   }
   try {
-    await writeAtomic(target, bytes)
+    if (createOnly) {
+      // Publish complete bytes with an exclusive hard link: a file created by
+      // anyone after the absence check makes the link fail instead of being
+      // overwritten by a rename.
+      const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
+      await writeFile(temporary, bytes)
+      try {
+        await makeLink(temporary, target)
+        createdByUs = true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          const current = await readFile(target).catch(() => undefined)
+          throw new InstallConflictError(
+            `definition "${definition.id}" already exists`,
+            current === undefined ? null : sha256(current),
+          )
+        }
+        throw error
+      } finally {
+        await remove(temporary).catch(() => undefined)
+      }
+    } else {
+      await writeAtomic(target, bytes)
+      // A replace of a missing target created this file; rollback must remove
+      // nothing else.
+      if (!hadPrevious) createdByUs = true
+    }
     // A concurrent swap for a link must not be blessed: the written file itself
     // has to resolve to the exact expected name inside the definitions directory.
     const written = await realpath(target).catch(() => undefined)
@@ -334,7 +366,7 @@ async function installOnce(
     if (hadPrevious) await remove(backup).catch(() => undefined)
     return { definition, file: target, hash }
   } catch (error) {
-    if (hadPrevious || (await lstat(target).catch(() => undefined)) !== undefined) {
+    if (hadPrevious || createdByUs) {
       await restore()
     }
     throw error

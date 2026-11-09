@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   approvalsPath,
+  InstallConflictError,
   installDefinition,
   loadApprovedDefinitions,
   readApprovals,
@@ -410,6 +411,36 @@ describe('install transaction isolation', () => {
     expect(observed).toContain('Original')
     const loaded = await loadApprovedDefinitions(workspace, { auth: auth() })
     expect(loaded.definitions.find((entry) => entry.id === 'readable-demo')?.name).toBe('Changed')
+  })
+
+  it('refuses to overwrite a definition created at publication time', async () => {
+    const workspace = await tempWorkspace()
+    const source = join(workspace, 'race.json')
+    await writeFile(source, `${JSON.stringify(definitionFor('race-demo'), null, 2)}\n`)
+    const competitor = Buffer.from(
+      `${JSON.stringify(definitionFor('race-demo', 'Competitor'), null, 2)}\n`,
+      'utf8',
+    )
+    let injected = false
+    await expect(
+      installDefinition(workspace, source, auth(), {
+        expectedHash: null,
+        link: async (from, to) => {
+          // A different writer publishes the same id between the absence check
+          // and our exclusive publication.
+          if (!injected) {
+            injected = true
+            await writeFile(to, competitor)
+          }
+          await link(from, to)
+        },
+      }),
+    ).rejects.toBeInstanceOf(InstallConflictError)
+    expect(
+      await readFile(join(workspaceDefinitionsDirectory(workspace), 'race-demo.json')),
+    ).toEqual(competitor)
+    const approvals = await readApprovals(workspace)
+    expect(approvals.approvals.has('race-demo')).toBe(false)
   })
 
   it('keeps both approvals when two definitions install concurrently', async () => {
