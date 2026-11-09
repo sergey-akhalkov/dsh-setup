@@ -12275,7 +12275,9 @@ window.__ModuleLoader__.load({
         setLoading(true);
         try {
           const result = await saveAsCopy(editor, { api, taken });
-          if (result.status === "saved") {
+          const nextId2 = result.document.definition.id;
+          const documentChanged = nextId2 !== editor.document.definition.id;
+          if (documentChanged) {
             runSelection.invalidate();
             setRuns([]);
             setRunId(void 0);
@@ -12285,9 +12287,9 @@ window.__ModuleLoader__.load({
             if (current === editor) return result;
             return reconcileCopy(editor, current, result);
           });
-          if (result.status === "saved") {
+          if (documentChanged) {
             await refreshLibrary();
-            await loadRuns(result.document.definition.id);
+            await loadRuns(nextId2);
           }
         } catch (error) {
           setMessage(error instanceof Error ? error.message : String(error));

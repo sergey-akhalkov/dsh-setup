@@ -314,6 +314,19 @@ describe('draft, dirty tracking, and save', () => {
     })
     expect(failing.document.revision).toBeNull()
     expect(failing.dirty).toBe(true)
+
+    // The definition save succeeded and only the layout failed: the copy has
+    // already replaced the open document and reports it, so the view must
+    // reload runs for the copy rather than keep the original's.
+    const layoutFailed = await saveAsCopy(moved, {
+      api: fakeApi({
+        layout: () => ({ ok: false, kind: 'conflict', status: 409, revision: 'layout-rev' }),
+      }).api,
+      taken: TAKEN,
+    })
+    expect(layoutFailed.status).toBe('error')
+    expect(layoutFailed.document.definition.id).toBe('demo-copy')
+    expect(layoutFailed.document.revision).not.toBeNull()
   })
 
   it('installs a draft only through the create-only save', async () => {

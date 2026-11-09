@@ -268,9 +268,11 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setLoading(true)
     try {
       const result = await saveAsCopy(editor, { api, taken })
-      if (result.status === 'saved') {
-        // The copy becomes the open document now; drop the original's runs
-        // before the library refresh, not after it.
+      const nextId = result.document.definition.id
+      // A copy that saved its definition but failed only on the layout has
+      // already become the open document; drop the original's runs either way.
+      const documentChanged = nextId !== editor.document.definition.id
+      if (documentChanged) {
         runSelection.invalidate()
         setRuns([])
         setRunId(undefined)
@@ -280,9 +282,9 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         if (current === editor) return result
         return reconcileCopy(editor, current, result)
       })
-      if (result.status === 'saved') {
+      if (documentChanged) {
         await refreshLibrary()
-        await loadRuns(result.document.definition.id)
+        await loadRuns(nextId)
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
