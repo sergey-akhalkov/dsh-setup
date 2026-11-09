@@ -166,7 +166,7 @@ budget, and the `work_checkpoint` observability attribution (19 tasks, 18/19 por
 ## Archive index
 
 Every directory under `openspec/changes/archive/`, with its recorded task count at the time this page
-was written (2026-11-09). Read the entry's `proposal.md` and `design.md` for what it changed, and its
+was written (2026-11-10). Read the entry's `proposal.md` and `design.md` for what it changed, and its
 `tasks.md` for the open boxes.
 
 | Change                                                   | Recorded tasks |
@@ -224,6 +224,7 @@ was written (2026-11-09). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-09-add-workflow-obligations`                    | 36/36          |
 | `2026-11-09-add-section-scoped-task-review`              | 10/10          |
 | `2026-11-09-add-workflow-editor`                         | 24/27          |
+| `2026-11-10-retire-legacy-gates`                         | 17/21          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -692,3 +693,18 @@ the serial integration passed the full gate (146 files / 2750 tests, build with 
 rendered DesignMode accessibility interaction check (7.1/7.2 are covered by pure logic until the 8.4
 owner browser pass) and the live visual check (8.4); the client bundle budget is documented as the
 single-artifact trade-off.
+
+On 2026-11-10 `retire-legacy-gates` switched the shipped setup to the workflow-owned gates: the setup
+defaults disable the task-review and archive legacy signals, turn off the checkpoint automation, and
+keep the verification-gate row installed but disabled, while the retained spec-review, task-progress
+and lane-boundary rules stay strict. The workflow definitions `task-review`, `retro` and `verify` load
+from the tracked parity report (all gate cases pass; `pnpm workflows:parity --check` runs after every
+build in both CI workflows), the verify settings accept profile command/cap overrides (including a
+cap above 128), and the verification-gate capability spec was retired. The serial integration passed
+the full gate (153 files / 2840 tests, gen 411, validators, strict validation) and archived 17/21.
+Open owner follow-ups: the four held gaps — bottleneck-target normalization (4.2), preserving a
+pending verification obligation across turns (5.1), and the installed-runtime activation test with
+the lane-fanout assertion (6.2/6.5) — plus the one-release owner steps: install the release into a
+throwaway DSH_HOME, exercise the retired and retained gates, delete the legacy verification row
+after one release, and use the documented per-signal switch to roll back. The gates are switched on
+by default in this release, so the throwaway-DSH_HOME check is the first post-install verification.

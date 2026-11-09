@@ -211,7 +211,7 @@ younger than `stepInterval` steps exists for the turn, steering the request on e
 SHALL also refuse a close whose checkpoint names a bottleneck whose remedy is not executed or whose
 bottleneck reached `bottleneckAge`. It SHALL allow at most `maxBlocks` refusals per turn and then
 allow the close with a visible UNCHECKED notice that is not a pass. It MUST fail open on an internal
-state error and MUST NOT evaluate a subagent turn.
+state error and MUST NOT evaluate a subagent turn. When `checkpoint.automation` is false, this close gate MUST report nothing and MUST NOT steer or refuse a close; the `retro` workflow definition owns the checkpoint request.
 
 #### Scenario: Missing checkpoint
 
@@ -258,6 +258,11 @@ state error and MUST NOT evaluate a subagent turn.
 - **WHEN** the turn belongs to a subagent
 - **THEN** the close gate does not evaluate it
 
+#### Scenario: Automation off is silent
+
+- **WHEN** `automation` is false and the turn closes after a substantial pause with no checkpoint
+- **THEN** the checkpoint provider does not refuse or steer the close
+
 ### Requirement: Parallel-action gate
 
 When the plugin computes parallel remaining work from the checkpoint's lane plan, it SHALL require a
@@ -265,7 +270,7 @@ successful worker start whose arguments contain the checkpoint id before the tur
 checkpoint in the same turn whose lane plan removes the parallel work. Two lanes are parallel when
 both are runnable, they have different owners, and their scopes do not overlap, compared by path
 components so `src` and `src2` are disjoint. A failed or untagged worker start MUST NOT satisfy the
-gate.
+gate. When `checkpoint.automation` is false, the gate MUST report nothing and require no worker start.
 
 #### Scenario: Worker start satisfies
 
@@ -314,12 +319,17 @@ gate.
 - **WHEN** a worker start does not contain the checkpoint id
 - **THEN** it does not satisfy the gate
 
+#### Scenario: Automation off requires no worker
+
+- **WHEN** `automation` is false and the checkpoint computed parallel lanes
+- **THEN** the gate reports nothing and the turn may close
+
 ### Requirement: Parallel gate refusal and cap
 
 The plugin SHALL steer on each unsatisfied parallel-gate close with the checkpoint id, share the
 `maxBlocks` budget with the close gate, and after the cap allow the close with a visible UNCHECKED
 notice. When no worker-start tool is registered, `enforceParallel` is false, or the checkpoint
-outcome is `done`, the gate SHALL report nothing.
+outcome is `done`, the gate SHALL report nothing. When `checkpoint.automation` is false, the gate SHALL report nothing.
 
 #### Scenario: Missing worker
 
@@ -351,6 +361,11 @@ outcome is `done`, the gate SHALL report nothing.
 
 - **WHEN** the checkpoint outcome is `done`
 - **THEN** the gate reports nothing
+
+#### Scenario: Automation off parallel refusal is silent
+
+- **WHEN** `automation` is false and the turn closes after a computed parallel plan with no tagged worker start
+- **THEN** the gate reports nothing and the turn may close
 
 ### Requirement: Goal rounds
 
@@ -450,7 +465,7 @@ The plugin SHALL steer one bounded checkpoint request when a root turn reaches `
 (default 40) since the turn start or the latest checkpoint, provided the turn has at least one
 successful write or worker start (or `requireWrite` is false) and the last tool call is not
 `ask_user_question`. It MUST NOT steer within `stepInterval` steps of a successful checkpoint and
-MUST NOT start an idle agent.
+MUST NOT start an idle agent. When `checkpoint.automation` is false, the plugin MUST NOT steer a periodic request.
 
 #### Scenario: Interval reached
 
@@ -487,6 +502,11 @@ MUST NOT start an idle agent.
 
 - **WHEN** no agent is running
 - **THEN** the request is not injected
+
+#### Scenario: Automation off sends no request
+
+- **WHEN** `automation` is false and a root turn reaches the interval boundary
+- **THEN** the plugin steers no checkpoint request
 
 ### Requirement: Lane plan
 
@@ -534,7 +554,7 @@ successful worker start carrying the checkpoint id and the bottleneck id, a succ
 at a declared target for a lead-owned bottleneck, or a question to the user. When the bottleneck
 owner is not `lead`, the action MUST be `worker_start` or `user_decision`; `lead_action` MUST be
 refused. When no worker-start tool is visible, the owner rule MUST fail open and accept a
-`lead_action` with targets.
+`lead_action` with targets. When `checkpoint.automation` is false, the remedy MUST NOT refuse the close; the checkpoint record still carries the bottleneck unchanged.
 
 #### Scenario: Worker start remedy
 
@@ -597,6 +617,11 @@ refused. When no worker-start tool is visible, the owner rule MUST fail open and
 - **WHEN** the checkpoint outcome is `done`
 - **THEN** the remedy gate reports nothing
 
+#### Scenario: Automation off does not refuse the remedy
+
+- **WHEN** `automation` is false and the checkpoint names a remedy that was not executed
+- **THEN** the plugin does not refuse the close and the record still names the remedy
+
 ### Requirement: Bottleneck remedy evidence
 
 A remedy match SHALL require a completed successful result and, for `lead_action`, a destination path
@@ -647,7 +672,7 @@ The plugin SHALL read the previous checkpoint record of the same session and cou
 checkpoints whose bottleneck names the same owner and the same set of blocking lane ids. At
 `bottleneckAge` such checkpoints (default 2) it MUST refuse the close until the owner changes, a
 blocking lane changes state, or a `user_decision` question was asked. It MUST NOT count a record
-from another session or one without a bottleneck.
+from another session or one without a bottleneck. When `checkpoint.automation` is false, no age refusal applies.
 
 #### Scenario: Age reached
 
@@ -679,3 +704,37 @@ from another session or one without a bottleneck.
 
 - **WHEN** another session recorded a checkpoint with the same owner and blocking lanes
 - **THEN** it does not count toward this session's age
+
+#### Scenario: Automation off does not age
+
+- **WHEN** `automation` is false and consecutive checkpoints name the same bottleneck
+- **THEN** the plugin does not refuse the close for bottleneck age
+
+### Requirement: Gate-only retirement switch
+
+The checkpoint provider SHALL support `automation: false`, which keeps the `work_checkpoint` tool, its local record, and the lane schema, while disabling the close gate, the parallel gate, the remedy gate, the bottleneck-age gate, and the periodic request. When automation is false, the `retro` workflow definition SHALL be the enforcing path and MUST be `own`; a `defer` definition beside the disabled automation MUST be refused because no enabled legacy source remains.
+
+#### Scenario: Tool remains available
+
+- **WHEN** `automation` is false
+- **THEN** `work_checkpoint` still accepts a call, writes its record, and returns the decision summary
+
+#### Scenario: Gates are silent
+
+- **WHEN** `automation` is false and a turn stops without a checkpoint
+- **THEN** the checkpoint provider does not steer or refuse the close
+
+#### Scenario: Workflow owns the close
+
+- **WHEN** `automation` is false and the `retro` definition is `own`
+- **THEN** the workflow requests the checkpoint and refuses the close until a fresh record exists
+
+#### Scenario: Defer is refused without automation
+
+- **WHEN** `automation` is false and the `retro` definition is `defer`
+- **THEN** the definition is refused and neither owner is silently left without an enforcing checkpoint
+
+#### Scenario: Rollback
+
+- **WHEN** `automation` is true again
+- **THEN** the checkpoint provider's gates steer again and the `retro` definition MUST return to `defer`

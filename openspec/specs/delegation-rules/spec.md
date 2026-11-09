@@ -286,7 +286,7 @@ The patch contract SHALL run a write-capable target in an isolated git worktree,
 
 ### Requirement: Turn-stopping gate
 
-For every gated rule, the engine SHALL refuse a turn close unless a matching `PASS` or `ERROR` record exists for the rule and digest; it MUST steer with the rule id, digest, record path, and exact delegate call and MUST NOT accept a text claim. A soft rule MUST steer once per failure streak; a failed delegation MUST be reported and MUST NOT trap the turn. A stale record MUST never authorize a handoff. A change-scoped review rule MUST apply only in a session that created or modified the change. The engine MUST separate a worktree-level git failure from a per-change artifact problem: a missing or unreadable planning file in a change attributed to the current session (for example `tasks.md`) MUST NOT be reported as a worktree digest failure and MUST instead produce a distinct issue that names the change and the session, or treat the change as not review-ready.
+For every gated rule, the engine SHALL refuse a turn close unless a matching `PASS` or `ERROR` record exists for the rule and digest; it MUST steer with the rule id, digest, record path, and exact delegate call and MUST NOT accept a text claim. A soft rule MUST steer once per failure streak; a failed delegation MUST be reported and MUST NOT trap the turn. A stale record MUST never authorize a handoff. A change-scoped review rule MUST apply only in a session that created or modified the change. The engine MUST separate a worktree-level git failure from a per-change artifact problem: a missing or unreadable planning file in a change attributed to the current session (for example `tasks.md`) MUST NOT be reported as a worktree digest failure and MUST instead produce a distinct issue that names the change and the session, or treat the change as not review-ready. When `delegation.gates.workflowOwned` is false, the engine MUST NOT enforce or steer the task-review rule and MUST NOT refuse a close for a missing task review; the whole-spec `spec-review` rule, the task-progress gate, and the lane-assignment/lane-boundary gates MUST remain in force. A `defer` task-review definition MUST be refused in that mode.
 
 #### Scenario: Strict rule unsatisfied
 
@@ -327,6 +327,11 @@ For every gated rule, the engine SHALL refuse a turn close unless a matching `PA
 
 - **WHEN** the git status or diff command needed for the worktree digest fails
 - **THEN** the gate reports the worktree digest failure and the git command to re-run
+
+#### Scenario: Workflow-owned task-review is silent
+
+- **WHEN** `gates.workflowOwned` is false and a checked task lacks a review
+- **THEN** this engine does not steer or refuse the close for the task-review rule
 
 ### Requirement: Delegate tool and status
 
@@ -935,7 +940,7 @@ The engine SHALL compute approval over every checked task in `tasks.md`, indepen
 
 ### Requirement: Archive approval gate
 
-In a workspace whose tracked `openspec/review-approval.json` sets `archiveGate: true`, the engine SHALL refuse the archive operation before it runs unless every checked task has a portable task-review PASS. The refusal MUST name the change, the missing tasks, and the exact review calls, and MUST leave the change active. The guard MUST fail closed on an unreadable change, record, or task rule. A workspace without the marker MUST be unchanged.
+In a workspace whose tracked `openspec/review-approval.json` sets `archiveGate: true`, the engine SHALL refuse the archive operation before it runs unless every checked task has a portable task-review PASS. The refusal MUST name the change, the missing tasks, and the exact review calls, and MUST leave the change active. The guard MUST fail closed on an unreadable change, record, or task rule. A workspace without the marker MUST be unchanged. When `delegation.gates.workflowOwned` is false, this legacy archive guard MUST NOT run; the workflow archive gate is the only archive enforcement, and the switch is valid only when the `task-review` definition is `own` and the tracked parity report passes.
 
 #### Scenario: Missing approval
 
@@ -966,6 +971,11 @@ In a workspace whose tracked `openspec/review-approval.json` sets `archiveGate: 
 
 - **WHEN** `tasks.md` or a required portable record cannot be read
 - **THEN** the archive is refused with the path and the failure
+
+#### Scenario: Legacy guard is off
+
+- **WHEN** `gates.workflowOwned` is false and a checked task has no portable PASS
+- **THEN** this engine does not refuse the archive and the workflow archive gate owns the check
 
 ### Requirement: PASS-only approval boundary
 
@@ -1997,3 +2007,52 @@ A settled section ERROR SHALL be visible to each covered checked task's turn-gat
 
 - **WHEN** the section target fails with a classified failure
 - **THEN** the covered tasks' gate state names that failure class and the retry policy still applies
+
+### Requirement: Gate-only retirement switch
+
+The review engine SHALL support `gates.workflowOwned: false`, which disables only the task-review turn-stopping rule and the archive gate. It keeps the `delegate` tool, queue, runs, records, `task_progress` notes, rule data, the whole-spec `spec-review` rule, and the task-progress and lane-assignment/lane-boundary gates. A `defer` `task-review` definition MUST then be refused, while a `defer` `spec-review` step remains valid.
+
+#### Scenario: Review runtime remains
+
+- **WHEN** `gates.workflowOwned` is false and a task review is delegated
+- **THEN** the review still queues, runs, and writes its record
+
+#### Scenario: Workflow-owned gates are silent
+
+- **WHEN** the switch is false and a checked task lacks a review
+- **THEN** the delegation-rules task-review and archive gates do not steer or refuse
+
+#### Scenario: Spec-review rule remains
+
+- **WHEN** the switch is false and a change in this session's scope has no matching whole-spec review
+- **THEN** the legacy `spec-ready` rule still refuses the close and steers the spec review
+
+#### Scenario: Task-progress gate remains
+
+- **WHEN** the switch is false and a code-changing turn has neither a newly checked reviewed task nor a matching progress note
+- **THEN** the task-progress gate still refuses the close and steers to a note or a reviewed tick
+
+#### Scenario: Stale note is rejected
+
+- **WHEN** the switch is false and the worktree changes after a progress note
+- **THEN** the task-progress gate still refuses the close because the note is stale
+
+#### Scenario: Lane-assignment gate remains
+
+- **WHEN** the switch is false and completing one lane leaves a single unchecked unassigned lane, or an implementation turn below the checkpoint threshold leaves an unassigned lane
+- **THEN** the lane-assignment gate still reports the lane and names the tagged worker or serial-note call
+
+#### Scenario: Workflow owns the gate
+
+- **WHEN** `gates.workflowOwned` is false and the `task-review` definition is `own`
+- **THEN** the workflow starts the review, refuses the close on FINDINGS or a missing record, allows an ERROR to close an intermediate turn without approving, requires a portable PASS for every checked task when the tick completes the list, and refuses the archive until a PASS exists
+
+#### Scenario: Records are unchanged
+
+- **WHEN** the switch changes
+- **THEN** existing review records, queue state, and `task_progress` notes remain readable and are not rewritten
+
+#### Scenario: Rollback
+
+- **WHEN** `gates.workflowOwned` is true again
+- **THEN** the task-review and archive gates steer again, the `task-review` definition MUST return to `defer`, and the spec-review, progress, and lane gates are unaffected
