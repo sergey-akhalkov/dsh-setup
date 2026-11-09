@@ -223,6 +223,7 @@ was written (2026-11-09). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-07-learn-from-review-findings`                  | 23/23          |
 | `2026-11-09-add-workflow-obligations`                    | 36/36          |
 | `2026-11-09-add-section-scoped-task-review`              | 10/10          |
+| `2026-11-09-add-workflow-editor`                         | 24/27          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -678,3 +679,16 @@ the shared lock. A section ERROR is visible to the turn gate but grants no appro
 gate is unchanged. The change's six requirements were added to `delegation-rules`; per-task review
 remains the live gate until the owner installs the regenerated setup, and the workflow follow-up runs
 one real section review on an installed profile.
+
+On 2026-11-09 `add-workflow-editor` added the Design mode to `@dsh-setup/plugin-workflows`: a React Flow
+canvas bundled into the single client artifact (pinned 12.12.1, single-artifact budget documented and
+enforced at 539,493 B bundle / 591,739 B artifact), an equivalent List form editor, templates and local
+definitions through the revision-checked host write API, a layout sidecar, the run overlay with the
+recorded definition name/version, structured evidence, failure class, violations and an orphan badge,
+and keyboard/screen-reader support. Every save goes through the host-signed install/approve path, create
+is create-only, and a conflict returns 409 without a write. The `workflows` spec gained 10 requirements;
+the serial integration passed the full gate (146 files / 2750 tests, build with no diff, `gen:check`
+407 files, validators, strict OpenSpec validation) and archived 24/27. Open owner follow-ups: the
+rendered DesignMode accessibility interaction check (7.1/7.2 are covered by pure logic until the 8.4
+owner browser pass) and the live visual check (8.4); the client bundle budget is documented as the
+single-artifact trade-off.
