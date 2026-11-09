@@ -222,6 +222,7 @@ was written (2026-11-09). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-07-add-openspec-live-list`                      | 7/7            |
 | `2026-11-07-learn-from-review-findings`                  | 23/23          |
 | `2026-11-09-add-workflow-obligations`                    | 36/36          |
+| `2026-11-09-add-section-scoped-task-review`              | 10/10          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -667,3 +668,13 @@ create-change -> strict spec -> whole-spec review -> approval receipt path, adop
 change, restart after `create-change` without recreating the directory, and confirm the deferred
 `task-review`/`retro` definitions add no second steer; the live 5.1-style carrier check for the
 workflow routes remains owner scope.
+
+On 2026-11-09 `add-section-scoped-task-review` added section-scoped task review to `delegation-rules`:
+a `delegate` call can name a `tasks.md` section (for example `1` or `1.x`), one run reviews all its
+checked tasks in one frozen snapshot with one prompt and verdict, and a PASS publishes the existing
+per-task portable approvals transactionally — matching approvals preserved byte-identically,
+nonmatching ones replaced, failures rolled back, and section/per-task publications serialized under
+the shared lock. A section ERROR is visible to the turn gate but grants no approval, and the archive
+gate is unchanged. The change's six requirements were added to `delegation-rules`; per-task review
+remains the live gate until the owner installs the regenerated setup, and the workflow follow-up runs
+one real section review on an installed profile.
