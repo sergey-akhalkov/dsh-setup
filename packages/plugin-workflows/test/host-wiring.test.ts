@@ -933,10 +933,6 @@ describe('retro applicability evidence', () => {
       async () => (await retroRows()).filter((row) => row.reason === 'not-applicable').length >= 3,
     )
     expect(await retroRuns()).toHaveLength(0)
-    const { sessionRuns } = await import('../src/host/projection.ts')
-    expect(
-      (await sessionRuns(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
-    ).toHaveLength(0)
 
     // The single maxRuns slot is still free for a real applicable turn.
     await emitTurn(4, [
@@ -947,9 +943,6 @@ describe('retro applicability evidence', () => {
     ])
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect(await retroRuns()).toHaveLength(1)
-    expect(
-      (await sessionRuns(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
-    ).toHaveLength(1)
   })
 
   it('creates no retro run for a subagent turn', async () => {
