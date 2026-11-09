@@ -490,6 +490,7 @@ function verifyCapDecision(maxBlocks: number, blocks: number): ParityDecision {
     now: 1_000,
   })
   run = settleStep(run, 'check', 'open', { at: 1_001 })
+  run = { ...run, turnBlocksTurn: 1 }
   for (let index = 0; index < blocks; index += 1) run = incrementTurnBlocks(run, 1_001)
   const outcome = evaluateTurnClose({
     run,

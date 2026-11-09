@@ -67,6 +67,8 @@ export interface WorkflowRun {
     readonly violations: readonly RunViolation[];
     /** The trigger identity that produced this run, for dedupe after reload. */
     readonly dedupeKey?: string;
+    /** The turn whose maxBlocks budget the current turnBlocks count belongs to. */
+    readonly turnBlocksTurn?: number;
 }
 /** The run directory for one workspace. */
 export declare function runsDirectory(workspace: string): string;
