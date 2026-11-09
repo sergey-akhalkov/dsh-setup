@@ -23,7 +23,7 @@ export function jsonText(value: unknown): string {
   return value === undefined ? '' : JSON.stringify(value)
 }
 
-const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
+const EXECUTORS = ['main', 'branch', 'loop', 'human'] as const
 const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
 
 export interface PropertiesProps {
@@ -100,7 +100,8 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
       <label>
         Evidence (JSON)
         <textarea
-          value={jsonText(step.evidence)}
+          key={`evidence:${node.id}`}
+          defaultValue={jsonText(step.evidence)}
           aria-label="Evidence JSON"
           rows={3}
           onChange={(event) => {
@@ -140,7 +141,8 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           <label>
             Branch predicate (JSON)
             <textarea
-              value={jsonText(branch.predicate)}
+              key={`predicate:${node.id}`}
+              defaultValue={jsonText(branch.predicate)}
               aria-label="Branch predicate JSON"
               rows={2}
               onChange={(event) => {
@@ -174,7 +176,8 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
           <label>
             Loop stop (JSON)
             <textarea
-              value={jsonText(loop.stop)}
+              key={`stop:${node.id}`}
+              defaultValue={jsonText(loop.stop)}
               aria-label="Loop stop JSON"
               rows={2}
               onChange={(event) => {
@@ -260,7 +263,8 @@ function triggerFields(props: PropertiesProps): ReactNode {
       <label>
         Trigger match (JSON)
         <textarea
-          value={jsonText(match ?? {})}
+          key={`match:${props.state.document.definition.id}`}
+          defaultValue={jsonText(match ?? {})}
           aria-label="Trigger match JSON"
           rows={2}
           onChange={(event) => {

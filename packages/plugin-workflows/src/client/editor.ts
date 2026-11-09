@@ -333,7 +333,56 @@ export function moveStep(
 }
 
 function executorOf(kind: NodeKind): string {
-  return kind === 'trigger' || kind === 'end' ? 'main' : kind
+  // A palette "step" is a main step; the host has no executor named "step".
+  if (kind === 'trigger' || kind === 'end' || kind === 'step') return 'main'
+  return kind
+}
+
+/** The executor-specific fields a step must not keep when its executor changes. */
+const EXECUTOR_FIELDS = ['next', 'branch', 'loop', 'human', 'tool', 'subagent'] as const
+
+/**
+ * Rebuild a step for a new executor: remove the fields the old executor owned
+ * and initialize the fields the new one requires, so the change does not leave
+ * a step the engine would refuse.
+ */
+function normalizeExecutor(step: GraphStep, executor: string): GraphStep {
+  const next: Record<string, unknown> = { ...step, executor }
+  for (const key of EXECUTOR_FIELDS) delete next[key]
+  if (executor === 'branch') {
+    next.branch = { predicate: {}, then: 'end', else: 'end' }
+  } else if (executor === 'loop') {
+    next.loop = { maxIterations: 3, stop: {}, next: 'end' }
+  } else {
+    next.next = step.next ?? 'end'
+    if (executor === 'human') {
+      next.human = { timeoutAction: 'block' }
+      next.evidence = { kind: 'human', answer: 'yes' }
+      next.prompt ??= 'Confirm this step with the user.'
+    } else if (executor === 'main' || executor === 'subagent') {
+      next.prompt ??= 'Describe what this step must do.'
+      if (next.evidence === undefined) {
+        next.evidence = { kind: 'declaration' }
+        next.nonCritical = true
+      }
+      if (executor === 'subagent') next.subagent = { provider: 'spawn', schema: { type: 'object' } }
+    } else if (executor === 'tool') {
+      next.tool = { name: 'shell' }
+    }
+  }
+  return next as GraphStep
+}
+
+/** Rebuild the diagram from a definition change while keeping known positions. */
+function rebuildDiagram(state: EditorState, definition: GraphDefinition): EditorState {
+  const graph = definitionToGraph(definition)
+  const nodes = graph.nodes.map((node) => {
+    const old = state.diagram.nodes.find(
+      (entry) => entry.id === node.id || entry.step?.id === node.step?.id,
+    )
+    return old === undefined ? node : { ...node, position: old.position }
+  })
+  return updateGraph({ ...state, document: { ...state.document, definition } }, nodes, graph.edges)
 }
 
 /** Add one unconnected step of the chosen kind; the pre-check names the gap. */
@@ -397,11 +446,21 @@ export function patchStep(
   id: string,
   patch: Readonly<Record<string, unknown>>,
 ): EditorState {
-  const nodes = state.diagram.nodes.map((node) => {
-    if (node.id !== id || node.step === undefined) return node
-    const step = { ...node.step, ...patch } as GraphStep
+  const node = state.diagram.nodes.find((entry) => entry.id === id)
+  if (node === undefined || node.step === undefined) return state
+  if (patch.executor !== undefined && patch.executor !== node.step.executor) {
+    const step = normalizeExecutor(node.step, String(patch.executor))
+    const definition = {
+      ...state.document.definition,
+      steps: state.document.definition.steps.map((entry) => (entry.id === step.id ? step : entry)),
+    }
+    return rebuildDiagram(state, definition)
+  }
+  const nodes = state.diagram.nodes.map((entry) => {
+    if (entry.id !== id || entry.step === undefined) return entry
+    const step = { ...entry.step, ...patch } as GraphStep
     const kind = nodeKindOf(step.executor)
-    return { ...node, kind, step, title: step.title }
+    return { ...entry, kind, step, title: step.title }
   })
   return updateGraph(state, nodes, state.diagram.edges)
 }

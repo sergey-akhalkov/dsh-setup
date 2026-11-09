@@ -246,6 +246,27 @@ describe('palette and property panel', () => {
     expect(deleted).toEqual([nodeIdOf('requirements')])
   })
 
+  it('accepts JSON typed incrementally and only commits valid parses', () => {
+    const patches: Record<string, unknown>[] = []
+    const tree = call(ui, 'PropertyPanel', {
+      state: editor(),
+      selected: nodeIdOf('requirements'),
+      onDefinitionPatch: () => {},
+      onPatch: (_id: string, patch: Record<string, unknown>) => patches.push(patch),
+      onConnect: () => {},
+      onDelete: () => {},
+    })
+    const evidence = elements(tree).find(
+      (element) => element.type === 'textarea' && element.props['aria-label'] === 'Evidence JSON',
+    )
+    expect(evidence?.props.value).toBeUndefined()
+    expect(evidence?.props.defaultValue).toBeDefined()
+    fire(evidence, 'onChange', '{')
+    expect(patches).toEqual([])
+    fire(evidence, 'onChange', '{"kind":"declaration"}')
+    expect(patches[0]).toEqual({ evidence: { kind: 'declaration' } })
+  })
+
   it('opens the property panel for the selected node', () => {
     const state = editor()
     const step = DEFINITION.steps[1]

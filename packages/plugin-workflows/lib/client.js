@@ -10435,7 +10435,45 @@ window.__ModuleLoader__.load({
       };
     }
     function executorOf(kind) {
-      return kind === "trigger" || kind === "end" ? "main" : kind;
+      if (kind === "trigger" || kind === "end" || kind === "step") return "main";
+      return kind;
+    }
+    var EXECUTOR_FIELDS = ["next", "branch", "loop", "human", "tool", "subagent"];
+    function normalizeExecutor(step, executor) {
+      const next = { ...step, executor };
+      for (const key of EXECUTOR_FIELDS) delete next[key];
+      if (executor === "branch") {
+        next.branch = { predicate: {}, then: "end", else: "end" };
+      } else if (executor === "loop") {
+        next.loop = { maxIterations: 3, stop: {}, next: "end" };
+      } else {
+        next.next = step.next ?? "end";
+        if (executor === "human") {
+          next.human = { timeoutAction: "block" };
+          next.evidence = { kind: "human", answer: "yes" };
+          next.prompt ??= "Confirm this step with the user.";
+        } else if (executor === "main" || executor === "subagent") {
+          next.prompt ??= "Describe what this step must do.";
+          if (next.evidence === void 0) {
+            next.evidence = { kind: "declaration" };
+            next.nonCritical = true;
+          }
+          if (executor === "subagent") next.subagent = { provider: "spawn", schema: { type: "object" } };
+        } else if (executor === "tool") {
+          next.tool = { name: "shell" };
+        }
+      }
+      return next;
+    }
+    function rebuildDiagram(state, definition) {
+      const graph = definitionToGraph(definition);
+      const nodes = graph.nodes.map((node) => {
+        const old = state.diagram.nodes.find(
+          (entry) => entry.id === node.id || entry.step?.id === node.step?.id
+        );
+        return old === void 0 ? node : { ...node, position: old.position };
+      });
+      return updateGraph({ ...state, document: { ...state.document, definition } }, nodes, graph.edges);
     }
     function addStep(state, kind) {
       const definition = state.document.definition;
@@ -10482,11 +10520,21 @@ window.__ModuleLoader__.load({
       return updateGraph(state, nodes, edges);
     }
     function patchStep(state, id2, patch) {
-      const nodes = state.diagram.nodes.map((node) => {
-        if (node.id !== id2 || node.step === void 0) return node;
-        const step = { ...node.step, ...patch };
+      const node = state.diagram.nodes.find((entry) => entry.id === id2);
+      if (node === void 0 || node.step === void 0) return state;
+      if (patch.executor !== void 0 && patch.executor !== node.step.executor) {
+        const step = normalizeExecutor(node.step, String(patch.executor));
+        const definition = {
+          ...state.document.definition,
+          steps: state.document.definition.steps.map((entry) => entry.id === step.id ? step : entry)
+        };
+        return rebuildDiagram(state, definition);
+      }
+      const nodes = state.diagram.nodes.map((entry) => {
+        if (entry.id !== id2 || entry.step === void 0) return entry;
+        const step = { ...entry.step, ...patch };
         const kind = nodeKindOf(step.executor);
-        return { ...node, kind, step, title: step.title };
+        return { ...entry, kind, step, title: step.title };
       });
       return updateGraph(state, nodes, state.diagram.edges);
     }
@@ -10962,7 +11010,7 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/list.tsx
     var import_jsx_runtime4 = require("react/jsx-runtime");
-    var EXECUTORS = ["main", "subagent", "tool", "branch", "loop", "human"];
+    var EXECUTORS = ["main", "branch", "loop", "human"];
     var EVIDENCE_KINDS = ["file", "record", "tool", "check", "human", "all", "declaration"];
     function outputsFor(step) {
       if (step.branch !== void 0) return ["true", "false"];
@@ -11274,7 +11322,7 @@ window.__ModuleLoader__.load({
     function jsonText(value2) {
       return value2 === void 0 ? "" : JSON.stringify(value2);
     }
-    var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
+    var EXECUTORS2 = ["main", "branch", "loop", "human"];
     var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
     function selectTarget(props, node, kind) {
       const current = currentTarget(props.state.diagram.edges, node.id, kind);
@@ -11348,7 +11396,7 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "textarea",
             {
-              value: jsonText(step.evidence),
+              defaultValue: jsonText(step.evidence),
               "aria-label": "Evidence JSON",
               rows: 3,
               onChange: (event) => {
@@ -11360,7 +11408,8 @@ window.__ModuleLoader__.load({
                 const parsed = parseJsonField(text2);
                 if (parsed.ok) props.onPatch(node.id, { evidence: parsed.value });
               }
-            }
+            },
+            `evidence:${node.id}`
           )
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
@@ -11384,7 +11433,7 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
               "textarea",
               {
-                value: jsonText(branch.predicate),
+                defaultValue: jsonText(branch.predicate),
                 "aria-label": "Branch predicate JSON",
                 rows: 2,
                 onChange: (event) => {
@@ -11393,7 +11442,8 @@ window.__ModuleLoader__.load({
                     props.onPatch(node.id, { branch: { ...branch, predicate: parsed.value } });
                   }
                 }
-              }
+              },
+              `predicate:${node.id}`
             )
           ] }),
           selectTarget(props, node, "true"),
@@ -11420,14 +11470,15 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
               "textarea",
               {
-                value: jsonText(loop.stop),
+                defaultValue: jsonText(loop.stop),
                 "aria-label": "Loop stop JSON",
                 rows: 2,
                 onChange: (event) => {
                   const parsed = parseJsonField(event.currentTarget.value);
                   if (parsed.ok) props.onPatch(node.id, { loop: { ...loop, stop: parsed.value } });
                 }
-              }
+              },
+              `stop:${node.id}`
             )
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
@@ -11499,14 +11550,15 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "textarea",
             {
-              value: jsonText(match ?? {}),
+              defaultValue: jsonText(match ?? {}),
               "aria-label": "Trigger match JSON",
               rows: 2,
               onChange: (event) => {
                 const parsed = parseJsonField(event.currentTarget.value);
                 if (parsed.ok) props.onDefinitionPatch({ trigger: { ...trigger, match: parsed.value } });
               }
-            }
+            },
+            `match:${props.state.document.definition.id}`
           )
         ] }),
         triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind))

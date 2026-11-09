@@ -31,7 +31,7 @@ import {
   unsavedChanges,
   updateGraph,
 } from '../src/client/editor.ts'
-import { type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
+import { END_NODE, type GraphDefinition, nodeIdOf } from '../src/client/graph.ts'
 import { validateDefinition } from '../src/host/definitions.ts'
 
 const definition = {
@@ -629,6 +629,37 @@ describe('pre-check and host error mapping', () => {
     const added = state.diagram.nodes.find((node) => node.kind === 'human')
     expect(added).toBeDefined()
     expect(state.issues.some((issue) => issue.nodeId === added?.id)).toBe(true)
+  })
+
+  it('creates a valid main step from the palette', () => {
+    let state = addStep(openNew(blankDefinition(new Set(['palette-demo']))), 'step')
+    expect(state.document.definition.steps[1]?.executor).toBe('main')
+    state = patchStep(state, nodeIdOf('step-2'), {
+      prompt: 'Do it.',
+      evidence: { kind: 'declaration' },
+      nonCritical: true,
+    })
+    state = connectSteps(state, nodeIdOf('step-1'), nodeIdOf('step-2'), 'next')
+    state = connectSteps(state, nodeIdOf('step-2'), END_NODE, 'next')
+    expect(state.issues).toEqual([])
+    expect(
+      validateDefinition(state.document.definition).steps.map((step) => step.executor),
+    ).toEqual(['main', 'main'])
+  })
+
+  it('normalizes required configuration when the executor changes', () => {
+    let state = opened()
+    state = patchStep(state, nodeIdOf('one'), { executor: 'branch' })
+    expect(state.document.definition.steps[0]?.branch).toMatchObject({
+      then: 'end',
+      else: 'end',
+    })
+    expect(state.document.definition.steps[0]?.next).toBeUndefined()
+    expect(validateDefinition(state.document.definition).steps[0]?.executor).toBe('branch')
+    state = patchStep(state, nodeIdOf('one'), { executor: 'main' })
+    expect(state.document.definition.steps[0]?.branch).toBeUndefined()
+    expect(state.document.definition.steps[0]?.next).toBe('end')
+    expect(validateDefinition(state.document.definition).steps[0]?.executor).toBe('main')
   })
 
   it('applies add, connect, field edit, and delete to the definition', () => {

@@ -9,7 +9,7 @@ import type { EdgeKind, GraphStep } from './graph.ts'
  * the canvas cannot render and an equal editor, never a read-only mirror.
  */
 
-const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'] as const
+const EXECUTORS = ['main', 'branch', 'loop', 'human'] as const
 const EVIDENCE_KINDS = ['file', 'record', 'tool', 'check', 'human', 'all', 'declaration'] as const
 
 export interface ListEditorProps {
