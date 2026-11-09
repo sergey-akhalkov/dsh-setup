@@ -359,6 +359,10 @@ describe('retro applicability through the journal path', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'not-applicable'))
     expect((await retroRows()).some((row) => row.reason === 'run-created')).toBe(false)
+    const { sessionRuns: shortTurnViews } = await import('../src/host/projection.ts')
+    expect(
+      (await shortTurnViews(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
+    ).toHaveLength(0)
 
     await host.emit(
       'agent/pre-step',
@@ -399,6 +403,12 @@ describe('retro applicability through the journal path', () => {
       (entry) => entry.definition === 'retro',
     )
     expect(blockedRetro?.steps[0]?.state).toBe('blocked')
+    const { sessionRuns } = await import('../src/host/projection.ts')
+    const view = (await sessionRuns(workspace, 'session-1')).find(
+      (entry) => entry.id === `workflow:${blockedRetro?.id ?? ''}`,
+    )
+    expect(view).toBeDefined()
+    expect(view?.steps[0]?.state).toBe('blocked')
     const runId = String(
       (await retroRows()).find((row) => row.reason === 'run-created')?.runId ?? '',
     )
@@ -655,6 +665,10 @@ describe('retro applicability evidence', () => {
       async () => (await retroRows()).filter((row) => row.reason === 'not-applicable').length >= 3,
     )
     expect(await retroRuns()).toHaveLength(0)
+    const { sessionRuns } = await import('../src/host/projection.ts')
+    expect(
+      (await sessionRuns(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
+    ).toHaveLength(0)
 
     // The single maxRuns slot is still free for a real applicable turn.
     await emitTurn(4, [
@@ -665,6 +679,98 @@ describe('retro applicability evidence', () => {
     ])
     await waitFor(async () => (await retroRows()).some((row) => row.reason === 'run-created'))
     expect(await retroRuns()).toHaveLength(1)
+    expect(
+      (await sessionRuns(workspace, 'session-1')).filter((view) => view.source === 'workflow'),
+    ).toHaveLength(1)
+  })
+
+  it('creates no retro run for a subagent turn', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never, { maxRuns: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const child = {
+      ...host.agent,
+      id: 'child-1',
+      session: {
+        id: 'child-1',
+        header: { origin: 'subagent', delegationDepth: 1, parentSession: 'session-1' },
+      },
+    }
+    await host.emit('agent/created', { agent: child })
+    const childJournal = join(workspace, '.dsh', 'workflows', 'events', 'child-1.jsonl')
+    const childRows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(childJournal, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:retro')
+    const turn = async (
+      agent: Record<string, unknown>,
+      number: number,
+      results: ReadonlyArray<{ name: string; args: Record<string, unknown> }>,
+    ): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent,
+          turn: number,
+          step: 1,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      for (const [index, result] of results.entries()) {
+        await host.emit(
+          'tools/result',
+          {
+            agent,
+            callId: `call-${String(number)}-${String(index)}`,
+            name: result.name,
+            arguments: result.args,
+          },
+          { isError: false, content: [{ type: 'text', text: 'ok' }] },
+        )
+      }
+      await host.emit('agent/turn-stopping', { agent, turn: number })
+    }
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const retroRuns = async (): Promise<Array<{ id: string }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition === 'retro',
+      )
+
+    // A subagent turn that would otherwise be applicable creates no run.
+    await turn(child, 1, [
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'write', args: { file_path: 'src/app.ts' } },
+    ])
+    await waitFor(async () => (await childRows()).some((row) => row.reason === 'not-applicable'))
+    expect(await retroRuns()).toHaveLength(0)
+
+    // The free capacity slot still admits a root turn.
+    await turn(host.agent, 2, [
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'read', args: {} },
+      { name: 'write', args: { file_path: 'src/app.ts' } },
+    ])
+    await waitFor(async () => (await retroRuns()).length === 1)
   })
 })
 
@@ -725,6 +831,13 @@ describe('task-review runtime from a tasks.md change', () => {
     for (const run of created) {
       const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
       expect(settled?.steps[0]?.state).toBe('done')
+    }
+    const { sessionRuns } = await import('../src/host/projection.ts')
+    const views = await sessionRuns(workspace, 'session-1')
+    for (const run of created) {
+      const view = views.find((entry) => entry.id === `workflow:${run.id}`)
+      expect(view).toBeDefined()
+      expect(view?.steps[0]?.state).toBe('done')
     }
     expect(host.steers).toHaveLength(0)
 

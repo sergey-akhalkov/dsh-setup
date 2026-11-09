@@ -441,6 +441,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   let pluginDisposed = false
   /** The session most recently observed in each workspace. */
   const activeSession = new Map<string, string>()
+  /** Whether a session is a root agent; the legacy gates exclude children. */
+  const rootSessions = new Map<string, boolean>()
   /** One change-tree watcher per workspace, started on its first event. */
   const watchers = new Map<string, FsChangeWatcher>()
   const watching = new Set<string>()
@@ -660,6 +662,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const workspace = workspaceFor(services, session)
       if (workspace !== undefined) {
         activeSession.set(workspace, String(session.id))
+        const header = session.header as {
+          origin?: string
+          delegationDepth?: number
+          parentSession?: unknown
+        }
+        rootSessions.set(
+          String(session.id),
+          header.origin !== 'subagent' &&
+            (header.delegationDepth ?? 0) === 0 &&
+            header.parentSession === undefined,
+        )
         seedCheckedTasks(workspace, String(session.id))
         healthFor(workspace)
         watchChanges(workspace)
@@ -870,6 +883,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             },
             resolveApplicability: (definition) => {
               if (definition.trigger.applicability !== 'checkpoint-required') return undefined
+              // The legacy checkpoint gate excludes subagent sessions.
+              if (rootSessions.get(input.session) !== true) return false
               const current =
                 input.turn !== undefined && metrics !== undefined && metrics.turn === input.turn
                   ? metrics
