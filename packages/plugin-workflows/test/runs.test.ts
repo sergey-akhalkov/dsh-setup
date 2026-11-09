@@ -166,7 +166,7 @@ describe('run store', () => {
     const reloaded = await readAuthenticatedRun(workspace, run.id, auth())
     expect(reloaded?.status).toBe('cancelled')
     expect(reloaded?.violations[0]).toMatchObject({ kind: 'VIOLATION', step: 'requirements' })
-    expect(reloaded?.steps[0]?.evidence).toEqual({ kind: 'tool', callId: 'call-1' })
+    expect(reloaded?.steps[0]?.evidence).toEqual({ kind: 'tool', callId: 'call-1', ref: 'call-1' })
     expect(reloaded?.steps[1]?.reason).toBe('user cancelled')
   })
 
