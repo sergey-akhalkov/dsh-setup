@@ -491,6 +491,28 @@ describe('workflows command and prompt context', () => {
     const bounded = renderActiveRunsContext([huge])
     expect(bounded.split('\n')).toHaveLength(1)
     expect(bounded.length).toBeLessThanOrEqual(240)
+    // Unicode line separators are normalized too.
+    const baseStep = runFor('/workspace').steps[0]!
+    const unicode = {
+      ...runFor('/workspace'),
+      steps: [
+        { ...baseStep, id: 'a\u2028b\u2028c\u2028d\u2028e\u2028f\u2028g', state: 'open' as const },
+      ],
+    }
+    const unicodeText = renderActiveRunsContext([unicode])
+    expect(unicodeText.split('\n')).toHaveLength(1)
+    expect(unicodeText).not.toContain('\u2028')
+    // A long definition still leaves room for the current step.
+    const longDefinition = {
+      ...runFor('/workspace'),
+      definition: 'd'.repeat(240),
+      steps: [{ ...baseStep, id: 'requirements', state: 'open' as const }],
+    }
+    const longText = renderActiveRunsContext([longDefinition])
+    expect(longText.split('\n')).toHaveLength(1)
+    expect(longText.length).toBeLessThanOrEqual(240)
+    expect(longText).toContain('step requirements')
+    expect(longText).toContain('dddd')
   })
 
   it('registers data-derived text without interpolation', () => {

@@ -11,10 +11,17 @@ export const ACTIVE_RUNS_CONTEXT = 'workflows-active-runs'
 export const MAX_ACTIVE_RUN_LINES = 5
 /** One rendered line never exceeds this bound, whatever the identifiers hold. */
 export const MAX_ACTIVE_RUN_LINE_CHARS = 240
+/** One identifier's bound, so a long definition leaves room for the step. */
+const MAX_IDENTIFIER_CHARS = 80
 
-/** Collapse control characters and bound one data-derived prompt line. */
+/** Collapse control and Unicode line separators in one data-derived value. */
 function oneLine(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/gu, ' ').slice(0, MAX_ACTIVE_RUN_LINE_CHARS)
+  return value.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/gu, ' ')
+}
+
+/** Sanitize and bound one identifier before composing the prompt line. */
+function bounded(value: string): string {
+  return oneLine(value).slice(0, MAX_IDENTIFIER_CHARS)
 }
 
 /** One bounded line for an active run, or '' when there is none. */
@@ -28,7 +35,8 @@ export function renderActiveRunsContext(runs: readonly WorkflowRun[]): string {
     active.length > MAX_ACTIVE_RUN_LINES ? active.slice(0, MAX_ACTIVE_RUN_LINES - 1) : active
   const lines = listed.map((run) => {
     const pending = pendingStep(run)
-    return oneLine(`- ${run.definition}: step ${pending ?? 'end'} (${run.status}) run ${run.id}`)
+    const line = `- ${bounded(run.definition)}: step ${bounded(pending ?? 'end')} (${run.status}) run ${bounded(run.id)}`
+    return oneLine(line).slice(0, MAX_ACTIVE_RUN_LINE_CHARS)
   })
   if (active.length > MAX_ACTIVE_RUN_LINES) {
     lines.push(
