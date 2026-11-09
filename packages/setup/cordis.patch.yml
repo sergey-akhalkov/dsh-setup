@@ -104,6 +104,8 @@
           review: 600000
           answer: 300000
           patch: 1800000
+        gates:
+          workflowOwned: false
         failureStreak: 3
         reviewLearning:
           enabled: true
@@ -134,6 +136,7 @@
           onExhausted: deny
         checkpoint:
           enabled: true
+          automation: false
           minToolCalls: 4
           requireWrite: true
           maxBlocks: 3
@@ -213,8 +216,19 @@
       name: "@dsh-setup/plugin-serena"
     - id: dsh-setup-verification-gate
       name: "@dsh-setup/plugin-verification-gate"
+      disabled: true
     - id: dsh-setup-workflows
       name: "@dsh-setup/plugin-workflows"
+      config:
+        checkpointApplicability:
+          minToolCalls: 4
+          requireWrite: true
+          bottleneckAge: 2
+          stepInterval: 40
+          enforceParallel: true
+        verify:
+          commands: []
+          maxBlocks: 8
     - id: dsh-setup-working-principles
       name: "@dsh-setup/plugin-working-principles"
 - id: agent-default-model
@@ -430,3 +444,9 @@
     checkpointApplicability:
       minToolCalls: 4
       requireWrite: true
+      bottleneckAge: 2
+      stepInterval: 40
+      enforceParallel: true
+    verify:
+      commands: []
+      maxBlocks: 8

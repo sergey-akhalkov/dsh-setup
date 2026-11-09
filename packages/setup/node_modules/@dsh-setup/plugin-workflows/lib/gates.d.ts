@@ -34,6 +34,17 @@ export interface TurnCloseInput {
     readonly origin?: 'root' | 'subagent';
     /** The legacy plugins the profile installs. */
     readonly installedLegacy: ReadonlySet<string>;
+    /** `${plugin}/signal` entries that would actually steer; absent means installed = enabled. */
+    readonly enabledLegacy?: ReadonlySet<string>;
+    /** The owned completion-coverage decision for this turn, when it applies. */
+    readonly completion?: {
+        readonly ok: boolean;
+        readonly text?: string;
+    };
+    /** The owned checkpoint remedy/age decision for this turn, when it applies. */
+    readonly checkpointIssue?: {
+        readonly text: string;
+    };
     readonly now?: number;
     readonly onError?: (error: unknown) => void;
 }
@@ -43,7 +54,7 @@ export interface TurnCloseInput {
  * whether it blocks the turn close itself, because the legacy gate is the only
  * steer for it.
  */
-export declare function selectBlockingStep(run: WorkflowRun, definition: Definition, installedLegacy: ReadonlySet<string>): Step | undefined;
+export declare function selectBlockingStep(run: WorkflowRun, definition: Definition, installedLegacy: ReadonlySet<string>, enabledLegacy?: ReadonlySet<string>): Step | undefined;
 /** Evaluate one root turn stop. */
 export declare function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome;
 export type IntakeGateDecision = {
@@ -90,6 +101,8 @@ export interface DeferredStepInput {
     readonly definition: Definition;
     readonly stepId: string;
     readonly installedLegacy: ReadonlySet<string>;
+    /** `${plugin}/${signal}` entries that would actually steer. */
+    readonly enabledLegacy?: ReadonlySet<string>;
     /** The existing legacy reader; it never dispatches an executor. */
     readonly readRecord: (step: Step) => Promise<EvidenceCheck>;
     readonly now?: number;
@@ -154,6 +167,11 @@ export interface ArchiveGateInput {
     readonly receipts: readonly WorkflowReceipt[];
     /** The whole-spec `PASS` record, already verified against the current digest. */
     readonly specRecord: EvidenceCheck;
+    /** The owned per-task portable PASS coverage, computed from the workspace. */
+    readonly taskReview?: {
+        readonly ok: boolean;
+        readonly text?: string;
+    };
 }
 export type ArchiveGateDecision = {
     readonly kind: 'allow';

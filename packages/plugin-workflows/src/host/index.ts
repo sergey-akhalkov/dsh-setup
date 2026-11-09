@@ -2525,7 +2525,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           const lastCheckAt = checkTimes.length === 0 ? undefined : Math.max(...checkTimes)
           const completedVerify = runs.find(
             (run) =>
-              run.definition === 'verify' &&
+              run.definition.id === 'verify' &&
               run.session === sessionId &&
               run.status === 'completed' &&
               Number(run.dedupeKey?.split('\u0000').at(-1)) === payload.turn,
@@ -2735,7 +2735,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (!refusedThisClose && workflowOwnsCheckpoint) {
           const currentRetro = runs.find(
             (run) =>
-              run.definition === 'retro' &&
+              run.definition.id === 'retro' &&
               typeof run.context.checkpoint === 'string' &&
               checkpointTurnOf(run.context.checkpoint) === payload.turn &&
               run.session === sessionId &&
@@ -2752,7 +2752,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             const blocks = currentRetro.turnBlocks ?? 0
             const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3
             const alreadyUnchecked = (currentRetro.violations ?? []).some(
-              (violation) => violation.detail?.includes('checkpoint freshness refused') === true,
+              (violation) => violation.reason?.includes('checkpoint freshness refused') === true,
             )
             if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
               await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth)

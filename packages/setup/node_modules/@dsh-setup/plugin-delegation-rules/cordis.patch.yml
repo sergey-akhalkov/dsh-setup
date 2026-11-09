@@ -93,6 +93,8 @@
           review: 600000
           answer: 300000
           patch: 1800000
+        gates:
+          workflowOwned: false
         failureStreak: 3
         reviewLearning:
           enabled: true

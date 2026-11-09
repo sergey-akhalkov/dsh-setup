@@ -5,3 +5,15 @@
 # not owner configuration: no trigger acts, so there is nothing to tune yet.
 rows:
   - id: dsh-setup-workflows
+    config:
+      checkpointApplicability:
+        minToolCalls: 4
+        requireWrite: true
+        bottleneckAge: 2
+        stepInterval: 40
+        enforceParallel: true
+      # The legacy verification row shipped no commands; keep the workflow
+      # verification gate inert until a profile configures its commands.
+      verify:
+        commands: []
+        maxBlocks: 8

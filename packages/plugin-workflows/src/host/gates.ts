@@ -698,7 +698,7 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
     }
   }
   if (input.taskReview !== undefined && !input.taskReview.ok) {
-    const relatedRun = related.find((run) => run.definition === 'task-review')
+    const relatedRun = related.find((run) => run.definition.id === 'task-review')
     return {
       kind: 'deny',
       reason: `the archive of "${input.change}" is refused: ${input.taskReview.text ?? 'a checked task has no portable task-review PASS'}${relatedRun === undefined ? '' : ` (related review run "${relatedRun.id}")`}`,

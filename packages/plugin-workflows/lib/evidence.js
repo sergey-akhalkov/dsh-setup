@@ -660,7 +660,9 @@ function verifyCheck(context, item) {
         (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)));
     const afterWrite = results.filter((candidate) => candidate.at > lastWrite);
     const shown = shownCommands(commands);
-    const target = context.lastWritePath === undefined ? '' : ` (last write: ${context.lastWritePath.slice(0, 120)})`;
+    const target = context.lastWritePath === undefined
+        ? ''
+        : ` (last write: ${context.lastWritePath.slice(0, 120)})`;
     if (afterWrite.length === 0) {
         if (context.lastCheckAt !== undefined && context.lastCheckAt > lastWrite) {
             return {

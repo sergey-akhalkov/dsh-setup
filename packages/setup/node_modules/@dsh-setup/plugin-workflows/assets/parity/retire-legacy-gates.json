@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "change": "retire-legacy-gates",
+  "at": "2026-11-09T17:58:16.235Z",
+  "templates": {
+    "retro": "sha256-e4df72e46947fb54cad338495b65489155da181bb77130158360ae549e1a8566",
+    "task-review": "sha256-3b5c0eb319c1e7e479d0a4dd65068c594965b967e6bb6b3229d14a7a1cbf94e9",
+    "verify": "sha256-d8a15d05d6721c1aa12046499eaae49a1732160b397ed45d652d16c1eebd9b78"
+  },
+  "settings": {
+    "verify.commands": {
+      "type": "non-empty string list",
+      "cases": [
+        [
+          "pnpm check"
+        ],
+        [
+          "rtk pnpm check",
+          "cargo test"
+        ]
+      ]
+    },
+    "verify.maxBlocks": {
+      "type": "positive safe integer",
+      "cases": [
+        8,
+        129
+      ]
+    }
+  },
+  "gates": {
+    "checkpoint": {
+      "cases": 8,
+      "mismatches": 0,
+      "status": "pass"
+    },
+    "task-review": {
+      "cases": 13,
+      "mismatches": 0,
+      "status": "pass"
+    },
+    "verification": {
+      "cases": 10,
+      "mismatches": 0,
+      "status": "pass"
+    }
+  },
+  "retained": {
+    "spec-review": {
+      "cases": 2,
+      "status": "legacy"
+    },
+    "task-progress": {
+      "cases": 4,
+      "status": "legacy"
+    },
+    "lane-assignment": {
+      "cases": 4,
+      "status": "legacy"
+    }
+  },
+  "mismatches": []
+}

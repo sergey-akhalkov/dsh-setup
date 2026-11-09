@@ -1,7 +1,7 @@
 {
   "v": 1,
   "id": "task-review",
-  "name": "Deferred task review",
+  "name": "Task review",
   "version": 1,
   "trigger": {
     "kind": "fs.change",
@@ -12,27 +12,54 @@
   "settings": {
     "allowModelStart": false,
     "risk": "low",
-    "gateOwnership": "defer",
+    "gateOwnership": "own",
     "maxBlocks": 3,
     "allowIntent": false,
+    "allowTools": ["delegate"],
     "legacy": { "plugin": "delegation-rules", "signal": "task-review" }
   },
   "steps": [
     {
-      "id": "read-review",
-      "title": "Read the task review record",
+      "id": "start-review",
+      "title": "Start the task review",
+      "executor": "tool",
+      "tool": {
+        "name": "delegate",
+        "args": { "rule": "task-review", "change": "{name}", "task": "{taskId}" }
+      },
+      "evidence": {
+        "kind": "tool",
+        "name": "delegate",
+        "args": { "rule": "task-review", "task": "{taskId}" }
+      },
+      "next": "await-review",
+      "blockTurnClose": true
+    },
+    {
+      "id": "await-review",
+      "title": "Wait for the task review record",
       "executor": "main",
-      "prompt": "Read the existing task review record for this checked task. Do not start a second review and do not steer.",
+      "prompt": "Wait for the task review record this run started. Do not start a second review. A matching PASS or ERROR closes this step; FINDINGS keeps it open until the findings are fixed and the review re-run.",
       "evidence": {
         "kind": "record",
         "rule": "task-review",
         "change": "{name}",
         "scope": "task",
         "task": "{taskId}",
-        "verdict": "PASS",
-        "path": "openspec/changes/{name}/reviews/{taskId}.json"
+        "verdicts": ["PASS", "ERROR"],
+        "path": ".dsh/delegation/task-review/{name}/tasks/{taskId}.json"
       },
-      "next": "end"
+      "next": "complete-review",
+      "blockTurnClose": true
+    },
+    {
+      "id": "complete-review",
+      "title": "Confirm the completion coverage",
+      "executor": "main",
+      "prompt": "Confirm the portable task-review PASS coverage for every checked task before the change can complete. Do not tick or archive; a missing or non-PASS checked task keeps this step open.",
+      "evidence": { "kind": "check", "source": "task-review-coverage" },
+      "next": "end",
+      "blockTurnClose": true
     }
   ]
 }

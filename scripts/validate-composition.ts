@@ -301,12 +301,16 @@ function main(): number {
         }
       })
 
-      step('compose the verification-gate row with no configuration', () => {
+      step('compose the installed but disabled verification-gate row', () => {
         const row = rowBlock(dump.stdout, 'dsh-setup-verification-gate')
         if (row === '') throw new Error('verification-gate row is missing')
-        if (rowHasLine(row, 'disabled: true')) throw new Error('verification-gate row is disabled')
-        if (row.includes('config:') || row.includes('commands:')) {
-          throw new Error('the setup shipped verification-gate configuration')
+        if (!rowHasLine(row, 'disabled: true')) {
+          throw new Error('verification-gate row is not disabled')
+        }
+        const workflows = rowBlock(dump.stdout, 'dsh-setup-workflows')
+        if (workflows === '') throw new Error('workflows row is missing')
+        if (!workflows.includes('commands:') || !workflows.includes('maxBlocks: 8')) {
+          throw new Error('the setup shipped no verify settings')
         }
       })
 

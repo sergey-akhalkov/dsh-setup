@@ -255,7 +255,7 @@ describe('owned task-review decisions', () => {
         {
           ...runFor(shipped('change-intake'), true),
           id: 'run-intake',
-          definition: 'change-intake',
+          definition: { id: 'change-intake', name: 'Change intake', version: 1 },
           status: 'completed' as const,
           context: { name: 'auth' },
         },

@@ -28,6 +28,14 @@ export interface ToolCallObservation {
     readonly arguments: Readonly<Record<string, unknown>>;
     readonly ok: boolean;
     readonly at?: number;
+    /** The turn the call was observed in; absent on older in-memory entries. */
+    readonly turn?: number;
+    /** The pre-step index the call was observed at, for checkpoint freshness. */
+    readonly step?: number;
+    /** A bounded result text, for classifying delegate starts/answers. */
+    readonly detail?: string;
+    /** The observation order, for remedy/call ordering. */
+    readonly seq?: number;
 }
 /** One completed foreground shell result the verifier may match against. */
 export interface ShellResultObservation {
@@ -60,6 +68,14 @@ export interface EvidenceContext {
     readonly shellResults?: readonly ShellResultObservation[];
     /** The step's request time; a check must run after it. */
     readonly stepStartedAt?: number;
+    /** The validated erify.commands profile setting; empty keeps verify inert. */
+    readonly checkCommands?: readonly string[];
+    /** When the turn last wrote a non-documentation file; absent means no code write. */
+    readonly lastWriteAt?: number;
+    /** The latest written path, for the bounded refusal text. */
+    readonly lastWritePath?: string;
+    /** The latest successful configured check, retained across buffer eviction. */
+    readonly lastCheckAt?: number;
     /** Recorded user answers for the step's question. */
     readonly answers?: readonly HumanAnswerObservation[];
     /** Whether the step is marked nonCritical, the only declaration consumer. */
@@ -100,6 +116,12 @@ export declare function currentSpecDigest(workspace: string, change: string): Pr
 export declare function hostToolName(name: string): string;
 /** Whether an observed tool is the declared tool; `shell` matches the host shell. */
 export declare function toolNameMatches(declared: string, observed: string): boolean;
+/** Whether a recorded working directory names the workspace root. */
+export declare function sameCheckDirectory(left: string, right: string): boolean;
+/** True when a write target is planning scratch or documentation, not code. */
+export declare function ignoredWrite(path: string): boolean;
+/** When the turn last wrote a non-documentation file, from its tool calls. */
+export declare function lastCodeWriteAt(calls: readonly ToolCallObservation[], workspace?: string): number | undefined;
 /** Resolve every workspace-relative path an evidence contract will check. */
 export declare function collectEvidencePaths(value: Evidence, context: EvidenceContext, item?: string): string[];
 export declare function describeEvidence(value: Evidence, context: EvidenceContext): string;

@@ -1623,7 +1623,8 @@ export function apply(ctx, config = {}) {
                 toolCalls,
                 shellResults,
                 checkCommands: verifySettings.commands,
-                ...(lastCodeWriteAt(toolCalls, workspace) === undefined && writeMetrics?.lastWriteAt === undefined
+                ...(lastCodeWriteAt(toolCalls, workspace) === undefined &&
+                    writeMetrics?.lastWriteAt === undefined
                     ? {}
                     : { lastWriteAt: lastCodeWriteAt(toolCalls, workspace) ?? writeMetrics?.lastWriteAt }),
                 ...(writeMetrics?.lastWritePath === undefined
@@ -2145,7 +2146,7 @@ export function apply(ctx, config = {}) {
                 const metricsCheckAt = turnMetrics.get(sessionId)?.lastCheckAt;
                 const checkTimes = [bufferCheckAt, metricsCheckAt].filter((entry) => entry !== undefined);
                 const lastCheckAt = checkTimes.length === 0 ? undefined : Math.max(...checkTimes);
-                const completedVerify = runs.find((run) => run.definition === 'verify' &&
+                const completedVerify = runs.find((run) => run.definition.id === 'verify' &&
                     run.session === sessionId &&
                     run.status === 'completed' &&
                     Number(run.dedupeKey?.split('\u0000').at(-1)) === payload.turn);
@@ -2312,7 +2313,7 @@ export function apply(ctx, config = {}) {
             // later in the same turn: re-check the current-turn record on every
             // close and steer when the obligation reappears.
             if (!refusedThisClose && workflowOwnsCheckpoint) {
-                const currentRetro = runs.find((run) => run.definition === 'retro' &&
+                const currentRetro = runs.find((run) => run.definition.id === 'retro' &&
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) === payload.turn &&
                     run.session === sessionId &&
@@ -2321,7 +2322,7 @@ export function apply(ctx, config = {}) {
                     const issue = checkpointGateIssue(workspace, currentRetro.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
                     const blocks = currentRetro.turnBlocks ?? 0;
                     const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3;
-                    const alreadyUnchecked = (currentRetro.violations ?? []).some((violation) => violation.detail?.includes('checkpoint freshness refused') === true);
+                    const alreadyUnchecked = (currentRetro.violations ?? []).some((violation) => violation.reason?.includes('checkpoint freshness refused') === true);
                     if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
                         await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth);
                         payload.agent.steer({

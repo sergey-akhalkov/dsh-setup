@@ -89,6 +89,9 @@ jobs:
       - name: Build committed runtime from sources
         run: pnpm build
 
+      - name: Check the legacy-gate parity report
+        run: pnpm workflows:parity --check
+
       - name: Reject committed runtime that differs from a fresh build
         run: git diff --exit-code
 

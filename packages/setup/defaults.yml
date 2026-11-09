@@ -235,10 +235,20 @@
         window: week
         minSamples: 20
         guardrail: failure-rate
-# The Workflows view is read-only in this release; the row has no owner-tunable
-# options yet, so the default restates an empty config.
+# The workflows engine owns the checkpoint, task-review and verification closes
+# in this release; the verification-gate row stays installed but disabled for
+# one release. The verify definition has no shipped commands, matching the
+# inert legacy row, until a profile configures them.
 - id: dsh-setup-workflows
   config:
     checkpointApplicability:
       minToolCalls: 4
       requireWrite: true
+      bottleneckAge: 2
+      stepInterval: 40
+      enforceParallel: true
+    verify:
+      commands: []
+      maxBlocks: 8
+- id: dsh-setup-verification-gate
+  disabled: true

@@ -608,7 +608,7 @@ describe('retro fresh checkpoint', () => {
     let retroRun: { id: string; context: Record<string, unknown> } | undefined
     await waitFor(async () => {
       retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-        (entry) => entry.definition === 'retro',
+        (entry) => entry.definition.id === 'retro',
       ) as typeof retroRun
       return retroRun !== undefined
     })
@@ -683,7 +683,7 @@ describe('retro fresh checkpoint', () => {
     let retroRun: { id: string; context: Record<string, unknown> } | undefined
     await waitFor(async () => {
       retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-        (entry) => entry.definition === 'retro',
+        (entry) => entry.definition.id === 'retro',
       ) as typeof retroRun
       return retroRun !== undefined
     })
@@ -760,7 +760,7 @@ describe('verify auto-start', () => {
     let verifyRun: { id: string } | undefined
     await waitFor(async () => {
       verifyRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-        (entry) => entry.definition === 'verify',
+        (entry) => entry.definition.id === 'verify',
       )
       return verifyRun !== undefined
     })
@@ -829,7 +829,7 @@ describe('verify auto-start', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     await waitFor(async () => {
       const verify = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-        (entry) => entry.definition === 'verify',
+        (entry) => entry.definition.id === 'verify',
       )
       return verify?.status === 'completed'
     })
@@ -847,7 +847,7 @@ describe('verify auto-start', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     expect(host.steers.length).toBeGreaterThan(before)
     const reopened = (await runs.listAuthenticatedRuns(workspace, auth)).find(
-      (entry) => entry.definition === 'verify',
+      (entry) => entry.definition.id === 'verify',
     )
     expect(reopened?.status).not.toBe('completed')
   })
