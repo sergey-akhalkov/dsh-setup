@@ -151,6 +151,63 @@ describe('parity load gate and verify settings', () => {
     expect([...deferredResult.refused]).not.toContain('verify')
   })
 
+  it('binds the retirement ids by name even when their legacy metadata is removed', () => {
+    const definitions = loadShippedDefinitions().map((entry) =>
+      entry.id === 'verify'
+        ? { ...entry, settings: { ...entry.settings, legacy: undefined } }
+        : entry,
+    )
+    const missing = parityLoadIssues(definitions, undefined, '/plugins/parity.json', 'missing')
+    expect([...missing.refused]).toContain('verify')
+    const report = readParityReport().report
+    if (report === undefined) throw new Error('the tracked parity report is missing')
+    const stale = parityLoadIssues(
+      definitions,
+      { ...report, templates: { ...report.templates, verify: 'sha256-wrong' } },
+      '/plugins/parity.json',
+      undefined,
+    )
+    expect([...stale.refused]).toContain('verify')
+    expect(stale.issues.join('\n')).toContain('enable the verification-gate row')
+  })
+
+  it('refuses an own definition whose parity gate is failed, missing, or mismatched', () => {
+    const definitions = loadShippedDefinitions()
+    const report = readParityReport().report
+    if (report === undefined) throw new Error('the tracked parity report is missing')
+    const variants = [
+      {
+        ...report,
+        gates: {
+          ...report.gates,
+          checkpoint: { cases: 1, mismatches: 0, status: 'fail' as const },
+        },
+      },
+      {
+        ...report,
+        gates: Object.fromEntries(
+          Object.entries(report.gates).filter(([key]) => key !== 'verification'),
+        ),
+      },
+      {
+        ...report,
+        gates: {
+          ...report.gates,
+          'task-review': { cases: 1, mismatches: 1, status: 'fail' as const },
+        },
+      },
+    ]
+    const refused = variants.map(
+      (variant) =>
+        parityLoadIssues(definitions, variant, '/plugins/parity.json', undefined).refused,
+    )
+    expect(refused.map((entry) => [...entry])).toEqual([
+      expect.arrayContaining(['retro']),
+      expect.arrayContaining(['verify']),
+      expect.arrayContaining(['task-review']),
+    ])
+  })
+
   it('never embeds a shell command in the verify template', () => {
     const check = shipped('verify').steps[0]
     expect(check?.evidence).toEqual({ kind: 'check', source: 'verify-settings' })
@@ -455,6 +512,22 @@ describe('owned task-review definition', () => {
     await rm(findings, { recursive: true, force: true })
   })
 
+  it('rejects ERROR through the shipped await-review when PASS is the only verdict', async () => {
+    const taskId = '0123456789abcdef'
+    const workspace = await workspaceWithRecords({ [taskId]: 'ERROR' })
+    const step = shipped('task-review').steps.find((entry) => entry.id === 'await-review')
+    const evidence = {
+      ...(step?.evidence as unknown as Record<string, unknown>),
+      verdicts: ['PASS'],
+    }
+    const check = await verifyEvidence(evidence as never, {
+      workspace,
+      values: { name: 'auth', taskId },
+    })
+    expect(check.ok).toBe(false)
+    await rm(workspace, { recursive: true, force: true })
+  })
+
   it('requires portable PASS coverage for every checked task at completion', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'workflows-retire-'))
     const changeDir = join(workspace, 'openspec', 'changes', 'auth')
@@ -493,7 +566,12 @@ describe('owned task-review definition', () => {
     // cannot approve the checked task.
     await writeFile(
       join(workspace, 'openspec', 'review-approval.json'),
-      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review', reviewerProvider: 'other-provider' }),
+      JSON.stringify({
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        reviewerProvider: 'other-provider',
+      }),
       'utf8',
     )
     expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)

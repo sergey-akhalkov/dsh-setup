@@ -34,7 +34,7 @@ export interface ParityReport {
  * and the settings schema. Profile-provided verify values are excluded.
  */
 export declare function templateHash(definition: Definition): string;
-/** Definitions that declare a legacy signal are report-bound when `own`. */
+/** The report binds these ids whenever owned, independent of settings.legacy. */
 export declare function reportBoundDefinitions(definitions: readonly Definition[]): Definition[];
 /** The assets/parity directory, resolving from src and from lib. */
 export declare function parityAssetDirectory(): string;

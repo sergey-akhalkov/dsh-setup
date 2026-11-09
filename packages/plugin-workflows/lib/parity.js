@@ -45,8 +45,23 @@ export function templateHash(definition) {
     return `sha256-${createHash('sha256').update(canonical(template)).digest('hex')}`;
 }
 /** Definitions that declare a legacy signal are report-bound when `own`. */
+/** The three retirement definitions, bound by id even if editable metadata is removed. */
+const RETIREMENT_BINDINGS = {
+    retro: { plugin: 'goal-continuity', signal: 'work_checkpoint' },
+    'task-review': { plugin: 'delegation-rules', signal: 'task-review' },
+    verify: { plugin: 'verification-gate', signal: 'verification-gate' },
+};
+/** The report binds these ids whenever owned, independent of settings.legacy. */
 export function reportBoundDefinitions(definitions) {
-    return definitions.filter((definition) => definition.settings.gateOwnership === 'own' && definition.settings.legacy !== undefined);
+    return definitions.filter((definition) => definition.settings.gateOwnership === 'own' &&
+        RETIREMENT_BINDINGS[definition.id] !== undefined);
+}
+/** The rollback switch for one retirement definition id. */
+function retirementSwitch(definitionId) {
+    const binding = RETIREMENT_BINDINGS[definitionId];
+    return binding === undefined
+        ? 'enable the legacy gate'
+        : legacySwitchFor(binding.plugin, binding.signal);
 }
 /** The assets/parity directory, resolving from src and from lib. */
 export function parityAssetDirectory() {
@@ -167,15 +182,14 @@ export function parityLoadIssues(definitions, report, reportPath, reportError) {
     if (report === undefined) {
         for (const definition of bound) {
             refused.add(definition.id);
-            const rollback = legacySwitchFor(definition.settings.legacy?.plugin ?? '', definition.settings.legacy?.signal ?? '');
+            const rollback = retirementSwitch(definition.id);
             issues.push(`workflow definition "${definition.id}": set ${rollback} to fall back to the legacy gate; the parity report is missing at "${reportPath}" (${reportError ?? 'no report'})`);
         }
         return { issues, refused };
     }
     const verifyIsBound = bound.some((definition) => definition.id === 'verify');
     for (const definition of bound) {
-        const legacy = definition.settings.legacy;
-        const rollback = legacySwitchFor(legacy?.plugin ?? '', legacy?.signal ?? '');
+        const rollback = retirementSwitch(definition.id);
         const expected = report.templates[definition.id];
         const actual = templateHash(definition);
         if (expected === undefined) {

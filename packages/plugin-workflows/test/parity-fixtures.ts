@@ -84,23 +84,50 @@ function checkpointWorkflow(input: {
   )
 }
 
-function reviewWorkflow(verdict: string | undefined): Promise<ParityDecision> {
-  if (verdict === undefined) {
-    return Promise.resolve({ decision: 'refuse', reason: 'no task-review record' })
-  }
-  if (verdict === 'PASS' || verdict === 'ERROR') {
-    return Promise.resolve({
-      decision: 'allow',
-      reason: `${verdict} is matching intermediate turn-close evidence`,
+/** The shipped await-review step judged by the production evidence reader. */
+async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecision> {
+  const definition = loadShippedDefinitionsForFixtures().find((entry) => entry.id === 'task-review')
+  const evidence = definition?.steps.find((step) => step.id === 'await-review')?.evidence
+  if (evidence === undefined) throw new Error('the shipped await-review evidence is missing')
+  const root = await mkdtemp(join(tmpdir(), 'workflows-parity-'))
+  try {
+    const taskId = '0123456789abcdef'
+    const directory = join(root, '.dsh', 'delegation', 'task-review', 'change-a', 'tasks')
+    await mkdir(directory, { recursive: true })
+    if (verdict !== undefined) {
+      await writeFile(
+        join(directory, `${taskId}.json`),
+        JSON.stringify({
+          rule: 'task-review',
+          change: 'change-a',
+          phase: 'task',
+          scope: 'task',
+          taskId,
+          digest: 'a'.repeat(64),
+          verdict,
+          findings: [],
+          target: { provider: 'codex-subagent' },
+          time: '2026-10-29T08:55:43.317Z',
+        }),
+        'utf8',
+      )
+    }
+    const check = await verifyEvidence(evidence, {
+      workspace: root,
+      values: { name: 'change-a', taskId },
     })
+    return check.ok
+      ? {
+          decision: 'allow',
+          reason: `the shipped await-review accepts ${verdict ?? 'no record'}`,
+        }
+      : {
+          decision: 'refuse',
+          reason: `the shipped await-review rejects ${verdict ?? 'no record'}`,
+        }
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
-  return Promise.resolve({
-    decision: 'refuse',
-    reason:
-      verdict === 'FINDINGS'
-        ? 'the record is FINDINGS; fix the findings and re-run'
-        : `verdict ${verdict} does not satisfy the review step`,
-  })
 }
 
 function verifyWorkflow(input: {
