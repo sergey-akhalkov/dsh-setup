@@ -64,7 +64,7 @@ Retention: terminal runs are pruned after 30 days or when the workspace exceeds 
 
 User commands:
 
-- `/workflows` — opens the Workflows view; nothing starts.
+- `/workflows` — names the Workflows tab as the entry point (a Host command result is text-only and cannot open a client view); nothing starts.
 - `/workflows run <definitionId>` — user-started run.
 - `/workflows resume <runId>` — resumes an interrupted/blocked run.
 - `/workflows install <path>` — validates, asks the user, copies into the definitions directory, and records the hash + host signature.

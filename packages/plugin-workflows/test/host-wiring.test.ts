@@ -3715,9 +3715,9 @@ describe('workflows tool live wiring', () => {
 })
 
 describe('unapproved active definitions', () => {
-  it('starts no run from an unapproved active local definition after reload', async () => {
+  it('starts runs only for the approved definition after reload', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
-    const workspace = await tempWorkspace()
+    const { validateDefinition } = await import('../src/host/definitions.ts')
     const raw = {
       v: 1,
       id: 'active-demo',
@@ -3725,9 +3725,9 @@ describe('unapproved active definitions', () => {
       version: 1,
       trigger: {
         kind: 'fs.change',
-        match: { path: 'openspec/changes/' },
+        match: { path: 'openspec/changes/**' },
         mode: 'active',
-        dedupe: 'path',
+        dedupe: 'path+content-hash',
       },
       settings: {
         allowModelStart: false,
@@ -3747,28 +3747,63 @@ describe('unapproved active definitions', () => {
         },
       ],
     }
-    await mkdir(join(workspace, '.dsh', 'workflows', 'definitions'), { recursive: true })
-    await writeFile(
-      join(workspace, '.dsh', 'workflows', 'definitions', 'active-demo.json'),
-      JSON.stringify(raw),
-      'utf8',
-    )
-    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
-    await mkdir(changeDir, { recursive: true })
-    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
-    const host = fakeHost(workspace)
-    apply(host.ctx as never)
-    await new Promise((resolve) => setTimeout(resolve, 150))
-    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
-    host.fireFs()
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    // The fixture itself must be valid, or the zero-run check proves nothing.
+    expect(validateDefinition(raw).id).toBe('active-demo')
     const runs = await import('../src/host/runs.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const active = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-      (entry) => entry.definition === 'active-demo',
+    const changeDirFor = async (workspace: string): Promise<string> => {
+      const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+      await mkdir(changeDir, { recursive: true })
+      await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+      return changeDir
+    }
+    const fireChange = async (
+      workspace: string,
+      host: ReturnType<typeof fakeHost>,
+      changeDir: string,
+    ): Promise<void> => {
+      const applyHost = (): void => {
+        apply(host.ctx as never)
+      }
+      applyHost()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+      host.fireFs()
+    }
+
+    // A raw local file without an approval is never loaded.
+    const unapproved = await tempWorkspace()
+    await mkdir(join(unapproved, '.dsh', 'workflows', 'definitions'), { recursive: true })
+    await writeFile(
+      join(unapproved, '.dsh', 'workflows', 'definitions', 'active-demo.json'),
+      JSON.stringify(raw),
+      'utf8',
     )
-    expect(active).toHaveLength(0)
+    const unapprovedChange = await changeDirFor(unapproved)
+    const unapprovedHost = fakeHost(unapproved)
+    await fireChange(unapproved, unapprovedHost, unapprovedChange)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(
+      (await runs.listAuthenticatedRuns(unapproved, auth)).filter(
+        (entry) => entry.definition === 'active-demo',
+      ),
+    ).toHaveLength(0)
+
+    // The same definition, installed and approved, starts a run for the event.
+    const approved = await tempWorkspace()
+    const source = join(approved, 'active-demo.json')
+    await writeFile(source, JSON.stringify(raw), 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    await installDefinition(approved, source, auth)
+    const approvedChange = await changeDirFor(approved)
+    const approvedHost = fakeHost(approved)
+    await fireChange(approved, approvedHost, approvedChange)
+    await waitFor(async () =>
+      (await runs.listAuthenticatedRuns(approved, auth)).some(
+        (entry) => entry.definition === 'active-demo',
+      ),
+    )
   })
 })
 
