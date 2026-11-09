@@ -9,7 +9,7 @@ import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './comman
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
 import { evaluateEvent } from './evaluate.js';
-import { ignoredWrite, lastCodeWriteAt, verifyEvidence, } from './evidence.js';
+import { ignoredWrite, lastCodeWriteAt, sameCheckDirectory, verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
 import { startFsChangeWatcher } from './fs-change.js';
 import { authorizationWriteDecision, evaluateArchiveGate, evaluateIntakeGate, evaluateTurnClose, } from './gates.js';
@@ -2107,12 +2107,15 @@ export function apply(ctx, config = {}) {
                 ? turnMetrics.get(sessionId)?.lastWriteAt
                 : undefined;
             if (verifyWriteAt !== undefined) {
+                const normalizeCommand = (value) => value.trim().replace(/^rtk\\s+/u, '');
+                const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand));
                 const lastCheckAt = (sessionShellResults.get(sessionId) ?? [])
                     .filter((result) => result.foreground &&
                     result.exitCode === 0 &&
                     result.timedOut !== true &&
                     result.sandboxDenied !== true &&
-                    verifySettings.commands.includes(result.command))
+                    configuredCommands.has(normalizeCommand(result.command)) &&
+                    (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)))
                     .map((result) => result.at)
                     .sort((left, right) => right - left)[0];
                 const completedVerify = runs.find((run) => run.definition === 'verify' &&

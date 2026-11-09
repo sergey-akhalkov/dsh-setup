@@ -578,7 +578,7 @@ function toolCheck(evidence, context, item) {
     return { ok: true, evidence: { kind: 'tool', callId: call.callId, detail: evidence.name } };
 }
 /** Whether a recorded working directory names the workspace root. */
-function sameCheckDirectory(left, right) {
+export function sameCheckDirectory(left, right) {
     const norm = (value) => value.replaceAll('\\', '/').replace(/\/+$/u, '');
     const a = norm(left);
     const b = norm(right);

@@ -28,6 +28,7 @@ import {
   ignoredWrite,
   lastCodeWriteAt,
   type ShellResultObservation,
+  sameCheckDirectory,
   type ToolCallObservation,
   verifyEvidence,
 } from './evidence.js'
@@ -2464,6 +2465,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ? turnMetrics.get(sessionId)?.lastWriteAt
             : undefined
         if (verifyWriteAt !== undefined) {
+          const normalizeCommand = (value: string): string => value.trim().replace(/^rtk\\s+/u, '')
+          const configuredCommands = new Set(verifySettings.commands.map(normalizeCommand))
           const lastCheckAt = (sessionShellResults.get(sessionId) ?? [])
             .filter(
               (result) =>
@@ -2471,7 +2474,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 result.exitCode === 0 &&
                 result.timedOut !== true &&
                 result.sandboxDenied !== true &&
-                verifySettings.commands.includes(result.command),
+                configuredCommands.has(normalizeCommand(result.command)) &&
+                (result.cwd === undefined || sameCheckDirectory(result.cwd, workspace)),
             )
             .map((result) => result.at)
             .sort((left, right) => right - left)[0]

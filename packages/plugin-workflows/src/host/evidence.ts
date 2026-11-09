@@ -763,7 +763,7 @@ function toolCheck(
 }
 
 /** Whether a recorded working directory names the workspace root. */
-function sameCheckDirectory(left: string, right: string): boolean {
+export function sameCheckDirectory(left: string, right: string): boolean {
   const norm = (value: string): string => value.replaceAll('\\', '/').replace(/\/+$/u, '')
   const a = norm(left)
   const b = norm(right)
