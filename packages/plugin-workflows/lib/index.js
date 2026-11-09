@@ -2118,6 +2118,13 @@ export function apply(ctx, config = {}) {
                 workerVisible: workerToolVisible(),
                 enforceParallel: checkpointApplicability.enforceParallel,
             });
+            const checkpointTurnOf = (path) => {
+                const name = path.replaceAll('\\', '/').split('/').at(-1) ?? '';
+                const turn = Number(name.replace(/\.json$/u, ''));
+                return Number.isSafeInteger(turn) ? turn : undefined;
+            };
+            let refusedThisClose = false;
+            const retroStaleBlocks = new Map();
             // Advance every run first: an owned tool step (the review start) must
             // dispatch for every newly checked task before one close is refused.
             const advanced = new Map();
@@ -2128,8 +2135,11 @@ export function apply(ctx, config = {}) {
                     continue;
                 // A retro run must not complete on the record alone: while the host
                 // checkpoint remedy/age rule fails, keep the run open and steer.
-                if (definition.id === 'retro' && typeof run.context.checkpoint === 'string') {
-                    if (checkpointGateIssue(workspace, run.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn)) !== undefined) {
+                if (definition.id === 'retro' &&
+                    typeof run.context.checkpoint === 'string' &&
+                    checkpointTurnOf(run.context.checkpoint) === payload.turn) {
+                    const DEBUG_ISSUE = checkpointGateIssue(workspace, run.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
+                    if (DEBUG_ISSUE !== undefined) {
                         advanced.set(run.id, run);
                         definitionOf.set(run.id, definition);
                         continue;
@@ -2183,11 +2193,37 @@ export function apply(ctx, config = {}) {
                 // Keep the session's main-step owner until its step settles; a
                 // second run may take over only after that.
                 if (outcome.kind !== 'allow') {
+                    refusedThisClose = true;
                     mainStepOwners.set(sessionId, run.id);
                     break;
                 }
                 if (owner !== undefined && run.id === owner.id) {
                     mainStepOwners.delete(sessionId);
+                }
+            }
+            // A completed retro run must not hide a checkpoint that went stale
+            // later in the same turn: re-check the current-turn record on every
+            // close and steer when the obligation reappears.
+            if (!refusedThisClose) {
+                const currentRetro = runs.find((run) => run.definition === 'retro' &&
+                    typeof run.context.checkpoint === 'string' &&
+                    checkpointTurnOf(run.context.checkpoint) === payload.turn &&
+                    run.status !== 'cancelled');
+                if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
+                    const issue = checkpointGateIssue(workspace, currentRetro.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
+                    const key = `${sessionId}:${String(payload.turn)}`;
+                    const blocks = retroStaleBlocks.get(key) ?? 0;
+                    const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3;
+                    if (issue !== undefined && blocks < limit) {
+                        retroStaleBlocks.set(key, blocks + 1);
+                        payload.agent.steer({
+                            id: randomUUID(),
+                            role: 'user',
+                            content: [{ type: 'text', text: issue.text }],
+                            source: { kind: 'workflows-gate' },
+                        });
+                        refusedThisClose = true;
+                    }
                 }
             }
             await refreshPromptRuns(workspace);

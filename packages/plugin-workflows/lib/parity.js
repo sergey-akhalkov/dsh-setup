@@ -475,19 +475,38 @@ function stringList(value) {
         ? value.filter((entry) => typeof entry === 'string')
         : [];
 }
+function argumentStrings(value) {
+    if (typeof value === 'string')
+        return [value];
+    if (Array.isArray(value))
+        return value.flatMap(argumentStrings);
+    if (isRecord(value))
+        return Object.values(value).flatMap(argumentStrings);
+    return [];
+}
 function mentions(value, wanted) {
-    const text = JSON.stringify(value);
-    return text.includes(wanted);
+    return argumentStrings(value).some((text) => text.includes(wanted));
 }
 function normalizePath(value) {
-    return value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/+/gu, '/').replace(/\/$/u, '');
+    const parts = [];
+    for (const part of value.replaceAll('\\', '/').split('/')) {
+        if (part === '' || part === '.')
+            continue;
+        if (part === '..') {
+            parts.pop();
+        }
+        else {
+            parts.push(part);
+        }
+    }
+    return parts.join('/');
 }
-/** A destination matches a target only by whole path components. */
+/** A destination matches a target when it is the target or lies beneath it. */
 function targetMatches(targets, destination) {
     const path = normalizePath(destination);
     return targets.some((target) => {
         const wanted = normalizePath(target);
-        return wanted !== '' && (path === wanted || path.endsWith(`/${wanted}`));
+        return wanted === '' || path === wanted || path.startsWith(`${wanted}/`);
     });
 }
 function delegateStarted(detail) {
@@ -544,8 +563,11 @@ function scopeOverlaps(left, right) {
     return left.some((a) => right.some((b) => {
         const x = parts(a);
         const y = parts(b);
+        // The repository root contains every scope, including a '.' entry.
+        if (x.length === 0 || y.length === 0)
+            return true;
         const min = Math.min(x.length, y.length);
-        return min > 0 && x.slice(0, min).every((part, index) => part === y[index]);
+        return x.slice(0, min).every((part, index) => part === y[index]);
     }));
 }
 function parallelPlan(record) {

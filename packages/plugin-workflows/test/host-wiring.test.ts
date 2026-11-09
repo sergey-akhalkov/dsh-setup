@@ -637,6 +637,77 @@ describe('retro fresh checkpoint', () => {
     expect(settled?.steps[0]?.state).toBe('open')
     expect(host.steers.length).toBeGreaterThan(0)
   })
+  it('reopens the checkpoint obligation when a completed turn checkpoint goes stale', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const emitStep = async (step: number): Promise<void> => {
+      await host.emit(
+        'agent/pre-step',
+        {
+          agent: host.agent,
+          turn: 1,
+          step,
+          messages: [],
+          signal: new AbortController().signal,
+          modelSelection: { provider: 'p', model: 'm' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    }
+    await emitStep(1)
+    for (const [index, name] of ['read', 'read', 'read', 'read', 'write'].entries()) {
+      await host.emit(
+        'tools/result',
+        {
+          agent: host.agent,
+          callId: `call-${String(index)}`,
+          name,
+          arguments: name === 'write' ? { file_path: 'src/app.ts' } : {},
+        },
+        { isError: false, content: [{ type: 'text', text: 'ok' }] },
+      )
+    }
+    await host.emit(
+      'tools/result',
+      { agent: host.agent, callId: 'checkpoint-call', name: 'work_checkpoint', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: 'checkpoint recorded' }] },
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let retroRun: { id: string; context: Record<string, unknown> } | undefined
+    await waitFor(async () => {
+      retroRun = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+        (entry) => entry.definition === 'retro',
+      ) as typeof retroRun
+      return retroRun !== undefined
+    })
+    await mkdir(dirname(join(workspace, String(retroRun?.context.checkpoint))), { recursive: true })
+    await writeFile(
+      join(workspace, String(retroRun?.context.checkpoint)),
+      JSON.stringify({
+        checkpoint: 'checkpoint-1-aaaaaaaa',
+        outcome: 'done',
+        turn: 1,
+        lanes: [],
+        next: 'continue',
+      }),
+      'utf8',
+    )
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(async () => {
+      const stored = await runs.readAuthenticatedRun(workspace, retroRun?.id ?? '', auth)
+      return stored?.status === 'completed'
+    })
+    const before = host.steers.length
+    for (let step = 2; step <= 42; step += 1) await emitStep(step)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.steers.length).toBeGreaterThan(before)
+  })
 })
 
 describe('retro applicability evidence', () => {

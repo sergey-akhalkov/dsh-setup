@@ -64,31 +64,57 @@ export interface ParityCase {
 const ALLOW: ParityDecision = { decision: 'allow', reason: 'legacy allows' }
 const REFUSE: ParityDecision = { decision: 'refuse', reason: 'legacy refuses' }
 
-function checkpointWorkflow(input: {
+async function checkpointWorkflow(input: {
   readonly record?: CheckpointCloseRecord
   readonly observations?: readonly CheckpointObservation[]
   readonly bottleneckAge?: number
 }): Promise<ParityDecision> {
-  if (input.record === undefined) {
-    return Promise.resolve({
-      decision: 'refuse',
-      reason: 'the checkpoint step is open: no fresh work_checkpoint record',
-    })
-  }
-  const issue = checkpointCloseIssue({
-    record: input.record,
-    checkpointId:
-      typeof (input.record as { checkpoint?: unknown }).checkpoint === 'string'
-        ? (input.record as { checkpoint: string }).checkpoint
-        : 'checkpoint-1-aaaaaaaa',
-    observations: input.observations ?? [],
-    bottleneckAge: input.bottleneckAge ?? 2,
+  const definition = loadShippedDefinitionsForFixtures().find((entry) => entry.id === 'retro')
+  if (definition === undefined) throw new Error('the shipped retro definition is missing')
+  const issue =
+    input.record === undefined
+      ? undefined
+      : checkpointCloseIssue({
+          record: input.record,
+          checkpointId:
+            typeof (input.record as { checkpoint?: unknown }).checkpoint === 'string'
+              ? (input.record as { checkpoint: string }).checkpoint
+              : 'checkpoint-1-aaaaaaaa',
+          observations: input.observations ?? [],
+          bottleneckAge: input.bottleneckAge ?? 2,
+        })
+  let run = createRun({
+    definition: 'retro',
+    trigger: 'turn.stopping',
+    session: 'session-1',
+    workspace: '/workspace',
+    context: { checkpoint: 'checkpoint-1-aaaaaaaa' },
+    steps: ['checkpoint', 'verify'],
+    now: 1_000,
   })
-  return Promise.resolve(
-    issue === undefined
-      ? { decision: 'allow', reason: 'the checkpoint evidence and remedy are present' }
-      : { decision: 'refuse', reason: issue },
-  )
+  if (input.record !== undefined && issue === undefined) {
+    run = settleStep(run, 'checkpoint', 'done', { at: 1_001 })
+    run = settleStep(run, 'verify', 'done', { at: 1_002 })
+  }
+  const outcome = evaluateTurnClose({
+    run,
+    definition,
+    agent: { steer: () => undefined },
+    evidenceContext: { workspace: '/workspace', values: {} },
+    turn: 1,
+    maxBlocks: 3,
+    installedLegacy: new Set(),
+    enabledLegacy: new Set(),
+  })
+  return outcome.kind === 'allow'
+    ? { decision: 'allow', reason: 'the shipped retro close gate allows' }
+    : {
+        decision: 'refuse',
+        reason:
+          (outcome.kind === 'refuse' ? outcome.text : outcome.detail) ??
+          issue ??
+          'the retro step is open',
+      }
 }
 
 /** The shipped await-review step judged by the production evidence reader. */
