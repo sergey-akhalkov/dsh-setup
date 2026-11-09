@@ -609,8 +609,7 @@ function isResourceScope(value) {
 }
 function scopeOverlaps(left, right, workspace) {
     const parts = (value) => {
-        const normalized = value.replaceAll('\\', '/');
-        const absolute = isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized);
+        const absolute = resolveWorkspacePath(value, workspace);
         const folded = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
         return folded.replaceAll('\\', '/').split('/').filter(Boolean);
     };

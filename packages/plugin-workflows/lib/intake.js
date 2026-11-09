@@ -59,7 +59,9 @@ export async function advanceIntake(input) {
             }
             return { run: completedRun, completed: true };
         }
-        if (pending.state === 'failed' && pending.step.executor === 'tool') {
+        if (pending.state === 'failed' &&
+            pending.step.executor === 'tool' &&
+            input.definition.id === 'task-review') {
             // A rejected dispatch stays retryable: reset the tool step so the next
             // close dispatches it again instead of closing without the obligation.
             run = {
@@ -130,10 +132,10 @@ export async function advanceIntake(input) {
                     ...(input.signal === undefined ? {} : { signal: input.signal }),
                 });
                 if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
-                    // A failed dispatch is a blocking obligation, not a terminal run:
-                    // keep it retryable so the close gate cannot pass over it.
+                    // A failed dispatch is a blocking obligation only for the owned
+                    // review retry; other workflows keep their terminal failure.
                     return {
-                        run: setRunStatus(run, 'blocked', at),
+                        run: input.definition.id === 'task-review' ? setRunStatus(run, 'blocked', at) : run,
                         completed: false,
                         waiting: waitingFor(step, input.evidenceContext),
                     };

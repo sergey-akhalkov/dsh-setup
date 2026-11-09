@@ -47,11 +47,13 @@ export function evaluateTurnClose(input) {
                         detail,
                     };
                 }
+                const text = `step "${failed.id}" has a failed dispatch; retry it before the close`;
+                input.agent.steer(text);
                 return {
                     kind: 'refuse',
                     run: incrementTurnBlocks(input.run, at),
                     stepId: failed.id,
-                    text: `step "${failed.id}" has a failed dispatch; retry it before the close`,
+                    text,
                 };
             }
         }

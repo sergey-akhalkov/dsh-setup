@@ -769,8 +769,7 @@ function scopeOverlaps(
   workspace: string,
 ): boolean {
   const parts = (value: string): string[] => {
-    const normalized = value.replaceAll('\\', '/')
-    const absolute = isAbsolute(normalized) ? resolve(normalized) : resolve(workspace, normalized)
+    const absolute = resolveWorkspacePath(value, workspace)
     const folded = process.platform === 'win32' ? absolute.toLowerCase() : absolute
     return folded.replaceAll('\\', '/').split('/').filter(Boolean)
   }

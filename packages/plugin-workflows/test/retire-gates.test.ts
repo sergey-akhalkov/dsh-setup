@@ -1336,10 +1336,11 @@ describe('owned task-review definition', () => {
       now: 1_000,
     })
     run = settleStep(run, 'start-review', 'failed', { at: 1_001, reason: 'delegate failed' })
+    const steers: string[] = []
     const outcome = evaluateTurnClose({
       run,
       definition,
-      agent: { steer: () => undefined },
+      agent: { steer: (text: string) => steers.push(text) },
       evidenceContext: { workspace: '/workspace', values: {} },
       turn: 1,
       maxBlocks: 3,
@@ -1347,6 +1348,8 @@ describe('owned task-review definition', () => {
       enabledLegacy: enabledOff(),
     })
     expect(outcome.kind).not.toBe('allow')
+    expect(steers).toHaveLength(1)
+    expect(steers[0]).toContain('failed dispatch')
   })
 
   it('requires portable PASS coverage for every checked task at completion', async () => {
