@@ -877,6 +877,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const turnMetrics = new Map<string, TurnMetrics>()
   /** Bounded per-session observations the evidence verifier may consume. */
   const sessionToolCalls = new Map<string, ToolCallObservation[]>()
+  /** A monotonic observation counter; eviction must not reuse sequence numbers. */
+  const observationSeq = new Map<string, number>()
+  const nextObservationSeq = (session: string): number => {
+    const next = observationSeq.get(session) ?? 0
+    observationSeq.set(session, next + 1)
+    return next
+  }
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
   /** The current pre-step index per session, for checkpoint freshness. */
   const turnSteps = new Map<string, number>()
@@ -1426,7 +1433,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: isShellTool ? shellOutcome.ok : !result.isError,
           at: journal.time(),
           detail: text.slice(0, 500),
-          seq: observed.length,
+          seq: nextObservationSeq(sessionId),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
@@ -1823,7 +1830,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: true,
           at: journal.time(),
           detail: JSON.stringify(first.result).slice(0, 500),
-          seq: observed.length,
+          seq: nextObservationSeq(sessionId),
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
@@ -2472,7 +2479,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             .filter(
               (result) =>
                 result.foreground &&
+                result.ok === true &&
                 result.exitCode === 0 &&
+                result.signal === undefined &&
                 result.timedOut !== true &&
                 result.sandboxDenied !== true &&
                 configuredCommands.has(normalizeCommand(result.command)) &&
@@ -2767,9 +2776,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         shellResults: sessionShellResults.get(sessionId) ?? [],
         checkCommands: verifySettings.commands,
         ...(lastWrite === undefined ? {} : { lastWriteAt: lastWrite }),
-        ...(metrics?.lastWritePath === undefined
-          ? {}
-          : { lastWritePath: metrics.lastWritePath }),
+        ...(metrics?.lastWritePath === undefined ? {} : { lastWritePath: metrics.lastWritePath }),
         ...(state?.requestedAt === undefined ? {} : { stepStartedAt: state.requestedAt }),
         ...(typeof state?.evidence?.answer === 'string'
           ? { answers: [{ answer: state.evidence.answer }] }

@@ -820,6 +820,48 @@ describe('owned verification evidence', () => {
   const check = (input: Parameters<typeof verifyEvidence>[1]) =>
     verifyEvidence({ kind: 'check', source: 'verify-settings' }, input)
 
+  it('bounds the displayed command list so a refusal is still steered', async () => {
+    const definition = shipped('verify')
+    const run = createRun({
+      definition: 'verify',
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: {},
+      steps: ['check'],
+      now: 1_000,
+    })
+    const commands = Array.from({ length: 30 }, (_, index) => 'check-' + String(index))
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: { workspace: '/workspace', values: {}, checkCommands: commands },
+      turn: 1,
+      maxBlocks: 129,
+      installedLegacy: new Set(),
+      enabledLegacy: new Set(),
+    })
+    expect(outcome.kind).toBe('refuse')
+    if (outcome.kind === 'refuse') {
+      expect(outcome.text.length).toBeLessThan(2000)
+      expect(outcome.text).toContain('more')
+    }
+    expect(commands.length).toBe(30)
+    const check = await verifyEvidence(
+      { kind: 'check', source: 'verify-settings' },
+      {
+        workspace: '/workspace',
+        values: {},
+        checkCommands: commands,
+        lastWriteAt: 100,
+        shellResults: [],
+      },
+    )
+    expect(check.ok).toBe(false)
+    if (!check.ok) expect(check.failure.detail.length).toBeLessThan(600)
+  })
+
   it('requires a passing configured command after the last code write', async () => {
     const passing = await check({
       workspace: '/workspace',
@@ -1041,6 +1083,8 @@ describe('owned task-review definition', () => {
       { failureClass: 'reviewed-inputs-changed' },
       { error: 'queue-internal-error: failure' },
       { failureClass: 42 },
+      { failureClass: 'not-a-valid-failure-class' },
+      { worktreeDigest: 42 },
       { error: { message: 'bad' } },
     ]) {
       const workspace = await workspaceWithRecords({ [taskId]: 'ERROR' })

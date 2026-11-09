@@ -409,8 +409,29 @@ export function localRecordError(record: Record<string, unknown>): string | unde
   if (record.runId !== undefined && typeof record.runId !== 'string') {
     return 'field "runId" must be a string'
   }
-  if (record.failureClass !== undefined && typeof record.failureClass !== 'string') {
-    return 'field "failureClass" must be a string'
+  if (record.failureClass !== undefined) {
+    const failureClasses = new Set([
+      'child-limit',
+      'provider-not-started',
+      'timeout',
+      'reviewed-inputs-changed',
+      'invalid-output',
+      'config',
+      'permission',
+      'unknown',
+      'queue-full',
+      'queue-timeout',
+      'queue-internal-error',
+    ])
+    if (typeof record.failureClass !== 'string' || !failureClasses.has(record.failureClass)) {
+      return 'field "failureClass" must be a known failure class'
+    }
+  }
+  if (
+    record.worktreeDigest !== undefined &&
+    (typeof record.worktreeDigest !== 'string' || !DIGEST.test(record.worktreeDigest))
+  ) {
+    return 'field "worktreeDigest" must be 64 hex characters'
   }
   if (record.error !== undefined && typeof record.error !== 'string') {
     return 'field "error" must be a string'

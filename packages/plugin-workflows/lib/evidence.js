@@ -611,6 +611,13 @@ export function lastCodeWriteAt(calls) {
 function normalizeCheckCommand(value) {
     return value.trim().replace(/^rtk\s+/u, '');
 }
+function shownCommands(commands) {
+    const limited = commands
+        .slice(0, 3)
+        .map((command) => `"${command}"`)
+        .join(' or ');
+    return commands.length > 3 ? `${limited} (+${String(commands.length - 3)} more)` : limited;
+}
 function checkFailure(detail, item) {
     return failure('check-failed', detail, undefined, item);
 }
@@ -649,7 +656,7 @@ function verifyCheck(context, item) {
         accepted.has(normalizeCheckCommand(candidate.command)) &&
         (candidate.cwd === undefined || sameCheckDirectory(candidate.cwd, context.workspace)));
     const afterWrite = results.filter((candidate) => candidate.at > lastWrite);
-    const shown = commands.map((command) => `"${command}"`).join(' or ');
+    const shown = shownCommands(commands);
     if (afterWrite.length === 0) {
         return checkFailure(`no configured verification command completed after the last code write; run ${shown}`, item);
     }
@@ -869,7 +876,7 @@ export function describeEvidence(value, context) {
         }
         case 'check': {
             if (value.source === 'verify-settings') {
-                return `a configured verify command (${(context.checkCommands ?? []).join(' or ') || 'inert'}) exits 0 after the last code write`;
+                return `a configured verify command (${shownCommands(context.checkCommands ?? []) || 'inert'}) exits 0 after the last code write`;
             }
             const command = resolveEvidenceText(value.command ?? '', context, undefined);
             return `foreground command "${command.ok ? command.text : value.command}" exits 0`;
