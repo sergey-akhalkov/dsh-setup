@@ -61,6 +61,7 @@ export interface RunStepView {
   readonly state: string
   readonly at?: number
   readonly evidence?: string
+  readonly reason?: string
 }
 
 export interface RunView {
@@ -453,7 +454,12 @@ export function RunDetail(props: { run: RunView; t: Translate; session?: string 
           {run.steps.map((step) => (
             <tr key={step.id} data-step={step.id}>
               <td>{step.title}</td>
-              <td>{step.state}</td>
+              <td>
+                {step.state}
+                {step.reason === undefined ? null : (
+                  <span className="dsh-wf-error"> {step.reason}</span>
+                )}
+              </td>
               <td>{step.at === undefined ? '—' : formatTime(step.at, t)}</td>
               <td>
                 {step.evidence === undefined ? (

@@ -21,6 +21,7 @@ export interface RunStep {
   readonly state: string
   readonly at?: number
   readonly evidence?: string
+  readonly reason?: string
 }
 
 /** The one shape every adapter returns. */
@@ -785,6 +786,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       // A parseable file that is not a run record is a diagnostic, not a run.
       typeof parsed.value.definition !== 'string' ||
       typeof parsed.value.status !== 'string' ||
+      typeof parsed.value.session !== 'string' ||
       !Array.isArray(parsed.value.steps)
     ) {
       runs.push(
@@ -820,6 +822,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
         title: entry.id,
         state: typeof entry.state === 'string' ? entry.state : 'unknown',
         ...(typeof entry.at === 'number' ? { at: entry.at } : {}),
+        ...(typeof entry.reason === 'string' ? { reason: safeError(entry.reason) } : {}),
         ...(evidence === undefined
           ? {}
           : {

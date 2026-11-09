@@ -106,6 +106,9 @@ describe('workflows view data', () => {
     const blockedRow = runs.find((run) => run.id === 'workflow:run-blocked-1')
     expect(blockedRow).toMatchObject({ status: 'running' })
     expect(blockedRow?.steps.find((step) => step.title === 'VIOLATION')).toBeDefined()
+    expect(blockedRow?.steps.find((step) => step.id === 'requirements')?.reason).toBe(
+      'missing evidence',
+    )
     const malformed = runs.find((run) => run.id === 'workflow:malformed')
     expect(malformed).toMatchObject({ status: 'unknown' })
     expect(malformed?.error).toBeDefined()
@@ -119,6 +122,16 @@ describe('workflows view data', () => {
     )
     const incompleteRows = await sessionRuns(workspace, 'session-1')
     expect(incompleteRows.find((run) => run.id === 'workflow:incomplete')?.error).toBeDefined()
+    // A record without a session is also a malformed diagnostic.
+    await writeFile(
+      join(runsDirectory(workspace), 'missing-session.json'),
+      `${JSON.stringify({ v: 1, id: 'missing-session', definition: 'change-intake', status: 'running', steps: [] })}\n`,
+      'utf8',
+    )
+    const missingSessionRows = await sessionRuns(workspace, 'session-1')
+    expect(
+      missingSessionRows.find((run) => run.id === 'workflow:missing-session')?.error,
+    ).toBeDefined()
     // Another session's valid failed run stays in its own session.
     const otherBase = createRun({
       definition: 'change-intake',

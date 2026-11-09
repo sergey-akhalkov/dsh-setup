@@ -521,11 +521,12 @@ describe('Workflows loaded view', () => {
     const module = loadModule()
     const t = (key: string): string =>
       ({ 'definitions.heading': 'Definitions', 'receipts.heading': 'Receipts' })[key] ?? key
-    const step = (id: string, state: string, title = id) => ({
+    const step = (id: string, state: string, title = id, reason?: string) => ({
       id,
       title,
       state,
       at: 1_762_500_000_000,
+      ...(reason === undefined ? {} : { reason }),
     })
     const loaded = {
       health: {
@@ -578,7 +579,10 @@ describe('Workflows loaded view', () => {
             title: 'change-intake intake',
             startedAt: 1_762_500_000_001,
             status: 'running',
-            steps: [step('spec-review', 'blocked'), step('violation:0', 'VIOLATION', 'VIOLATION')],
+            steps: [
+              step('spec-review', 'blocked', 'Spec review', 'missing-file'),
+              step('violation:0', 'VIOLATION', 'VIOLATION'),
+            ],
           },
           {
             id: 'workflow:malformed',
@@ -631,6 +635,7 @@ describe('Workflows loaded view', () => {
     expect(blocked).toContain('workflow:run-running')
     expect(blocked).toContain('workflow:run-blocked')
     expect(blocked).toContain('VIOLATION')
+    expect(blocked).toContain('missing-file')
     expect(blocked).toContain('run-created-1')
     expect(blocked).toContain('auth')
     const malformed = JSON.stringify(
