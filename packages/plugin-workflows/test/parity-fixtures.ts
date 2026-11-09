@@ -139,7 +139,10 @@ async function reviewWorkflow(verdict: string | undefined): Promise<ParityDecisi
           taskId,
           digest: 'a'.repeat(64),
           verdict,
-          findings: [],
+          findings:
+            verdict === 'FINDINGS'
+              ? [{ severity: 'P1', title: 'finding', evidence: 'e', fix: 'f' }]
+              : [],
           target: { provider: 'codex-subagent' },
           time: '2026-10-29T08:55:43.317Z',
         }),

@@ -903,7 +903,10 @@ describe('owned task-review definition', () => {
           taskId,
           digest: 'a'.repeat(64),
           verdict,
-          findings: [],
+          findings:
+            verdict === 'FINDINGS'
+              ? [{ severity: 'P1', title: 'finding', evidence: 'e', fix: 'f' }]
+              : [],
           target: { provider: 'codex-subagent' },
           time: '2026-11-08T00:00:00.000Z',
         }),
@@ -1200,6 +1203,14 @@ describe('owned task-review definition', () => {
       { version: 1, archiveGate: true, taskRule: 'task-review', reviewerModle: 'x' },
       { version: 1, archiveGate: true, taskRule: 'task-review', grandfathered: 42 },
       { version: 1, archiveGate: true, taskRule: 'task-review', cutoff: 42 },
+      { version: 1, archiveGate: true, taskRule: 'task-review', cutoff: '/tmp/release' },
+      { version: 1, archiveGate: true, taskRule: 'task-review', grandfathered: { archive: 'old' } },
+      {
+        version: 1,
+        archiveGate: true,
+        taskRule: 'task-review',
+        grandfathered: { '../bad': 'old' },
+      },
     ]) {
       await writeFile(marker, JSON.stringify(malformed), 'utf8')
       expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)

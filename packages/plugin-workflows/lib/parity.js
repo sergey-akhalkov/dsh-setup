@@ -308,7 +308,11 @@ const PORTABLE_KEYS = new Set([
 ]);
 const PORTABLE_TARGET_KEYS = new Set(['provider', 'model', 'reasoningEffort']);
 function hasMachinePath(value) {
-    return /(?:^[A-Za-z]:[\\/]|^\/(?:Users|home|root)\/|^~[\\/])/u.test(value);
+    return (/[A-Za-z]:[\\/]/.test(value) ||
+        /\\\\/.test(value) ||
+        /file:\/\//i.test(value) ||
+        /(?:^|[\s"'=([{<`])\/[^\s"'`)\]}>]+/.test(value) ||
+        /(?:^|[\s"'=([{<`])~[/\\]/.test(value));
 }
 /**
  * The committed portable schema; unknown fields (session, runId, phase) and an
@@ -417,7 +421,10 @@ export function reviewerBinding(workspace) {
         if (!isRecord(raw.grandfathered)) {
             return { invalid: 'review-approval.json grandfathered must be an object' };
         }
-        for (const value of Object.values(raw.grandfathered)) {
+        for (const [key, value] of Object.entries(raw.grandfathered)) {
+            if (!/^[a-z0-9][a-z0-9-]*$/u.test(key) || key === 'archive') {
+                return { invalid: 'review-approval.json grandfathered keys must be change names' };
+            }
             if (typeof value !== 'string' || value.trim() === '' || hasMachinePath(value)) {
                 return { invalid: 'review-approval.json grandfathered values must be clean strings' };
             }
