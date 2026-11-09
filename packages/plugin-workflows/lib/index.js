@@ -1177,8 +1177,8 @@ export function apply(ctx, config = {}) {
             if (command !== undefined &&
                 shellOutcome.ok &&
                 shellOutcome.background !== true &&
-                verifySettings.commands.some((configured) => configured.trim().replace(/^rtk\\s+/u, '') ===
-                    command.trim().replace(/^rtk\\s+/u, ''))) {
+                (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
+                verifySettings.commands.some((configured) => configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''))) {
                 metrics.lastCheckAt = journal.time();
             }
             // A background or unreadable shell result cannot satisfy a check.

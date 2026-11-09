@@ -1446,10 +1446,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           command !== undefined &&
           shellOutcome.ok &&
           shellOutcome.background !== true &&
+          (shellOutcome.cwd === undefined || sameCheckDirectory(shellOutcome.cwd, workspace)) &&
           verifySettings.commands.some(
             (configured) =>
-              configured.trim().replace(/^rtk\\s+/u, '') ===
-              command.trim().replace(/^rtk\\s+/u, ''),
+              configured.trim().replace(/^rtk\s+/u, '') === command.trim().replace(/^rtk\s+/u, ''),
           )
         ) {
           metrics.lastCheckAt = journal.time()
