@@ -3720,14 +3720,24 @@ describe('/workflows command starts and resumes work', () => {
       | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
       | undefined
     expect(restartedCommand).toBeDefined()
-    const resumed = await restartedCommand?.handler({
-      agent: restarted.agent,
-      commandId: 'cmd-resume',
-      rawInput: ' resume run-resume-demo',
-      attachments: [],
-      signal: new AbortController().signal,
-    })
-    expect(resumed?.kind).toBe('success')
+    if (restartedCommand === undefined)
+      throw new Error('the restarted host has no workflows command')
+    const invokeResume = () =>
+      restartedCommand.handler({
+        agent: restarted.agent,
+        commandId: 'cmd-resume',
+        rawInput: ' resume run-resume-demo',
+        attachments: [],
+        signal: new AbortController().signal,
+      })
+    // The restarted host finishes asynchronous journal recovery after apply; a
+    // command issued before it settles must become usable on retry.
+    let resumed = await invokeResume()
+    for (let attempt = 0; resumed.kind !== 'success' && attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      resumed = await invokeResume()
+    }
+    expect(resumed.kind, resumed.text).toBe('success')
     expect(restarted.steers).toHaveLength(1)
     await restarted.emit('agent/turn-stopping', { agent: restarted.agent, turn: 1 })
     const resumedRun = await runs.readAuthenticatedRun(workspace, 'run-resume-demo', auth)
