@@ -429,8 +429,9 @@ describe('editor definition writes', () => {
     const workspace = await tempWorkspace()
     const routes = createEditorRoutes(
       services(workspace, {
-        install: (target, source, auth) =>
+        install: (target, source, auth, options) =>
           installDefinition(target, source, auth, {
+            ...options,
             writeApprovals: async () => {
               throw new Error('the approval store could not be written')
             },
