@@ -8,6 +8,7 @@ import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
 import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './command-parse.js';
 import { runWorkflowCommand } from './commands.js';
 import { KNOWN_LEGACY_SOURCES, loadShippedDefinitions, resolveOwnership, workspaceDefinitionsDirectory, } from './definitions.js';
+import { listEditorDefinitions, readEditorDefinitionDocument, registerEditorRoutes, } from './editor-api.js';
 import { evaluateEvent } from './evaluate.js';
 import { verifyEvidence, } from './evidence.js';
 import { adaptUserQuestions, OwnedCalls, requestMainStep, } from './executors.js';
@@ -461,6 +462,8 @@ export function apply(ctx, config = {}) {
             const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event);
             const run = createRun({
                 definition: definition.id,
+                definitionName: definition.name,
+                definitionVersion: definition.version,
                 trigger: definition.trigger.kind,
                 session: event.session ?? '',
                 workspace,
@@ -948,6 +951,8 @@ export function apply(ctx, config = {}) {
                                         });
                                         const run = createRun({
                                             definition: definition.id,
+                                            definitionName: definition.name,
+                                            definitionVersion: definition.version,
                                             trigger: 'intent',
                                             session: sessionId,
                                             workspace: activeWorkspace,
@@ -1503,6 +1508,8 @@ export function apply(ctx, config = {}) {
         try {
             const run = createRun({
                 definition: definition.id,
+                definitionName: definition.name,
+                definitionVersion: definition.version,
                 trigger: definition.trigger.kind,
                 session: sessionId,
                 workspace,
@@ -2248,9 +2255,18 @@ export function apply(ctx, config = {}) {
         lastEventAtFor: (session) => sessionEventAt.get(session),
         triggers,
         definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
+        definitionEntriesFor: (workspace) => listEditorDefinitions(workspace),
+        definitionDocumentFor: (workspace, id) => readEditorDefinitionDocument(workspace, id),
         receiptsFor: async (workspace) => {
             const auth = storedAuth;
             return auth === undefined ? [] : listReceipts(workspace, auth);
         },
+    });
+    // The Design mode's write API shares the read API's carrier and host key, so a
+    // saved definition is approved exactly as a `/workflows install` would be.
+    registerEditorRoutes(ctx, {
+        agents: services.agents,
+        workingDirectory: services.workingDirectory,
+        auth: async () => (storedAuth === undefined ? ensureAuth() : storedAuth),
     });
 }

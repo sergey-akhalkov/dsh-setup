@@ -526,6 +526,18 @@ services. Its configuration includes `checkpointApplicability` (`minToolCalls` d
 default row is `- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates,
 intake/adoption flow and migration are documented in [workflows](workflows.md).
 
+### Editor and Design mode
+
+The Workflows view also gains a Design mode behind the same tab: a React Flow canvas bundled into the
+single client artifact, an equivalent List form editor, templates and local definitions opened through
+the revision-checked host write API, a layout sidecar, and the run overlay (the latest run per
+definition with step state, evidence, failure class, violations, and an orphan badge). The graph stays a
+projection of the definition: create is create-only, updates and deletes send the revision from the
+last read, a mismatch returns 409 and leaves the file unchanged (reload or save-as-copy), and every
+save goes through the host-signed install/approve path, so an editor save is an authorized install.
+Keyboard editing, focus order, a screen-reader summary, and the List fallback cover the canvas; the
+editor is inert without the host write API.
+
 ## OpenSpec apply picker
 
 [`packages/plugin-openspec`](../packages/plugin-openspec) adds one Client command, `/openspec-apply`.
