@@ -531,7 +531,9 @@ intake/adoption flow and migration are documented in [workflows](workflows.md).
 The Workflows view also gains a Design mode behind the same tab: a React Flow canvas bundled into the
 single client artifact, an equivalent List form editor, templates and local definitions opened through
 the revision-checked host write API, a layout sidecar, and the run overlay (the latest run per
-definition with step state, evidence, failure class, violations, and an orphan badge). The graph stays a
+definition with step state, structured evidence references, failure class, violations, and an orphan
+badge; the recorded definition name/version, evidence, failure class and violations stay readable after
+the definition changes or is deleted). The graph stays a
 projection of the definition: create is create-only, updates and deletes send the revision from the
 last read, a mismatch returns 409 and leaves the file unchanged (reload or save-as-copy), and every
 save goes through the host-signed install/approve path, so an editor save is an authorized install.
