@@ -111,6 +111,27 @@ describe('workflows view data', () => {
     expect(malformed?.error).toBeDefined()
     const sessionRows = await sessionRuns(workspace, 'session-1')
     expect(sessionRows.find((run) => run.id === 'workflow:malformed')).toBeDefined()
+    // A parseable but incomplete record is also a diagnostic.
+    await writeFile(
+      join(runsDirectory(workspace), 'incomplete.json'),
+      `${JSON.stringify({ v: 1, id: 'incomplete' })}\n`,
+      'utf8',
+    )
+    const incompleteRows = await sessionRuns(workspace, 'session-1')
+    expect(incompleteRows.find((run) => run.id === 'workflow:incomplete')?.error).toBeDefined()
+    // Another session's valid failed run stays in its own session.
+    const otherBase = createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-B',
+      workspace,
+      steps: ['requirements'],
+      id: 'run-other-failed',
+      now: 5_000,
+    })
+    await writeRun(workspace, setRunStatus(otherBase, 'failed', 5_100), auth())
+    const scopedRows = await sessionRuns(workspace, 'session-1')
+    expect(scopedRows.find((run) => run.id === 'workflow:run-other-failed')).toBeUndefined()
   })
 
   it('serves the definitions and the authenticated adoption receipt', async () => {

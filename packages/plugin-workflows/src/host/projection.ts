@@ -778,7 +778,15 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       )
       continue
     }
-    if (!isRecord(parsed.value) || parsed.value.v !== 1 || typeof parsed.value.id !== 'string') {
+    if (
+      !isRecord(parsed.value) ||
+      parsed.value.v !== 1 ||
+      typeof parsed.value.id !== 'string' ||
+      // A parseable file that is not a run record is a diagnostic, not a run.
+      typeof parsed.value.definition !== 'string' ||
+      typeof parsed.value.status !== 'string' ||
+      !Array.isArray(parsed.value.steps)
+    ) {
       runs.push(
         errorRun(
           `workflow:${id}`,
@@ -787,7 +795,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
           file,
           'unattributed',
           undefined,
-          'the run record is not an object',
+          'the run record is missing required fields',
         ),
       )
       continue
@@ -888,8 +896,10 @@ export async function sessionRuns(workspace: string, sessionId: string): Promise
     .filter(
       (run) =>
         (run.attribution !== 'unattributed' && run.session === sessionId) ||
-        // Malformed workflow records are workspace diagnostics, not session rows.
-        (run.source === 'workflow' && run.error !== undefined),
+        // Only unattributed malformed workflow records are workspace diagnostics.
+        (run.attribution === 'unattributed' &&
+          run.source === 'workflow' &&
+          run.error !== undefined),
     )
     .sort(compareRuns)
 }
