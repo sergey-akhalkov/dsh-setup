@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -10,7 +10,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { adoptChange } from './adoption.js'
 import { registerWorkflowRoutes } from './api.js'
 import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
-import { parseArchiveCommand, parseOpenspecCommand } from './command-parse.js'
+import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './command-parse.js'
 import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
 import {
   type Definition,
@@ -154,12 +154,13 @@ export function definitionEventsOf(
           ]
     case 'fs.change': {
       const path = event.subject
+      const changeName = /^openspec\/changes\/([^/]+)\//u.exec(path)?.[1]
       const events: DefinitionEvent[] = [
         {
           kind: 'fs.change',
           subject: path,
           path,
-          ...(event.change === undefined ? {} : { name: event.change }),
+          ...(changeName === undefined ? {} : { name: changeName }),
           ...(event.hash === undefined ? {} : { hash: event.hash }),
           ...base,
         },
@@ -579,6 +580,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const workspace = workspaceFor(services, session)
       if (workspace !== undefined) {
         activeSession.set(workspace, String(session.id))
+        seedCheckedTasks(workspace, String(session.id))
         healthFor(workspace)
         watchChanges(workspace)
         void loadDefinitions(workspace)
@@ -628,6 +630,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return ids.filter((id) => !previous.has(id)).at(-1)
     } catch {
       return undefined
+    }
+  }
+  /** Seed the checked-task baselines from the current workspace changes. */
+  const seedCheckedTasks = (workspace: string, session: string): void => {
+    try {
+      for (const change of readdirSync(join(workspace, 'openspec', 'changes'))) {
+        if (!CHANGE_NAME.test(change)) continue
+        const markdown = readFileSync(
+          join(workspace, 'openspec', 'changes', change, 'tasks.md'),
+          'utf8',
+        )
+        checkedTasksSeen.set(`${session}\u0000${change}`, new Set(checkedTaskIds(markdown)))
+      }
+    } catch {
+      // No readable change tree yet; the first event seeds the baseline.
     }
   }
   /** The session's current main-step owner; a second run waits for it to settle. */
@@ -708,11 +725,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
       // The checked-task delta names the task a task-review run reads. It is
       // computed here, not added to the observed fs.change event.
+      const changedName =
+        event.kind === 'fs.change'
+          ? /^openspec\/changes\/([^/]+)\//u.exec(event.subject)?.[1]
+          : undefined
       const taskReviewTaskId =
-        event.kind === 'fs.change' &&
-        event.change !== undefined &&
-        /(?:^|\/)tasks\.md$/u.test(event.subject)
-          ? checkedTaskDelta(workspace, input.session, event.change, event.subject)
+        changedName !== undefined && /(?:^|\/)tasks\.md$/u.test(event.subject)
+          ? checkedTaskDelta(workspace, input.session, changedName, event.subject)
           : undefined
       const definitionRows = definitionEventsOf(input, event, workspace).flatMap(
         (definitionEvent) =>
@@ -723,6 +742,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               const full =
                 storedAuth !== undefined &&
                 (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
+              if (definition.id === 'task-review' && taskReviewTaskId === undefined) {
+                return { ok: false, reason: 'no newly checked task in this tasks.md change' }
+              }
               const outcome = startDefinitionRun(
                 workspace,
                 definition,

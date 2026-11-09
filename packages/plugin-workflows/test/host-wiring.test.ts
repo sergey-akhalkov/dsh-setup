@@ -88,8 +88,10 @@ function fakeHost(
     readonly arguments: Record<string, unknown>
   }>
   emit(name: string, ...args: unknown[]): Promise<unknown>
+  fireFs(error?: Error): void
 } {
   const listeners = new Map<string, Listener[]>()
+  const fsWatchers: Array<(error?: Error) => void> = []
   const steers: unknown[] = []
   const toolExecutions: Array<{
     id: string
@@ -175,7 +177,10 @@ function fakeHost(
       if (name === 'fs') {
         return {
           resolve: async (path: unknown) => ({ targetKey: String(path) }),
-          watch: async () => async () => {},
+          watch: async (_target: unknown, changed: (error?: Error) => void) => {
+            fsWatchers.push(changed)
+            return async () => {}
+          },
         }
       }
       if (name === 'connection') return { fetch: { register: () => () => {} } }
@@ -217,6 +222,9 @@ function fakeHost(
     commands,
     steers,
     toolExecutions,
+    fireFs(error) {
+      for (const changed of fsWatchers) changed(error)
+    },
     async emit(name, ...args): Promise<unknown> {
       let result: unknown
       for (const listener of listeners.get(name) ?? []) result = await listener(...args)
@@ -415,6 +423,66 @@ describe('retro applicability through the journal path', () => {
     })
     const terminal = await runs.readAuthenticatedRun(workspace, runId, auth)
     expect(terminal?.reason).toBe('not-applicable')
+  })
+})
+
+describe('task-review runtime from a tasks.md change', () => {
+  it('names the change and the task from the path and checked delta and never steers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const taskId = taskIdOf('Task')
+    await writeFile(
+      join(changeDir, 'reviews', `${taskId}.json`),
+      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const rows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(journalFile, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:task-review')
+
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () => (await rows()).some((row) => row.reason === 'run-created'))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const created = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition === 'task-review',
+    )
+    expect(created?.context).toMatchObject({ name: 'auth', taskId })
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const settled = await runs.readAuthenticatedRun(workspace, created?.id ?? '', auth)
+    expect(settled?.steps[0]?.state).toBe('done')
+    expect(host.steers).toHaveLength(0)
+
+    // An edit that checks nothing starts no second observational run.
+    await writeFile(join(changeDir, 'tasks.md'), '# Notes\n\n- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () => (await rows()).some((row) => row.reason === 'run-suppressed'))
+    expect(
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition === 'task-review',
+      ),
+    ).toHaveLength(1)
   })
 })
 
@@ -2141,7 +2209,7 @@ it('carries a filesystem change name into the definition event', () => {
     {
       kind: 'fs.change',
       subject: 'openspec/changes/auth/tasks.md',
-      change: 'auth',
+      change: 'modified',
     } as never,
     '/workspace',
   )
