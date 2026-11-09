@@ -1,9 +1,10 @@
+import { pendingStep } from './resume.js'
 import type { WorkflowRun } from './runs.js'
 
 /**
- * The `workflows-active-runs` system-prompt context: at most five bounded lines,
- * one per active run; no section at all when none is active, so a prompt
- * without workflows stays byte-identical.
+ * The `workflows-active-runs` system-prompt context: at most five bounded lines
+ * in total, one per active run; no section at all when none is active, so a
+ * prompt without workflows stays byte-identical.
  */
 
 export const ACTIVE_RUNS_CONTEXT = 'workflows-active-runs'
@@ -15,12 +16,15 @@ export function renderActiveRunsContext(runs: readonly WorkflowRun[]): string {
     (run) => run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
   )
   if (active.length === 0) return ''
-  const lines = active.slice(0, MAX_ACTIVE_RUN_LINES).map((run) => {
-    const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked')
-    return `- ${run.definition}: step ${pending?.id ?? 'end'} (${run.status}) run ${run.id}`
+  // The overflow summary shares the five-line budget with the run lines.
+  const listed =
+    active.length > MAX_ACTIVE_RUN_LINES ? active.slice(0, MAX_ACTIVE_RUN_LINES - 1) : active
+  const lines = listed.map((run) => {
+    const pending = pendingStep(run)
+    return `- ${run.definition}: step ${pending ?? 'end'} (${run.status}) run ${run.id}`
   })
   if (active.length > MAX_ACTIVE_RUN_LINES) {
-    lines.push(`- ${String(active.length - MAX_ACTIVE_RUN_LINES)} more active run(s)`)
+    lines.push(`- ${String(active.length - (MAX_ACTIVE_RUN_LINES - 1))} more active run(s)`)
   }
   return lines.join('\n')
 }

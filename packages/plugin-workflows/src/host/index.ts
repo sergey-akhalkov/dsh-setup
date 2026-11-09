@@ -1445,7 +1445,28 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
   /** Dedupe keys whose triggering call has not finished starting its run yet. */
   const inFlightTriggers = new Set<string>()
-  let promptRuns: WorkflowRun[] = []
+  /** The prompt's active runs per workspace, refreshed after every transition. */
+  const promptRunsByWorkspace = new Map<string, WorkflowRun[]>()
+  let promptWorkspace: string | undefined
+  const refreshPromptRuns = async (workspace: string): Promise<void> => {
+    const auth = storedAuth
+    if (auth === undefined) return
+    try {
+      const runs = await listAuthenticatedRuns(workspace, auth)
+      promptRunsByWorkspace.set(
+        workspace,
+        runs.filter(
+          (run) =>
+            run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
+        ),
+      )
+      promptWorkspace = workspace
+    } catch {
+      // Keep the last good prompt when a refresh cannot read the store.
+    }
+  }
+  const activePromptRuns = (): WorkflowRun[] =>
+    promptWorkspace === undefined ? [] : (promptRunsByWorkspace.get(promptWorkspace) ?? [])
   const optionalService = <T>(name: string): T | undefined => {
     try {
       return (ctx as unknown as { get?: (serviceName: string) => unknown }).get?.(name) as
@@ -1704,6 +1725,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
       await writeRun(workspace, run, auth)
+      void refreshPromptRuns(workspace)
       return run
     } finally {
       releaseStart(workspace)
@@ -2176,10 +2198,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (auth === undefined) return
         const definitions = await definitionsFor(workspace)
         const runs = await listAuthenticatedRuns(workspace, auth)
-        promptRuns = runs.filter(
-          (run) =>
-            run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted',
-        )
         const sessionId = String(payload.agent.session.id)
         const eligible = runs.filter(
           (run) =>
@@ -2232,6 +2250,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             mainStepOwners.delete(sessionId)
           }
         }
+        await refreshPromptRuns(workspace)
       } catch (error) {
         publishListenerError(workspaceFor(services, payload.agent.session), error)
       }
@@ -2280,6 +2299,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       await recoverIfNeeded(workspace)
       const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id))
       await writeRun(workspace, resumed.run, auth)
+      void refreshPromptRuns(workspace)
       return { run: resumed.run, stepId: resumed.stepId }
     },
     cancelRun: async (runId) => {
@@ -2292,6 +2312,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         String(agent.session.id),
       )
       await writeRun(workspace, cancelled, auth)
+      void refreshPromptRuns(workspace)
       return cancelled
     },
   })
@@ -2464,6 +2485,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   await recoverIfNeeded(workspace)
                   const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
                   await writeRun(workspace, resumed.run, auth)
+                  void refreshPromptRuns(workspace)
                   await steerPending(invocation.agent, runId)
                   return { stepId: resumed.stepId }
                 },
@@ -2505,7 +2527,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   }
 
   // The bounded active-run system-prompt context.
-  registerActiveRunsContext(ctx as never, () => promptRuns)
+  registerActiveRunsContext(ctx as never, activePromptRuns)
 
   // The read-only API is optional at runtime but present on the Web host that
   // also carries the Client view; a host without Fetch keeps recording only.

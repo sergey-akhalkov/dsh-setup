@@ -476,8 +476,23 @@ describe('workflows command and prompt context', () => {
       ...runFor('/workspace', `run-${String(index)}`),
     }))
     const lines = renderActiveRunsContext(many).split('\n')
-    expect(lines.length).toBeLessThanOrEqual(6)
+    expect(lines.length).toBeLessThanOrEqual(5)
     expect(lines.at(-1)).toContain('more active run')
+  })
+
+  it('names the branch pending step, not the array-first one', () => {
+    const base = runFor('/workspace')
+    const run = {
+      ...base,
+      branchPath: ['yes', 'join'],
+      steps: [
+        { ...base.steps[0], id: 'join', state: 'open' as const },
+        { ...base.steps[0], id: 'yes', state: 'blocked' as const },
+      ],
+    }
+    const text = renderActiveRunsContext([run])
+    expect(text).toContain('step yes')
+    expect(text).not.toContain('step join')
   })
 
   it('registers the dynamic context only when the system-prompt service exists', () => {

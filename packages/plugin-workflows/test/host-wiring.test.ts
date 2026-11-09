@@ -82,6 +82,7 @@ function fakeHost(
   readonly agent: Record<string, unknown>
   readonly commands: Array<Record<string, unknown>>
   readonly toolDefinitions: Array<Record<string, unknown>>
+  readonly promptContributions: Array<{ name: string; text: () => string }>
   readonly steers: readonly unknown[]
   readonly toolExecutions: Array<{
     readonly id: string
@@ -110,6 +111,7 @@ function fakeHost(
   }
   const commands: Array<Record<string, unknown>> = []
   const toolDefinitions: Array<Record<string, unknown>> = []
+  const promptContributions: Array<{ name: string; text: () => string }> = []
   const tools: Record<string, unknown> = {
     get: (name: string) =>
       ['delegate', 'task_progress', 'delegation_status', 'work_checkpoint'].includes(name)
@@ -176,6 +178,12 @@ function fakeHost(
     }
   }
   const ctx = {
+    systemPrompt: {
+      context: (contribution: { name: string; text: () => string }) => {
+        promptContributions.push(contribution)
+        return () => {}
+      },
+    },
     get(name: string): unknown {
       if (name === 'agents') return { get: () => agent, list: () => [agent] }
       if (name === 'workingDirectory') return { get: () => workspace }
@@ -198,6 +206,14 @@ function fakeHost(
               selected: [options.answer ?? 'yes'],
             })),
           }),
+        }
+      }
+      if (name === 'systemPrompt') {
+        return {
+          context: (contribution: { name: string; text: () => string }) => {
+            promptContributions.push(contribution)
+            return () => {}
+          },
         }
       }
       if (name === 'commands') {
@@ -226,6 +242,7 @@ function fakeHost(
     agent,
     commands,
     toolDefinitions,
+    promptContributions,
     steers,
     toolExecutions,
     fireFs(error) {
@@ -3349,6 +3366,100 @@ describe('/workflows command starts and resumes work', () => {
     })
     expect(started.kind).toBe('success')
     expect(started.text).toContain('step "observe"')
+  })
+})
+
+describe('active-runs prompt context', () => {
+  it('tracks starts, completions, cancellations, and an empty workspace', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const demo = {
+      v: 1,
+      id: 'demo',
+      name: 'Demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'demo.json'), `${JSON.stringify(demo)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'demo.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const contribution = host.promptContributions.find(
+      (entry) => entry.name === 'workflows-active-runs',
+    )
+    expect(contribution).toBeDefined()
+    expect(contribution?.text()).toBe('')
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    if (command === undefined || contribution === undefined) return
+    const invoke = (rawInput: string): Promise<{ kind?: string; text?: string }> =>
+      command.handler({
+        agent: host.agent,
+        commandId: `cmd-${rawInput.trim()}`,
+        rawInput,
+        attachments: [],
+        signal: new AbortController().signal,
+      })
+    const runs = await import('../src/host/runs.ts')
+
+    await invoke(' run demo')
+    await waitFor(() => contribution.text().includes('demo'))
+    await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => contribution.text() === '')
+
+    await invoke(' run demo')
+    await waitFor(() => contribution.text().includes('demo'))
+    const second = (await runs.listAuthenticatedRuns(workspace, auth))
+      .filter((entry) => entry.definition === 'demo')
+      .at(-1)
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    await tool?.execute({ action: 'cancel', runId: second?.id }, { agent: host.agent })
+    await waitFor(() => contribution.text() === '')
+
+    // Another workspace must render no section, even while this one has a run.
+    await invoke(' run demo')
+    await waitFor(() => contribution.text().includes('demo'))
+    const other = await tempWorkspace()
+    await writeFile(join(other, 'demo.json'), `${JSON.stringify(demo)}\n`, 'utf8')
+    await installDefinition(other, join(other, 'demo.json'), auth)
+    const otherHost = fakeHost(other)
+    apply(otherHost.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    const otherContribution = otherHost.promptContributions.find(
+      (entry) => entry.name === 'workflows-active-runs',
+    )
+    expect(otherContribution).toBeDefined()
+    expect(otherContribution?.text()).toBe('')
   })
 })
 
