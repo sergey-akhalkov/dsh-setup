@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { DesignMode } from './design.tsx'
 import {
   ErrorLine,
   EventList,
@@ -170,6 +171,7 @@ export function WorkflowsView(props: {
 }): ReactNode {
   const { sessionId, t } = props
   const [state, setState] = useState<ViewState>({ phase: 'loading' })
+  const [design, setDesign] = useState(false)
   const [selected, setSelected] = useState<string | undefined>(undefined)
   const loadId = useRef(0)
   const pendingPages = useRef(new Set<string>())
@@ -329,7 +331,22 @@ export function WorkflowsView(props: {
   return (
     <div className="dsh-wf" data-state={state.phase}>
       <style>{VIEW_CSS}</style>
-      {body}
+      {design ? (
+        <DesignMode
+          {...(sessionId === undefined ? {} : { sessionId })}
+          t={t}
+          onClose={() => setDesign(false)}
+        />
+      ) : (
+        <>
+          <div className="dsh-wf-design-bar">
+            <button type="button" className="dsh-wf-retry" onClick={() => setDesign(true)}>
+              {t('design.title')}
+            </button>
+          </div>
+          {body}
+        </>
+      )}
     </div>
   )
 }

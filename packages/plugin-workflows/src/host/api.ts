@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
-import type { Definition } from './definitions.js'
+import { type Definition, loadShippedDefinitions } from './definitions.js'
 import { isInside } from './fs-change.js'
 import type { WorkflowHealth } from './health.js'
 import type { Journal, TriggerEvaluationRecord } from './journal.js'
@@ -23,6 +23,7 @@ export const TRIGGERS_ROUTE = '/api/workflows/triggers'
 export const HEALTH_ROUTE = '/api/workflows/health'
 export const EVIDENCE_ROUTE = '/api/workflows/evidence'
 export const DEFINITIONS_ROUTE = '/api/workflows/definitions'
+export const TEMPLATES_ROUTE = '/api/workflows/templates'
 export const RECEIPTS_ROUTE = '/api/workflows/receipts'
 
 /** Default and maximum page sizes. */
@@ -54,6 +55,25 @@ export interface WorkflowApiServices {
   readonly triggers: readonly Trigger[]
   /** The approved definitions of one workspace. */
   readonly definitionsFor?: (workspace: string) => readonly Definition[]
+  /** The editor's list view: source and revision per definition. */
+  readonly definitionEntriesFor?: (workspace: string) => Promise<{
+    readonly definitions: readonly {
+      readonly id: string
+      readonly name: string
+      readonly version: number
+      readonly source: 'shipped' | 'local'
+      readonly revision: string | null
+    }[]
+    readonly errors?: readonly string[]
+  }>
+  /** One definition document with the revision a write must send back. */
+  readonly definitionDocumentFor?: (
+    workspace: string,
+    id: string,
+  ) => Promise<
+    | { readonly definition: unknown; readonly revision: string | null; readonly source: string }
+    | undefined
+  >
   /** The authenticated receipts of one workspace. */
   readonly receiptsFor?: (workspace: string) => Promise<readonly WorkflowReceipt[]>
 }
@@ -236,9 +256,18 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
     route(RUNS_ROUTE, async (request) => {
       const resolved = resolveSession(services, request)
       if ('response' in resolved) return resolved.response
-      const paging = parsePaging(new URL(request.url))
+      const url = new URL(request.url)
+      const paging = parsePaging(url)
       if ('response' in paging) return paging.response
-      const runs: RunView[] = await sessionRuns(resolved.workspace, resolved.session)
+      const source = url.searchParams.get('source')
+      const definition = url.searchParams.get('definition')
+      let runs: RunView[] = await sessionRuns(resolved.workspace, resolved.session)
+      if (source !== null && source !== '') runs = runs.filter((run) => run.source === source)
+      if (definition !== null && definition !== '') {
+        runs = runs.filter((run) => run.definition?.id === definition)
+      }
+      // A definition-filtered request is the editor overlay: newest first.
+      if ((definition ?? '') !== '') runs = [...runs].reverse()
       const start = Math.min(paging.cursor, runs.length)
       const page = runs.slice(start, start + paging.limit)
       const next = start + page.length < runs.length ? String(start + page.length) : undefined
@@ -283,24 +312,85 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
     route(DEFINITIONS_ROUTE, async (request) => {
       const resolved = resolveSession(services, request)
       if ('response' in resolved) return resolved.response
+      const id = new URL(request.url).searchParams.get('id')
+      if (id !== null && id !== '') {
+        // The carrier matches exact paths only, so one document is addressed by
+        // `id` on the literal definitions route rather than a path segment.
+        if (services.definitionDocumentFor === undefined) {
+          return json(404, { error: 'the definition does not exist' })
+        }
+        try {
+          const document = await services.definitionDocumentFor(resolved.workspace, id)
+          if (document === undefined) return json(404, { error: 'the definition does not exist' })
+          return json(200, document)
+        } catch (error) {
+          return json(400, { errors: [{ path: '', message: bounded(error) }] })
+        }
+      }
       const definitions = services.definitionsFor?.(resolved.workspace) ?? []
+      const byId = new Map(definitions.map((definition) => [definition.id, definition]))
+      const entries = await services.definitionEntriesFor?.(resolved.workspace)
+      const summary = (definition: Definition): Record<string, unknown> => ({
+        id: definition.id,
+        name: definition.name,
+        version: definition.version,
+        trigger: definition.trigger,
+        risk: definition.settings.risk,
+        allowModelStart: definition.settings.allowModelStart,
+        gateOwnership: definition.settings.gateOwnership,
+        steps: definition.steps.map((step) => ({
+          id: step.id,
+          title: step.title,
+          executor: step.executor,
+          ownership: step.ownership ?? 'own',
+          blockTurnClose: step.blockTurnClose === true,
+        })),
+      })
+      const rows: Record<string, unknown>[] = []
+      const covered = new Set<string>()
+      // The editor store is authoritative for the list: a local definition
+      // created after the runtime cache loaded must still appear.
+      for (const entry of entries?.definitions ?? []) {
+        covered.add(entry.id)
+        let definition = byId.get(entry.id)
+        if (definition === undefined && services.definitionDocumentFor !== undefined) {
+          const document = await services
+            .definitionDocumentFor(resolved.workspace, entry.id)
+            .catch(() => undefined)
+          definition = document?.definition as Definition | undefined
+        }
+        rows.push({
+          ...(definition === undefined
+            ? { id: entry.id, name: entry.name, version: entry.version }
+            : summary(definition)),
+          source: entry.source,
+          revision: entry.revision,
+        })
+      }
+      for (const definition of definitions) {
+        if (!covered.has(definition.id)) rows.push(summary(definition))
+      }
       return json(200, {
         session: resolved.session,
-        definitions: definitions.map((definition) => ({
+        definitions: rows,
+        ...(entries?.errors === undefined || entries.errors.length === 0
+          ? {}
+          : { errors: entries.errors }),
+      })
+    }),
+    route(TEMPLATES_ROUTE, async (request) => {
+      const resolved = resolveSession(services, request)
+      if ('response' in resolved) return resolved.response
+      return json(200, {
+        session: resolved.session,
+        templates: loadShippedDefinitions().map((definition) => ({
           id: definition.id,
           name: definition.name,
           version: definition.version,
-          trigger: definition.trigger,
-          risk: definition.settings.risk,
-          allowModelStart: definition.settings.allowModelStart,
-          gateOwnership: definition.settings.gateOwnership,
-          steps: definition.steps.map((step) => ({
-            id: step.id,
-            title: step.title,
-            executor: step.executor,
-            ownership: step.ownership ?? 'own',
-            blockTurnClose: step.blockTurnClose === true,
-          })),
+          stepCount: definition.steps.length,
+          source: 'shipped',
+          revision: null,
+          definition,
         })),
       })
     }),

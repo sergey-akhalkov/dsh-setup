@@ -981,6 +981,7 @@ describe('human executor', () => {
     expect(rejected.steps[0]?.state).not.toBe('done')
     expect(rejected.status).toBe('blocked')
     expect(rejected.steps[0]?.reason).toContain('is not one of: yes')
+    expect(rejected.steps[0]?.failureClass).toBe('rejected-answer')
     const timedOut = await runHumanStep({
       run: humanRun(),
       step,

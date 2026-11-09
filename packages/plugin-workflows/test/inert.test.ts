@@ -84,11 +84,30 @@ ${output.text}
       }
     if (id === 'react') {
       return {
+        Component: class {},
+        createContext: (value: unknown) => ({
+          Provider: (props: unknown) => props,
+          Consumer: () => null,
+          _currentValue: value,
+        }),
+        createElement: (type: unknown, props: unknown, ...children: unknown[]) => ({
+          type,
+          props: { ...(props as Record<string, unknown>), children },
+        }),
+        forwardRef: (render: unknown) => render,
+        memo: (component: unknown) => component,
+        useCallback: (callback: unknown) => callback,
+        useContext: (context: { _currentValue?: unknown }) => context?._currentValue,
         useEffect: () => {},
+        useId: () => 'id',
+        useLayoutEffect: () => {},
+        useMemo: (factory: () => unknown) => factory(),
+        useRef: (value: unknown) => ({ current: value }),
         useState: (initial: unknown) => [
           typeof initial === 'function' ? (initial as () => unknown)() : initial,
           () => {},
         ],
+        useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
       }
     }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {

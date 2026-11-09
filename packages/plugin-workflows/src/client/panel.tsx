@@ -61,7 +61,19 @@ export interface RunStepView {
   readonly state: string
   readonly at?: number
   readonly evidence?: string
+  /** The structured producer evidence the run overlay renders. */
+  readonly evidenceRef?: { readonly kind: string; readonly ref?: string; readonly at?: number }
+  /** The producer-owned class of a blocked or failed step. */
+  readonly failureClass?: string
   readonly reason?: string
+  /** A display row synthesized for a violation, not a real step. */
+  readonly synthetic?: boolean
+}
+
+export interface RunViolationView {
+  readonly stepId?: string
+  readonly at: number
+  readonly reason: string
 }
 
 export interface RunView {
@@ -73,6 +85,9 @@ export interface RunView {
   readonly startedAt: number
   readonly status: 'running' | 'done' | 'failed' | 'unknown'
   readonly steps: readonly RunStepView[]
+  /** The definition identity a workflow run recorded at creation. */
+  readonly definition?: { readonly id: string; readonly name: string; readonly version: number }
+  readonly violations?: readonly RunViolationView[]
   readonly error?: string
   readonly record?: string
 }
@@ -142,6 +157,29 @@ export const EN: Record<string, string> = {
   'state.retry': 'Retry',
   'state.empty': 'Nothing recorded yet.',
   'state.noSession': 'Open a session to see its workflow process.',
+  'design.title': 'Design',
+  'design.close': 'Read view',
+  'design.new': 'New definition',
+  'design.open': 'Open definition',
+  'design.template': 'Template…',
+  'design.copyTemplate': 'Create from template',
+  'design.draft': 'Draft…',
+  'design.openDraft': 'Open draft',
+  'design.save': 'Save',
+  'design.reload': 'Reload',
+  'design.delete': 'Delete',
+  'design.confirmDelete': 'Confirm delete',
+  'design.listMode': 'List',
+  'design.canvasMode': 'Canvas',
+  'design.run': 'Run overlay',
+  'design.noRun': 'No run',
+  'design.dirty': 'unsaved changes',
+  'design.clean': 'saved',
+  'design.saveCopy': 'Save as copy',
+  'design.useId': 'Use id',
+  'design.conflict': 'The resource changed on disk.',
+  'design.intro':
+    'Build a local definition on the canvas or in the list. Shipped definitions are templates; editing one creates a local copy.',
   'health.title': 'Health',
   'health.listener-down': 'The recorder listener is down',
   'health.journal-readonly': 'The journal is read-only',

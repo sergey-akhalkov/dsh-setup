@@ -1,3 +1,4 @@
+import { link, rename, unlink } from 'node:fs/promises';
 import { type Definition } from './definitions.js';
 import type { HostAuth } from './host-auth.js';
 /**
@@ -40,12 +41,31 @@ export interface InstallResult {
 export interface InstallOptions {
     /** Test seam: the approval-store writer; production writes the real store. */
     readonly writeApprovals?: (workspace: string, approvals: ReadonlyMap<string, StoredApproval>) => Promise<void>;
+    /** Test seam: the backup-link primitive; production hard-links. */
+    readonly link?: typeof link;
+    /** Test seam: the restore primitive; production renames. */
+    readonly rename?: typeof rename;
+    /** Test seam: the cleanup primitive; production unlinks. */
+    readonly unlink?: typeof unlink;
+    /**
+     * The revision precondition, checked inside the install transaction: null
+     * creates only, a hash replaces only the loaded bytes.
+     */
+    readonly expectedHash?: string | null;
 }
+/** A revision precondition failed inside the install transaction. */
+export declare class InstallConflictError extends Error {
+    readonly revision: string | null;
+    constructor(message: string, revision: string | null);
+}
+/** Run one filesystem transaction under the workspace install lock. */
+export declare function runInstallTransaction<T>(workspace: string, run: () => Promise<T>): Promise<T>;
 /**
  * Validate a definition file, copy it atomically into the workspace definitions
  * directory, and record its content hash and host signature. The caller asks
  * the user first; this function is the host-only install path and the one the
- * editor save uses.
+ * editor save uses. Installs of one workspace are serialized because they share
+ * the approval file.
  */
 export declare function installDefinition(workspace: string, sourcePath: string, auth: HostAuth, options?: InstallOptions): Promise<InstallResult>;
 export interface ApprovedDefinitions {

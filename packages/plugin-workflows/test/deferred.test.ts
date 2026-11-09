@@ -161,6 +161,20 @@ describe('deferred workflow definitions', () => {
     expect(missing.run.status).toBe('blocked')
     expect(missing.run.steps[0]?.state).toBe('blocked')
     expect(step.id).toBe('read-review')
+
+    const noCall = await runDeferredStep({
+      run: { ...deferredRun('task-review'), context: { name: 'auth', taskId } },
+      definition: taskReview,
+      stepId: 'read-review',
+      installedLegacy: INSTALLED,
+      readRecord: () =>
+        verifyEvidence(
+          { kind: 'tool', name: 'no-such-tool' },
+          { workspace, values: { name: 'auth', taskId } },
+        ),
+    })
+    expect(noCall.run.status).toBe('blocked')
+    expect(noCall.run.steps[0]?.failureClass).toBe('no-call')
   })
 
   it('records retro applicability and creates observational runs only when applicable', () => {

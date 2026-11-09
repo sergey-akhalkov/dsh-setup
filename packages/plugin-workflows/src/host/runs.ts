@@ -43,6 +43,8 @@ export type StepState = (typeof STEP_STATES)[number]
 /** What satisfied one step. */
 export interface RunEvidence {
   readonly kind: string
+  /** The workspace-relative path, call id, or record the evidence names. */
+  readonly ref?: string
   readonly path?: string
   readonly detail?: string
   readonly digest?: string
@@ -64,6 +66,42 @@ export interface RunStep {
   readonly lastTurn?: number
   readonly evidence?: RunEvidence
   readonly reason?: string
+  /** The producer-owned failure class of a blocked or failed step. */
+  readonly failureClass?: string
+}
+
+/**
+ * The producer-owned failure vocabulary. The editor renders the stored value
+ * verbatim and never derives a class from a message; executors and gates embed
+ * their structured reason in the message, so a known reason token wins before
+ * the fallback wording checks.
+ */
+const FAILURE_CLASSES = [
+  'missing-file',
+  'record-mismatch',
+  'no-answer',
+  'no-call',
+  'invalid-result',
+  'rejected-answer',
+  'check-failed',
+] as const
+
+export function classifyFailure(reason: string | undefined): string {
+  const raw = (reason ?? '').toLowerCase()
+  // A parenthesized detail is context, not the cause; classify the leading
+  // reason so a detail token cannot override the actual failure class.
+  const text = raw.includes(' (') ? raw.slice(0, raw.indexOf(' (')) : raw
+  for (const failureClass of FAILURE_CLASSES) {
+    if (text.includes(failureClass)) return failureClass
+  }
+  if (/missing-file|does not exist|not found|enoent/u.test(text)) return 'missing-file'
+  if (/not one of|rejected|not accepted|does not match/u.test(text)) return 'rejected-answer'
+  // A missing call's detail may mention a recorded call; classify it first.
+  if (/no call|not observed|no evidence|not recorded/u.test(text)) return 'no-call'
+  if (/digest|hash|signature|tampered|record/u.test(text)) return 'record-mismatch'
+  if (/answer|question/u.test(text)) return 'no-answer'
+  if (/schema|invalid|result/u.test(text)) return 'invalid-result'
+  return 'check-failed'
 }
 
 /** A visible refusal or bypass; never a pass. */
@@ -82,6 +120,10 @@ export interface WorkflowRun {
   readonly v: typeof RUN_VERSION
   readonly id: string
   readonly definition: string
+  /** The definition name in effect when the run started; copied, never looked up. */
+  readonly definitionName?: string
+  /** The definition version in effect when the run started; copied, not looked up. */
+  readonly definitionVersion?: number
   readonly trigger: string
   readonly session: string
   readonly workspaceKey: string
@@ -121,6 +163,8 @@ export function newRunId(now = Date.now()): string {
 
 export interface CreateRunInput {
   readonly definition: string
+  readonly definitionName?: string
+  readonly definitionVersion?: number
   readonly trigger: string
   readonly session: string
   readonly workspace: string
@@ -138,6 +182,10 @@ export function createRun(input: CreateRunInput): WorkflowRun {
     v: RUN_VERSION,
     id: input.id ?? newRunId(at),
     definition: input.definition,
+    ...(input.definitionName === undefined ? {} : { definitionName: input.definitionName }),
+    ...(input.definitionVersion === undefined
+      ? {}
+      : { definitionVersion: input.definitionVersion }),
     trigger: input.trigger,
     session: input.session,
     workspaceKey: input.workspace,
@@ -350,17 +398,35 @@ export async function listAuthenticatedRuns(
   )
 }
 
+/** The structured evidence shape persisted on a step: kind plus a reference. */
+function withEvidenceRef(evidence: RunEvidence): RunEvidence {
+  if (evidence.ref !== undefined) return evidence
+  const reference =
+    evidence.path ?? evidence.callId ?? evidence.detail ?? evidence.answer ?? evidence.digest
+  return reference === undefined ? evidence : { ...evidence, ref: reference }
+}
+
 /** Replace one step's state and stamp the run. Pure. */
 export function settleStep(
   run: WorkflowRun,
   stepId: string,
   state: StepState,
-  patch: { readonly at?: number; readonly evidence?: RunEvidence; readonly reason?: string } = {},
+  patch: {
+    readonly at?: number
+    readonly evidence?: RunEvidence
+    readonly reason?: string
+    readonly failureClass?: string
+  } = {},
 ): WorkflowRun {
   if (!run.steps.some((step) => step.id === stepId)) {
     throw new Error(`run "${run.id}" has no step "${stepId}"`)
   }
   const at = patch.at ?? Date.now()
+  const evidence = patch.evidence === undefined ? undefined : withEvidenceRef(patch.evidence)
+  const failureClass =
+    state === 'blocked' || state === 'failed'
+      ? (patch.failureClass ?? classifyFailure(patch.reason))
+      : undefined
   return {
     ...run,
     updatedAt: at,
@@ -370,8 +436,9 @@ export function settleStep(
             ...step,
             state,
             at,
-            ...(patch.evidence === undefined ? {} : { evidence: patch.evidence }),
+            ...(evidence === undefined ? {} : { evidence }),
             ...(patch.reason === undefined ? {} : { reason: patch.reason }),
+            ...(failureClass === undefined ? {} : { failureClass }),
           }
         : step,
     ),

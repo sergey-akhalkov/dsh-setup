@@ -1,4 +1,4 @@
-import type { Definition } from './definitions.js';
+import { type Definition } from './definitions.js';
 import type { WorkflowHealth } from './health.js';
 import type { Journal } from './journal.js';
 import type { WorkflowReceipt } from './receipts.js';
@@ -16,6 +16,7 @@ export declare const TRIGGERS_ROUTE = "/api/workflows/triggers";
 export declare const HEALTH_ROUTE = "/api/workflows/health";
 export declare const EVIDENCE_ROUTE = "/api/workflows/evidence";
 export declare const DEFINITIONS_ROUTE = "/api/workflows/definitions";
+export declare const TEMPLATES_ROUTE = "/api/workflows/templates";
 export declare const RECEIPTS_ROUTE = "/api/workflows/receipts";
 /** Default and maximum page sizes. */
 export declare const DEFAULT_LIMIT = 50;
@@ -47,6 +48,23 @@ export interface WorkflowApiServices {
     readonly triggers: readonly Trigger[];
     /** The approved definitions of one workspace. */
     readonly definitionsFor?: (workspace: string) => readonly Definition[];
+    /** The editor's list view: source and revision per definition. */
+    readonly definitionEntriesFor?: (workspace: string) => Promise<{
+        readonly definitions: readonly {
+            readonly id: string;
+            readonly name: string;
+            readonly version: number;
+            readonly source: 'shipped' | 'local';
+            readonly revision: string | null;
+        }[];
+        readonly errors?: readonly string[];
+    }>;
+    /** One definition document with the revision a write must send back. */
+    readonly definitionDocumentFor?: (workspace: string, id: string) => Promise<{
+        readonly definition: unknown;
+        readonly revision: string | null;
+        readonly source: string;
+    } | undefined>;
     /** The authenticated receipts of one workspace. */
     readonly receiptsFor?: (workspace: string) => Promise<readonly WorkflowReceipt[]>;
 }

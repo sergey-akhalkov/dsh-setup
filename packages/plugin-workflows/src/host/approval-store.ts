@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import {
+  link,
   lstat,
   mkdir,
   readdir,
@@ -167,20 +168,73 @@ export interface InstallOptions {
     workspace: string,
     approvals: ReadonlyMap<string, StoredApproval>,
   ) => Promise<void>
+  /** Test seam: the backup-link primitive; production hard-links. */
+  readonly link?: typeof link
+  /** Test seam: the restore primitive; production renames. */
+  readonly rename?: typeof rename
+  /** Test seam: the cleanup primitive; production unlinks. */
+  readonly unlink?: typeof unlink
+  /**
+   * The revision precondition, checked inside the install transaction: null
+   * creates only, a hash replaces only the loaded bytes.
+   */
+  readonly expectedHash?: string | null
+}
+
+/** A revision precondition failed inside the install transaction. */
+export class InstallConflictError extends Error {
+  readonly revision: string | null
+
+  constructor(message: string, revision: string | null) {
+    super(message)
+    this.name = 'InstallConflictError'
+    this.revision = revision
+  }
+}
+
+/** Workspace-scoped install transaction queue: approvals are one shared file. */
+const INSTALL_QUEUES = new Map<string, Promise<unknown>>()
+
+function serializeInstall<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = INSTALL_QUEUES.get(key) ?? Promise.resolve()
+  const next = previous.then(run, run)
+  INSTALL_QUEUES.set(
+    key,
+    next.catch(() => undefined),
+  )
+  return next
+}
+
+/** Run one filesystem transaction under the workspace install lock. */
+export function runInstallTransaction<T>(workspace: string, run: () => Promise<T>): Promise<T> {
+  return serializeInstall(workspace, run)
 }
 
 /**
  * Validate a definition file, copy it atomically into the workspace definitions
  * directory, and record its content hash and host signature. The caller asks
  * the user first; this function is the host-only install path and the one the
- * editor save uses.
+ * editor save uses. Installs of one workspace are serialized because they share
+ * the approval file.
  */
-export async function installDefinition(
+export function installDefinition(
   workspace: string,
   sourcePath: string,
   auth: HostAuth,
   options: InstallOptions = {},
 ): Promise<InstallResult> {
+  return serializeInstall(workspace, () => installOnce(workspace, sourcePath, auth, options))
+}
+
+async function installOnce(
+  workspace: string,
+  sourcePath: string,
+  auth: HostAuth,
+  options: InstallOptions,
+): Promise<InstallResult> {
+  const move = options.rename ?? rename
+  const remove = options.unlink ?? unlink
+  const makeLink = options.link ?? link
   const root = await realpath(workspace)
   const source = await realpath(isAbsolute(sourcePath) ? sourcePath : join(root, sourcePath)).catch(
     () => undefined,
@@ -210,45 +264,113 @@ export async function installDefinition(
   if (!isInside(directory, target) || dirname(target) !== directory) {
     throw new Error(`definition "${definition.id}" resolves outside the definitions directory`)
   }
-  // The definition bytes and its approval are one install: on any later
-  // failure the previous file is restored, so neither half is left changed.
-  const previous = await readFile(target).catch(() => undefined)
-  await writeAtomic(target, bytes)
-  const rollback = async (): Promise<void> => {
-    if (previous === undefined) await unlink(target).catch(() => undefined)
-    else await writeAtomic(target, previous).catch(() => undefined)
+  // The revision precondition lives inside this serialized transaction, so a
+  // concurrent install cannot slip between the check and the replacement.
+  const createOnly = options.expectedHash === null
+  if (options.expectedHash !== undefined) {
+    const current = await readFile(target).catch(() => undefined)
+    const currentHash = current === undefined ? null : sha256(current)
+    if (createOnly) {
+      if (currentHash !== null) {
+        throw new InstallConflictError(`definition "${definition.id}" already exists`, currentHash)
+      }
+    } else if (currentHash !== options.expectedHash) {
+      throw new InstallConflictError(`definition "${definition.id}" changed on disk`, currentHash)
+    }
   }
-  // A concurrent swap for a link must not be blessed: the written file itself
-  // has to resolve to the exact expected name inside the definitions directory.
-  const written = await realpath(target).catch(() => undefined)
-  if (
-    written === undefined ||
-    dirname(written) !== directory ||
-    (await lstat(target)).isSymbolicLink()
-  ) {
-    await rollback()
-    throw new Error(
-      `definition "${definition.id}" was replaced while installing; the approval was not recorded`,
-    )
+  // Keep the previous definition under a backup name with a hard link (the
+  // target stays readable throughout), so a failed approval write can restore
+  // it by rename even when the disk is full.
+  const backup = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.bak`
+  let hadPrevious = false
+  let createdByUs = false
+  if (!createOnly) {
+    try {
+      await makeLink(target, backup)
+      hadPrevious = true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
   }
-  // Sign the exact validated source bytes. Never re-read the writable
-  // destination: a write between the copy and the re-read must not be blessed.
-  const hash = sha256(bytes)
-  const record: StoredApproval = {
-    hash,
-    signature: approvalSignature(auth, definition.id, hash),
+  const restore = async (): Promise<void> => {
+    if (!hadPrevious) {
+      // Remove the target only when this transaction created it; a competitor's
+      // file that made an exclusive create fail must stay untouched.
+      if (createdByUs) await remove(target).catch(() => undefined)
+      return
+    }
+    try {
+      await move(backup, target)
+    } catch (error) {
+      throw new Error(
+        `the previous definition could not be restored after a failed install (${errorMessage(error)}); its bytes are preserved at "${backup}"`,
+      )
+    }
   }
-  const approvals = new Map(existing.approvals)
-  approvals.set(definition.id, record)
   try {
-    await (options.writeApprovals ?? writeApprovals)(workspace, approvals)
+    if (createOnly) {
+      // Publish complete bytes with an exclusive hard link: a file created by
+      // anyone after the absence check makes the link fail instead of being
+      // overwritten by a rename.
+      const temporary = `${target}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`
+      await writeFile(temporary, bytes)
+      try {
+        await makeLink(temporary, target)
+        createdByUs = true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          const current = await readFile(target).catch(() => undefined)
+          throw new InstallConflictError(
+            `definition "${definition.id}" already exists`,
+            current === undefined ? null : sha256(current),
+          )
+        }
+        throw error
+      } finally {
+        await remove(temporary).catch(() => undefined)
+      }
+    } else {
+      await writeAtomic(target, bytes)
+      // A replace of a missing target created this file; rollback must remove
+      // nothing else.
+      if (!hadPrevious) createdByUs = true
+    }
+    // A concurrent swap for a link must not be blessed: the written file itself
+    // has to resolve to the exact expected name inside the definitions directory.
+    const written = await realpath(target).catch(() => undefined)
+    if (
+      written === undefined ||
+      dirname(written) !== directory ||
+      (await lstat(target)).isSymbolicLink()
+    ) {
+      throw new Error(
+        `definition "${definition.id}" was replaced while installing; the approval was not recorded`,
+      )
+    }
+    // Sign the exact validated source bytes. Never re-read the writable
+    // destination: a write between the copy and the re-read must not be blessed.
+    const hash = sha256(bytes)
+    const record: StoredApproval = {
+      hash,
+      signature: approvalSignature(auth, definition.id, hash),
+    }
+    const approvals = new Map(existing.approvals)
+    approvals.set(definition.id, record)
+    try {
+      await (options.writeApprovals ?? writeApprovals)(workspace, approvals)
+    } catch (error) {
+      throw new Error(
+        `the approval store could not be written (${errorMessage(error)}); the definition was not installed`,
+      )
+    }
+    if (hadPrevious) await remove(backup).catch(() => undefined)
+    return { definition, file: target, hash }
   } catch (error) {
-    await rollback()
-    throw new Error(
-      `the approval store could not be written (${errorMessage(error)}); the definition was not installed`,
-    )
+    if (hadPrevious || createdByUs) {
+      await restore()
+    }
+    throw error
   }
-  return { definition, file: target, hash }
 }
 
 /**
