@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { apply, definitionEventsOf } from '../src/host/index.ts'
@@ -72,7 +72,11 @@ type Listener = (...args: unknown[]) => unknown
 
 function fakeHost(
   workspace: string,
-  options: { readonly toolExecute?: boolean; readonly userQuestions?: boolean } = {},
+  options: {
+    readonly toolExecute?: boolean
+    readonly userQuestions?: boolean
+    readonly answer?: string
+  } = {},
 ): {
   readonly ctx: Record<string, unknown>
   readonly agent: Record<string, unknown>
@@ -113,35 +117,55 @@ function fakeHost(
     tools.execute = async (input: {
       calls: ReadonlyArray<{ id: string; name: string; arguments: Record<string, unknown> }>
     }) => {
+      const results: Array<{ callId: string; result: Record<string, unknown> }> = []
       for (const call of input.calls) {
         toolExecutions.push({ id: call.id, name: call.name, arguments: call.arguments })
+        // Route the host's own dispatch through the real pre-execute gate so an
+        // unowned call would be refused exactly as in the live pipeline.
+        let decision: { kind?: string; reason?: string } | undefined
+        for (const listener of listeners.get('tools/pre-execute') ?? []) {
+          decision = (await listener(
+            {
+              agent,
+              callId: call.id,
+              name: call.name,
+              arguments: call.arguments,
+            },
+            async () => ({ kind: 'continue' }),
+          )) as { kind?: string; reason?: string } | undefined
+        }
+        const denied = decision?.kind === 'deny'
         const command = typeof call.arguments.command === 'string' ? call.arguments.command : ''
-        if (command.startsWith('openspec new change ')) {
+        if (!denied && command.startsWith('openspec new change ')) {
           const name = command.slice('openspec new change '.length)
           const change = join(workspace, 'openspec', 'changes', name)
           await mkdir(change, { recursive: true })
           await writeFile(join(change, '.openspec.yaml'), 'version: 1\n', 'utf8')
         }
-      }
-      return {
-        results: input.calls.map((call) => ({
+        results.push({
           callId: call.id,
-          result: {
-            isError: false,
-            value: {
-              kind: 'foreground',
-              cwd: workspace,
-              exitCode: 0,
-              signal: null,
-              timedOut: false,
-              aborted: false,
-              timeoutMs: 120_000,
-              stdout: { text: '', truncated: false },
-              stderr: { text: '', truncated: false },
-            },
-          },
-        })),
+          result: denied
+            ? {
+                isError: true,
+                content: [{ type: 'text', text: decision?.reason ?? 'denied' }],
+              }
+            : {
+                isError: false,
+                value: {
+                  kind: 'foreground',
+                  cwd: workspace,
+                  exitCode: 0,
+                  signal: null,
+                  timedOut: false,
+                  aborted: false,
+                  timeoutMs: 120_000,
+                  stdout: { text: '', truncated: false },
+                  stderr: { text: '', truncated: false },
+                },
+              },
+        })
       }
+      return { results }
     }
   }
   const ctx = {
@@ -159,7 +183,10 @@ function fakeHost(
       if (name === 'userQuestions' && options.userQuestions === true) {
         return {
           ask: async (request: { questions: Array<{ id: string }> }) => ({
-            answers: request.questions.map((question) => ({ id: question.id, selected: ['yes'] })),
+            answers: request.questions.map((question) => ({
+              id: question.id,
+              selected: [options.answer ?? 'yes'],
+            })),
           }),
         }
       }
@@ -2167,6 +2194,173 @@ it.skipIf(process.platform !== 'win32')(
     expect(nextCalled).toBe(false)
   },
 )
+describe('intake end-to-end in a fake host', () => {
+  it('runs a refused creation through drafts, dispatch, validation, review, approval, and receipt', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { toolExecute: true, userQuestions: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const pre = (callId: string): Promise<unknown> =>
+      host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId,
+          name: 'pwsh',
+          arguments: { command: 'openspec new change auth' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+    const turnStop = (turn: number): Promise<unknown> =>
+      host.emit('agent/turn-stopping', { agent: host.agent, turn })
+    const intakeRuns = async (): Promise<Array<{ id: string; status: string }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (run) => run.definition === 'change-intake',
+      )
+    const draft = async (file: string, text: string): Promise<void> => {
+      const directory = join(workspace, '.dsh', 'workflows', 'drafts', 'auth')
+      await mkdir(directory, { recursive: true })
+      await writeFile(join(directory, file), text, 'utf8')
+    }
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+
+    // 1. The creation command is refused and the intake run starts.
+    const refused = (await pre('create-1')) as { kind?: string; reason?: string }
+    expect(refused?.kind).toBe('deny')
+    expect(await intakeRuns()).toHaveLength(1)
+
+    // 2. The drafts advance the three main steps.
+    await draft('requirements.md', 'x'.repeat(220))
+    await turnStop(1)
+    await draft('architecture.md', '# architecture\n')
+    await turnStop(2)
+    await draft('interface.md', '# interface\n')
+    await turnStop(3)
+    const created = (await intakeRuns())[0]
+    expect(created).toBeDefined()
+    const afterCreate = await runs.readAuthenticatedRun(workspace, created?.id ?? '', auth)
+    expect(afterCreate?.steps.find((step) => step.id === 'create-change')?.state).toBe('done')
+    expect(host.toolExecutions.map((call) => call.arguments.command)).toContain(
+      'openspec new change auth',
+    )
+    expect(await readdir(changeDir)).toContain('.openspec.yaml')
+
+    // 3. A restart after create-change resumes at spec and never recreates or adopts.
+    const metadata = await readFile(join(changeDir, '.openspec.yaml'), 'utf8')
+    await runs.writeRun(
+      workspace,
+      runs.setRunStatus(afterCreate as never, 'interrupted', Date.now()),
+      auth,
+    )
+    const resumed = (await pre('create-restart')) as { kind?: string; reason?: string }
+    expect(resumed?.kind).toBe('deny')
+    expect(resumed?.reason).toContain('spec')
+    expect(await readFile(join(changeDir, '.openspec.yaml'), 'utf8')).toBe(metadata)
+    expect(await intakeRuns()).toHaveLength(1)
+
+    // 4. Artifacts and a canonical strict-validation result complete spec.
+    for (const [file, text] of [
+      ['proposal.md', '# proposal\n'],
+      ['design.md', '# design\n'],
+      ['tasks.md', '- [ ] 1.1 Task\n'],
+      ['specs/auth/spec.md', '# spec\n'],
+    ] as const) {
+      await mkdir(dirname(join(changeDir, file)), { recursive: true })
+      await writeFile(join(changeDir, file), text, 'utf8')
+    }
+    await host.emit(
+      'tools/result',
+      {
+        agent: host.agent,
+        name: 'pwsh',
+        callId: 'validate-e2e',
+        arguments: { command: 'openspec validate auth --strict' },
+      },
+      {
+        isError: false,
+        content: [],
+        value: {
+          kind: 'foreground',
+          cwd: workspace,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          aborted: false,
+          timeoutMs: 120_000,
+          stdout: { text: '', truncated: false },
+          stderr: { text: '', truncated: false },
+        },
+      },
+    )
+    await turnStop(4)
+
+    // 5. The current whole-spec PASS record completes the deferred review.
+    const digest = await currentSpecDigest(workspace, 'auth')
+    expect(digest).toBeDefined()
+    const recordDir = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(recordDir, { recursive: true })
+    await writeFile(
+      join(recordDir, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    await turnStop(5)
+    const completed = await runs.readAuthenticatedRun(workspace, created?.id ?? '', auth)
+    expect(completed?.status).toBe('completed')
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'intake',
+      change: 'auth',
+    })
+
+    // 6. A repeated creation is allowed and starts no second run.
+    const repeated = (await pre('create-2')) as { kind?: string }
+    expect(repeated?.kind).toBe('continue')
+    expect(await intakeRuns()).toHaveLength(1)
+  })
+
+  it('leaves a no answer open without a receipt', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace, { userQuestions: true, answer: 'no' })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const runs = await import('../src/host/runs.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    expect(intake).toBeDefined()
+    if (intake === undefined) return
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: intake.steps.map((step) => step.id),
+      id: 'run-intake-no',
+      now: 1_000,
+    })
+    for (const step of ['requirements', 'architecture', 'interface', 'create-change', 'spec']) {
+      run = runs.settleStep(run, step, 'done', { at: 1_100 })
+    }
+    run = runs.requestStep(run, 'spec-review', 1_200)
+    await runs.writeRun(workspace, run, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const stored = await runs.readAuthenticatedRun(workspace, 'run-intake-no', auth)
+    expect(stored?.status).not.toBe('completed')
+    expect(stored?.steps.find((step) => step.id === 'approval')?.state).not.toBe('done')
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toBeUndefined()
+  })
+})
+
 describe('archive gate on an unreadable run store', () => {
   it('refuses the archive when the run listing or stat fails and issues no authorization', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
