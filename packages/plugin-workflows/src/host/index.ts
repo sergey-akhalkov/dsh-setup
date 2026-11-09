@@ -68,6 +68,7 @@ import {
   writeRun,
   writeRunSync,
 } from './runs.js'
+import { checkedTaskIds } from './tasks.js'
 import { executeWorkflowsTool, type WorkflowsToolHost } from './tools.js'
 import {
   checkpointRequired,
@@ -502,6 +503,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     definition: Definition,
     event: DefinitionEvent,
     blocked = false,
+    extraContext: Readonly<Record<string, unknown>> = {},
   ): StartRunOutcome => {
     const auth = storedAuth
     if (auth === undefined) {
@@ -525,7 +527,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         trigger: definition.trigger.kind,
         session: event.session ?? '',
         workspace,
-        ...(event.name === undefined ? {} : { context: { name: event.name } }),
+        context: {
+          ...(event.name === undefined ? {} : { name: event.name }),
+          ...extraContext,
+        },
         steps: definition.steps.map((step) => step.id),
         now: journal.time(),
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
@@ -604,6 +609,27 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   /** Bounded per-session observations the evidence verifier may consume. */
   const sessionToolCalls = new Map<string, ToolCallObservation[]>()
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
+  /** The checked task ids last seen per session and change, for the delta. */
+  const checkedTasksSeen = new Map<string, ReadonlySet<string>>()
+  /** The newest newly-checked task id for a tasks.md change, or undefined. */
+  const checkedTaskDelta = (
+    workspace: string,
+    session: string,
+    change: string,
+    path: string,
+  ): string | undefined => {
+    try {
+      const markdown = readFileSync(join(workspace, path), 'utf8')
+      const ids = checkedTaskIds(markdown)
+      const key = `${session}\u0000${change}`
+      const previous = checkedTasksSeen.get(key)
+      checkedTasksSeen.set(key, new Set(ids))
+      if (previous === undefined) return undefined
+      return ids.filter((id) => !previous.has(id)).at(-1)
+    } catch {
+      return undefined
+    }
+  }
   /** The session's current main-step owner; a second run waits for it to settle. */
   const mainStepOwners = new Map<string, string>()
   /** The last turn whose user message was classified, one classification per turn. */
@@ -680,6 +706,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       let startedThisEvent = 0
       const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
       const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
+      // The checked-task delta names the task a task-review run reads. It is
+      // computed here, not added to the observed fs.change event.
+      const taskReviewTaskId =
+        event.kind === 'fs.change' &&
+        event.change !== undefined &&
+        /(?:^|\/)tasks\.md$/u.test(event.subject)
+          ? checkedTaskDelta(workspace, input.session, event.change, event.subject)
+          : undefined
       const definitionRows = definitionEventsOf(input, event, workspace).flatMap(
         (definitionEvent) =>
           evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
@@ -689,7 +723,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               const full =
                 storedAuth !== undefined &&
                 (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
-              const outcome = startDefinitionRun(workspace, definition, matched, full)
+              const outcome = startDefinitionRun(
+                workspace,
+                definition,
+                matched,
+                full,
+                definition.id === 'task-review' && taskReviewTaskId !== undefined
+                  ? { taskId: taskReviewTaskId }
+                  : {},
+              )
               if (outcome.ok) startedThisEvent += 1
               return outcome
             },
