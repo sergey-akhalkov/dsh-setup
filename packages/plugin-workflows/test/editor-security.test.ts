@@ -274,7 +274,16 @@ describe('editor trust boundary', () => {
   })
 
   it('keeps JSONLogic conditions as data and never evaluates them in the client', () => {
-    const predicate = { and: [{ '==': [{ var: 'x' }, 1] }, { '!': [{ var: 'y' }] }] }
+    // Any read of this predicate (a JSONLogic interpreter walking rules) throws,
+    // so a client-side evaluation would fail this test instead of passing it.
+    const predicate = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('JSONLogic was evaluated in the client')
+        },
+      },
+    )
     const definition = {
       ...DEFINITION,
       steps: [
@@ -288,9 +297,10 @@ describe('editor trust boundary', () => {
     } as unknown as GraphDefinition
     const graph = definitionToGraph(definition)
     const converted = graphToDefinition(definition, graph.nodes, graph.edges)
-    expect((converted.steps[0]?.branch as { predicate?: unknown } | undefined)?.predicate).toEqual(
+    expect((converted.steps[0]?.branch as { predicate?: unknown } | undefined)?.predicate).toBe(
       predicate,
     )
+    // Static guard: the client never imports an evaluator or a JSONLogic package.
     const clientDir = fileURLToPath(new URL('../src/client', import.meta.url))
     const files = readdirSync(clientDir)
     for (const file of files) {
@@ -298,6 +308,17 @@ describe('editor trust boundary', () => {
       expect(body).not.toMatch(/\beval\s*\(/u)
       expect(body).not.toMatch(/new\s+Function\s*\(/u)
       expect(body).not.toMatch(/\bFunction\s*\(/u)
+      expect(body).not.toMatch(/evaluateJsonLogic\s*\(/u)
+      expect(body).not.toMatch(/from\s+['"][^'"]*json-?logic/iu)
+      expect(body).not.toMatch(/require\(\s*['"][^'"]*json-?logic/iu)
+    }
+    const manifest = JSON.parse(
+      readFileSync(join(fileURLToPath(new URL('..', import.meta.url)), 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+    for (const field of [manifest.dependencies, manifest.devDependencies]) {
+      for (const name of Object.keys(field ?? {})) {
+        expect(name).not.toMatch(/json-?logic/iu)
+      }
     }
   })
 })

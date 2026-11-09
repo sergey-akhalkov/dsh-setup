@@ -83,6 +83,14 @@ export function canvasFailedState(editor: EditorState): EditorState {
   return setMode(editor, 'list')
 }
 
+/** The production recovery for a canvas render failure: keep editing in List. */
+export function recoverCanvas(editor: EditorState): {
+  readonly failed: true
+  readonly editor: EditorState
+} {
+  return { failed: true, editor: canvasFailedState(editor) }
+}
+
 export function DesignMode(props: DesignModeProps): ReactNode {
   const { sessionId, t } = props
   const api = useMemo(() => fetchEditorApi(sessionId ?? ''), [sessionId])
@@ -446,8 +454,9 @@ export function DesignMode(props: DesignModeProps): ReactNode {
                   />
                 }
                 onError={() => {
-                  setCanvasFailed(true)
-                  setEditor(canvasFailedState(editor))
+                  const recovery = recoverCanvas(editor)
+                  setCanvasFailed(recovery.failed)
+                  setEditor(recovery.editor)
                 }}
               >
                 <DesignCanvas

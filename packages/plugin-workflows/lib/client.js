@@ -12138,6 +12138,9 @@ window.__ModuleLoader__.load({
     function canvasFailedState(editor) {
       return setMode(editor, "list");
     }
+    function recoverCanvas(editor) {
+      return { failed: true, editor: canvasFailedState(editor) };
+    }
     function DesignMode(props) {
       const { sessionId, t } = props;
       const api = (0, import_react6.useMemo)(() => fetchEditorApi(sessionId ?? ""), [sessionId]);
@@ -12448,8 +12451,9 @@ window.__ModuleLoader__.load({
                   }
                 ),
                 onError: () => {
-                  setCanvasFailed(true);
-                  setEditor(canvasFailedState(editor));
+                  const recovery = recoverCanvas(editor);
+                  setCanvasFailed(recovery.failed);
+                  setEditor(recovery.editor);
                 },
                 children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
                   DesignCanvas,

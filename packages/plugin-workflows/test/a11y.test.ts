@@ -85,6 +85,7 @@ describe('mode and fallback', () => {
   it('renders the list when the canvas render throws, with a bounded notice', () => {
     // The fallback is client-only: it neither calls the host nor reads/writes runs.
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const state = openNew(blankDefinition(new Set(['fallback-demo'])))
     const boundary = new (
       ui.CanvasBoundary as unknown as new (
         props: Record<string, unknown>,
@@ -101,14 +102,23 @@ describe('mode and fallback', () => {
     boundary.state = { ...boundary.state, ...derived }
     expect(boundary.render()).toBe('list-editor')
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const onError = vi.fn()
+    const onError = vi.fn(() => {
+      const recovery = (
+        ui.recoverCanvas as (editor: unknown) => { failed: boolean; editor: { mode: string } }
+      )(state)
+      expect(recovery.failed).toBe(true)
+      expect(recovery.editor.mode).toBe('list')
+    })
     const watching = new (
       ui.CanvasBoundary as unknown as new (
         props: Record<string, unknown>,
       ) => {
         componentDidCatch: (error: unknown) => void
       }
-    )({ fallback: 'list-editor', onError })
+    )({
+      fallback: 'list-editor',
+      onError,
+    })
     watching.componentDidCatch(new Error('React Flow failed'))
     expect(onError).toHaveBeenCalledTimes(1)
     errors.mockRestore()
