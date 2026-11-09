@@ -889,6 +889,14 @@ describe('task-review runtime from a tasks.md change', () => {
       expect(view).toBeDefined()
       expect(view?.steps[0]?.state).toBe('done')
     }
+    // Each task dispatches its review exactly once; a second close must not
+    // dispatch the completed start step again.
+    const delegateCalls = (): number =>
+      host.toolExecutions.filter((entry) => entry.name === 'delegate').length
+    expect(delegateCalls()).toBe(2)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    expect(delegateCalls()).toBe(2)
+
     // The owned definition steers the review call while the record is missing.
     expect(host.steers.length).toBeGreaterThan(0)
     const steerText = host.steers

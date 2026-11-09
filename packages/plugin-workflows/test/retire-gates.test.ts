@@ -488,6 +488,21 @@ describe('owned task-review definition', () => {
     }
     expect(taskReviewCoverage(workspace, 'auth').ok).toBe(true)
     expect(taskReviewCompletion(workspace, 'auth')?.ok).toBe(true)
+
+    // The marker's reviewer binding still applies: another reviewer's PASS
+    // cannot approve the checked task.
+    await writeFile(
+      join(workspace, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review', reviewerProvider: 'other-provider' }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(false)
+    await writeFile(
+      join(workspace, 'openspec', 'review-approval.json'),
+      JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' }),
+      'utf8',
+    )
+    expect(taskReviewCoverage(workspace, 'auth').ok).toBe(true)
     expect(taskReviewCompletion(workspace, 'missing-change')).toBeUndefined()
     await rm(workspace, { recursive: true, force: true })
   })
