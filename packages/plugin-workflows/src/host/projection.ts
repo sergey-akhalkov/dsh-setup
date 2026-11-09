@@ -409,6 +409,12 @@ export function localRecordError(record: Record<string, unknown>): string | unde
   if (record.runId !== undefined && typeof record.runId !== 'string') {
     return 'field "runId" must be a string'
   }
+  if (record.failureClass !== undefined && typeof record.failureClass !== 'string') {
+    return 'field "failureClass" must be a string'
+  }
+  if (record.error !== undefined && typeof record.error !== 'string') {
+    return 'field "error" must be a string'
+  }
   return undefined
 }
 

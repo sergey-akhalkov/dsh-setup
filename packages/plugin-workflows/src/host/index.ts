@@ -78,6 +78,7 @@ import {
   createRun,
   DEFAULT_MAX_RUNS,
   hasTamperedRuns,
+  incrementTurnBlocks,
   listAuthenticatedRuns,
   openRunCount,
   pruneRuns,
@@ -879,8 +880,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const sessionShellResults = new Map<string, ShellResultObservation[]>()
   /** The current pre-step index per session, for checkpoint freshness. */
   const turnSteps = new Map<string, number>()
-  /** Per-session, per-turn fresh-checkpoint refusal budget for the recheck. */
-  const retroStaleBlocks = new Map<string, number>()
   /** The checked task ids last seen per session and change, for the delta. */
   const checkedTasksSeen = new Map<string, ReadonlySet<string>>()
   /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -1427,6 +1426,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: isShellTool ? shellOutcome.ok : !result.isError,
           at: journal.time(),
           detail: text.slice(0, 500),
+          seq: observed.length,
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
@@ -1823,6 +1823,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ok: true,
           at: journal.time(),
           detail: JSON.stringify(first.result).slice(0, 500),
+          seq: observed.length,
           ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
           ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
         })
@@ -2525,6 +2526,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ok: call.ok,
             ...(call.at === undefined ? {} : { at: call.at }),
             ...(call.detail === undefined ? {} : { detail: call.detail }),
+            ...(call.seq === undefined ? {} : { seq: call.seq }),
           }))
         const checkpointFreshness = (
           session: string,
@@ -2614,6 +2616,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ok: call.ok,
             ...(call.at === undefined ? {} : { at: call.at }),
             ...(call.detail === undefined ? {} : { detail: call.detail }),
+            ...(call.seq === undefined ? {} : { seq: call.seq }),
           }))
           const completion =
             definition.id === 'task-review' && typeof current.context.name === 'string'
@@ -2698,11 +2701,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               checkpointApplicability.bottleneckAge,
               checkpointOptions(payload.turn),
             )
-            const key = `${sessionId}:${String(payload.turn)}`
-            const blocks = retroStaleBlocks.get(key) ?? 0
+            const blocks = currentRetro.turnBlocks ?? 0
             const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3
-            if (issue !== undefined && blocks < limit) {
-              retroStaleBlocks.set(key, blocks + 1)
+            const alreadyUnchecked = (currentRetro.violations ?? []).some(
+              (violation) => violation.detail?.includes('checkpoint freshness refused') === true,
+            )
+            if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
+              await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth)
               payload.agent.steer({
                 id: randomUUID(),
                 role: 'user',
@@ -2710,8 +2715,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 source: { kind: 'workflows-gate' },
               } as never)
               refusedThisClose = true
-            } else if (issue !== undefined && blocks === limit) {
-              retroStaleBlocks.set(key, blocks + 1)
+            } else if (issue !== undefined && !alreadyUnchecked && blocks >= limit) {
               const violated = addViolation(
                 currentRetro,
                 `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`,

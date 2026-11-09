@@ -34,6 +34,8 @@ export interface ToolCallObservation {
     readonly step?: number;
     /** A bounded result text, for classifying delegate starts/answers. */
     readonly detail?: string;
+    /** The observation order, for remedy/call ordering. */
+    readonly seq?: number;
 }
 /** One completed foreground shell result the verifier may match against. */
 export interface ShellResultObservation {

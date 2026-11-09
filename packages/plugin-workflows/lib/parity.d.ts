@@ -107,6 +107,8 @@ export interface CheckpointObservation {
     readonly at?: number;
     /** The tool result text; used to tell a started delegate from a cached answer. */
     readonly detail?: string;
+    /** Observation order, so calls after the checkpoint are unambiguous. */
+    readonly seq?: number;
 }
 /**
  * The owned checkpoint rules beyond the tool's own validation: freshness, a
@@ -131,6 +133,8 @@ export declare function checkpointCloseIssue(input: {
     readonly workspace?: string;
     /** The validated tool arguments (unredacted), preferred over the record. */
     readonly checkpointArguments?: Readonly<Record<string, unknown>>;
+    /** Observation order of the successful checkpoint, for exact later-call ordering. */
+    readonly checkpointSeq?: number;
 }): string | undefined;
 /** The completion branch: applies only when the task list is fully checked. */
 export declare function taskReviewCompletion(workspace: string, change: string): {

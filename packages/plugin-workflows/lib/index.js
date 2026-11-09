@@ -21,7 +21,7 @@ import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifyS
 import { registerActiveRunsContext } from './prompt.js';
 import { listReceipts } from './receipts.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, incrementTurnBlocks, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { checkedTaskIds } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, loadCatalog, obligationDedupeKey, } from './triggers.js';
@@ -671,8 +671,6 @@ export function apply(ctx, config = {}) {
     const sessionShellResults = new Map();
     /** The current pre-step index per session, for checkpoint freshness. */
     const turnSteps = new Map();
-    /** Per-session, per-turn fresh-checkpoint refusal budget for the recheck. */
-    const retroStaleBlocks = new Map();
     /** The checked task ids last seen per session and change, for the delta. */
     const checkedTasksSeen = new Map();
     /** Every newly-checked task id for a tasks.md change, newest last. */
@@ -1161,6 +1159,7 @@ export function apply(ctx, config = {}) {
                 ok: isShellTool ? shellOutcome.ok : !result.isError,
                 at: journal.time(),
                 detail: text.slice(0, 500),
+                seq: observed.length,
                 ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
                 ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
             });
@@ -1522,6 +1521,7 @@ export function apply(ctx, config = {}) {
                     ok: true,
                     at: journal.time(),
                     detail: JSON.stringify(first.result).slice(0, 500),
+                    seq: observed.length,
                     ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
                     ...(turnSteps.get(sessionId) === undefined ? {} : { step: turnSteps.get(sessionId) }),
                 });
@@ -2153,6 +2153,7 @@ export function apply(ctx, config = {}) {
                 ok: call.ok,
                 ...(call.at === undefined ? {} : { at: call.at }),
                 ...(call.detail === undefined ? {} : { detail: call.detail }),
+                ...(call.seq === undefined ? {} : { seq: call.seq }),
             }));
             const checkpointFreshness = (session, turn) => {
                 const calls = (sessionToolCalls.get(session) ?? []).filter((call) => call.name === 'work_checkpoint' && call.ok && call.turn === turn);
@@ -2220,6 +2221,7 @@ export function apply(ctx, config = {}) {
                     ok: call.ok,
                     ...(call.at === undefined ? {} : { at: call.at }),
                     ...(call.detail === undefined ? {} : { detail: call.detail }),
+                    ...(call.seq === undefined ? {} : { seq: call.seq }),
                 }));
                 const completion = definition.id === 'task-review' && typeof current.context.name === 'string'
                     ? taskReviewCompletion(workspace, current.context.name)
@@ -2287,11 +2289,11 @@ export function apply(ctx, config = {}) {
                     run.status !== 'cancelled');
                 if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
                     const issue = checkpointGateIssue(workspace, currentRetro.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
-                    const key = `${sessionId}:${String(payload.turn)}`;
-                    const blocks = retroStaleBlocks.get(key) ?? 0;
+                    const blocks = currentRetro.turnBlocks ?? 0;
                     const limit = definitions.find((entry) => entry.id === 'retro')?.settings.maxBlocks ?? 3;
-                    if (issue !== undefined && blocks < limit) {
-                        retroStaleBlocks.set(key, blocks + 1);
+                    const alreadyUnchecked = (currentRetro.violations ?? []).some((violation) => violation.detail?.includes('checkpoint freshness refused') === true);
+                    if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
+                        await writeRun(workspace, incrementTurnBlocks(currentRetro, journal.time()), auth);
                         payload.agent.steer({
                             id: randomUUID(),
                             role: 'user',
@@ -2300,8 +2302,7 @@ export function apply(ctx, config = {}) {
                         });
                         refusedThisClose = true;
                     }
-                    else if (issue !== undefined && blocks === limit) {
-                        retroStaleBlocks.set(key, blocks + 1);
+                    else if (issue !== undefined && !alreadyUnchecked && blocks >= limit) {
                         const violated = addViolation(currentRetro, `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`, { at: journal.time() });
                         await writeRun(workspace, violated, auth);
                         payload.agent.steer({

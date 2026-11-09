@@ -661,9 +661,14 @@ export function checkpointCloseIssue(input) {
             ...rawArguments.bottleneck,
         }
         : undefined;
-    const later = input.observations.filter((entry) => entry.ok &&
-        (input.checkpointAt === undefined ||
-            (entry.at !== undefined && entry.at > input.checkpointAt)));
+    const later = input.observations.filter((entry) => {
+        if (!entry.ok)
+            return false;
+        if (input.checkpointSeq !== undefined) {
+            return entry.seq !== undefined && entry.seq > input.checkpointSeq;
+        }
+        return (input.checkpointAt === undefined || (entry.at !== undefined && entry.at > input.checkpointAt));
+    });
     const stale = input.fresh === false;
     const outcome = typeof record.outcome === 'string' ? record.outcome : '';
     if (outcome !== 'continue') {
@@ -764,9 +769,10 @@ export function checkpointGateIssue(workspace, checkpointPath, observations, bot
     const checkpoint = typeof record.checkpoint === 'string'
         ? record.checkpoint
         : '';
-    const toolArguments = observations
+    const lastCheckpointCall = observations
         .filter((entry) => entry.ok && entry.toolName === 'work_checkpoint')
-        .at(-1)?.arguments;
+        .at(-1);
+    const toolArguments = lastCheckpointCall?.arguments;
     const issue = checkpointCloseIssue({
         record,
         checkpointId: checkpoint,
@@ -775,6 +781,7 @@ export function checkpointGateIssue(workspace, checkpointPath, observations, bot
         ...options,
         workspace,
         ...(toolArguments === undefined ? {} : { checkpointArguments: toolArguments }),
+        ...(lastCheckpointCall?.seq === undefined ? {} : { checkpointSeq: lastCheckpointCall.seq }),
     });
     return issue === undefined ? undefined : { text: issue };
 }

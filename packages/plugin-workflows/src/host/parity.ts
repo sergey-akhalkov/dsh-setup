@@ -644,6 +644,8 @@ export interface CheckpointObservation {
   readonly at?: number
   /** The tool result text; used to tell a started delegate from a cached answer. */
   readonly detail?: string
+  /** Observation order, so calls after the checkpoint are unambiguous. */
+  readonly seq?: number
 }
 
 function stringList(value: unknown): string[] {
@@ -826,6 +828,8 @@ export function checkpointCloseIssue(input: {
   readonly workspace?: string
   /** The validated tool arguments (unredacted), preferred over the record. */
   readonly checkpointArguments?: Readonly<Record<string, unknown>>
+  /** Observation order of the successful checkpoint, for exact later-call ordering. */
+  readonly checkpointSeq?: number
 }): string | undefined {
   const workspace = input.workspace ?? process.cwd()
   const record = input.record
@@ -842,12 +846,15 @@ export function checkpointCloseIssue(input: {
           ...(rawArguments.bottleneck as CheckpointCloseRecord['bottleneck']),
         }
       : undefined
-  const later = input.observations.filter(
-    (entry) =>
-      entry.ok &&
-      (input.checkpointAt === undefined ||
-        (entry.at !== undefined && entry.at > input.checkpointAt)),
-  )
+  const later = input.observations.filter((entry) => {
+    if (!entry.ok) return false
+    if (input.checkpointSeq !== undefined) {
+      return entry.seq !== undefined && entry.seq > input.checkpointSeq
+    }
+    return (
+      input.checkpointAt === undefined || (entry.at !== undefined && entry.at > input.checkpointAt)
+    )
+  })
   const stale = input.fresh === false
   const outcome = typeof record.outcome === 'string' ? record.outcome : ''
   if (outcome !== 'continue') {
@@ -971,9 +978,10 @@ export function checkpointGateIssue(
     typeof (record as { readonly checkpoint?: unknown }).checkpoint === 'string'
       ? (record as { readonly checkpoint: string }).checkpoint
       : ''
-  const toolArguments = observations
+  const lastCheckpointCall = observations
     .filter((entry) => entry.ok && entry.toolName === 'work_checkpoint')
-    .at(-1)?.arguments
+    .at(-1)
+  const toolArguments = lastCheckpointCall?.arguments
   const issue = checkpointCloseIssue({
     record,
     checkpointId: checkpoint,
@@ -982,6 +990,7 @@ export function checkpointGateIssue(
     ...options,
     workspace,
     ...(toolArguments === undefined ? {} : { checkpointArguments: toolArguments }),
+    ...(lastCheckpointCall?.seq === undefined ? {} : { checkpointSeq: lastCheckpointCall.seq }),
   })
   return issue === undefined ? undefined : { text: issue }
 }

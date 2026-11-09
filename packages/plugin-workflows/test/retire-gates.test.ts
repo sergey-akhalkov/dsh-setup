@@ -1040,6 +1040,8 @@ describe('owned task-review definition', () => {
     for (const extra of [
       { failureClass: 'reviewed-inputs-changed' },
       { error: 'queue-internal-error: failure' },
+      { failureClass: 42 },
+      { error: { message: 'bad' } },
     ]) {
       const workspace = await workspaceWithRecords({ [taskId]: 'ERROR' })
       const recordPath = join(
