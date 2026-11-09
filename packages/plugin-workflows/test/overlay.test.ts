@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { definitionToGraph, type GraphDefinition } from '../src/client/graph.ts'
 import { overlayFor, withOverlay } from '../src/client/overlay.ts'
 import type { RunView } from '../src/client/panel.tsx'
+import { createRunSelection } from '../src/client/run-selection.ts'
 import { packageDir } from './client-harness.ts'
 
 const DEFINITION = JSON.parse(
@@ -234,5 +235,23 @@ describe('run overlay', () => {
     expect(
       withOverlay(graph.nodes, overlay).find((node) => node.step?.id === 'constructor')?.runState,
     ).toBe('running')
+  })
+
+  it('discards a superseded definition run response', async () => {
+    const resolvers = new Map<string, (runs: string[]) => void>()
+    const selection = createRunSelection<string>(
+      (definitionId) =>
+        new Promise((resolve) => {
+          resolvers.set(definitionId, resolve)
+        }),
+    )
+    const applied: (readonly string[])[] = []
+    const alpha = selection.load('alpha', (next) => applied.push(next))
+    const beta = selection.load('beta', (next) => applied.push(next))
+    resolvers.get('beta')?.(['beta-run'])
+    resolvers.get('alpha')?.(['alpha-run'])
+    await Promise.all([alpha, beta])
+    // Both loads clear first; only the latest definition's response lands.
+    expect(applied).toEqual([[], [], ['beta-run']])
   })
 })

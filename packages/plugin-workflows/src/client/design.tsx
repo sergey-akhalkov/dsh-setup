@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { defaultMode, fallbackNotice, resolveSurface, summaryText } from './a11y.ts'
 import { CanvasBoundary, DesignCanvas } from './canvas.tsx'
 import { connectChoices, EDGE_LABELS } from './edges.ts'
@@ -39,6 +39,7 @@ import { overlayFor, withOverlay } from './overlay.ts'
 import { Palette } from './palette.tsx'
 import type { RunView, Translate } from './panel.tsx'
 import { PropertyPanel } from './properties.tsx'
+import { createRunSelection } from './run-selection.ts'
 import { FLOW_CSS } from './styles.ts'
 
 /**
@@ -132,25 +133,16 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [selected])
 
-  const runsRequest = useRef(0)
+  const runSelection = useMemo(
+    () => createRunSelection((definitionId: string) => api.runs(definitionId)),
+    [api],
+  )
+
   const loadRuns = async (definitionId: string): Promise<void> => {
-    runsRequest.current += 1
-    const request = runsRequest.current
-    // A different definition must not show the previous one's runs while the
-    // new list loads, and a late response must not supply the old overlay.
-    setRuns([])
-    setRunId(undefined)
-    try {
-      const next = await api.runs(definitionId)
-      if (request !== runsRequest.current) return
+    await runSelection.load(definitionId, (next) => {
       setRuns(next)
       setRunId(next[0]?.id)
-    } catch {
-      if (request !== runsRequest.current) return
-      // A run read failure leaves the canvas editable without an overlay.
-      setRuns([])
-      setRunId(undefined)
-    }
+    })
   }
 
   const open = async (id: string): Promise<void> => {

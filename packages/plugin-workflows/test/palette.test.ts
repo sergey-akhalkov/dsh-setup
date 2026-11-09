@@ -67,6 +67,7 @@ const listRowModel = ui.listRowModel as (
 ) => Readonly<Record<string, string>>
 
 const patchListField = ui.patchListField as (
+  graphId: string,
   step: GraphStep,
   field: string,
   value: string,

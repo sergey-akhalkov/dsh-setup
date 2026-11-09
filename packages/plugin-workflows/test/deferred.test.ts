@@ -169,7 +169,7 @@ describe('deferred workflow definitions', () => {
       installedLegacy: INSTALLED,
       readRecord: () =>
         verifyEvidence(
-          { kind: 'tool', callId: 'no-such-call' },
+          { kind: 'tool', name: 'no-such-tool' },
           { workspace, values: { name: 'auth', taskId } },
         ),
     })

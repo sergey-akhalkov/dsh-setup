@@ -125,7 +125,7 @@ describe('summary and keyboard', () => {
         title: 'run',
         attribution: 'local',
         startedAt: 1,
-        status: 'blocked',
+        status: 'failed',
         steps: [{ id: 'requirements', title: 'requirements', state: 'blocked' }],
       },
       DEFINITION,
@@ -133,7 +133,7 @@ describe('summary and keyboard', () => {
     const base = summaryText(DEFINITION, undefined, overlay)
     expect(base).toContain('Trigger tool.pre-execute')
     expect(base).toContain(`${String(DEFINITION.steps.length)} steps`)
-    expect(base).toContain('run blocked')
+    expect(base).toContain('run failed')
     expect(summaryText(DEFINITION, 'Requirements')).toContain('Selected: Requirements')
     expect(summaryText(DEFINITION)).toContain('no run selected')
   })

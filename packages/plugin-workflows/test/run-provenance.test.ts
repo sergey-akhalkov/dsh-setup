@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -223,7 +223,7 @@ describe('runs route definition filter', () => {
     const viewStep = view?.steps.find((step) => step.id === stepId)
     expect(viewStep?.evidenceRef).toMatchObject({ kind: 'record', ref: 'record-1.json' })
     expect(viewStep?.failureClass).toBe('rejected-answer')
-    expect(view?.violations[0]).toMatchObject({
+    expect(view?.violations?.[0]).toMatchObject({
       stepId,
       reason: expect.stringContaining('bypassed'),
     })

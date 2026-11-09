@@ -124,9 +124,9 @@ window.__ModuleLoader__.load({
             return x === y && (0 !== x || 1 / x === 1 / y) || x !== x && y !== y;
           }
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef4 = React.useRef, useEffect4 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
+          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef3 = React.useRef, useEffect4 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
           exports.useSyncExternalStoreWithSelector = function(subscribe, getSnapshot, getServerSnapshot, selector2, isEqual) {
-            var instRef = useRef4(null);
+            var instRef = useRef3(null);
             if (null === instRef.current) {
               var inst = { hasValue: false, value: null };
               instRef.current = inst;
@@ -12007,6 +12007,25 @@ window.__ModuleLoader__.load({
       ] });
     }
 
+    // packages/plugin-workflows/src/client/run-selection.ts
+    function createRunSelection(read) {
+      let request = 0;
+      return {
+        async load(definitionId, onChange) {
+          request += 1;
+          const token = request;
+          onChange([]);
+          let next;
+          try {
+            next = await read(definitionId);
+          } catch {
+            next = [];
+          }
+          if (token === request) onChange(next);
+        }
+      };
+    }
+
     // packages/plugin-workflows/src/client/styles.ts
     var FLOW_CSS = `
     .dsh-wf-design { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
@@ -12128,22 +12147,15 @@ window.__ModuleLoader__.load({
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
       }, [selected2]);
-      const runsRequest = (0, import_react6.useRef)(0);
+      const runSelection = (0, import_react6.useMemo)(
+        () => createRunSelection((definitionId) => api.runs(definitionId)),
+        [api]
+      );
       const loadRuns = async (definitionId) => {
-        runsRequest.current += 1;
-        const request = runsRequest.current;
-        setRuns([]);
-        setRunId(void 0);
-        try {
-          const next = await api.runs(definitionId);
-          if (request !== runsRequest.current) return;
+        await runSelection.load(definitionId, (next) => {
           setRuns(next);
           setRunId(next[0]?.id);
-        } catch {
-          if (request !== runsRequest.current) return;
-          setRuns([]);
-          setRunId(void 0);
-        }
+        });
       };
       const open = async (id2) => {
         if (id2 === "") return;

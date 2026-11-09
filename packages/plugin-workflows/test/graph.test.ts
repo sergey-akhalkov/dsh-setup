@@ -9,6 +9,7 @@ import {
   END_NODE,
   type GraphDefinition,
   GraphError,
+  type GraphStep,
   graphToDefinition,
   nodeIdOf,
   precheckGraph,
@@ -42,12 +43,8 @@ function baseDefinition(overrides: Partial<GraphDefinition> = {}): GraphDefiniti
   }
 }
 
-function step(
-  id: string,
-  executor: string,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return { id, title: id, executor, ...extra }
+function step(id: string, executor: string, extra: Record<string, unknown> = {}): GraphStep {
+  return { id, title: id, executor, ...extra } as GraphStep
 }
 
 describe('definition to graph', () => {
