@@ -27,7 +27,7 @@ export function renderActiveRunsContext(runs) {
     const listed = active.length > MAX_ACTIVE_RUN_LINES ? active.slice(0, MAX_ACTIVE_RUN_LINES - 1) : active;
     const lines = listed.map((run) => {
         const pending = pendingStep(run);
-        const line = `- ${bounded(run.definition)}: step ${bounded(pending ?? 'end')} (${run.status}) run ${bounded(run.id)}`;
+        const line = `- ${bounded(run.definition.id)}: step ${bounded(pending ?? 'end')} (${run.status}) run ${bounded(run.id)}`;
         return oneLine(line).slice(0, MAX_ACTIVE_RUN_LINE_CHARS);
     });
     if (active.length > MAX_ACTIVE_RUN_LINES) {

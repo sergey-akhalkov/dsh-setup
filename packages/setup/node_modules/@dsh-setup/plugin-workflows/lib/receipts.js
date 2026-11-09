@@ -138,7 +138,7 @@ export async function issueCompletionReceipt(workspace, runId, digest, auth, now
     if (run === undefined) {
         throw new Error('receipt refused: the intake run is unsigned, modified, or unreadable; no receipt was issued');
     }
-    if (run.definition !== 'change-intake' || run.status !== 'completed') {
+    if (run.definition.id !== 'change-intake' || run.status !== 'completed') {
         throw new Error(`receipt refused: run "${run.id}" is not a completed change-intake run; no receipt was issued`);
     }
     const name = run.context.name;
