@@ -2212,9 +2212,12 @@ export function apply(ctx, config = {}) {
                                                     return undefined;
                                                 await writeCommit(workspace, result.run, auth);
                                                 if (entryGeneration !== sessionGeneration(sessionId)) {
+                                                    // Always persist the prior interrupted state:
+                                                    // interruptEndedRun returns undefined for an already
+                                                    // interrupted run.
                                                     const replacement = prior === undefined
                                                         ? undefined
-                                                        : interruptEndedRun(prior, true, journal.time());
+                                                        : (interruptEndedRun(prior, true, journal.time()) ?? prior);
                                                     if (replacement !== undefined) {
                                                         await writeCommit(workspace, replacement, auth);
                                                     }
@@ -2542,7 +2545,7 @@ export function apply(ctx, config = {}) {
                             attempts: 0,
                         })),
                     };
-                    const persisted = await persistRun(workspace, reopened, auth, undefined, undefined, completedVerify.updatedAt);
+                    const persisted = await persistRun(workspace, reopened, auth, runGenerationsAtRead.get(completedVerify.id), sessionGenerationAtRead, completedVerify.updatedAt);
                     runs.splice(runs.indexOf(completedVerify), 1, persisted);
                 }
             }
@@ -2851,7 +2854,11 @@ export function apply(ctx, config = {}) {
                         // A disposal can land during the write; keep its fence and restore
                         // the prior pending steps so the run remains resumable.
                         if (entryGeneration !== sessionGeneration(sessionId)) {
-                            const replacement = prior === undefined ? undefined : interruptEndedRun(prior, true, journal.time());
+                            // Always persist the prior interrupted state: interruptEndedRun
+                            // returns undefined for an already interrupted run.
+                            const replacement = prior === undefined
+                                ? undefined
+                                : (interruptEndedRun(prior, true, journal.time()) ?? prior);
                             if (replacement !== undefined)
                                 await writeCommit(workspace, replacement, auth);
                             bumpRunGeneration(runId);
@@ -3061,9 +3068,12 @@ export function apply(ctx, config = {}) {
                                         return undefined;
                                     await writeCommit(workspace, result.run, auth);
                                     if (entryGeneration !== sessionGeneration(sessionId)) {
+                                        // Always persist the prior interrupted state:
+                                        // interruptEndedRun returns undefined for an already
+                                        // interrupted run.
                                         const replacement = prior === undefined
                                             ? undefined
-                                            : interruptEndedRun(prior, true, journal.time());
+                                            : (interruptEndedRun(prior, true, journal.time()) ?? prior);
                                         if (replacement !== undefined) {
                                             await writeCommit(workspace, replacement, auth);
                                         }
