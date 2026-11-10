@@ -725,3 +725,17 @@ session-scoped `run=` lookup. The integration passed the full gate (155 files / 
 build with no diff, validators, strict validation) with 19 portable task-review PASS records and
 shipped in v0.30.0; the two delta specs are synced into the main specs and the change is archived.
 Open owner follow-up: 5.2, the installed-build visual check of both surfaces.
+
+On 2026-11-10 `add-workflow-overview` replaced the session view's journal with a workflow overview: two
+segments, `Workflows` (definitions grouped by trigger kind, each workflow's own mode/filter, the group
+firing count as the sum of its bound definitions' `definition:<id>` matched/total evaluation counts,
+and `completed / all runs` with separate failed/running/cancelled/interrupted/blocked counts) and
+`Runs` (the all-runs feed); selecting a workflow opens its page with the description, ordered
+architecture chain, trigger binding, its runs newest first, and its definition-scoped evaluation
+history where only a run-carrying evaluation links to the run. The session-wide `Journal` segment was
+removed as a breaking change. The host read API gained `counts {matched,total}` on the trigger
+entries, an additive `lifecycle` field on projected runs and the `stats=1` per-definition status
+buckets. The integration passed the full gate (156 files / 2941 tests, gen 411, build with no diff,
+validators) with 9 portable task-review PASS records and released in v0.31.0, archived 9/11 (the
+archive and release steps were completed after the tick). Open owner follow-up: the installed-build
+visual check of both segments and the workflow page.
