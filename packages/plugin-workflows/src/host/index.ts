@@ -2162,24 +2162,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     storeRevision += 1
     lifecycleEpoch += 1
   }
-  /**
-   * The single guarded run-store write for a lock holder: re-read the durable
-   * run, refuse when it moved since the snapshot, then write and bump the
-   * revision.
-   */
-  const finishCommit = async (
-    workspace: string,
-    run: WorkflowRun,
-    auth: HostAuth,
-    expectedUpdatedAt: number,
-  ): Promise<WorkflowRun> => {
-    const current = await readAuthenticatedRun(workspace, run.id, auth)
-    if (current === undefined) return run
-    if (current.updatedAt !== expectedUpdatedAt) return current
-    if (current.status === 'cancelled') return current
-    await writeCommit(workspace, run, auth)
-    return run
-  }
   /** Persist an advance unless the run's snapshot, session or state moved. */
   const persistRun = async (
     workspace: string,
@@ -3663,9 +3645,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 }
                 // A command steer writes the same guarded store: a disposal
                 // during it must not revive the run.
-                await withRunLock(run.id, async () => {
-                  await finishCommit(workspace, steered.run, auth, run.updatedAt)
-                })
+                await persistRun(
+                  workspace,
+                  steered.run,
+                  auth,
+                  runGeneration(run.id),
+                  sessionGeneration(String(agent.session.id)),
+                  run.updatedAt,
+                )
               }
               const questions = questionsFor(invocation.agent)
               const host: WorkflowCommandHost = {
