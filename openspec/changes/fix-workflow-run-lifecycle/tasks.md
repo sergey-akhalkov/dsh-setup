@@ -16,4 +16,4 @@ parallel work is planned.
 ## 2. Docs and generated tree (serial, owns `docs/workflows.md`, `packages/plugin-workflows/lib/**`, `packages/setup/node_modules/@dsh-setup/**`)
 
 - [x] 2.1 Update `docs/workflows.md` with record reuse, supersession, the bounded retry and failed resume, session liveness, the dead-session cancel, and the session-scoped prompt.
-- [ ] 2.2 Run `pnpm build`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm gen`, `pnpm gen:check`, and the repository validators; commit the regenerated `lib/**` and setup tree.
+- [x] 2.2 Run `pnpm build`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm gen`, `pnpm gen:check`, and the repository validators; commit the regenerated `lib/**` and setup tree.

@@ -635,7 +635,11 @@ describe('task-review dispatch lifecycle', () => {
     readonly run: WorkflowRun
   }
 
-  async function taskWorkspace(task: string, verdict?: 'PASS' | 'ERROR'): Promise<TaskWorkspace> {
+  async function taskWorkspace(
+    task: string,
+    verdict?: 'PASS' | 'ERROR' | 'FINDINGS',
+    portable = true,
+  ): Promise<TaskWorkspace> {
     const workspace = await tempWorkspace()
     const definition = taskReviewDefinition()
     const taskId = taskIdOf(task)
@@ -644,7 +648,7 @@ describe('task-review dispatch lifecycle', () => {
     await mkdir(join(changeDir, 'reviews'), { recursive: true })
     await mkdir(records, { recursive: true })
     await writeFile(join(changeDir, 'tasks.md'), `- [x] 1.1 ${task}\n`, 'utf8')
-    const portable = {
+    const portableRecord = {
       rule: 'task-review',
       change: 'auth',
       scope: 'task',
@@ -655,11 +659,21 @@ describe('task-review dispatch lifecycle', () => {
       target: { provider: 'codex-subagent' },
       time: '2026-11-10T00:00:00.000Z',
     }
-    await writeFile(join(changeDir, 'reviews', `${taskId}.json`), JSON.stringify(portable), 'utf8')
+    if (portable) {
+      await writeFile(
+        join(changeDir, 'reviews', `${taskId}.json`),
+        JSON.stringify(portableRecord),
+        'utf8',
+      )
+    }
     if (verdict !== undefined) {
+      const findings =
+        verdict === 'FINDINGS'
+          ? [{ severity: 'P1', title: 'finding', evidence: 'evidence', fix: 'fix' }]
+          : []
       await writeFile(
         join(records, `${taskId}.json`),
-        JSON.stringify({ ...portable, phase: 'task', verdict }),
+        JSON.stringify({ ...portableRecord, phase: 'task', verdict, findings }),
         'utf8',
       )
     }
@@ -816,18 +830,81 @@ describe('task-review dispatch lifecycle', () => {
         },
       })
     let current = run
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
       const result = await advance(current)
       current = result.run
       expect(result.completed).toBe(false)
-      expect(current.status).toBe('blocked')
+      expect(current.status).toBe(attempt < 3 ? 'blocked' : 'failed')
     }
     const failedStep = current.steps.find((step) => step.id === 'start-review')
     expect(failedStep?.state).toBe('failed')
     expect(failedStep?.attempts).toBe(3)
+    expect(current.reason).toContain('resume or cancel')
+    // A further advance stays terminal and dispatches nothing.
     const terminal = await advance(current)
     expect(terminal.run.status).toBe('failed')
     expect(terminal.run.steps.find((step) => step.id === 'start-review')?.state).toBe('failed')
-    expect(terminal.run.reason).toContain('resume or cancel')
+  })
+
+  it('settles start-review from a matching ERROR record without dispatching', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task', 'ERROR', false)
+    let calls = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/task-review']),
+      now: 2_000,
+      toolRunner: {
+        async call() {
+          calls += 1
+          return { ok: false, error: 'an ERROR record must not dispatch delegate' }
+        },
+      },
+    })
+    expect(calls).toBe(0)
+    expect(result.run.steps.find((step) => step.id === 'start-review')?.state).toBe('done')
+    expect(result.run.steps.find((step) => step.id === 'await-review')?.state).toBe('done')
+    // An ERROR cannot satisfy the completion coverage.
+    expect(result.waiting?.stepId).toBe('complete-review')
+  })
+
+  it('dispatches delegate when the matching record is FINDINGS', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task', 'FINDINGS')
+    let calls = 0
+    const toolCalls: Array<{
+      callId: string
+      name: string
+      arguments: Record<string, unknown>
+      ok: boolean
+    }> = []
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId }, toolCalls },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/task-review']),
+      now: 2_000,
+      toolRunner: {
+        async call(request) {
+          calls += 1
+          toolCalls.push({
+            callId: request.callId,
+            name: request.name,
+            arguments: { ...request.arguments },
+            ok: true,
+          })
+          return { ok: true }
+        },
+      },
+    })
+    expect(calls).toBe(1)
+    expect(result.run.steps.find((step) => step.id === 'start-review')?.state).toBe('done')
+    expect(result.waiting?.stepId).toBe('await-review')
   })
 })

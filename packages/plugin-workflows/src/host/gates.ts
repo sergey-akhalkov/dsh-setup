@@ -146,6 +146,9 @@ export function evaluateTurnClose(input: TurnCloseInput): TurnCloseOutcome {
         const run = markTurn(addViolation(input.run, detail, { at }))
         return { kind: 'violation', run, detail }
       }
+      // The owned rule refuses through the same steer the step walk uses; a
+      // returned outcome alone does not hold a turn open.
+      input.agent.steer(text)
       return {
         kind: 'refuse',
         run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),

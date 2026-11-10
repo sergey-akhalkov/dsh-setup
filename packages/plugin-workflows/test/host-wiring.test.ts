@@ -1561,24 +1561,112 @@ describe('task-review runtime from a tasks.md change', () => {
       (entry) => entry.definition.id === 'task-review',
     )
     expect(reviewRuns.map((entry) => entry.id)).toEqual([existing.id])
-    // Restoring a task whose run was cancelled starts a fresh run.
+  })
+
+  it('resumes a failed task-review run and dispatches the review again', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const taskId = taskIdOf('Task')
+    const host = fakeHost(workspace, { toolExecute: true })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let run = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: ['start-review', 'await-review', 'complete-review'],
+      now: 1_000,
+    })
+    run = runs.settleStep(run, 'start-review', 'failed', {
+      at: 1_001,
+      reason: 'the tool call failed: tool call aborted',
+      attempts: 3,
+      evidence: { kind: 'tool', callId: 'owned-previous', detail: 'failed' },
+    })
+    run = runs.setRunStatus(run, 'failed', 1_002, 'the review dispatch failed 3 time(s)')
+    await runs.writeRun(workspace, run, auth)
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    const resumed = await tool?.execute({ action: 'resume', runId: run.id }, { agent: host.agent })
+    expect(resumed?.text).toContain('resumed')
+    const afterResume = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    const reopened = afterResume?.steps.find((entry) => entry.id === 'start-review')
+    expect(reopened?.state).toBe('open')
+    expect(reopened?.attempts).toBe(0)
+    expect(reopened?.evidence).toBeUndefined()
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    expect(host.toolExecutions.filter((entry) => entry.name === 'delegate').length).toBe(1)
+    const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.steps.find((entry) => entry.id === 'start-review')?.state).toBe('done')
+  })
+
+  it('starts a fresh run after a superseded watcher run and a restored task', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const runs = await import('../src/host/runs.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const rows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(journalFile, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:task-review')
+    const reviewRuns = async (): Promise<Array<{ id: string; status: string }>> =>
+      (await runs.listAuthenticatedRuns(workspace, auth))
+        .filter((entry) => entry.definition.id === 'task-review')
+        .map((entry) => ({ id: entry.id, status: entry.status }))
+    // A real watcher tick starts the run and consumes its trigger key.
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () => (await reviewRuns()).length === 1)
+    const first = (await reviewRuns())[0]
+    expect(first).toBeDefined()
+    // Unchecking the task supersedes the run at the turn close.
     const beforeUncheck = (await rows()).length
     await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
     host.fireFs()
     await waitFor(async () => (await rows()).length > beforeUncheck)
-    const afterUncheck = (await rows()).length
-    const { cancelRun } = await import('../src/host/resume.ts')
-    await cancelRun(workspace, existing.id, auth)
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await reviewRuns()).find((entry) => entry.id === first?.id)?.status === 'cancelled',
+    )
+    // Restoring the identical bytes must start a fresh run.
     await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
     host.fireFs()
-    await waitFor(async () => (await rows()).length > afterUncheck)
-    const restored = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
-      (entry) => entry.definition.id === 'task-review',
-    )
-    expect(restored).toHaveLength(2)
-    expect(restored.some((entry) => entry.id !== existing.id && entry.status === 'running')).toBe(
-      true,
-    )
+    await waitFor(async () => (await reviewRuns()).length === 2)
+    const restored = (await reviewRuns()).filter((entry) => entry.id !== first?.id)
+    expect(restored).toHaveLength(1)
+    expect(restored[0]?.status).toBe('running')
   })
 })
 
@@ -4399,6 +4487,56 @@ describe('active-runs prompt context', () => {
   })
 })
 
+describe('task-review terminal coverage', () => {
+  it('refuses a final tick without a portable PASS after dispatch exhaustion', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const taskId = taskIdOf('Task')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let run = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: ['start-review', 'await-review', 'complete-review'],
+      now: 1_000,
+    })
+    run = runs.settleStep(run, 'start-review', 'failed', {
+      at: 1_001,
+      reason: 'the review dispatch failed 3 time(s)',
+      attempts: 3,
+    })
+    run = runs.setRunStatus(run, 'failed', 1_002, 'the review dispatch failed 3 time(s)')
+    await runs.writeRun(workspace, run, auth)
+    const steerText = (): string =>
+      host.steers
+        .map((message) =>
+          ((message as { content?: Array<{ text?: string }> }).content ?? [])
+            .map((block) => block.text ?? '')
+            .join(''),
+        )
+        .join('\n')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => steerText().includes('completion of change'))
+    expect(steerText()).toContain('task-review PASS')
+    const firstCount = host.steers.length
+    // The failed-dispatch branch is skipped, but the coverage still refuses
+    // the later close: a terminal run does not exempt the final tick.
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
+    await waitFor(() => host.steers.length > firstCount)
+  })
+})
+
 describe('session disposal', () => {
   it('marks the session runs interrupted so no other session inherits them', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
@@ -4466,6 +4604,28 @@ describe('session disposal', () => {
     )
     expect(after?.reason).toContain('session ended')
     expect(after?.steps.every((step) => step.state === 'open')).toBe(true)
+    const runId = started?.id ?? 'missing'
+    // A recreated session agent resumes the run instead of re-interrupting it.
+    await host.emit('agent/created', { agent: host.agent })
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    const resumed = await tool?.execute({ action: 'resume', runId }, { agent: host.agent })
+    expect(resumed?.text).toContain('resumed')
+    await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await runs.listAuthenticatedRuns(workspace, auth)).find((entry) => entry.id === runId)
+          ?.status === 'completed',
+    )
+    const completed = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.id === runId,
+    )
+    expect(completed?.status).toBe('completed')
   })
 })
 

@@ -734,6 +734,8 @@ export function apply(ctx, config = {}) {
     const mainStepOwners = new Map();
     /** Runs whose session ended; a later stale advance must not revive them. */
     const endedRunIds = new Set();
+    /** Sessions whose agent was disposed; fenced synchronously before any store read. */
+    const endedSessionIds = new Set();
     /** The last turn whose user message was classified, one classification per turn. */
     const intentTurns = new Map();
     const metricsFor = (session, turn) => {
@@ -1356,6 +1358,8 @@ export function apply(ctx, config = {}) {
     };
     listen(() => ctx.on('agent/created', ({ agent }) => {
         try {
+            // A new agent generation makes the session live again.
+            endedSessionIds.delete(String(agent.session.id));
             bindLifecycle(agent);
             observeSession(agent.session);
         }
@@ -1380,6 +1384,9 @@ export function apply(ctx, config = {}) {
         await refreshPromptRuns(workspace);
     };
     listen(() => ctx.on('agent/disposed', ({ agent }) => {
+        // Fence the session synchronously; the store read below is asynchronous
+        // and an in-flight advance must not win the race.
+        endedSessionIds.add(String(agent.session.id));
         try {
             const workspace = workspaceFor(services, agent.session);
             if (workspace === undefined)
@@ -1672,13 +1679,12 @@ export function apply(ctx, config = {}) {
     };
     /** Persist an advance unless the run's session ended meanwhile. */
     const persistRun = async (workspace, run, auth) => {
-        const written = interruptEndedRun(run, endedRunIds.has(run.id), journal.time()) ?? run;
+        const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session);
+        const written = interruptEndedRun(run, ended(), journal.time()) ?? run;
         await writeRun(workspace, written, auth);
         // A disposal can land between the check and the write; re-check after it so
         // a stale advance never leaves the run running or blocked.
-        const late = endedRunIds.has(run.id)
-            ? interruptEndedRun(written, true, journal.time())
-            : undefined;
+        const late = ended() ? interruptEndedRun(written, true, journal.time()) : undefined;
         if (late !== undefined) {
             await writeRun(workspace, late, auth);
             return late;
@@ -1822,7 +1828,9 @@ export function apply(ctx, config = {}) {
             const map = seen.get(sessionId) ?? new Map();
             seen.set(sessionId, map);
             for (const run of runs) {
-                if (run.session === sessionId && run.dedupeKey !== undefined) {
+                if (run.session === sessionId &&
+                    run.dedupeKey !== undefined &&
+                    run.status !== 'cancelled') {
                     map.set(run.dedupeKey, run.updatedAt);
                 }
             }
@@ -2283,7 +2291,12 @@ export function apply(ctx, config = {}) {
                     runs.splice(runs.indexOf(completedVerify), 1, persisted);
                 }
             }
-            const eligible = runs.filter((run) => run.session === sessionId && (run.status === 'running' || run.status === 'blocked'));
+            const eligible = runs.filter((run) => run.session === sessionId &&
+                (run.status === 'running' ||
+                    run.status === 'blocked' ||
+                    // A terminal task-review run still owns its change's completion
+                    // coverage, so the close cannot skip it after exhaustion.
+                    (run.definition.id === 'task-review' && run.status === 'failed')));
             const ownerId = mainStepOwners.get(sessionId);
             const owner = ownerId === undefined ? undefined : eligible.find((run) => run.id === ownerId);
             if (ownerId !== undefined && owner === undefined)
@@ -2349,6 +2362,13 @@ export function apply(ctx, config = {}) {
                         continue;
                     }
                 }
+                // A terminal task-review run is not advanced again; the gate below
+                // still evaluates its change's completion coverage.
+                if (run.definition.id === 'task-review' && run.status === 'failed') {
+                    advanced.set(run.id, run);
+                    definitionOf.set(run.id, definition);
+                    continue;
+                }
                 const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn);
                 advanced.set(run.id, current);
                 definitionOf.set(run.id, definition);
@@ -2358,6 +2378,13 @@ export function apply(ctx, config = {}) {
                 const definition = definitionOf.get(run.id);
                 if (current === undefined || definition === undefined)
                     continue;
+                // A superseded run no longer suppresses a restored identical event.
+                if (current.status === 'cancelled' && (current.reason ?? '').includes('superseded')) {
+                    const sessionSeen = seen.get(current.session);
+                    if (sessionSeen !== undefined && current.dedupeKey !== undefined) {
+                        sessionSeen.delete(current.dedupeKey);
+                    }
+                }
                 // A prior turn's retro obligation is obsolete: work_checkpoint only
                 // writes the current turn's record, so supersede it (keeping its
                 // violation history) instead of demanding the old record forever.
@@ -2533,6 +2560,9 @@ export function apply(ctx, config = {}) {
             resumeRun: async (runId) => {
                 await recoverIfNeeded(workspace);
                 const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id));
+                // An explicit resume is a new lifecycle generation for the run.
+                endedRunIds.delete(runId);
+                endedSessionIds.delete(String(agent.session.id));
                 await writeRun(workspace, resumed.run, auth);
                 void refreshPromptRuns(workspace);
                 return { run: resumed.run, stepId: resumed.stepId };
@@ -2703,6 +2733,9 @@ export function apply(ctx, config = {}) {
                         resume: async (runId) => {
                             await recoverIfNeeded(workspace);
                             const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId);
+                            // An explicit resume is a new lifecycle generation for the run.
+                            endedRunIds.delete(runId);
+                            endedSessionIds.delete(sessionId);
                             await writeRun(workspace, resumed.run, auth);
                             void refreshPromptRuns(workspace);
                             await steerPending(invocation.agent, runId);

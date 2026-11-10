@@ -23,6 +23,12 @@ function waitingFor(step, context) {
         paths: step.evidence === undefined ? [] : collectEvidencePaths(step.evidence, context),
     };
 }
+/** The bounded reason for a task-review dispatch that exhausted its attempts. */
+function dispatchExhaustedReason(run, stepId) {
+    const failed = run.steps.find((entry) => entry.id === stepId);
+    const attempts = failed?.attempts ?? 0;
+    return `the review dispatch failed ${String(attempts)} time(s); resume or cancel the run${failed?.reason === undefined ? '' : ` (${failed.reason.slice(0, 160)})`}`;
+}
 /**
  * Advance the intake as far as the currently verified evidence allows. It never
  * marks a step done from text; a missing artifact or a non-zero check stops the
@@ -87,7 +93,7 @@ export async function advanceIntake(input) {
             // driving the close and resume/cancel is the documented recovery.
             if (attempts >= MAX_TOOL_STEP_ATTEMPTS) {
                 return {
-                    run: setRunStatus(run, 'failed', at, `the review dispatch failed ${String(attempts)} time(s); resume or cancel the run${failed?.reason === undefined ? '' : ` (${failed.reason.slice(0, 160)})`}`),
+                    run: setRunStatus(run, 'failed', at, dispatchExhaustedReason(run, pending.step.id)),
                     completed: false,
                 };
             }
@@ -179,8 +185,17 @@ export async function advanceIntake(input) {
                 if (run.steps.find((entry) => entry.id === step.id)?.state !== 'done') {
                     // A failed dispatch is a blocking obligation only for the owned
                     // review retry; other workflows keep their terminal failure.
+                    if (input.definition.id !== 'task-review') {
+                        return { run, completed: false, waiting: waitingFor(step, input.evidenceContext) };
+                    }
+                    const failed = run.steps.find((entry) => entry.id === step.id);
+                    const attempts = failed?.attempts ?? 0;
                     return {
-                        run: input.definition.id === 'task-review' ? setRunStatus(run, 'blocked', at) : run,
+                        // The third failure is terminal immediately; no extra advance is
+                        // needed to stop the dispatch-specific refusal.
+                        run: attempts >= MAX_TOOL_STEP_ATTEMPTS
+                            ? setRunStatus(run, 'failed', at, dispatchExhaustedReason(run, step.id))
+                            : setRunStatus(run, 'blocked', at),
                         completed: false,
                         waiting: waitingFor(step, input.evidenceContext),
                     };
