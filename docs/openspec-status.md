@@ -708,3 +708,21 @@ the lane-fanout assertion (6.2/6.5) — plus the one-release owner steps: instal
 throwaway DSH_HOME, exercise the retired and retained gates, delete the legacy verification row
 after one release, and use the documented per-signal switch to roll back. The gates are switched on
 by default in this release, so the throwaway-DSH_HOME check is the first post-install verification.
+
+On 2026-11-10 `redesign-workflows-ui` turned the Workflows tab into the session's run history and moved
+authoring to a right-sidebar page: one status line (StateDot plus a details tooltip), the session's
+attributed runs newest first with composed titles, trigger, relative start time and duration, a run
+detail page whose Back control restores the list scroll and focus, and a Journal segment whose trigger
+evaluations render inline with a run link only for an evaluation carrying a run id. The view reloads on
+open, on demand and on visibility, re-reads the pages already loaded, resolves the open run by id
+through the runs route's `run=` lookup, and keeps the loaded rows on a failed background refresh. The
+editor moved to the `Workflow design` page opened from its Start guide card (kept mounted across
+hiding, list mode below the shipped narrow threshold, an `Add step` menu, a collapsible property panel,
+and a per-tab dirty close guard); that page also shows the definition list, trigger catalog and
+receipts. Host projection gained the recorded trigger, a terminal time derived only from settled steps,
+and titles composed from the definition name and subject; the runs route gained `order=newest` and the
+session-scoped `run=` lookup. The integration passed the full gate (155 files / 2881 tests, gen 411,
+build with no diff, validators, strict validation) with 19 portable task-review PASS records and
+shipped in v0.30.0; the two delta specs are synced into the main specs. The archive move remains
+pending the owner's intake approval for the change. Open owner follow-up: 5.2, the installed-build
+visual check of both surfaces.
