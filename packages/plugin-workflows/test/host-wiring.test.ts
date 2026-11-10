@@ -5117,6 +5117,11 @@ describe('session disposal', () => {
     release()
     await closing
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    console.error(
+      'diag-settled',
+      settled?.status,
+      settled?.steps.map((step) => step.state).join(','),
+    )
     expect(settled?.status).toBe('interrupted')
     await expect(
       readFile(join(workspace, '.dsh', 'workflows', 'receipts', 'auth.json'), 'utf8'),
@@ -5294,6 +5299,11 @@ describe('session disposal', () => {
     release()
     expect(await resuming).toBeInstanceOf(Error)
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    console.error(
+      'diag-settled',
+      settled?.status,
+      settled?.steps.map((step) => step.state).join(','),
+    )
     expect(settled?.status).toBe('interrupted')
     expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
   }, 90000)
@@ -5342,6 +5352,11 @@ describe('session disposal', () => {
     const result = await resuming
     expect(result.kind).toBe('error')
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    console.error(
+      'diag-settled',
+      settled?.status,
+      settled?.steps.map((step) => step.state).join(','),
+    )
     expect(settled?.status).toBe('interrupted')
     expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
   }, 90000)

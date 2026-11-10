@@ -1836,8 +1836,17 @@ export function apply(ctx, config = {}) {
             return run;
         const sessionStale = () => capturedSessionGeneration !== undefined &&
             capturedSessionGeneration !== sessionGeneration(run.session);
+        const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session) || disposalFenced.has(run.id);
+        const interruptedFrom = () => interruptEndedRun(current, true, journal.time()) ?? current;
+        // A disposal already fenced the session: persist the interrupted state,
+        // keeping the prior durable pending steps so resume works.
+        if (ended() || sessionStale()) {
+            const replacement = interruptedFrom();
+            if (replacement !== current)
+                await writeCommit(workspace, replacement, auth);
+            return replacement;
+        }
         if ((generation !== undefined && generation !== runGeneration(run.id)) ||
-            sessionStale() ||
             (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) ||
             current.status === 'cancelled' ||
             (current.status === 'interrupted' &&
@@ -1846,16 +1855,6 @@ export function apply(ctx, config = {}) {
                 run.status !== 'cancelled')) {
             // The stored state is newer; the stale advance must not be written.
             return current;
-        }
-        const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session) || disposalFenced.has(run.id);
-        const interruptedFrom = () => interruptEndedRun(current, true, journal.time()) ?? current;
-        // A disposal already fenced the session: never persist the running
-        // proposal, and keep the prior durable pending steps so resume works.
-        if (ended() || sessionStale()) {
-            const replacement = interruptedFrom();
-            if (replacement !== current)
-                await writeCommit(workspace, replacement, auth);
-            return replacement;
         }
         if (run !== current)
             await writeCommit(workspace, run, auth);
