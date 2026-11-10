@@ -2058,6 +2058,16 @@ describe('review retry-after and run retries', () => {
       await flush()
       await vi.advanceTimersByTimeAsync(200)
       await flush()
+      // A retry timer may be created a microtask after the advance; keep
+      // advancing (bounded) until the run settles instead of assuming order.
+      for (
+        let step = 0;
+        step < 20 && harness.settledRuns.every((entry) => entry.runId !== runId);
+        step += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(100)
+        await flush()
+      }
       expect(await harness.waitForRun(runId)).toContain('state=completed')
 
       const run = await readRun(root, runId)
