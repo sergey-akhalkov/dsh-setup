@@ -1121,3 +1121,54 @@ describe('Workflows session view interaction', () => {
     expect(tracker.violations).toEqual([])
   })
 })
+
+describe('Workflows overview isolation and latest runs', () => {
+  it('loads the latest run per definition even when it is outside the session page', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const newest = run('workflow:run-new', NOW)
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('definition=change-intake')) return json({ runs: [newest] })
+      return json({ runs: [run('workflow:run-old', NOW - 60_000)], next: '2' })
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    const tree = await runtime.settle(render)
+    const latest = renderElements(tree).find(
+      (element) => element.props['data-latest-run'] === 'workflow:run-new',
+    )
+    expect(latest).toBeDefined()
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('drops the previous session data when the next session load fails', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const tracker = installFetch((url) => {
+      if (url.includes('session=session-2')) return json({ error: 'the session load failed' }, 500)
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      return json({ runs: RUNS })
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    let session = 'session-1'
+    const render = (): unknown => view({ sessionId: session, t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    expect(renderText(tree)).toContain('OpenSpec change intake')
+    session = 'session-2'
+    tree = await runtime.settle(render)
+    expect(renderText(tree)).not.toContain('OpenSpec change intake')
+    expect(renderText(tree)).toContain('the session load failed')
+    expect(tracker.violations).toEqual([])
+  })
+})

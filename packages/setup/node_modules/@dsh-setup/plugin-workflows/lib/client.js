@@ -13842,7 +13842,7 @@ window.__ModuleLoader__.load({
       const loadId = (0, import_react8.useRef)(0);
       const lookupId = (0, import_react8.useRef)(0);
       const workflowToken = (0, import_react8.useRef)(0);
-      const workflowRefreshing = (0, import_react8.useRef)(false);
+      const workflowRefreshing = (0, import_react8.useRef)(0);
       const runsPages = (0, import_react8.useRef)(1);
       const workflowRunsPages = (0, import_react8.useRef)(1);
       const historyPages = (0, import_react8.useRef)(1);
@@ -13890,7 +13890,7 @@ window.__ModuleLoader__.load({
       const loadWorkflowPage = (generation, token, id2, mode) => {
         if (sessionId === void 0) return;
         if (mode === "initial") setWorkflow({ phase: "loading" });
-        workflowRefreshing.current = mode === "background";
+        workflowRefreshing.current = mode === "background" ? token : 0;
         const runPages = Math.max(1, workflowRunsPages.current);
         const eventPages = Math.max(1, historyPages.current);
         const current = () => !isStaleGeneration(generation, loadId.current) && token === workflowToken.current && definitionRef.current === id2;
@@ -13900,15 +13900,15 @@ window.__ModuleLoader__.load({
           readDefinitionEvents(sessionId, eventPages)
         ]).then(
           ([document2, runs, events]) => {
+            if (workflowRefreshing.current === token) workflowRefreshing.current = 0;
             if (!current()) return;
-            workflowRefreshing.current = false;
             workflowRunsPages.current = runPages;
             historyPages.current = eventPages;
             setWorkflow({ phase: "ready", document: document2, runs, events });
           },
           (error) => {
+            if (workflowRefreshing.current === token) workflowRefreshing.current = 0;
             if (!current()) return;
-            workflowRefreshing.current = false;
             const message = messageOf(error);
             const loadedPage = workflowRef.current;
             if (mode === "background" && loadedPage.phase === "ready") {
@@ -13997,7 +13997,7 @@ window.__ModuleLoader__.load({
         runsPages.current = 1;
         workflowRunsPages.current = 1;
         historyPages.current = 1;
-        workflowRefreshing.current = false;
+        workflowRefreshing.current = 0;
         knownRun.current = void 0;
         load("initial");
         return () => {
@@ -14051,7 +14051,7 @@ window.__ModuleLoader__.load({
         }
         workflowRunsPages.current = 1;
         historyPages.current = 1;
-        workflowRefreshing.current = false;
+        workflowRefreshing.current = 0;
         pendingPages.current.forEach((key) => {
           if (key.startsWith("workflowRuns:") || key.startsWith("history:"))
             pendingPages.current.delete(key);
@@ -14069,7 +14069,7 @@ window.__ModuleLoader__.load({
       };
       const backFromWorkflow = () => {
         workflowToken.current += 1;
-        workflowRefreshing.current = false;
+        workflowRefreshing.current = 0;
         pendingPages.current.forEach((key) => {
           if (key.startsWith("workflowRuns:") || key.startsWith("history:"))
             pendingPages.current.delete(key);
@@ -14189,7 +14189,7 @@ window.__ModuleLoader__.load({
         );
       };
       const mergeWorkflowRuns = () => {
-        if (stateRef.current.refreshing === true || workflowRefreshing.current) return;
+        if (stateRef.current.refreshing === true || workflowRefreshing.current !== 0) return;
         const id2 = definitionRef.current;
         const next = workflowRef.current.runs?.next;
         if (id2 === void 0 || next === void 0) return;
@@ -14232,7 +14232,7 @@ window.__ModuleLoader__.load({
         );
       };
       const mergeHistory = () => {
-        if (stateRef.current.refreshing === true || workflowRefreshing.current) return;
+        if (stateRef.current.refreshing === true || workflowRefreshing.current !== 0) return;
         const id2 = definitionRef.current;
         const next = workflowRef.current.events?.next;
         if (id2 === void 0 || next === void 0) return;

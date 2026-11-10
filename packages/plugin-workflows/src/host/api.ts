@@ -282,13 +282,19 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
         const buckets = new Map<string, Record<string, number>>()
         for (const entry of runs) {
           if (entry.definition === undefined) continue
-          const bucket =
+          const lifecycle =
             entry.lifecycle ??
             (entry.status === 'done'
               ? 'completed'
               : entry.status === 'failed'
                 ? 'failed'
-                : 'running')
+                : entry.status === 'running'
+                  ? 'running'
+                  : undefined)
+          // A malformed row with no recorded lifecycle is never folded into
+          // `running`; it is left out of the counts instead.
+          if (lifecycle === undefined) continue
+          const bucket = lifecycle
           const counts = buckets.get(entry.definition.id) ?? {
             completed: 0,
             failed: 0,

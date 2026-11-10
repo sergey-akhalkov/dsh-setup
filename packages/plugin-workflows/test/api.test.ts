@@ -687,6 +687,7 @@ describe('workflow statistics', () => {
     await recordRun(value.workspaceOne, 'run-b1', 'completed', 'flow-b')
     await recordRun(value.workspaceOne, 'run-b2', 'running', 'flow-b')
     await recordRun(value.workspaceOne, 'run-b3', 'blocked', 'flow-b')
+    await recordRun(value.workspaceOne, 'run-b4', 'unknown', 'flow-b')
     const stats = await request(value, RUNS_ROUTE, {
       session: 's1',
       query: 'stats=1&limit=1&cursor=5',

@@ -502,8 +502,8 @@ export function WorkflowsView(props: {
   const loadId = useRef(0)
   const lookupId = useRef(0)
   const workflowToken = useRef(0)
-  /** A pending workflow-page background refresh blocks its pagination. */
-  const workflowRefreshing = useRef(false)
+  /** The token of the pending workflow-page background refresh; 0 is idle. */
+  const workflowRefreshing = useRef(0)
   const runsPages = useRef(1)
   const workflowRunsPages = useRef(1)
   const historyPages = useRef(1)
@@ -576,7 +576,7 @@ export function WorkflowsView(props: {
   ): void => {
     if (sessionId === undefined) return
     if (mode === 'initial') setWorkflow({ phase: 'loading' })
-    workflowRefreshing.current = mode === 'background'
+    workflowRefreshing.current = mode === 'background' ? token : 0
     const runPages = Math.max(1, workflowRunsPages.current)
     const eventPages = Math.max(1, historyPages.current)
     const current = (): boolean =>
@@ -589,15 +589,15 @@ export function WorkflowsView(props: {
       readDefinitionEvents(sessionId, eventPages),
     ]).then(
       ([document, runs, events]) => {
+        if (workflowRefreshing.current === token) workflowRefreshing.current = 0
         if (!current()) return
-        workflowRefreshing.current = false
         workflowRunsPages.current = runPages
         historyPages.current = eventPages
         setWorkflow({ phase: 'ready', document, runs, events })
       },
       (error: unknown) => {
+        if (workflowRefreshing.current === token) workflowRefreshing.current = 0
         if (!current()) return
-        workflowRefreshing.current = false
         const message = messageOf(error)
         const loadedPage = workflowRef.current
         // A failed background refresh keeps the loaded page; only a first
@@ -696,7 +696,7 @@ export function WorkflowsView(props: {
     runsPages.current = 1
     workflowRunsPages.current = 1
     historyPages.current = 1
-    workflowRefreshing.current = false
+    workflowRefreshing.current = 0
     knownRun.current = undefined
     load('initial')
     return () => {
@@ -764,7 +764,7 @@ export function WorkflowsView(props: {
     }
     workflowRunsPages.current = 1
     historyPages.current = 1
-    workflowRefreshing.current = false
+    workflowRefreshing.current = 0
     pendingPages.current.forEach((key) => {
       if (key.startsWith('workflowRuns:') || key.startsWith('history:'))
         pendingPages.current.delete(key)
@@ -783,7 +783,7 @@ export function WorkflowsView(props: {
 
   const backFromWorkflow = (): void => {
     workflowToken.current += 1
-    workflowRefreshing.current = false
+    workflowRefreshing.current = 0
     pendingPages.current.forEach((key) => {
       if (key.startsWith('workflowRuns:') || key.startsWith('history:'))
         pendingPages.current.delete(key)
@@ -916,7 +916,7 @@ export function WorkflowsView(props: {
   }
 
   const mergeWorkflowRuns = (): void => {
-    if (stateRef.current.refreshing === true || workflowRefreshing.current) return
+    if (stateRef.current.refreshing === true || workflowRefreshing.current !== 0) return
     const id = definitionRef.current
     const next = workflowRef.current.runs?.next
     if (id === undefined || next === undefined) return
@@ -960,7 +960,7 @@ export function WorkflowsView(props: {
   }
 
   const mergeHistory = (): void => {
-    if (stateRef.current.refreshing === true || workflowRefreshing.current) return
+    if (stateRef.current.refreshing === true || workflowRefreshing.current !== 0) return
     const id = definitionRef.current
     const next = workflowRef.current.events?.next
     if (id === undefined || next === undefined) return
