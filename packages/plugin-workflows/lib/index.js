@@ -761,18 +761,21 @@ export function apply(ctx, config = {}) {
      * before the bump cannot be paired with the post-bump generation.
      */
     const stableRuns = async (workspace, auth) => {
-        const snapshot = (runs) => ({
+        const snapshot = (runs, stable) => ({
             runs,
             generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)])),
             sessionGenerations: new Map(runs.map((run) => [run.id, sessionGeneration(run.session)])),
+            stable,
         });
         for (let attempt = 0; attempt < 3; attempt += 1) {
             const epoch = lifecycleEpoch;
             const runs = await listAuthenticatedRuns(workspace, auth);
             if (lifecycleEpoch === epoch)
-                return snapshot(runs);
+                return snapshot(runs, true);
         }
-        return snapshot(await listAuthenticatedRuns(workspace, auth));
+        // Never act on an unchecked snapshot: a run created, resumed or cancelled
+        // during the last read is not bound to the generations captured here.
+        return snapshot(await listAuthenticatedRuns(workspace, auth), false);
     };
     /** The last turn whose user message was classified, one classification per turn. */
     const intentTurns = new Map();
@@ -833,6 +836,7 @@ export function apply(ctx, config = {}) {
                     runs: [],
                     generations: new Map(),
                     sessionGenerations: new Map(),
+                    stable: true,
                 }
                 : await stableRuns(workspace, storedAuth);
             const knownRuns = stableKnown.runs;
@@ -950,7 +954,9 @@ export function apply(ctx, config = {}) {
             const evaluations = [...records, ...definitionRows];
             // A deferred observational run whose trigger later evaluates as not
             // applicable is completed so retention can prune it, never left blocked.
-            if (storedAuth !== undefined) {
+            // Skip it on an unstable read: a run cancelled during the final listing
+            // must not be completed from the stale snapshot.
+            if (storedAuth !== undefined && stableKnown.stable) {
                 for (const row of definitionRows) {
                     if (row.reason !== 'not-applicable')
                         continue;
