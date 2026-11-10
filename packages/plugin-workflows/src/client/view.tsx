@@ -644,7 +644,9 @@ export function WorkflowsView(props: {
         const retained: Record<string, RunView> = {}
         if (mode === 'background' && previousLatest !== undefined) {
           for (const id of latestResult.failed) {
-            if (Object.hasOwn(previousLatest, id)) retained[id] = previousLatest[id]
+            if (!Object.hasOwn(previousLatest, id)) continue
+            const retainedRun = previousLatest[id]
+            if (retainedRun !== undefined) retained[id] = retainedRun
           }
         }
         const latestRuns = { ...retained, ...latestResult.latest }
