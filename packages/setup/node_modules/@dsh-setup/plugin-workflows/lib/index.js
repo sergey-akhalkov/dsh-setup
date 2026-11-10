@@ -1850,12 +1850,12 @@ export function apply(ctx, config = {}) {
         // touch the resumed state.
         if (generation !== undefined && generation !== runGeneration(run.id))
             return current;
-        if (sessionStale()) {
-            const replacement = interruptedFrom();
-            if (replacement !== current)
-                await writeCommit(workspace, replacement, auth);
-            return replacement;
-        }
+        // A newer session generation means this advance came from an older agent
+        // lifetime; reject it. A real disposal is caught by `ended()` above (or by
+        // the post-write fence below), so a re-created session never interrupts a
+        // resumed run.
+        if (sessionStale())
+            return current;
         if ((expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) ||
             current.status === 'cancelled' ||
             (current.status === 'interrupted' &&
