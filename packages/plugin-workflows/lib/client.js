@@ -13284,31 +13284,20 @@ window.__ModuleLoader__.load({
                   /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
                   group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
                 ] }),
-                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-                  import_dsh_client_ui_primitives7.AnimatedRows,
-                  {
-                    className: "dsh-wf-rows",
-                    role: "list",
-                    label,
-                    rowKeys: group.workflows.map((bucket) => bucket.definition.id),
-                    ready: true,
-                    resetKey: `workflows:${group.kind}:${String(group.workflows.length)}`,
-                    children: group.workflows.map((bucket) => {
-                      const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
-                      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-                        WorkflowRow,
-                        {
-                          bucket,
-                          ...latest === void 0 ? {} : { latest },
-                          now: now2,
-                          t,
-                          onOpen: () => props.onOpen(bucket.definition.id)
-                        },
-                        bucket.definition.id
-                      );
-                    })
-                  }
-                )
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ul", { className: "dsh-wf-rows", "aria-label": label, children: group.workflows.map((bucket) => {
+                  const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
+                  return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                    WorkflowRow,
+                    {
+                      bucket,
+                      ...latest === void 0 ? {} : { latest },
+                      now: now2,
+                      t,
+                      onOpen: () => props.onOpen(bucket.definition.id)
+                    },
+                    bucket.definition.id
+                  );
+                }) })
               ]
             },
             group.kind === "" ? "__unknown" : group.kind
@@ -13573,7 +13562,7 @@ window.__ModuleLoader__.load({
     .dsh-wf-scroll { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
     .dsh-wf-rows { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; min-width: 0; }
     .dsh-wf-row { min-width: 0; }
-    .dsh-wf-row-button { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: inherit; font: inherit; text-align: left; transition: background-color 120ms ease, border-color 120ms ease; }
+    .dsh-wf-row-button { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; width: 100%; min-width: 0; height: auto; min-height: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: inherit; font: inherit; line-height: 1.4; white-space: normal; text-align: left; transition: background-color 120ms ease, border-color 120ms ease; }
     .dsh-wf-row-button:hover { background: var(--dsw-alias-interactive-bg-hover); }
     .dsh-wf-run-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--dsw-font-s-strong-14); }
     .dsh-wf-run-status { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
@@ -13608,7 +13597,7 @@ window.__ModuleLoader__.load({
     .dsh-wf-overview { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
     .dsh-wf-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
     .dsh-wf-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
-    .dsh-wf-workflow-row { flex-wrap: wrap; align-items: flex-start; padding: 12px; }
+    .dsh-wf-workflow-row { flex-wrap: wrap; align-items: stretch; padding: 12px; }
     .dsh-wf-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; }
     .dsh-wf-card-head .dsh-wf-run-title { flex: 0 1 auto; }
     .dsh-wf-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; width: 100%; min-width: 0; }

@@ -1,10 +1,4 @@
-import {
-  Button,
-  relativeTime,
-  StateDot,
-  Tag,
-  Tooltip,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, relativeTime, StateDot, Tag, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import {
   type DefinitionStatView,
@@ -442,7 +436,7 @@ export function WorkflowOverview(props: {
                 </Tag>
               )}
             </div>
-            <ul className="dsh-wf-rows" role="list" aria-label={label}>
+            <ul className="dsh-wf-rows" aria-label={label}>
               {group.workflows.map((bucket) => {
                 const latest =
                   props.latestRuns === undefined
