@@ -5215,6 +5215,54 @@ describe('session disposal', () => {
     expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
   }, 90000)
 
+  it('keeps an interrupted run when a disposal races the command resume', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let run = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId: '0123456789abcdef' },
+      steps: ['start-review', 'await-review'],
+      now: 1_000,
+    })
+    run = runs.setRunStatus(run, 'interrupted', 1_001)
+    await runs.writeRun(workspace, run, auth)
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    expect(command).toBeDefined()
+    if (command === undefined) return
+    let release: () => void = () => undefined
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    runStoreFaults.pauseFor = (path) => path.includes(run.id)
+    runStoreFaults.pauseNextWrite = barrier
+    const resuming = command.handler({
+      agent: host.agent,
+      commandId: 'cmd-resume',
+      rawInput: ` resume ${run.id}`,
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined)
+    await host.emit('agent/disposed', { agent: host.agent })
+    release()
+    const result = await resuming
+    expect(result.kind).toBe('error')
+    const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.status).toBe('interrupted')
+    expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
+  }, 90000)
+
   it('keeps an intake resumed through the pre-execute gate running', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()

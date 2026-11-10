@@ -761,6 +761,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
       // A queued trigger evaluation can run after the session was disposed.
+      creationCounter += 1
+      runCreationOrder.set(run.id, creationCounter)
       const fenced = endedSessionIds.has(session) || entryGeneration !== sessionGeneration(session)
       writeRunSync(
         workspace,
@@ -981,6 +983,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const endedSessionIds = new Set<string>()
   /** Per-run lifecycle generations; a disposal or resume invalidates in-flight advances. */
   const runGenerations = new Map<string, number>()
+  /** A monotonic creation order, so a disposal batch never touches newer runs. */
+  let creationCounter = 0
+  const runCreationOrder = new Map<string, number>()
   /** Global lifecycle epoch, bumped by every generation bump. */
   let lifecycleEpoch = 0
   /** The run-store revision: every committed write bumps it. */
@@ -1456,6 +1461,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                         now: journal.time(),
                         ...(key === undefined ? {} : { dedupeKey: key }),
                       })
+                      creationCounter += 1
+                      runCreationOrder.set(run.id, creationCounter)
                       const fenced =
                         endedSessionIds.has(sessionId) ||
                         entryGeneration !== sessionGeneration(sessionId)
@@ -1776,6 +1783,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     sessionId: string,
     workspace: string,
     expectedGenerations: ReadonlyMap<string, number>,
+    disposalSeq: number,
   ): Promise<void> => {
     const auth = storedAuth ?? (await ensureAuth())
     if (auth === undefined) return
@@ -1783,6 +1791,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     for (const run of observed) {
       if (run.session !== sessionId) continue
       if (run.status !== 'running' && run.status !== 'blocked') continue
+      // A run created after the disposal event belongs to the replacement
+      // agent and must survive this batch.
+      if ((runCreationOrder.get(run.id) ?? 0) > disposalSeq) continue
       // Bind to the generation captured when the disposal event arrived; a run
       // resumed afterwards must not be interrupted by this delayed batch.
       if ((expectedGenerations.get(run.id) ?? 0) !== runGeneration(run.id)) continue
@@ -1817,6 +1828,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       endedSessionIds.add(String(agent.session.id))
       bumpSessionGeneration(String(agent.session.id))
       const expectedGenerations = new Map(runGenerations)
+      // Runs created after this event belong to the replacement agent.
+      const disposalSeq = creationCounter
       try {
         const workspace = workspaceFor(services, agent.session)
         if (workspace === undefined) return undefined
@@ -1824,6 +1837,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           String(agent.session.id),
           workspace,
           expectedGenerations,
+          disposalSeq,
         ).catch((error: unknown) => publishListenerError(workspace, error))
       } catch (error) {
         publishListenerError(workspaceFor(services, agent.session), error)
@@ -2394,6 +2408,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         now: journal.time(),
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
+      creationCounter += 1
+      runCreationOrder.set(run.id, creationCounter)
       // A start that raced a disposal is persisted interrupted: the disposal's
       // listing may have finished before this file appeared.
       const fenced =
