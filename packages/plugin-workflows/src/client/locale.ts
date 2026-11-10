@@ -72,6 +72,7 @@ export const EN: Record<string, string> = {
   'overview.iterations': 'iterations',
   'overview.cap': 'cap',
   'overview.list': 'list',
+  'overview.latestUnavailable': 'some latest runs could not be loaded',
   'workflow.back': 'Back to workflows',
   'workflow.noDescription': 'No description is recorded for this definition.',
   'workflow.version': 'Version',

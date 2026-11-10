@@ -963,6 +963,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const runGenerations = new Map<string, number>()
   /** Global lifecycle epoch, bumped by every generation bump. */
   let lifecycleEpoch = 0
+  /** Per-session lifecycle generations; a disposal invalidates in-flight advances. */
+  const sessionGenerations = new Map<string, number>()
+  const sessionGeneration = (session: string): number => sessionGenerations.get(session) ?? 0
+  const bumpSessionGeneration = (session: string): void => {
+    lifecycleEpoch += 1
+    sessionGenerations.set(session, sessionGeneration(session) + 1)
+  }
   const runGeneration = (runId: string): number => runGenerations.get(runId) ?? 0
   const bumpRunGeneration = (runId: string): void => {
     lifecycleEpoch += 1
@@ -1083,7 +1090,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const definitionRows = definitionEventsOf(input, event, workspace).flatMap(
         (definitionEvent) =>
           evaluateDefinitions(definitionsByWorkspace.get(workspace) ?? [], definitionEvent, {
-            isDuplicate: (key) => sessionSeen.has(key),
+            // A newly checked task must reach the per-task live-run guard even
+            // when the whole-file content key was already seen for another
+            // task's run; the guard below still prevents duplicates.
+            isDuplicate: (key, definition) =>
+              definition?.id === 'task-review' && taskReviewTaskIds.length > 0
+                ? false
+                : sessionSeen.has(key),
             markKey: (key) => sessionSeen.set(key, input.at),
             startRun: (definition, matched) => {
               const limited = (): boolean =>
@@ -1741,9 +1754,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   listen(() =>
     ctx.on('agent/disposed', ({ agent }) => {
       // Fence the session synchronously; the store read below is asynchronous
-      // and an in-flight advance must not win the race. The generation snapshot
-      // binds this disposal to the state at the event.
+      // and an in-flight advance must not win the race. The session generation
+      // keeps the invalidation after a recreated agent clears the fence.
       endedSessionIds.add(String(agent.session.id))
+      bumpSessionGeneration(String(agent.session.id))
       const expectedGenerations = new Map(runGenerations)
       try {
         const workspace = workspaceFor(services, agent.session)
@@ -2086,9 +2100,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     run: WorkflowRun,
     auth: HostAuth,
     generation?: number,
+    capturedSessionGeneration?: number,
   ): Promise<WorkflowRun> =>
     withRunLock(run.id, async () => {
-      if (generation !== undefined && generation !== runGeneration(run.id)) {
+      const sessionStale = (): boolean =>
+        capturedSessionGeneration !== undefined &&
+        capturedSessionGeneration !== sessionGeneration(run.session)
+      if ((generation !== undefined && generation !== runGeneration(run.id)) || sessionStale()) {
         // A disposal or resume happened while this advance was in flight; the
         // stored state is newer, so the stale advance must not be written.
         return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
@@ -2097,8 +2115,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const written = interruptEndedRun(run, ended(), journal.time()) ?? run
       await writeRun(workspace, written, auth)
       // A disposal can fence the session during the write; re-check after it so
-      // a stale advance never leaves the run running or blocked.
-      const late = ended() ? interruptEndedRun(written, true, journal.time()) : undefined
+      // a stale advance never leaves the run running or blocked, even when a
+      // recreated agent already cleared the session fence.
+      const late =
+        ended() || sessionStale() ? interruptEndedRun(written, true, journal.time()) : undefined
       if (late !== undefined) {
         await writeRun(workspace, late, auth)
         return late
@@ -2123,6 +2143,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
     }
     const generation = capturedGeneration ?? runGeneration(run.id)
+    const sessionGenerationAtStart = sessionGeneration(String(agent.session.id))
     const writeMetrics = turnMetrics.get(String(agent.session.id))
     // Only a fully applicable deferred observation advances; a run whose
     // trigger is no longer applicable becomes terminal and pruneable.
@@ -2143,6 +2164,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           completeNotApplicable(run, journal.time()),
           auth,
           generation,
+          sessionGenerationAtStart,
         )
       }
     }
@@ -2161,6 +2183,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           completeNotApplicable(run, journal.time()),
           auth,
           generation,
+          sessionGenerationAtStart,
         )
       }
     }
@@ -2213,7 +2236,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // guard as every other advance: a run interrupted by a disposal before
       // this write must not be revived as completed or receipted.
       completeRun: async (completedRun, digest) => {
-        const persisted = await persistRun(workspace, completedRun, auth, generation)
+        const persisted = await persistRun(
+          workspace,
+          completedRun,
+          auth,
+          generation,
+          sessionGenerationAtStart,
+        )
         if (persisted.status !== 'completed') return { run: persisted }
         try {
           await issueCompletionReceipt(workspace, persisted.id, digest, auth, journal.time())
@@ -2228,7 +2257,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       },
       now: journal.time(),
     })
-    if (result.run !== run) return await persistRun(workspace, result.run, auth, generation)
+    if (result.run !== run) {
+      return await persistRun(workspace, result.run, auth, generation, sessionGenerationAtStart)
+    }
     return result.run
   }
   const boundedError = (error: unknown): string =>
@@ -3033,7 +3064,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             onError: (error) => publishListenerError(workspace, error),
           })
           if (outcome.run !== current) {
-            await persistRun(workspace, outcome.run, auth, advancedGenerations.get(run.id))
+            await persistRun(
+              workspace,
+              outcome.run,
+              auth,
+              advancedGenerations.get(run.id),
+              sessionGeneration(sessionId),
+            )
           }
           // Keep the session's main-step owner until its step settles; a
           // second run may take over only after that.
@@ -3192,7 +3229,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // The tool already refused a live foreign session; dropping the
         // session here lets the host clear a run whose owner is gone.
         const cancelled = await cancelRun(workspace, runId, auth, Date.now())
-        await writeRun(workspace, cancelled, auth)
+        // Serialize the cancellation with disposal and invalidate older
+        // advances, so a delayed disposal cannot overwrite a terminal cancel.
+        await withRunLock(runId, async () => {
+          bumpRunGeneration(runId)
+          await writeRun(workspace, cancelled, auth)
+        })
         void refreshPromptRuns(workspace)
         return cancelled
       },

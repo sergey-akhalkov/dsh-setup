@@ -12545,6 +12545,7 @@ window.__ModuleLoader__.load({
       "overview.iterations": "iterations",
       "overview.cap": "cap",
       "overview.list": "list",
+      "overview.latestUnavailable": "some latest runs could not be loaded",
       "workflow.back": "Back to workflows",
       "workflow.noDescription": "No description is recorded for this definition.",
       "workflow.version": "Version",
@@ -13644,6 +13645,7 @@ window.__ModuleLoader__.load({
       return { definitions };
     }
     async function readLatestRuns(session, definitionIds) {
+      let failed2 = false;
       const entries = await Promise.all(
         definitionIds.map(async (id2) => {
           try {
@@ -13653,13 +13655,17 @@ window.__ModuleLoader__.load({
             const run = body.runs?.find((entry) => entry.definition?.id === id2);
             return run === void 0 ? void 0 : [id2, run];
           } catch {
+            failed2 = true;
             return void 0;
           }
         })
       );
-      return Object.fromEntries(
-        entries.filter((entry) => entry !== void 0)
-      );
+      return {
+        latest: Object.fromEntries(
+          entries.filter((entry) => entry !== void 0)
+        ),
+        failed: failed2
+      };
     }
     async function readDefinitionDocument(session, definitionId) {
       const body = await requestJson(
@@ -13937,11 +13943,13 @@ window.__ModuleLoader__.load({
         ]).then(
           async ([health, runs, definitions, triggers, stats]) => {
             if (isStaleGeneration(generation, loadId.current)) return;
-            const latestRuns = await readLatestRuns(
+            const latestResult = await readLatestRuns(
               sessionId,
               definitions.map((definition) => definition.id)
             );
             if (isStaleGeneration(generation, loadId.current)) return;
+            const previousLatest = stateRef.current.loaded?.latestRuns;
+            const latestRuns = mode === "background" && previousLatest !== void 0 ? { ...previousLatest, ...latestResult.latest } : latestResult.latest;
             runsPages.current = runPages;
             setState({
               phase: "ready",
@@ -13950,9 +13958,10 @@ window.__ModuleLoader__.load({
                 runs,
                 definitions,
                 triggers,
-                ...stats === void 0 ? {} : { stats },
-                ...Object.keys(latestRuns).length === 0 ? {} : { latestRuns }
-              }
+                latestRuns,
+                ...stats === void 0 ? {} : { stats }
+              },
+              ...latestResult.failed ? { refreshError: t("overview.latestUnavailable") } : {}
             });
             const open = selectedRef.current;
             if (open !== void 0) {
@@ -13979,6 +13988,11 @@ window.__ModuleLoader__.load({
             setState(
               (current) => current.loaded === void 0 ? { phase: "error", message } : { ...current, refreshing: false, refreshError: message }
             );
+            const openDefinition = definitionRef.current;
+            if (openDefinition !== void 0 && workflowRef.current.phase !== "ready") {
+              const token = ++workflowToken.current;
+              loadWorkflowPage(generation, token, openDefinition, "initial");
+            }
           }
         );
       };
@@ -14094,7 +14108,10 @@ window.__ModuleLoader__.load({
         setDetailError(void 0);
         const listed = origin === "runs" ? stateRef.current.loaded?.runs.items.find((run) => run.id === runId) : workflowRef.current.runs?.items.find((run) => run.id === runId);
         knownRun.current = listed;
-        if (listed !== void 0) return;
+        if (listed !== void 0) {
+          setDetail(listed);
+          return;
+        }
         const token = ++lookupId.current;
         resolveSelected(loadId.current, token, sessionId, runId);
       };
@@ -14277,7 +14294,7 @@ window.__ModuleLoader__.load({
             loaded: state.loaded,
             t,
             sessionId,
-            ...state.loaded.latestRuns === void 0 ? {} : { latestRuns: state.loaded.latestRuns },
+            ...state.loaded.latestRuns === void 0 ? { latestRuns: {} } : { latestRuns: state.loaded.latestRuns },
             segment,
             ...definitionId === void 0 ? {} : { definition: definitionId },
             workflow,

@@ -219,7 +219,8 @@ export async function readRunStats(session: string): Promise<RunStatsView | unde
 export async function readLatestRuns(
   session: string,
   definitionIds: readonly string[],
-): Promise<Readonly<Record<string, RunView>>> {
+): Promise<{ latest: Readonly<Record<string, RunView>>; failed: boolean }> {
+  let failed = false
   const entries = await Promise.all(
     definitionIds.map(async (id) => {
       try {
@@ -229,13 +230,17 @@ export async function readLatestRuns(
         const run = body.runs?.find((entry) => entry.definition?.id === id)
         return run === undefined ? undefined : ([id, run] as const)
       } catch {
+        failed = true
         return undefined
       }
     }),
   )
-  return Object.fromEntries(
-    entries.filter((entry): entry is readonly [string, RunView] => entry !== undefined),
-  )
+  return {
+    latest: Object.fromEntries(
+      entries.filter((entry): entry is readonly [string, RunView] => entry !== undefined),
+    ),
+    failed,
+  }
 }
 
 /** One full definition document, including its description and step targets. */
@@ -630,11 +635,16 @@ export function WorkflowsView(props: {
     ]).then(
       async ([health, runs, definitions, triggers, stats]) => {
         if (isStaleGeneration(generation, loadId.current)) return
-        const latestRuns = await readLatestRuns(
+        const latestResult = await readLatestRuns(
           sessionId,
           definitions.map((definition) => definition.id),
         )
         if (isStaleGeneration(generation, loadId.current)) return
+        const previousLatest = stateRef.current.loaded?.latestRuns
+        const latestRuns =
+          mode === 'background' && previousLatest !== undefined
+            ? { ...previousLatest, ...latestResult.latest }
+            : latestResult.latest
         runsPages.current = runPages
         setState({
           phase: 'ready',
@@ -643,9 +653,10 @@ export function WorkflowsView(props: {
             runs,
             definitions,
             triggers,
+            latestRuns,
             ...(stats === undefined ? {} : { stats }),
-            ...(Object.keys(latestRuns).length === 0 ? {} : { latestRuns }),
           },
+          ...(latestResult.failed ? { refreshError: t('overview.latestUnavailable') } : {}),
         })
         const open = selectedRef.current
         if (open !== undefined) {
@@ -676,6 +687,13 @@ export function WorkflowsView(props: {
             ? { phase: 'error', message }
             : { ...current, refreshing: false, refreshError: message },
         )
+        // The overview refresh superseded the workflow page's initial load;
+        // restart it here so a failed refresh cannot strand the page on loading.
+        const openDefinition = definitionRef.current
+        if (openDefinition !== undefined && workflowRef.current.phase !== 'ready') {
+          const token = ++workflowToken.current
+          loadWorkflowPage(generation, token, openDefinition, 'initial')
+        }
       },
     )
   }
@@ -812,7 +830,10 @@ export function WorkflowsView(props: {
         ? stateRef.current.loaded?.runs.items.find((run) => run.id === runId)
         : workflowRef.current.runs?.items.find((run) => run.id === runId)
     knownRun.current = listed
-    if (listed !== undefined) return
+    if (listed !== undefined) {
+      setDetail(listed)
+      return
+    }
     const token = ++lookupId.current
     resolveSelected(loadId.current, token, sessionId, runId)
   }
@@ -1006,7 +1027,7 @@ export function WorkflowsView(props: {
         t={t}
         sessionId={sessionId}
         {...((state.loaded as Loaded).latestRuns === undefined
-          ? {}
+          ? { latestRuns: {} }
           : { latestRuns: (state.loaded as Loaded).latestRuns })}
         segment={segment}
         {...(definitionId === undefined ? {} : { definition: definitionId })}

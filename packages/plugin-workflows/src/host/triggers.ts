@@ -219,7 +219,7 @@ export interface DefinitionEvaluationContext {
   readonly ready?: boolean
   /** The resolved applicability of a trigger that declares one. */
   readonly applicability?: boolean
-  readonly isDuplicate: (key: string) => boolean
+  readonly isDuplicate: (key: string, definition?: Definition) => boolean
 }
 
 function toolMatches(filter: string, event: DefinitionEvent): boolean {
@@ -321,7 +321,7 @@ export function evaluateDefinitionTrigger(
       }
     }
     const key = obligationDedupeKey(definition.id, trigger, event)
-    if (key !== undefined && trigger.repeat !== true && context.isDuplicate(key)) {
+    if (key !== undefined && trigger.repeat !== true && context.isDuplicate(key, definition)) {
       return { ...base, matched: false, reason: 'dedupe' }
     }
     return { ...base, matched: true, reason: 'would-fire' }

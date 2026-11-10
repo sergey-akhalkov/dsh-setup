@@ -81,7 +81,7 @@ export interface DefinitionEvaluationContext {
     readonly ready?: boolean;
     /** The resolved applicability of a trigger that declares one. */
     readonly applicability?: boolean;
-    readonly isDuplicate: (key: string) => boolean;
+    readonly isDuplicate: (key: string, definition?: Definition) => boolean;
 }
 /**
  * The de-duplication identity for one definition trigger and event. It always

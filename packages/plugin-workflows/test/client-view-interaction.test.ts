@@ -1171,4 +1171,124 @@ describe('Workflows overview isolation and latest runs', () => {
     expect(renderText(tree)).toContain('the session load failed')
     expect(tracker.violations).toEqual([])
   })
+
+  it('opens the run copy from the surface that opened it', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const workflowCopy = run('workflow:run-w', NOW)
+    const feedCopy = { ...workflowCopy, status: 'running', endedAt: undefined }
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/events')) return json(HISTORY)
+      if (url.includes('definition=change-intake')) return json({ runs: [workflowCopy] })
+      if (url.includes('/api/workflows/runs')) return json({ runs: [feedCopy] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    ;(workflowButton(tree, 'change-intake')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    ;(runButton(tree, 'workflow:run-w')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('runs.status.done')
+    expect(renderText(tree)).not.toContain('runs.status.running')
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('keeps the known latest run when the latest lookup fails', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const newest = run('workflow:run-new', NOW)
+    let failLatest = false
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('definition=change-intake')) {
+        return failLatest ? json({ error: 'latest failed' }, 500) : json({ runs: [newest] })
+      }
+      if (url.includes('/api/workflows/runs')) {
+        return json({ runs: [run('workflow:run-a', NOW - 120_000)] })
+      }
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    expect(
+      renderElements(tree).some(
+        (element) => element.props['data-latest-run'] === 'workflow:run-new',
+      ),
+    ).toBe(true)
+    failLatest = true
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    expect(
+      renderElements(tree).some(
+        (element) => element.props['data-latest-run'] === 'workflow:run-new',
+      ),
+    ).toBe(true)
+    expect(renderText(tree)).toContain('overview.latestUnavailable')
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('does not strand an opening workflow page when a refresh fails', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    let failOverview = false
+    let released = false
+    const pendingDocs: Array<(value: Response) => void> = []
+    const docResponse = (): Response =>
+      json({ definition: DEFINITION, revision: null, source: 'shipped' })
+    const tracker = installFetch((url) => {
+      if (url.includes('/api/workflows/definitions') && url.includes('id=')) {
+        if (released) return docResponse()
+        return new Promise<Response>((resolve) => pendingDocs.push(resolve))
+      }
+      if (url.includes('/api/workflows/events')) return json(HISTORY)
+      if (url.includes('definition=change-intake'))
+        return json({ runs: [run('workflow:run-w', NOW)] })
+      if (
+        failOverview &&
+        (url.includes('/api/workflows/definitions') ||
+          url.includes('/api/workflows/triggers') ||
+          url.includes('/api/workflows/health') ||
+          url.includes('stats=1') ||
+          url.includes('/api/workflows/runs'))
+      ) {
+        return json({ error: 'the overview refresh failed' }, 500)
+      }
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/runs')) return json({ runs: RUNS })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    ;(workflowButton(tree, 'change-intake')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    failOverview = true
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    released = true
+    for (const resolve of pendingDocs) resolve(docResponse())
+    tree = await runtime.settle(render)
+    expect(renderText(tree)).toContain('Intake a new OpenSpec change.')
+    expect(renderText(tree)).not.toContain('state.loading')
+    expect(tracker.violations).toEqual([])
+  })
 })
