@@ -2056,6 +2056,9 @@ export function apply(ctx, config = {}) {
             const agent = exec.agent;
             if (agent === undefined)
                 return await next();
+            // Capture the session lifecycle before any await: a disposal during the
+            // receipt/change reads must invalidate this call's gate.
+            const sessionGenerationAtEntry = sessionGeneration(String(agent.session.id));
             // Invocation order: a call that started before a checkpoint amendment
             // but returned after it must not count as a later remedy call.
             if (workspaceFor(services, agent.session) !== undefined) {
@@ -2203,7 +2206,7 @@ export function apply(ctx, config = {}) {
                                         return { runId: run.id };
                                     },
                                     resumeRun: async (runId) => {
-                                        const entryGeneration = sessionGeneration(sessionId);
+                                        const entryGeneration = sessionGenerationAtEntry;
                                         const resumed = await withRunLock(runId, async () => {
                                             try {
                                                 const prior = await readAuthenticatedRun(workspace, runId, auth);
