@@ -229,6 +229,10 @@ describe('run store', () => {
       2_600,
     )
     await writeRun(workspace, interrupted, auth())
+    // The prune order is the file mtime; give the two terminal runs distinct
+    // times so the oldest one is deterministic on a fast CI filesystem.
+    await utimes(runPath(workspace, first.id), new Date(1_000), new Date(1_000))
+    await utimes(runPath(workspace, second.id), new Date(2_000), new Date(2_000))
     const result = await pruneRuns(workspace, {
       auth: auth(),
       now: 4_000,
