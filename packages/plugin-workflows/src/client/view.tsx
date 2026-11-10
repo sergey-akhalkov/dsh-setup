@@ -603,6 +603,9 @@ export function WorkflowsView(props: {
         // refreshed workflow response, or look it up again when it left the page.
         const openRun = selectedRef.current
         if (runOrigin.current === 'workflow' && openRun !== undefined) {
+          // Invalidate any pending lookup so its delayed answer cannot
+          // overwrite the refreshed copy assigned below.
+          lookupId.current += 1
           const fresh = runs.items.find((run) => run.id === openRun)
           if (fresh !== undefined) {
             knownRun.current = fresh

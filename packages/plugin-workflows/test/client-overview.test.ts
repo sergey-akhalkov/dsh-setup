@@ -377,6 +377,48 @@ describe('definition-scoped evaluation history', () => {
   })
 })
 
+describe('overview grouping', () => {
+  it('keeps each workflow’s own mode and filter within one trigger kind', () => {
+    const module = loadModule()
+    const groupByTrigger = module.groupByTrigger as (
+      definitions: readonly Record<string, unknown>[],
+      triggers: readonly Record<string, unknown>[],
+      stats?: Record<string, unknown>,
+    ) => Array<{ kind: string; workflows: Array<{ definition: Record<string, unknown> }> }>
+    const triggerText = module.triggerText as (
+      trigger: Record<string, unknown> | undefined,
+      t: (key: string) => string,
+    ) => string
+    const groups = groupByTrigger(
+      [
+        {
+          id: 'flow-a',
+          name: 'Flow A',
+          version: 1,
+          trigger: { kind: 'fs.change', mode: 'shadow', match: { path: 'openspec/**' } },
+        },
+        {
+          id: 'flow-b',
+          name: 'Flow B',
+          version: 1,
+          trigger: { kind: 'fs.change', mode: 'active', match: { path: 'docs/**' } },
+        },
+      ],
+      [],
+    )
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.kind).toBe('fs.change')
+    expect(groups[0]?.workflows).toHaveLength(2)
+    const texts = (groups[0]?.workflows ?? []).map((bucket) =>
+      triggerText(bucket.definition.trigger as Record<string, unknown>, translate),
+    )
+    expect(texts[0]).toContain('shadow')
+    expect(texts[0]).toContain('openspec/**')
+    expect(texts[1]).toContain('active')
+    expect(texts[1]).toContain('docs/**')
+  })
+})
+
 describe('architecture chain', () => {
   it('renders each step’s executor and next, branch, and loop targets', () => {
     const module = loadModule()

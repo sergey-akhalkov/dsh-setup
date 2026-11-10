@@ -13913,6 +13913,7 @@ window.__ModuleLoader__.load({
             setWorkflow({ phase: "ready", document: document2, runs, events });
             const openRun2 = selectedRef.current;
             if (runOrigin.current === "workflow" && openRun2 !== void 0) {
+              lookupId.current += 1;
               const fresh = runs.items.find((run) => run.id === openRun2);
               if (fresh !== void 0) {
                 knownRun.current = fresh;
