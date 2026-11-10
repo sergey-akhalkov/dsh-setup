@@ -180,7 +180,9 @@ describe('export end to end', () => {
     }
   })
 
-  it('packs a loose-object backlog on an unchanged cycle', async () => {
+  // Packing 520 loose objects is a slow real-git step; CI runners exceed the
+  // 20 s default, so the three packing tests declare their own bound.
+  it('packs a loose-object backlog on an unchanged cycle', { timeout: 60_000 }, async () => {
     const root = tempDir()
     const server = await fake()
     const remote = bareRemote(root)
@@ -207,7 +209,7 @@ describe('export end to end', () => {
     }
   })
 
-  it('packs a loose-object backlog on a cycle that exports no banks', async () => {
+  it('packs a loose-object backlog on a cycle that exports no banks', { timeout: 60_000 }, async () => {
     const root = tempDir()
     const server = await startFakeHindsight({ banks: [] })
     servers.push(server)
@@ -226,7 +228,7 @@ describe('export end to end', () => {
     }
   })
 
-  it('packs a loose-object backlog on a cycle that fails before exporting', async () => {
+  it('packs a loose-object backlog on a cycle that fails before exporting', { timeout: 60_000 }, async () => {
     const root = tempDir()
     const config = exportConfig({ dir: join(root, 'repo') })
     repositoryWithPushCounter(config.dir, bareRemote(root), join(root, 'pushes.log'))
