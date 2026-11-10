@@ -1799,14 +1799,18 @@ export function apply(ctx, config = {}) {
         return written;
     });
     /** Advance one run through its verified evidence; a deferred step never steers. */
-    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration) => {
+    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration) => {
         if (capturedGeneration !== undefined && capturedGeneration !== runGeneration(run.id)) {
             // The snapshot was read before a resume replaced its lifecycle; never
             // dispatch or persist from it.
             return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run;
         }
         const generation = capturedGeneration ?? runGeneration(run.id);
-        const sessionGenerationAtStart = sessionGeneration(String(agent.session.id));
+        const sessionGenerationAtStart = capturedSessionGeneration ?? sessionGeneration(String(agent.session.id));
+        if (sessionGenerationAtStart !== sessionGeneration(String(agent.session.id))) {
+            // The session ended or was recreated while this snapshot waited.
+            return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run;
+        }
         const writeMetrics = turnMetrics.get(String(agent.session.id));
         // Only a fully applicable deferred observation advances; a run whose
         // trigger is no longer applicable becomes terminal and pruneable.
@@ -2388,10 +2392,15 @@ export function apply(ctx, config = {}) {
             if (auth === undefined)
                 return;
             const definitions = await definitionsFor(workspace);
-            // Bind the expected generation to a stable read; a run resumed during
-            // the read or while the close awaits another dispatch must not be
-            // advanced from the stale snapshot.
-            const { runs, generations: runGenerationsAtRead } = await stableRuns(workspace, auth);
+            const snapshot = await stableRuns(workspace, auth);
+            if (!snapshot.stable) {
+                // Never dispatch or persist from a listing a cancel/dispose can race.
+                // Fail open like an internal error; the next stop retries the read.
+                await refreshPromptRuns(workspace);
+                return;
+            }
+            const runs = snapshot.runs;
+            const runGenerationsAtRead = snapshot.generations;
             const sessionGenerationAtRead = sessionGeneration(String(payload.agent.session.id));
             const sessionId = String(payload.agent.session.id);
             // A later code write invalidates a completed verification for the same
@@ -2517,7 +2526,7 @@ export function apply(ctx, config = {}) {
                     definitionOf.set(run.id, definition);
                     continue;
                 }
-                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn, generation);
+                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn, generation, sessionGenerationAtRead);
                 advanced.set(run.id, current);
                 advancedGenerations.set(run.id, generation);
                 definitionOf.set(run.id, definition);

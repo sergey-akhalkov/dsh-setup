@@ -2161,6 +2161,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     enabledLegacy: ReadonlySet<string>,
     turn: number,
     capturedGeneration?: number,
+    capturedSessionGeneration?: number,
   ): Promise<WorkflowRun> => {
     if (capturedGeneration !== undefined && capturedGeneration !== runGeneration(run.id)) {
       // The snapshot was read before a resume replaced its lifecycle; never
@@ -2168,7 +2169,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
     }
     const generation = capturedGeneration ?? runGeneration(run.id)
-    const sessionGenerationAtStart = sessionGeneration(String(agent.session.id))
+    const sessionGenerationAtStart =
+      capturedSessionGeneration ?? sessionGeneration(String(agent.session.id))
+    if (sessionGenerationAtStart !== sessionGeneration(String(agent.session.id))) {
+      // The session ended or was recreated while this snapshot waited.
+      return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
+    }
     const writeMetrics = turnMetrics.get(String(agent.session.id))
     // Only a fully applicable deferred observation advances; a run whose
     // trigger is no longer applicable becomes terminal and pruneable.
@@ -2820,10 +2826,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const auth = storedAuth
         if (auth === undefined) return
         const definitions = await definitionsFor(workspace)
-        // Bind the expected generation to a stable read; a run resumed during
-        // the read or while the close awaits another dispatch must not be
-        // advanced from the stale snapshot.
-        const { runs, generations: runGenerationsAtRead } = await stableRuns(workspace, auth)
+        const snapshot = await stableRuns(workspace, auth)
+        if (!snapshot.stable) {
+          // Never dispatch or persist from a listing a cancel/dispose can race.
+          // Fail open like an internal error; the next stop retries the read.
+          await refreshPromptRuns(workspace)
+          return
+        }
+        const runs = snapshot.runs
+        const runGenerationsAtRead = snapshot.generations
         const sessionGenerationAtRead = sessionGeneration(String(payload.agent.session.id))
         const sessionId = String(payload.agent.session.id)
         // A later code write invalidates a completed verification for the same
@@ -2994,6 +3005,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             legacy.enabled,
             payload.turn,
             generation,
+            sessionGenerationAtRead,
           )
           advanced.set(run.id, current)
           advancedGenerations.set(run.id, generation)
