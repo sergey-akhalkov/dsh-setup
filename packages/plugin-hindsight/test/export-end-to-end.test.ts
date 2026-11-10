@@ -209,7 +209,9 @@ describe('export end to end', () => {
     }
   })
 
-  it('packs a loose-object backlog on a cycle that exports no banks', { timeout: 60_000 }, async () => {
+  it('packs a loose-object backlog on a cycle that exports no banks', {
+    timeout: 60_000,
+  }, async () => {
     const root = tempDir()
     const server = await startFakeHindsight({ banks: [] })
     servers.push(server)
@@ -228,7 +230,9 @@ describe('export end to end', () => {
     }
   })
 
-  it('packs a loose-object backlog on a cycle that fails before exporting', { timeout: 60_000 }, async () => {
+  it('packs a loose-object backlog on a cycle that fails before exporting', {
+    timeout: 60_000,
+  }, async () => {
     const root = tempDir()
     const config = exportConfig({ dir: join(root, 'repo') })
     repositoryWithPushCounter(config.dir, bareRemote(root), join(root, 'pushes.log'))
