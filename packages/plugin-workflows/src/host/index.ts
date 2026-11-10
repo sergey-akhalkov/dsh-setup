@@ -759,6 +759,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
       writeRunSync(workspace, run, auth)
+      storeRevision += 1
+      lifecycleEpoch += 1
       void refreshPromptRuns(workspace)
       return { ok: true, runId: run.id }
     } catch (error) {
@@ -966,6 +968,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const runGenerations = new Map<string, number>()
   /** Global lifecycle epoch, bumped by every generation bump. */
   let lifecycleEpoch = 0
+  /** The run-store revision: every committed write bumps it. */
+  let storeRevision = 0
   /** Per-session lifecycle generations; a disposal invalidates in-flight advances. */
   const sessionGenerations = new Map<string, number>()
   const sessionGeneration = (session: string): number => sessionGenerations.get(session) ?? 0
@@ -1002,9 +1006,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       stable,
     })
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const epoch = lifecycleEpoch
+      const epoch = storeRevision
       const runs = await listAuthenticatedRuns(workspace, auth)
-      if (lifecycleEpoch === epoch) return snapshot(runs, true)
+      if (storeRevision === epoch) return snapshot(runs, true)
     }
     // Never act on an unchecked snapshot: a run created, resumed or cancelled
     // during the last read is not bound to the generations captured here.
@@ -1240,6 +1244,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             storedAuth,
             knownRunGenerations.get(existing.id),
             knownSessionGenerations.get(existing.id),
+            existing.updatedAt,
           )
         }
       }
@@ -1441,6 +1446,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                         ...(key === undefined ? {} : { dedupeKey: key }),
                       })
                       writeRunSync(activeWorkspace, run, auth)
+                      storeRevision += 1
+                      lifecycleEpoch += 1
                       intentStarted += 1
                       return { ok: true, runId: run.id }
                     } catch (error) {
@@ -1760,9 +1767,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (current === undefined) return
         if (current.status !== 'running' && current.status !== 'blocked') return
         endedRunIds.add(run.id)
-        // Invalidate any advance that was in flight when the session ended.
-        bumpRunGeneration(run.id)
-        await writeRun(
+        await writeCommit(
           workspace,
           setRunStatus(
             current,
@@ -1772,6 +1777,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           ),
           auth,
         )
+        // Invalidate any advance after the interrupted state is durable, so a
+        // concurrent reader cannot pair the new generation with the old file.
+        bumpRunGeneration(run.id)
       })
     }
     await refreshPromptRuns(workspace)
@@ -2119,33 +2127,72 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       if (runWriteLocks.get(runId) === tail) runWriteLocks.delete(runId)
     }
   }
-  /** Persist an advance unless the run's session ended or a newer lifecycle began. */
+  /** Write one run without a lock/expected check; commits use the guards below. */
+  const writeCommit = async (
+    workspace: string,
+    run: WorkflowRun,
+    auth: HostAuth,
+  ): Promise<void> => {
+    await writeRun(workspace, run, auth)
+    storeRevision += 1
+    lifecycleEpoch += 1
+  }
+  /**
+   * The single guarded run-store write for a lock holder: re-read the durable
+   * run, refuse when it moved since the snapshot, then write and bump the
+   * revision.
+   */
+  const finishCommit = async (
+    workspace: string,
+    run: WorkflowRun,
+    auth: HostAuth,
+    expectedUpdatedAt: number,
+  ): Promise<WorkflowRun> => {
+    const current = await readAuthenticatedRun(workspace, run.id, auth)
+    if (current === undefined) return run
+    if (current.updatedAt !== expectedUpdatedAt) return current
+    if (current.status === 'cancelled') return current
+    await writeCommit(workspace, run, auth)
+    return run
+  }
+  /** Persist an advance unless the run's snapshot, session or state moved. */
   const persistRun = async (
     workspace: string,
     run: WorkflowRun,
     auth: HostAuth,
     generation?: number,
     capturedSessionGeneration?: number,
+    expectedUpdatedAt?: number,
   ): Promise<WorkflowRun> =>
     withRunLock(run.id, async () => {
+      const current = await readAuthenticatedRun(workspace, run.id, auth)
+      if (current === undefined) return run
       const sessionStale = (): boolean =>
         capturedSessionGeneration !== undefined &&
         capturedSessionGeneration !== sessionGeneration(run.session)
-      if ((generation !== undefined && generation !== runGeneration(run.id)) || sessionStale()) {
-        // A disposal or resume happened while this advance was in flight; the
-        // stored state is newer, so the stale advance must not be written.
-        return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
+      if (
+        (generation !== undefined && generation !== runGeneration(run.id)) ||
+        sessionStale() ||
+        (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) ||
+        current.status === 'cancelled' ||
+        (current.status === 'interrupted' &&
+          run.status !== 'interrupted' &&
+          run.status !== 'completed' &&
+          run.status !== 'cancelled')
+      ) {
+        // The stored state is newer; the stale advance must not be written.
+        return current
       }
       const ended = (): boolean => endedRunIds.has(run.id) || endedSessionIds.has(run.session)
       const written = interruptEndedRun(run, ended(), journal.time()) ?? run
-      await writeRun(workspace, written, auth)
-      // A disposal can fence the session during the write; re-check after it so
-      // a stale advance never leaves the run running or blocked, even when a
-      // recreated agent already cleared the session fence.
+      if (written !== current) await writeCommit(workspace, written, auth)
+      // A disposal can fence the session during the write; the lock serializes
+      // the writers, but the fence and the session generation are set
+      // synchronously, so re-check both after the write.
       const late =
         ended() || sessionStale() ? interruptEndedRun(written, true, journal.time()) : undefined
-      if (late !== undefined) {
-        await writeRun(workspace, late, auth)
+      if (late !== undefined && late !== written) {
+        await writeCommit(workspace, late, auth)
         return late
       }
       return written
@@ -2196,6 +2243,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           auth,
           generation,
           sessionGenerationAtStart,
+          run.updatedAt,
         )
       }
     }
@@ -2215,6 +2263,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           auth,
           generation,
           sessionGenerationAtStart,
+          run.updatedAt,
         )
       }
     }
@@ -2273,6 +2322,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           auth,
           generation,
           sessionGenerationAtStart,
+          run.updatedAt,
         )
         if (persisted.status !== 'completed') return { run: persisted }
         try {
@@ -2289,7 +2339,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       now: journal.time(),
     })
     if (result.run !== run) {
-      return await persistRun(workspace, result.run, auth, generation, sessionGenerationAtStart)
+      return await persistRun(
+        workspace,
+        result.run,
+        auth,
+        generation,
+        sessionGenerationAtStart,
+        run.updatedAt,
+      )
     }
     return result.run
   }
@@ -2323,6 +2380,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         ...(dedupeKey === undefined ? {} : { dedupeKey }),
       })
       await writeRun(workspace, run, auth)
+      storeRevision += 1
+      lifecycleEpoch += 1
       void refreshPromptRuns(workspace)
       return run
     } finally {
@@ -2539,6 +2598,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       return { runId: run.id }
                     },
                     resumeRun: async (runId) => {
+                      const before = await readAuthenticatedRun(workspace, runId, auth)
                       const resumed = await resumeRun(
                         workspace,
                         runId,
@@ -2552,8 +2612,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       await withRunLock(runId, async () => {
                         endedRunIds.delete(runId)
                         endedSessionIds.delete(sessionId)
+                        await finishCommit(
+                          workspace,
+                          resumed.run,
+                          auth,
+                          before?.updatedAt ?? resumed.run.updatedAt,
+                        )
                         bumpRunGeneration(runId)
-                        await writeRun(workspace, resumed.run, auth)
                       })
                       return { stepId: resumed.stepId }
                     },
@@ -2905,7 +2970,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 attempts: 0,
               })),
             }
-            const persisted = await persistRun(workspace, reopened, auth)
+            const persisted = await persistRun(
+              workspace,
+              reopened,
+              auth,
+              undefined,
+              undefined,
+              completedVerify.updatedAt,
+            )
             runs.splice(runs.indexOf(completedVerify), 1, persisted)
           }
         }
@@ -3065,6 +3137,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               auth,
               advancedGenerations.get(current.id),
               sessionGenerationAtRead,
+              current.updatedAt,
             )
             ordered.splice(ordered.indexOf(run), 1, superseded)
             continue
@@ -3139,6 +3212,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               auth,
               advancedGenerations.get(run.id),
               sessionGenerationAtRead,
+              current.updatedAt,
             )
           }
           // Keep the session's main-step owner until its step settles; a
@@ -3197,6 +3271,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 auth,
                 runGenerationsAtRead.get(currentRetro.id),
                 sessionGenerationAtRead,
+                currentRetro.updatedAt,
               )
               payload.agent.steer({
                 id: randomUUID(),
@@ -3217,6 +3292,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 auth,
                 runGenerationsAtRead.get(currentRetro.id),
                 sessionGenerationAtRead,
+                currentRetro.updatedAt,
               )
               payload.agent.steer({
                 id: randomUUID(),
@@ -3289,6 +3365,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       },
       resumeRun: async (runId) => {
         await recoverIfNeeded(workspace)
+        const before = await readAuthenticatedRun(workspace, runId, auth)
         const resumed = await resumeRun(
           workspace,
           runId,
@@ -3297,12 +3374,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           String(agent.session.id),
           false,
         )
-        // An explicit resume is a new lifecycle generation for the run.
+        // An explicit resume is a new lifecycle generation for the run; the
+        // commit refuses when the durable run moved since the snapshot.
         await withRunLock(runId, async () => {
           endedRunIds.delete(runId)
           endedSessionIds.delete(String(agent.session.id))
+          await finishCommit(
+            workspace,
+            resumed.run,
+            auth,
+            before?.updatedAt ?? resumed.run.updatedAt,
+          )
           bumpRunGeneration(runId)
-          await writeRun(workspace, resumed.run, auth)
         })
         void refreshPromptRuns(workspace)
         return { run: resumed.run, stepId: resumed.stepId }
@@ -3311,12 +3394,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         await recoverIfNeeded(workspace)
         // The tool already refused a live foreign session; dropping the
         // session here lets the host clear a run whose owner is gone.
+        const before = await readAuthenticatedRun(workspace, runId, auth)
         const cancelled = await cancelRun(workspace, runId, auth, Date.now(), undefined, false)
         // Serialize the cancellation with disposal and invalidate older
         // advances, so a delayed disposal cannot overwrite a terminal cancel.
         await withRunLock(runId, async () => {
+          await finishCommit(workspace, cancelled, auth, before?.updatedAt ?? cancelled.updatedAt)
           bumpRunGeneration(runId)
-          await writeRun(workspace, cancelled, auth)
         })
         void refreshPromptRuns(workspace)
         return cancelled
@@ -3478,7 +3562,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     `the pending step "${step.id}" could not be steered: ${steered.reason}`,
                   )
                 }
-                await writeRun(workspace, steered.run, auth)
+                // A command steer writes the same guarded store: a disposal
+                // during it must not revive the run.
+                await withRunLock(run.id, async () => {
+                  await finishCommit(workspace, steered.run, auth, run.updatedAt)
+                })
               }
               const questions = questionsFor(invocation.agent)
               const host: WorkflowCommandHost = {
@@ -3497,6 +3585,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 },
                 resume: async (runId) => {
                   await recoverIfNeeded(workspace)
+                  const before = await readAuthenticatedRun(workspace, runId, auth)
                   const resumed = await resumeRun(
                     workspace,
                     runId,
@@ -3509,8 +3598,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   await withRunLock(runId, async () => {
                     endedRunIds.delete(runId)
                     endedSessionIds.delete(sessionId)
+                    await finishCommit(
+                      workspace,
+                      resumed.run,
+                      auth,
+                      before?.updatedAt ?? resumed.run.updatedAt,
+                    )
                     bumpRunGeneration(runId)
-                    await writeRun(workspace, resumed.run, auth)
                   })
                   void refreshPromptRuns(workspace)
                   await steerPending(invocation.agent, runId)
