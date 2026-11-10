@@ -4789,6 +4789,89 @@ describe('active-runs prompt context', () => {
     expect(contribution.text({ scope: 'session-2' })).not.toContain(runA?.id ?? 'missing')
   })
 
+  it('disposes one session without interrupting another live session run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const demo = {
+      v: 1,
+      id: 'demo',
+      name: 'Demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'demo.json'), `${JSON.stringify(demo)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'demo.json'), auth)
+    const host = fakeHost(workspace, { workspaces: { 'session-2': workspace } })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }> }
+      | undefined
+    if (command === undefined) return
+    const otherAgent = {
+      ...host.agent,
+      id: 'session-2',
+      session: { id: 'session-2', header: { origin: 'root' } },
+    }
+    await host.emit('agent/created', { agent: otherAgent })
+    const start = (agent: Record<string, unknown>, id: string): Promise<{ kind?: string }> =>
+      command.handler({
+        agent,
+        commandId: `cmd-${id}`,
+        rawInput: ' run demo',
+        attachments: [],
+        signal: new AbortController().signal,
+      })
+    await start(host.agent, 'a')
+    await start(otherAgent, 'b')
+    const runs = await import('../src/host/runs.ts')
+    const all = await runs.listAuthenticatedRuns(workspace, auth)
+    const runA = all.find(
+      (entry) => entry.definition.id === 'demo' && entry.session === 'session-1',
+    )
+    const runB = all.find(
+      (entry) => entry.definition.id === 'demo' && entry.session === 'session-2',
+    )
+    expect(runA).toBeDefined()
+    expect(runB).toBeDefined()
+    await host.emit('agent/disposed', { agent: host.agent })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, runA?.id ?? 'missing', auth))?.status ===
+        'interrupted',
+    )
+    await writeFile(join(workspace, 'out.md'), 'evidence\n', 'utf8')
+    await host.emit('agent/turn-stopping', { agent: otherAgent, turn: 1 })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, runB?.id ?? 'missing', auth))?.status ===
+        'completed',
+    )
+    const settledA = await runs.readAuthenticatedRun(workspace, runA?.id ?? 'missing', auth)
+    expect(settledA?.status).toBe('interrupted')
+  })
+
   it('shows recovered and automatically started runs before turn close', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
