@@ -1574,6 +1574,38 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(reviewRuns.map((entry) => entry.id)).toEqual([existing.id])
   })
 
+  it('starts one run when two newly checked tasks share the same text', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '- [ ] 1.1 Run tests\n- [ ] 2.1 Run tests\n',
+      'utf8',
+    )
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const runs = await import('../src/host/runs.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await writeFile(
+      join(changeDir, 'tasks.md'),
+      '- [x] 1.1 Run tests\n- [x] 2.1 Run tests\n',
+      'utf8',
+    )
+    host.fireFs()
+    const reviewRuns = async (): Promise<number> =>
+      (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+        (entry) => entry.definition.id === 'task-review',
+      ).length
+    await waitFor(async () => (await reviewRuns()) >= 1)
+    // Give a second start the chance to appear before asserting the dedupe.
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(await reviewRuns()).toBe(1)
+  })
+
   it('resumes a failed task-review run and dispatches the review again', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()

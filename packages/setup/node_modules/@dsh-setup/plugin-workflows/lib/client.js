@@ -12495,8 +12495,8 @@ window.__ModuleLoader__.load({
       "health.lastCheck": "last check",
       "health.lastError": "last error",
       "segment.label": "Workflows view",
+      "segment.workflows": "Workflows",
       "segment.runs": "Runs",
-      "segment.journal": "Journal",
       "runs.title": "Runs",
       "runs.empty": "No run is attributable to this session yet. A run appears here when a workflow starts from this session.",
       "runs.trigger": "trigger",
@@ -12504,7 +12504,7 @@ window.__ModuleLoader__.load({
       "runs.ended": "Ended",
       "runs.duration": "Duration",
       "runs.status": "Status",
-      "runs.back": "Back to runs",
+      "runs.back": "Back",
       "runs.missing": "This run is no longer recorded.",
       "runs.missingBody": "It was removed or is not attributable to this session.",
       "runs.record": "Record",
@@ -12529,6 +12529,38 @@ window.__ModuleLoader__.load({
       "events.truncated": "payload truncated",
       "events.evaluations": "Trigger evaluations",
       "events.openRun": "Open run",
+      "overview.unknownKind": "unknown trigger",
+      "overview.empty": "No workflow definition is installed in this workspace yet.",
+      "overview.noWorkflows": "No workflow is bound to this trigger.",
+      "overview.firings": "firings",
+      "overview.runs": "runs",
+      "overview.failed": "failed",
+      "overview.running": "running",
+      "overview.blocked": "blocked",
+      "overview.cancelled": "cancelled",
+      "overview.interrupted": "interrupted",
+      "overview.statsUnavailable": "run statistics are unavailable",
+      "overview.latestRun": "last run",
+      "overview.noRuns": "no run yet",
+      "workflow.back": "Back to workflows",
+      "workflow.noDescription": "No description is recorded for this definition.",
+      "workflow.version": "Version",
+      "workflow.gateOwnership": "Gate ownership",
+      "workflow.trigger": "Trigger",
+      "workflow.firings": "Firings",
+      "workflow.countsUnavailable": "Firing counts are unavailable.",
+      "workflow.architecture": "Architecture",
+      "workflow.step": "Step",
+      "workflow.executor": "Executor",
+      "workflow.next": "next",
+      "workflow.then": "then",
+      "workflow.else": "else",
+      "workflow.loop": "loop",
+      "workflow.noSteps": "No step is recorded for this definition.",
+      "workflow.runs": "Runs",
+      "workflow.noRuns": "No run of this workflow is recorded in this session.",
+      "workflow.history": "Evaluation history",
+      "workflow.noHistory": "No trigger evaluation of this workflow is recorded in this session.",
       "definitions.heading": "Definitions",
       "definitions.empty": "No definition is installed yet.",
       "definitions.id": "Definition",
@@ -12601,11 +12633,24 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/panel.tsx
     var import_jsx_runtime7 = require("react/jsx-runtime");
+    function emptyPageStates() {
+      return { runs: void 0, workflowRuns: void 0, history: void 0 };
+    }
+    function updatePageState(states, kind, value2) {
+      return { ...states, [kind]: value2 };
+    }
+    function pageLoadProps(states, kind, next, t) {
+      const page = states?.[kind];
+      if (next === void 0 || page?.key !== `${kind}:${next}`) return {};
+      if (page.phase === "loading") return { loading: true };
+      return { error: page.message ?? t("state.error") };
+    }
     var EVENTS_PATH = "/api/workflows/events";
     var RUNS_PATH = "/api/workflows/runs";
     var TRIGGERS_PATH = "/api/workflows/triggers";
     var HEALTH_PATH = "/api/workflows/health";
     var EVIDENCE_PATH = "/api/workflows/evidence";
+    var DEFINITIONS_PATH = "/api/workflows/definitions";
     function pageUrl(path, session, cursor, limit, extra) {
       const query = new URLSearchParams({ session });
       if (cursor !== void 0) query.set("cursor", cursor);
@@ -12619,11 +12664,22 @@ window.__ModuleLoader__.load({
     function runsUrl(session, cursor, limit, options) {
       return pageUrl(RUNS_PATH, session, cursor, limit, {
         ...options?.order === void 0 ? {} : { order: options.order },
-        ...options?.run === void 0 ? {} : { run: options.run }
+        ...options?.run === void 0 ? {} : { run: options.run },
+        ...options?.definition === void 0 ? {} : { definition: options.definition },
+        ...options?.stats === true ? { stats: "1" } : {}
       });
     }
     function triggersUrl(session) {
       return pageUrl(TRIGGERS_PATH, session);
+    }
+    function definitionsUrl(session, id2) {
+      return pageUrl(
+        DEFINITIONS_PATH,
+        session,
+        void 0,
+        void 0,
+        id2 === void 0 ? void 0 : { id: id2 }
+      );
     }
     function isRecordEvidence(value2) {
       if (!value2.endsWith(".json")) return false;
@@ -12709,7 +12765,7 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/workflows.tsx
     var import_jsx_runtime8 = require("react/jsx-runtime");
-    function definitionsUrl(sessionId) {
+    function definitionsUrl2(sessionId) {
       return `/api/workflows/definitions?session=${encodeURIComponent(sessionId)}`;
     }
     function receiptsUrl(sessionId) {
@@ -12812,7 +12868,7 @@ window.__ModuleLoader__.load({
         let current = true;
         setError(void 0);
         void Promise.all([
-          requestJson(definitionsUrl(sessionId)),
+          requestJson(definitionsUrl2(sessionId)),
           requestJson(triggersUrl(sessionId)),
           requestJson(receiptsUrl(sessionId))
         ]).then(
@@ -12865,10 +12921,10 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives9 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react8 = require("react");
 
-    // packages/plugin-workflows/src/client/run-detail.tsx
+    // packages/plugin-workflows/src/client/overview.tsx
     var import_dsh_client_ui_primitives7 = require("@deepseek-ai/dsh-client-ui-primitives");
 
     // packages/plugin-workflows/src/client/run-history.tsx
@@ -12974,86 +13030,261 @@ window.__ModuleLoader__.load({
         }
       );
     }
-    function runLink(runId, t, open) {
-      return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(import_dsh_client_ui_primitives6.Button, { type: "button", variant: "ghost", size: "sm", "data-run": runId, onClick: () => open(runId), children: t("events.openRun") });
+
+    // packages/plugin-workflows/src/client/overview.tsx
+    var import_jsx_runtime11 = require("react/jsx-runtime");
+    function definitionEvaluationId(definitionId) {
+      return `definition:${definitionId}`;
     }
-    function Evaluations(props) {
-      const { event, t } = props;
-      const evaluations = event.triggers ?? [];
-      if (evaluations.length === 0) return null;
-      return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("ul", { className: "dsh-wf-evaluations", "aria-label": t("events.evaluations"), children: evaluations.map((evaluation) => {
-        const runId = evaluation.runId === void 0 ? void 0 : projectedRunId(evaluation.runId);
-        return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
-          "li",
-          {
-            "data-trigger": evaluation.id,
-            "data-matched": evaluation.matched ? "true" : "false",
-            children: [
-              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-trigger", children: evaluation.id }),
-              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-reason", children: reasonLabel(evaluation.reason, t) }),
-              evaluation.path === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-muted", children: `${t("triggers.filter")}: ${evaluation.path}` }),
-              evaluation.filter === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-muted", children: evaluation.filter }),
-              evaluation.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-muted", children: evaluation.detail }),
-              runId === void 0 ? null : runLink(runId, t, props.open)
-            ]
-          },
-          evaluation.id
-        );
-      }) });
-    }
-    function JournalList(props) {
-      const { events, t } = props;
-      if (events.length === 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { className: "dsh-wf-muted", "data-section": "journal", "data-state": "empty", children: t("events.empty") });
+    function matchText(match) {
+      if (match === void 0) return "\u2014";
+      const parts = [];
+      for (const [name, value2] of Object.entries(match)) {
+        if (value2 === void 0) continue;
+        parts.push(`${name}: ${typeof value2 === "string" ? value2 : JSON.stringify(value2)}`);
       }
-      const open = props.onOpenRun ?? (() => {
+      return parts.length === 0 ? "\u2014" : parts.join(", ");
+    }
+    function triggerText(trigger, t) {
+      if (trigger === void 0) return t("overview.unknownKind");
+      return `${t("definitions.mode")}: ${trigger.mode ?? "\u2014"} \xB7 ${t("triggers.filter")}: ${matchText(trigger.match)}`;
+    }
+    function triggerCountsFor(triggers, definitionId) {
+      return triggers.find((trigger) => trigger.id === definitionEvaluationId(definitionId))?.counts;
+    }
+    function sumFirings(workflows) {
+      if (workflows.length === 0) return void 0;
+      let matched = 0;
+      let total = 0;
+      for (const workflow of workflows) {
+        if (workflow.firings === void 0) return void 0;
+        matched += workflow.firings.matched;
+        total += workflow.firings.total;
+      }
+      return { matched, total };
+    }
+    function groupByTrigger(definitions, triggers, stats) {
+      const order = [];
+      const buckets = /* @__PURE__ */ new Map();
+      for (const definition of definitions) {
+        const kind = definition.trigger?.kind ?? "";
+        const statsEntry = stats?.definitions[definition.id];
+        const firings = triggerCountsFor(triggers, definition.id);
+        const bucket = {
+          definition,
+          ...statsEntry === void 0 ? {} : { stats: statsEntry },
+          ...firings === void 0 ? {} : { firings }
+        };
+        const existing = buckets.get(kind);
+        if (existing === void 0) {
+          order.push(kind);
+          buckets.set(kind, [bucket]);
+        } else {
+          existing.push(bucket);
+        }
+      }
+      for (const trigger of triggers) {
+        if (trigger.source === "workflow-definition") continue;
+        if (buckets.has(trigger.event)) continue;
+        order.push(trigger.event);
+        buckets.set(trigger.event, []);
+      }
+      return order.map((kind) => {
+        const workflows = buckets.get(kind) ?? [];
+        const firings = sumFirings(workflows);
+        return { kind, workflows, ...firings === void 0 ? {} : { firings } };
       });
-      return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("ol", { className: "dsh-wf-events", "data-section": "journal", children: events.map((event, index2) => /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("li", { "data-kind": event.kind, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { className: "dsh-wf-event-head", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-time", children: formatTime(event.at, t) }),
-          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "quiet", children: event.kind }),
-          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-subject", children: event.subject }),
-          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-summary", children: event.summary }),
-          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "warning", children: t("events.truncated") }) : null
+    }
+    function runStatsLabel(stats, t) {
+      if (stats === void 0) return t("overview.statsUnavailable");
+      const parts = [`${stats.completed} / ${stats.total} ${t("overview.runs")}`];
+      parts.push(`${t("overview.failed")} ${stats.failed}`);
+      parts.push(`${t("overview.running")} ${stats.running}`);
+      if (stats.blocked > 0) parts.push(`${t("overview.blocked")} ${stats.blocked}`);
+      parts.push(`${t("overview.cancelled")} ${stats.cancelled}`);
+      parts.push(`${t("overview.interrupted")} ${stats.interrupted}`);
+      return parts.join(" \xB7 ");
+    }
+    function latestRunFor(runs, definitionId) {
+      return runs.find((run) => run.definition?.id === definitionId);
+    }
+    function evaluationsFor(event, definitionId) {
+      const id2 = definitionEvaluationId(definitionId);
+      return (event.triggers ?? []).filter((evaluation) => evaluation.id === id2);
+    }
+    function architectureChain(steps) {
+      return (steps ?? []).map((step) => {
+        const targets = [];
+        if (step.branch !== void 0) {
+          if (step.branch.then !== void 0) targets.push({ kind: "then", target: step.branch.then });
+          if (step.branch.else !== void 0) targets.push({ kind: "else", target: step.branch.else });
+        }
+        if (step.loop !== void 0) {
+          const details = [];
+          if (step.loop.maxIterations !== void 0) {
+            details.push(`${String(step.loop.maxIterations)} iterations`);
+          }
+          if (step.loop.cap !== void 0) details.push(`cap ${step.loop.cap}`);
+          if (step.loop.list !== void 0) details.push(`list ${step.loop.list}`);
+          targets.push({
+            kind: "loop",
+            target: step.loop.next ?? "\u2014",
+            ...details.length === 0 ? {} : { detail: details.join(", ") }
+          });
+        }
+        if (step.next !== void 0) targets.push({ kind: "next", target: step.next });
+        return { step, targets };
+      });
+    }
+    function chainLabel(kind, t) {
+      switch (kind) {
+        case "next":
+          return t("workflow.next");
+        case "then":
+          return t("workflow.then");
+        case "else":
+          return t("workflow.else");
+        case "loop":
+          return t("workflow.loop");
+      }
+    }
+    function chainTargetsText(row, t) {
+      if (row.targets.length === 0) return "\u2014";
+      return row.targets.map((target) => {
+        const label = chainLabel(target.kind, t);
+        return target.detail === void 0 ? `${label}: ${target.target}` : `${label}: ${target.target} (${target.detail})`;
+      }).join(" \xB7 ");
+    }
+    function runStatusLabel(run, t) {
+      if (run.status === "running") return t("runs.status.running");
+      if (run.status === "done") return t("runs.status.done");
+      if (run.status === "failed") return t("runs.status.failed");
+      return t("runs.status.unknown");
+    }
+    function DefinitionHistory(props) {
+      const { t } = props;
+      const rows = props.events.flatMap((event) => {
+        const evaluations = evaluationsFor(event, props.definitionId);
+        return evaluations.length === 0 ? [] : [{ event, evaluations }];
+      });
+      if (rows.length === 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-history", "data-state": "empty", children: t("workflow.noHistory") });
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ol", { className: "dsh-wf-events", "data-section": "workflow-history", children: rows.map(({ event, evaluations }, index2) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("li", { "data-kind": event.kind, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-event-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-time", children: formatTime(event.at, t) }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: event.kind }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-subject", children: event.subject }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: event.summary }),
+          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "warning", children: t("events.truncated") }) : null
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(Evaluations, { event, t, open })
+        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ul", { className: "dsh-wf-evaluations", "aria-label": t("events.evaluations"), children: evaluations.map((evaluation) => {
+          const runId = evaluation.runId === void 0 ? void 0 : projectedRunId(evaluation.runId);
+          return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+            "li",
+            {
+              "data-trigger": evaluation.id,
+              "data-matched": evaluation.matched ? "true" : "false",
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-trigger", children: evaluation.id }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-reason", children: reasonLabel(evaluation.reason, t) }),
+                evaluation.path === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: `${t("triggers.filter")}: ${evaluation.path}` }),
+                evaluation.filter === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: evaluation.filter }),
+                evaluation.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: evaluation.detail }),
+                runId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                  import_dsh_client_ui_primitives7.Button,
+                  {
+                    type: "button",
+                    variant: "ghost",
+                    size: "sm",
+                    "data-run": runId,
+                    onClick: () => props.onOpenRun(runId),
+                    children: t("events.openRun")
+                  }
+                )
+              ]
+            },
+            evaluation.id
+          );
+        }) })
       ] }, `${String(event.at)}:${String(index2)}`)) });
     }
-
-    // packages/plugin-workflows/src/client/run-detail.tsx
-    var import_jsx_runtime11 = require("react/jsx-runtime");
-    function evidenceCell(step, session) {
-      const ref = step.evidenceRef;
-      if (ref !== void 0) {
-        const raw = ref.ref;
-        const name = ref.kind;
-        if (raw === void 0) return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { "data-evidence-kind": name, children: name });
-        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { children: raw });
-        if (session !== void 0 && isRecordEvidence(raw)) {
-          return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
-            "a",
-            {
-              href: evidenceUrl(session, raw),
-              target: "_blank",
-              rel: "noreferrer",
-              "data-evidence-kind": name,
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
-                " ",
-                label
-              ]
-            }
-          );
+    function WorkflowRow(props) {
+      const { bucket, latest, now: now2, t } = props;
+      const definition = bucket.definition;
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("li", { className: "dsh-wf-row", "data-row-key": definition.id, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+        import_dsh_client_ui_primitives7.Button,
+        {
+          type: "button",
+          variant: "toolbar",
+          size: "sm",
+          className: "dsh-wf-row-button dsh-wf-workflow-row",
+          "data-workflow": definition.id,
+          onClick: props.onOpen,
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
+            definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }),
+            definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: `${t("definitions.risk")}: ${definition.risk}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) }),
+            latest === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.StateDot, { state: runDot(latest.status) }),
+              " ",
+              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives7.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
+            ] }) })
+          ]
         }
-        return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { "data-evidence-kind": name, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
-          " ",
-          label
-        ] });
+      ) });
+    }
+    function WorkflowOverview(props) {
+      const { t } = props;
+      if (props.definitions.length === 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-overview", "data-state": "empty", children: t("overview.empty") });
       }
-      if (step.evidence === void 0) return "\u2014";
-      if (session === void 0 || !isRecordEvidence(step.evidence)) return step.evidence;
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.PathLabel, { path: step.evidence }) });
+      const now2 = props.now ?? Date.now();
+      const groups = groupByTrigger(props.definitions, props.triggers, props.stats);
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "dsh-wf-overview", "data-section": "workflow-overview", children: groups.map((group) => {
+        const label = group.kind === "" ? t("overview.unknownKind") : group.kind;
+        return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+          "section",
+          {
+            className: "dsh-wf-group",
+            "data-trigger-kind": group.kind,
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-group-head", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
+                group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
+              ] }),
+              group.workflows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", "data-trigger-empty": group.kind, children: t("overview.noWorkflows") }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                import_dsh_client_ui_primitives7.AnimatedRows,
+                {
+                  className: "dsh-wf-rows",
+                  role: "list",
+                  label,
+                  rowKeys: group.workflows.map((bucket) => bucket.definition.id),
+                  ready: true,
+                  resetKey: `workflows:${group.kind}:${String(group.workflows.length)}`,
+                  children: group.workflows.map((bucket) => {
+                    const latest = latestRunFor(props.runs, bucket.definition.id);
+                    return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                      WorkflowRow,
+                      {
+                        bucket,
+                        ...latest === void 0 ? {} : { latest },
+                        now: now2,
+                        t,
+                        onOpen: () => props.onOpen(bucket.definition.id)
+                      },
+                      bucket.definition.id
+                    );
+                  })
+                }
+              )
+            ]
+          },
+          group.kind === "" ? "__unknown" : group.kind
+        );
+      }) });
     }
     function Fact(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(import_jsx_runtime11.Fragment, { children: [
@@ -13061,58 +13292,196 @@ window.__ModuleLoader__.load({
         /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("dd", { children: props.value })
       ] });
     }
+    function WorkflowPage(props) {
+      const { definitionId, document: document2, t } = props;
+      const counts = props.trigger?.counts;
+      const risk = document2?.risk ?? document2?.settings?.risk;
+      const gateOwnership = document2?.gateOwnership ?? document2?.settings?.gateOwnership;
+      const chain = architectureChain(document2?.steps);
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-detail", "data-workflow-page": definitionId, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h2", { className: "dsh-wf-detail-title", children: document2?.name ?? definitionId }),
+          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
+        ] }),
+        props.phase === "loading" ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(LoadingLine, { t }) : props.phase === "error" || document2 === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(ErrorLine, { message: props.message ?? "", t, onRetry: props.onRetry }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(import_jsx_runtime11.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-summary", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("dl", { className: "dsh-wf-facts", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+              Fact,
+              {
+                label: t("workflow.version"),
+                value: document2.version === void 0 ? "\u2014" : `v${String(document2.version)}`
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Fact, { label: t("definitions.risk"), value: risk ?? "\u2014" }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Fact, { label: t("workflow.gateOwnership"), value: gateOwnership ?? "\u2014" }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+              Fact,
+              {
+                label: t("workflow.trigger"),
+                value: document2.trigger === void 0 ? t("overview.unknownKind") : `${document2.trigger.kind} \xB7 ${t("definitions.mode")}: ${document2.trigger.mode ?? "\u2014"} \xB7 ${t("triggers.filter")}: ${matchText(document2.trigger.match)}`
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+              Fact,
+              {
+                label: t("workflow.firings"),
+                value: counts === void 0 ? t("workflow.countsUnavailable") : `${String(counts.matched)} / ${String(counts.total)} ${t("overview.firings")}`
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-architecture", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.architecture") }),
+            chain.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", children: t("workflow.noSteps") }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("table", { className: "dsh-wf-table", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("tr", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("workflow.step") }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("workflow.executor") }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("workflow.next") })
+              ] }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("tbody", { children: chain.map((row) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("tr", { "data-step": row.step.id, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("td", { children: [
+                  row.step.title,
+                  " ",
+                  /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: row.step.id })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: row.step.executor }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { className: "dsh-wf-summary", children: chainTargetsText(row, t) })
+              ] }, row.step.id)) })
+            ] })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-runs", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.runs") }),
+            props.runs === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(LoadingLine, { t }) : props.runs.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", "data-state": "empty", children: t("workflow.noRuns") }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(RunList, { runs: props.runs.items, t, now: props.now, onOpen: props.onOpenRun }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+              LoadMore,
+              {
+                next: props.runs?.next,
+                t,
+                onLoad: props.onLoadRuns,
+                ...pageLoadProps(props.pageStates, "workflowRuns", props.runs?.next, t)
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-history", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.history") }),
+            props.events === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(LoadingLine, { t }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+              DefinitionHistory,
+              {
+                events: props.events.items,
+                definitionId,
+                t,
+                onOpenRun: props.onOpenRun
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+              LoadMore,
+              {
+                next: props.events?.next,
+                t,
+                onLoad: props.onLoadHistory,
+                ...pageLoadProps(props.pageStates, "history", props.events?.next, t)
+              }
+            )
+          ] })
+        ] })
+      ] });
+    }
+
+    // packages/plugin-workflows/src/client/run-detail.tsx
+    var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_jsx_runtime12 = require("react/jsx-runtime");
+    function evidenceCell(step, session) {
+      const ref = step.evidenceRef;
+      if (ref !== void 0) {
+        const raw = ref.ref;
+        const name = ref.kind;
+        if (raw === void 0) return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { "data-evidence-kind": name, children: name });
+        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives8.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { children: raw });
+        if (session !== void 0 && isRecordEvidence(raw)) {
+          return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+            "a",
+            {
+              href: evidenceUrl(session, raw),
+              target: "_blank",
+              rel: "noreferrer",
+              "data-evidence-kind": name,
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
+                " ",
+                label
+              ]
+            }
+          );
+        }
+        return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { "data-evidence-kind": name, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
+          " ",
+          label
+        ] });
+      }
+      if (step.evidence === void 0) return "\u2014";
+      if (session === void 0 || !isRecordEvidence(step.evidence)) return step.evidence;
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives8.PathLabel, { path: step.evidence }) });
+    }
+    function Fact2(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("dt", { children: props.label }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("dd", { children: props.value })
+      ] });
+    }
     function RunDetailPage(props) {
       const { run, t, session } = props;
       const identity4 = run.definition === void 0 ? t(`runs.source.${run.source}`) : `${run.definition.name} \xB7 v${String(run.definition.version)}`;
       const duration = durationText(run.startedAt, run.endedAt);
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-detail", "data-run-detail": run.id, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h2", { className: "dsh-wf-detail-title", children: run.title }),
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-            import_dsh_client_ui_primitives7.Tag,
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-detail", "data-run-detail": run.id, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives8.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h2", { className: "dsh-wf-detail-title", children: run.title }),
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            import_dsh_client_ui_primitives8.Tag,
             {
               tone: run.status === "failed" ? "danger" : run.status === "done" ? "success" : "neutral",
               children: t(`runs.status.${run.status}`)
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("dl", { className: "dsh-wf-facts", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-            Fact,
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("dl", { className: "dsh-wf-facts", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            Fact2,
             {
               label: t("runs.definition"),
-              value: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { "data-run-definition": run.definition?.id ?? run.source, children: identity4 })
+              value: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { "data-run-definition": run.definition?.id ?? run.source, children: identity4 })
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Fact, { label: t("runs.trigger"), value: run.trigger ?? "\u2014" }),
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Fact, { label: t("runs.started"), value: formatTime(run.startedAt, t) }),
-          run.endedAt === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Fact, { label: t("runs.ended"), value: formatTime(run.endedAt, t) }),
-          duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Fact, { label: t("runs.duration"), value: duration })
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact2, { label: t("runs.trigger"), value: run.trigger ?? "\u2014" }),
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact2, { label: t("runs.started"), value: formatTime(run.startedAt, t) }),
+          run.endedAt === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact2, { label: t("runs.ended"), value: formatTime(run.endedAt, t) }),
+          duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact2, { label: t("runs.duration"), value: duration })
         ] }),
-        run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("p", { className: "dsh-wf-muted", children: [
+        run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("p", { className: "dsh-wf-muted", children: [
           `${t("runs.record")}: `,
-          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.PathLabel, { path: run.record }) })
+          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives8.PathLabel, { path: run.record }) })
         ] }),
-        run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-section", "data-section": "steps", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.steps") }),
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("table", { className: "dsh-wf-table", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("runs.step") }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("runs.state") }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("runs.time") }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("runs.evidence") }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("runs.issue") })
+        run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-section", "data-section": "steps", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.steps") }),
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("table", { className: "dsh-wf-table", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("runs.step") }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("runs.state") }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("runs.time") }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("runs.evidence") }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("runs.issue") })
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("tbody", { children: run.steps.map((step) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("tr", { "data-step": step.id, "data-state": step.state, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: step.title }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: step.state }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: evidenceCell(step, session) }),
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("td", { children: [
-                step.failureClass === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { "data-failure-class": step.failureClass, children: step.failureClass }),
-                step.reason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-error", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("tbody", { children: run.steps.map((step) => /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("tr", { "data-step": step.id, "data-state": step.state, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { children: step.title }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { children: step.state }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { children: evidenceCell(step, session) }),
+              /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("td", { children: [
+                step.failureClass === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { "data-failure-class": step.failureClass, children: step.failureClass }),
+                step.reason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { className: "dsh-wf-error", children: [
                   " ",
                   step.reason
                 ] }),
@@ -13121,9 +13490,9 @@ window.__ModuleLoader__.load({
             ] }, step.id)) })
           ] })
         ] }),
-        run.violations === void 0 || run.violations.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-section", "data-section": "violations", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.violations") }),
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("ul", { className: "dsh-wf-violations", children: run.violations.map((violation, index2) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("li", { "data-step": violation.stepId, children: [
+        run.violations === void 0 || run.violations.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-section", "data-section": "violations", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.violations") }),
+          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("ul", { className: "dsh-wf-violations", children: run.violations.map((violation, index2) => /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("li", { "data-step": violation.stepId, children: [
             violation.stepId === void 0 ? "" : `${violation.stepId}: `,
             violation.reason
           ] }, `${String(violation.at)}:${String(index2)}`)) })
@@ -13131,21 +13500,21 @@ window.__ModuleLoader__.load({
       ] });
     }
     function MissingRunPage(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-detail", "data-state": "missing", role: "status", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-empty-title", children: props.t("runs.missing") }),
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", children: props.t("runs.missingBody") })
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-detail", "data-state": "missing", role: "status", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives8.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-empty-title", children: props.t("runs.missing") }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", children: props.t("runs.missingBody") })
       ] });
     }
     function RunLookupPage(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
         "section",
         {
           className: "dsh-wf-detail",
           "data-state": props.message === void 0 ? "loading" : "error",
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
-            props.message === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(LoadingLine, { t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(ErrorLine, { message: props.message, t: props.t, onRetry: props.onRetry ?? (() => {
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives8.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+            props.message === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(LoadingLine, { t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(ErrorLine, { message: props.message, t: props.t, onRetry: props.onRetry ?? (() => {
             }) })
           ]
         }
@@ -13153,7 +13522,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_jsx_runtime12 = require("react/jsx-runtime");
+    var import_jsx_runtime13 = require("react/jsx-runtime");
     var VIEW_CSS = `
     .dsh-wf { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; height: 100%; min-height: 0; padding: 12px; overflow: hidden; color: var(--dsw-alias-label-primary); }
     .dsh-wf-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
@@ -13190,26 +13559,26 @@ window.__ModuleLoader__.load({
     .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-secondary); }
     .dsh-wf-error { color: var(--dsw-alias-state-error-primary); }
     .dsh-wf-error-block { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .dsh-wf-overview { display: flex; flex-direction: column; gap: 12px; }
+    .dsh-wf-group { display: flex; flex-direction: column; gap: 6px; }
+    .dsh-wf-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+    .dsh-wf-group-title { margin: 8px 0 2px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    .dsh-wf-workflow-row { flex-wrap: wrap; align-items: baseline; }
     `;
-    function emptyPageStates() {
-      return { events: void 0, runs: void 0 };
-    }
-    function updatePageState(states, kind, value2) {
-      return { ...states, [kind]: value2 };
-    }
     function isStaleGeneration(requested, current) {
       return requested !== current;
     }
-    function isRow(value2, runId) {
-      return typeof value2 === "object" && value2 !== null && "getAttribute" in value2 && value2.getAttribute("data-run") === runId && "focus" in value2 && typeof value2.focus === "function";
+    function isRow(value2, attribute, id2) {
+      return typeof value2 === "object" && value2 !== null && "getAttribute" in value2 && value2.getAttribute(attribute) === id2 && "focus" in value2 && typeof value2.focus === "function";
     }
-    function restoreListPosition(host, runId, scrollTop) {
+    function restoreListPosition(host, id2, scrollTop, kind = "run") {
       if (host === null) return;
       host.scrollTop = scrollTop;
-      const rows = host.querySelectorAll("[data-run]");
+      const attribute = kind === "run" ? "data-run" : "data-workflow";
+      const rows = host.querySelectorAll(`[${attribute}]`);
       for (let index2 = 0; index2 < rows.length; index2 += 1) {
         const row = rows[index2];
-        if (!isRow(row, runId)) continue;
+        if (!isRow(row, attribute, id2)) continue;
         row.focus({ preventScroll: true });
         return;
       }
@@ -13232,19 +13601,6 @@ window.__ModuleLoader__.load({
     function pageOf(body, items) {
       return { items, ...body.next === void 0 ? {} : { next: body.next } };
     }
-    async function readEvents(session, pages) {
-      const items = [];
-      let next;
-      for (let index2 = 0; index2 < Math.max(1, pages); index2 += 1) {
-        const page = await requestJson(
-          eventsUrl(session, next)
-        );
-        items.push(...page.events);
-        next = page.next;
-        if (next === void 0) break;
-      }
-      return pageOf({ ...next === void 0 ? {} : { next } }, items);
-    }
     async function readRuns(session, pages) {
       const items = [];
       let next;
@@ -13252,34 +13608,81 @@ window.__ModuleLoader__.load({
         const page = await requestJson(
           runsUrl(session, next, void 0, { order: "newest" })
         );
-        items.push(...page.runs);
+        items.push(...page.runs ?? []);
         next = page.next;
         if (next === void 0) break;
       }
       return pageOf({ ...next === void 0 ? {} : { next } }, sortNewestFirst(dedupeRuns(items)));
     }
+    async function readDefinitions(session) {
+      const body = await requestJson(definitionsUrl(session));
+      return Array.isArray(body.definitions) ? body.definitions : [];
+    }
+    async function readTriggers(session) {
+      const body = await requestJson(triggersUrl(session));
+      return Array.isArray(body.triggers) ? body.triggers : [];
+    }
+    async function readRunStats(session) {
+      const body = await requestJson(
+        runsUrl(session, void 0, void 0, { stats: true })
+      );
+      const definitions = body.stats?.definitions;
+      if (definitions === null || definitions === void 0 || typeof definitions !== "object") {
+        return void 0;
+      }
+      return { definitions };
+    }
+    async function readDefinitionDocument(session, definitionId) {
+      const body = await requestJson(
+        definitionsUrl(session, definitionId)
+      );
+      if (body.definition === void 0) throw new Error("the definition document is missing");
+      return body.definition;
+    }
+    async function readDefinitionRuns(session, definitionId, pages) {
+      const items = [];
+      let next;
+      for (let index2 = 0; index2 < Math.max(1, pages); index2 += 1) {
+        const page = await requestJson(
+          runsUrl(session, next, void 0, { definition: definitionId })
+        );
+        items.push(...page.runs ?? []);
+        next = page.next;
+        if (next === void 0) break;
+      }
+      return pageOf({ ...next === void 0 ? {} : { next } }, sortNewestFirst(dedupeRuns(items)));
+    }
+    async function readDefinitionEvents(session, pages) {
+      const items = [];
+      let next;
+      for (let index2 = 0; index2 < Math.max(1, pages); index2 += 1) {
+        const page = await requestJson(
+          eventsUrl(session, next)
+        );
+        items.push(...page.events ?? []);
+        next = page.next;
+        if (next === void 0) break;
+      }
+      return pageOf({ ...next === void 0 ? {} : { next } }, items);
+    }
     function WorkflowsLoaded(props) {
       const { loaded, t } = props;
-      const segment = props.segment ?? "runs";
-      const selectedRun = props.detail ?? loaded.runs.items.find((run) => run.id === props.selected);
-      const pageProps = (kind, next) => {
-        const page = props.pageStates?.[kind];
-        if (next === void 0 || page?.key !== `${kind}:${next}`) return {};
-        if (page.phase === "loading") return { loading: true };
-        return { error: page.message ?? t("state.error") };
-      };
+      const segment = props.segment ?? "workflows";
+      const currentDefinition = props.definition;
+      const selectedRun = props.detail ?? loaded.runs.items.find((run) => run.id === props.selected) ?? props.workflow?.runs?.items.find((run) => run.id === props.selected);
+      const definitionTrigger = currentDefinition === void 0 ? void 0 : loaded.triggers.find((trigger) => trigger.id === definitionEvaluationId(currentDefinition));
       const empty2 = () => {
       };
       const options = [
-        { value: "runs", label: t("segment.runs") },
-        { value: "journal", label: t("segment.journal") }
+        { value: "workflows", label: t("segment.workflows") },
+        { value: "runs", label: t("segment.runs") }
       ];
       let body;
       if (props.selected !== void 0) {
         if (props.missing === true) {
-          body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(MissingRunPage, { t, onBack: props.onBack ?? empty2 });
+          body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(MissingRunPage, { t, onBack: props.onBack ?? empty2 });
         } else if (props.detailError !== void 0) {
-          body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+          body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
             RunLookupPage,
             {
               t,
@@ -13289,9 +13692,9 @@ window.__ModuleLoader__.load({
             }
           );
         } else if (selectedRun === void 0) {
-          body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(RunLookupPage, { t, onBack: props.onBack ?? empty2 });
+          body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(RunLookupPage, { t, onBack: props.onBack ?? empty2 });
         } else {
-          body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+          body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
             RunDetailPage,
             {
               run: selectedRun,
@@ -13301,30 +13704,44 @@ window.__ModuleLoader__.load({
             }
           );
         }
-      } else if (segment === "journal") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-            JournalList,
-            {
-              events: loaded.events.items,
-              t,
-              ...props.onOpenRun === void 0 ? {} : { onOpenRun: props.onOpenRun }
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-            LoadMore,
-            {
-              next: loaded.events.next,
-              t,
-              onLoad: props.onLoadEvents ?? empty2,
-              ...props.refreshing === true ? { loading: true } : {},
-              ...pageProps("events", loaded.events.next)
-            }
-          )
-        ] });
+      } else if (currentDefinition !== void 0) {
+        const workflow = props.workflow ?? { phase: "loading" };
+        body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+          WorkflowPage,
+          {
+            definitionId: currentDefinition,
+            phase: workflow.phase,
+            ...workflow.document === void 0 ? {} : { document: workflow.document },
+            ...definitionTrigger === void 0 ? {} : { trigger: definitionTrigger },
+            ...workflow.runs === void 0 ? {} : { runs: workflow.runs },
+            ...workflow.events === void 0 ? {} : { events: workflow.events },
+            ...workflow.message === void 0 ? {} : { message: workflow.message },
+            ...props.now === void 0 ? {} : { now: props.now },
+            ...props.pageStates === void 0 ? {} : { pageStates: props.pageStates },
+            t,
+            onBack: props.onBackWorkflow ?? empty2,
+            onOpenRun: props.onOpenWorkflowRun ?? empty2,
+            onLoadRuns: props.onLoadWorkflowRuns ?? empty2,
+            onLoadHistory: props.onLoadHistory ?? empty2,
+            onRetry: props.onRetryWorkflow ?? empty2
+          }
+        );
+      } else if (segment === "workflows") {
+        body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+          WorkflowOverview,
+          {
+            definitions: loaded.definitions,
+            triggers: loaded.triggers,
+            ...loaded.stats === void 0 ? {} : { stats: loaded.stats },
+            runs: loaded.runs.items,
+            t,
+            ...props.now === void 0 ? {} : { now: props.now },
+            onOpen: props.onOpenWorkflow ?? empty2
+          }
+        );
       } else {
-        body = /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        body = /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
             RunList,
             {
               runs: loaded.runs.items,
@@ -13333,26 +13750,27 @@ window.__ModuleLoader__.load({
               ...props.onSelect === void 0 ? {} : { onOpen: props.onSelect }
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
             LoadMore,
             {
               next: loaded.runs.next,
               t,
               onLoad: props.onLoadRuns ?? empty2,
               ...props.refreshing === true ? { loading: true } : {},
-              ...pageProps("runs", loaded.runs.next)
+              ...pageLoadProps(props.pageStates, "runs", loaded.runs.next, t)
             }
           )
         ] });
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+      const detail = props.selected !== void 0 || currentDefinition !== void 0;
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
         "div",
         {
           className: "dsh-wf-body",
           "data-segment": segment,
-          "data-view": props.selected === void 0 ? "list" : "detail",
+          "data-view": props.selected !== void 0 ? "detail" : currentDefinition === void 0 ? "list" : "workflow",
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               StatusLine,
               {
                 health: loaded.health,
@@ -13361,10 +13779,10 @@ window.__ModuleLoader__.load({
                 ...props.onRefresh === void 0 ? {} : { onRefresh: props.onRefresh }
               }
             ),
-            props.refreshError === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(ErrorLine, { message: props.refreshError, t, onRetry: props.onRetryRefresh ?? empty2 }),
-            props.selected === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-                import_dsh_client_ui_primitives8.SegmentedControl,
+            props.refreshError === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ErrorLine, { message: props.refreshError, t, onRetry: props.onRetryRefresh ?? empty2 }),
+            detail ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+                import_dsh_client_ui_primitives9.SegmentedControl,
                 {
                   id: "dsh-wf-segments",
                   value: segment,
@@ -13374,8 +13792,8 @@ window.__ModuleLoader__.load({
                   className: "dsh-wf-segments"
                 }
               ),
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body })
-            ] }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body })
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body })
+            ] })
           ]
         }
       );
@@ -13383,7 +13801,9 @@ window.__ModuleLoader__.load({
     function WorkflowsView(props) {
       const { sessionId, t } = props;
       const [state, setState] = (0, import_react8.useState)({ phase: "loading" });
-      const [segment, setSegment] = (0, import_react8.useState)("runs");
+      const [segment, setSegment] = (0, import_react8.useState)("workflows");
+      const [definitionId, setDefinitionId] = (0, import_react8.useState)();
+      const [workflow, setWorkflow] = (0, import_react8.useState)({ phase: "loading" });
       const [selected2, setSelected] = (0, import_react8.useState)();
       const [detail, setDetail] = (0, import_react8.useState)();
       const [missing, setMissing] = (0, import_react8.useState)(false);
@@ -13391,16 +13811,26 @@ window.__ModuleLoader__.load({
       const [pageStates, setPageStates] = (0, import_react8.useState)(emptyPageStates());
       const loadId = (0, import_react8.useRef)(0);
       const lookupId = (0, import_react8.useRef)(0);
+      const workflowToken = (0, import_react8.useRef)(0);
       const runsPages = (0, import_react8.useRef)(1);
-      const eventsPages = (0, import_react8.useRef)(1);
+      const workflowRunsPages = (0, import_react8.useRef)(1);
+      const historyPages = (0, import_react8.useRef)(1);
       const pendingPages = (0, import_react8.useRef)(/* @__PURE__ */ new Set());
       const scrollRef = (0, import_react8.useRef)(null);
-      const returnTo = (0, import_react8.useRef)(void 0);
+      const overviewReturn = (0, import_react8.useRef)(
+        void 0
+      );
+      const detailReturn = (0, import_react8.useRef)(void 0);
       const selectedRef = (0, import_react8.useRef)(void 0);
       selectedRef.current = selected2;
+      const definitionRef = (0, import_react8.useRef)(void 0);
+      definitionRef.current = definitionId;
+      const runOrigin = (0, import_react8.useRef)("runs");
       const knownRun = (0, import_react8.useRef)(void 0);
       const stateRef = (0, import_react8.useRef)(state);
       stateRef.current = state;
+      const workflowRef = (0, import_react8.useRef)(workflow);
+      workflowRef.current = workflow;
       const messageOf = (error) => error instanceof Error ? error.message : String(error);
       const resolveSelected = (generation, token, session, runId) => {
         setDetailError(void 0);
@@ -13410,7 +13840,7 @@ window.__ModuleLoader__.load({
         ).then(
           (body2) => {
             if (!current()) return;
-            const run = body2.runs[0];
+            const run = body2.runs?.[0];
             if (run === void 0) {
               setMissing(true);
               setDetail(void 0);
@@ -13426,6 +13856,35 @@ window.__ModuleLoader__.load({
           }
         );
       };
+      const loadWorkflowPage = (generation, token, id2, mode) => {
+        if (sessionId === void 0) return;
+        if (mode === "initial") setWorkflow({ phase: "loading" });
+        const runPages = Math.max(1, workflowRunsPages.current);
+        const eventPages = Math.max(1, historyPages.current);
+        const current = () => !isStaleGeneration(generation, loadId.current) && token === workflowToken.current && definitionRef.current === id2;
+        void Promise.all([
+          readDefinitionDocument(sessionId, id2),
+          readDefinitionRuns(sessionId, id2, runPages),
+          readDefinitionEvents(sessionId, eventPages)
+        ]).then(
+          ([document2, runs, events]) => {
+            if (!current()) return;
+            workflowRunsPages.current = runPages;
+            historyPages.current = eventPages;
+            setWorkflow({ phase: "ready", document: document2, runs, events });
+          },
+          (error) => {
+            if (!current()) return;
+            const message = messageOf(error);
+            const loadedPage = workflowRef.current;
+            if (mode === "background" && loadedPage.phase === "ready") {
+              setState((currentState) => ({ ...currentState, refreshError: message }));
+              return;
+            }
+            setWorkflow({ phase: "error", message });
+          }
+        );
+      };
       const load = (mode) => {
         if (sessionId === void 0) return;
         const generation = ++loadId.current;
@@ -13435,29 +13894,44 @@ window.__ModuleLoader__.load({
         if (mode === "initial") setState({ phase: "loading" });
         else setState((current) => ({ ...current, refreshing: true }));
         const runPages = Math.max(1, runsPages.current);
-        const eventPages = Math.max(1, eventsPages.current);
         void Promise.all([
           requestJson(healthUrl(sessionId)),
-          readEvents(sessionId, eventPages),
-          readRuns(sessionId, runPages)
+          readRuns(sessionId, runPages),
+          readDefinitions(sessionId),
+          readTriggers(sessionId),
+          readRunStats(sessionId)
         ]).then(
-          ([health, events, runs]) => {
+          ([health, runs, definitions, triggers, stats]) => {
             if (isStaleGeneration(generation, loadId.current)) return;
             runsPages.current = runPages;
-            eventsPages.current = eventPages;
-            setState({ phase: "ready", loaded: { health, events, runs } });
+            setState({
+              phase: "ready",
+              loaded: {
+                health,
+                runs,
+                definitions,
+                triggers,
+                ...stats === void 0 ? {} : { stats }
+              }
+            });
             const open = selectedRef.current;
-            if (open === void 0) return;
-            if (runs.items.some((run) => run.id === open)) {
-              lookupId.current += 1;
-              knownRun.current = runs.items.find((run) => run.id === open);
-              setDetail(void 0);
-              setMissing(false);
-              setDetailError(void 0);
-              return;
+            if (open !== void 0) {
+              if (runs.items.some((run) => run.id === open)) {
+                lookupId.current += 1;
+                knownRun.current = runs.items.find((run) => run.id === open);
+                setDetail(void 0);
+                setMissing(false);
+                setDetailError(void 0);
+              } else {
+                const token = ++lookupId.current;
+                resolveSelected(generation, token, sessionId, open);
+              }
             }
-            const token = ++lookupId.current;
-            resolveSelected(generation, token, sessionId, open);
+            const openDefinition = definitionRef.current;
+            if (openDefinition !== void 0) {
+              const token = ++workflowToken.current;
+              loadWorkflowPage(generation, token, openDefinition, "background");
+            }
           },
           (error) => {
             if (isStaleGeneration(generation, loadId.current)) return;
@@ -13474,7 +13948,12 @@ window.__ModuleLoader__.load({
         load("initial");
         return () => {
           loadId.current += 1;
+          workflowToken.current += 1;
         };
+      }, [sessionId]);
+      (0, import_react8.useEffect)(() => {
+        overviewReturn.current = void 0;
+        detailReturn.current = void 0;
       }, [sessionId]);
       (0, import_react8.useEffect)(() => {
         if (typeof document === "undefined") return;
@@ -13485,99 +13964,122 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener("visibilitychange", onVisible);
       }, []);
       (0, import_react8.useLayoutEffect)(() => {
-        if (selected2 !== void 0) return;
-        const restore = returnTo.current;
-        if (restore === void 0) return;
-        returnTo.current = void 0;
+        const target = detailReturn.current;
+        if (target === void 0) return;
+        const onTarget = target.surface === "workflow" ? definitionId !== void 0 && selected2 === void 0 : definitionId === void 0 && selected2 === void 0;
+        if (!onTarget) return;
+        detailReturn.current = void 0;
         const container = scrollRef.current;
         if (container === null) return;
-        restoreListPosition(container, restore.runId, restore.scrollTop);
-      }, [selected2]);
-      if (sessionId === void 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
-      }
-      const openRun = (runId, fromList) => {
+        restoreListPosition(
+          container,
+          target.id,
+          target.scrollTop,
+          target.surface === "overview" ? "workflow" : "run"
+        );
+      }, [definitionId, selected2]);
+      (0, import_react8.useLayoutEffect)(() => {
+        if (definitionId !== void 0 || selected2 !== void 0) return;
+        const target = overviewReturn.current;
+        if (target === void 0) return;
+        overviewReturn.current = void 0;
         const container = scrollRef.current;
-        if (fromList && container !== null) {
-          returnTo.current = { runId, scrollTop: container.scrollTop };
+        if (container === null) return;
+        restoreListPosition(container, target.id, target.scrollTop, "workflow");
+      }, [definitionId, selected2]);
+      if (sessionId === void 0) {
+        return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
+      }
+      const openWorkflowPage = (id2) => {
+        const container = scrollRef.current;
+        if (container !== null) {
+          overviewReturn.current = { id: id2, scrollTop: container.scrollTop };
         }
-        setSegment("runs");
+        workflowRunsPages.current = 1;
+        historyPages.current = 1;
+        setDefinitionId(id2);
+        setWorkflow({ phase: "loading" });
+        setSelected(void 0);
+        setDetail(void 0);
+        setMissing(false);
+        setDetailError(void 0);
+        setSegment("workflows");
+        const token = ++workflowToken.current;
+        loadWorkflowPage(loadId.current, token, id2, "initial");
+      };
+      const backFromWorkflow = () => {
+        workflowToken.current += 1;
+        setDefinitionId(void 0);
+        setWorkflow({ phase: "loading" });
+        setSelected(void 0);
+        setDetail(void 0);
+        setMissing(false);
+        setDetailError(void 0);
+      };
+      const openRun = (runId, origin) => {
+        const container = scrollRef.current;
+        if (container !== null) {
+          detailReturn.current = { id: runId, scrollTop: container.scrollTop, surface: origin };
+        }
+        runOrigin.current = origin;
         setSelected(runId);
         setMissing(false);
         setDetail(void 0);
         setDetailError(void 0);
-        const token = ++lookupId.current;
-        const loaded = stateRef.current.loaded;
-        const listed = loaded?.runs.items.find((run) => run.id === runId);
+        const listed = origin === "runs" ? stateRef.current.loaded?.runs.items.find((run) => run.id === runId) : workflowRef.current.runs?.items.find((run) => run.id === runId);
         knownRun.current = listed;
         if (listed !== void 0) return;
+        const token = ++lookupId.current;
         resolveSelected(loadId.current, token, sessionId, runId);
       };
-      const back = () => {
+      const backFromRun = () => {
         lookupId.current += 1;
         const resolved = detail ?? knownRun.current;
         const confirmedMissing = missing;
-        const current = stateRef.current;
-        const loaded = current.loaded;
-        if (resolved !== void 0 && !confirmedMissing && loaded !== void 0 && !loaded.runs.items.some((run) => run.id === resolved.id)) {
-          setState({
-            ...current,
-            loaded: {
-              ...loaded,
-              runs: {
-                ...loaded.runs,
-                items: sortNewestFirst([...loaded.runs.items, resolved])
-              }
+        if (resolved !== void 0 && !confirmedMissing) {
+          if (runOrigin.current === "runs") {
+            const current = stateRef.current;
+            const loaded = current.loaded;
+            if (loaded !== void 0 && !loaded.runs.items.some((run) => run.id === resolved.id)) {
+              setState({
+                ...current,
+                loaded: {
+                  ...loaded,
+                  runs: {
+                    ...loaded.runs,
+                    items: sortNewestFirst([...loaded.runs.items, resolved])
+                  }
+                }
+              });
             }
-          });
+          } else {
+            setWorkflow(
+              (current) => current.runs === void 0 || current.runs.items.some((run) => run.id === resolved.id) ? current : {
+                ...current,
+                runs: {
+                  ...current.runs,
+                  items: sortNewestFirst([...current.runs.items, resolved])
+                }
+              }
+            );
+          }
         }
         knownRun.current = void 0;
         setSelected(void 0);
         setDetail(void 0);
         setMissing(false);
         setDetailError(void 0);
-        setSegment("runs");
       };
       const retryDetail = () => {
         if (selected2 === void 0) return;
         const token = ++lookupId.current;
         resolveSelected(loadId.current, token, sessionId, selected2);
       };
-      const mergeEvents = () => {
-        if (stateRef.current.refreshing === true) return;
-        const loaded = state.loaded;
-        const next = loaded?.events.next;
-        if (next === void 0) return;
-        const key = `events:${next}`;
-        if (pendingPages.current.has(key)) return;
-        const generation = loadId.current;
-        pendingPages.current.add(key);
-        setPageStates((current) => updatePageState(current, "events", { key, phase: "loading" }));
-        void requestJson(eventsUrl(sessionId, next)).then(
-          (page) => {
-            if (isStaleGeneration(generation, loadId.current)) return;
-            pendingPages.current.delete(key);
-            eventsPages.current += 1;
-            setPageStates((current) => updatePageState(current, "events", void 0));
-            setState((current) => {
-              if (current.loaded === void 0) return current;
-              return {
-                ...current,
-                loaded: {
-                  ...current.loaded,
-                  events: pageOf(page, [...current.loaded.events.items, ...page.events])
-                }
-              };
-            });
-          },
-          (error) => {
-            if (isStaleGeneration(generation, loadId.current)) return;
-            pendingPages.current.delete(key);
-            setPageStates(
-              (current) => updatePageState(current, "events", { key, phase: "error", message: messageOf(error) })
-            );
-          }
-        );
+      const retryWorkflow = () => {
+        const id2 = definitionRef.current;
+        if (id2 === void 0) return;
+        const token = ++workflowToken.current;
+        loadWorkflowPage(loadId.current, token, id2, "initial");
       };
       const mergeRuns = () => {
         if (stateRef.current.refreshing === true) return;
@@ -13605,7 +14107,7 @@ window.__ModuleLoader__.load({
                   ...current.loaded,
                   runs: pageOf(
                     page,
-                    sortNewestFirst(dedupeRuns([...current.loaded.runs.items, ...page.runs]))
+                    sortNewestFirst(dedupeRuns([...current.loaded.runs.items, ...page.runs ?? []]))
                   )
                 }
               };
@@ -13620,19 +14122,98 @@ window.__ModuleLoader__.load({
           }
         );
       };
+      const mergeWorkflowRuns = () => {
+        if (stateRef.current.refreshing === true) return;
+        const id2 = definitionRef.current;
+        const next = workflowRef.current.runs?.next;
+        if (id2 === void 0 || next === void 0) return;
+        const key = `workflowRuns:${next}`;
+        if (pendingPages.current.has(key)) return;
+        const generation = loadId.current;
+        const token = workflowToken.current;
+        pendingPages.current.add(key);
+        setPageStates((current) => updatePageState(current, "workflowRuns", { key, phase: "loading" }));
+        void requestJson(
+          runsUrl(sessionId, next, void 0, { definition: id2 })
+        ).then(
+          (page) => {
+            if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return;
+            pendingPages.current.delete(key);
+            workflowRunsPages.current += 1;
+            setPageStates((current) => updatePageState(current, "workflowRuns", void 0));
+            setWorkflow((current) => {
+              if (current.runs === void 0) return current;
+              return {
+                ...current,
+                runs: pageOf(
+                  page,
+                  sortNewestFirst(dedupeRuns([...current.runs.items, ...page.runs ?? []]))
+                )
+              };
+            });
+          },
+          (error) => {
+            if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return;
+            pendingPages.current.delete(key);
+            setPageStates(
+              (current) => updatePageState(current, "workflowRuns", {
+                key,
+                phase: "error",
+                message: messageOf(error)
+              })
+            );
+          }
+        );
+      };
+      const mergeHistory = () => {
+        if (stateRef.current.refreshing === true) return;
+        const id2 = definitionRef.current;
+        const next = workflowRef.current.events?.next;
+        if (id2 === void 0 || next === void 0) return;
+        const key = `history:${next}`;
+        if (pendingPages.current.has(key)) return;
+        const generation = loadId.current;
+        const token = workflowToken.current;
+        pendingPages.current.add(key);
+        setPageStates((current) => updatePageState(current, "history", { key, phase: "loading" }));
+        void requestJson(eventsUrl(sessionId, next)).then(
+          (page) => {
+            if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return;
+            pendingPages.current.delete(key);
+            historyPages.current += 1;
+            setPageStates((current) => updatePageState(current, "history", void 0));
+            setWorkflow((current) => {
+              if (current.events === void 0) return current;
+              return {
+                ...current,
+                events: pageOf(page, [...current.events.items, ...page.events ?? []])
+              };
+            });
+          },
+          (error) => {
+            if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return;
+            pendingPages.current.delete(key);
+            setPageStates(
+              (current) => updatePageState(current, "history", { key, phase: "error", message: messageOf(error) })
+            );
+          }
+        );
+      };
       let body;
       if (state.phase === "loading") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(LoadingLine, { t });
+        body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t });
       } else if (state.phase === "error") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(ErrorLine, { message: state.message ?? "", t, onRetry: () => load("initial") });
+        body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ErrorLine, { message: state.message ?? "", t, onRetry: () => load("initial") });
       } else {
-        body = /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        body = /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
           WorkflowsLoaded,
           {
             loaded: state.loaded,
             t,
             sessionId,
             segment,
+            ...definitionId === void 0 ? {} : { definition: definitionId },
+            workflow,
             ...selected2 === void 0 ? {} : { selected: selected2 },
             ...detail === void 0 ? {} : { detail },
             ...missing ? { missing: true } : {},
@@ -13642,25 +14223,29 @@ window.__ModuleLoader__.load({
             pageStates,
             scrollRef,
             onSegment: setSegment,
-            onSelect: (runId) => openRun(runId, true),
-            onOpenRun: (runId) => openRun(runId, false),
-            onBack: back,
+            onOpenWorkflow: openWorkflowPage,
+            onBackWorkflow: backFromWorkflow,
+            onRetryWorkflow: retryWorkflow,
+            onOpenWorkflowRun: (runId) => openRun(runId, "workflow"),
+            onLoadWorkflowRuns: mergeWorkflowRuns,
+            onLoadHistory: mergeHistory,
+            onSelect: (runId) => openRun(runId, "runs"),
+            onBack: backFromRun,
             onRetryDetail: retryDetail,
             onRefresh: () => load("background"),
             onRetryRefresh: () => load("background"),
-            onLoadEvents: mergeEvents,
             onLoadRuns: mergeRuns
           }
         );
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf", "data-state": state.phase, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("style", { children: VIEW_CSS }),
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf", "data-state": state.phase, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("style", { children: VIEW_CSS }),
         body
       ] });
     }
 
     // packages/plugin-workflows/src/client/index.tsx
-    var import_jsx_runtime13 = require("react/jsx-runtime");
+    var import_jsx_runtime14 = require("react/jsx-runtime");
     var ENTRY_LIMITATION = "The host exposes no command that opens a conversation view; the Workflows tab is the entry.";
     var inject = ["slots", "locale", "resources"];
     var DESIGN_ID = "@dsh-setup/plugin-workflows/design";
@@ -13681,7 +14266,7 @@ window.__ModuleLoader__.load({
             "conversation.view",
             () => slots.register(
               { name: "conversation.view", id: "workflows", order: 30, label: () => t("view.label") },
-              (props) => /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+              (props) => /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
                 WorkflowsView,
                 {
                   t,
@@ -13735,7 +14320,7 @@ window.__ModuleLoader__.load({
             "sidebar.right.pane.tab",
             () => slots.register(
               { name: "sidebar.right.pane.tab", key: DESIGN_ID, locale: NS },
-              (props) => /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(DesignPage, { ...props })
+              (props) => /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(DesignPage, { ...props })
             )
           )
         );

@@ -582,3 +582,90 @@ describe('workflows read API', () => {
     expect(text.length).toBeLessThan(400)
   })
 })
+
+describe('workflow statistics', () => {
+  async function recordRun(
+    workspace: string,
+    id: string,
+    status: string,
+    definition = 'retro',
+  ): Promise<void> {
+    const directory = join(workspace, '.dsh', 'workflows', 'runs')
+    await mkdir(directory, { recursive: true })
+    await writeFile(
+      join(directory, `${id}.json`),
+      JSON.stringify({
+        v: 1,
+        id,
+        definition: { id: definition, name: definition, version: 1 },
+        status,
+        session: 's1',
+        steps: [],
+        createdAt: 1_762_500_000_000,
+      }),
+      'utf8',
+    )
+  }
+
+  it('counts each trigger evaluation and reports zero for an unevaluated trigger', async () => {
+    const value = await setup()
+    const records = [
+      [{ id: 'agent-turn-stop', matched: true, reason: 'run-created' }],
+      [{ id: 'agent-turn-stop', matched: false, reason: 'filter-mismatch' }],
+      [{ id: 'definition:retro', matched: true, reason: 'run-created' }],
+    ]
+    for (const [index, triggers] of records.entries()) {
+      const { record } = value.journal.record(input({ at: 1000 + index, triggers }))
+      await value.journal.append(value.workspaceOne, record)
+    }
+    const response = await request(value, TRIGGERS_ROUTE, { session: 's1' })
+    const body = response.body as {
+      triggers: Array<{
+        id: string
+        counts: { matched: number; total: number }
+        last?: { matched: boolean; reason: string }
+      }>
+    }
+    const fired = body.triggers.find((entry) => entry.id === 'agent-turn-stop')
+    expect(fired?.counts).toEqual({ matched: 1, total: 2 })
+    expect(fired?.last).toMatchObject({ matched: false, reason: 'filter-mismatch' })
+    const untouched = body.triggers.find(
+      (entry) => entry.id !== 'agent-turn-stop' && entry.id !== 'definition:retro',
+    )
+    expect(untouched?.counts).toEqual({ matched: 0, total: 0 })
+  })
+
+  it('aggregates per-definition run counts by the stored lifecycle', async () => {
+    const value = await setup()
+    for (const status of [
+      'completed',
+      'failed',
+      'cancelled',
+      'interrupted',
+      'running',
+      'blocked',
+    ]) {
+      await recordRun(value.workspaceOne, `run-${status}`, status)
+    }
+    const stats = await request(value, RUNS_ROUTE, { session: 's1', query: 'stats=1' })
+    expect(stats.status).toBe(200)
+    const definitions = (
+      stats.body as { stats: { definitions: Record<string, Record<string, number>> } }
+    ).stats.definitions
+    expect(definitions.retro).toMatchObject({
+      completed: 1,
+      failed: 1,
+      cancelled: 1,
+      interrupted: 1,
+      running: 1,
+      blocked: 1,
+      total: 6,
+    })
+    const paged = await request(value, RUNS_ROUTE, { session: 's1' })
+    const runs = (paged.body as { runs: Array<{ status: string; lifecycle?: string }> }).runs
+    expect(runs.some((run) => run.status === 'running' && run.lifecycle === 'interrupted')).toBe(
+      true,
+    )
+    expect(runs.some((run) => run.status === 'failed' && run.lifecycle === 'cancelled')).toBe(true)
+  })
+})

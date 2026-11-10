@@ -7,19 +7,10 @@ import {
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
-import {
-  formatTime,
-  type HealthView,
-  type JournalEvent,
-  projectedRunId,
-  type RunView,
-  reasonLabel,
-  type Translate,
-} from './panel.tsx'
+import { formatTime, type HealthView, type RunView, type Translate } from './panel.tsx'
 
 /**
- * The session run history: the status line, the newest-first run rows, and the
- * journal segment whose evaluations render beside the event they evaluated.
+ * The session run history: the status line and the newest-first run rows.
  * Every component is a pure function of host data.
  */
 
@@ -180,87 +171,5 @@ export function RunList(props: {
         <RunRow key={run.id} run={run} t={t} now={now} onOpen={() => props.onOpen?.(run.id)} />
       ))}
     </AnimatedRows>
-  )
-}
-
-/** A run link from an evaluation: only an evaluation with a run id renders one. */
-function runLink(runId: string, t: Translate, open: (runId: string) => void): ReactNode {
-  return (
-    <Button type="button" variant="ghost" size="sm" data-run={runId} onClick={() => open(runId)}>
-      {t('events.openRun')}
-    </Button>
-  )
-}
-
-/** One event's triggers, each with its recorded reason and any run link. */
-function Evaluations(props: {
-  readonly event: JournalEvent
-  readonly t: Translate
-  open(runId: string): void
-}): ReactNode {
-  const { event, t } = props
-  const evaluations = event.triggers ?? []
-  if (evaluations.length === 0) return null
-  return (
-    <ul className="dsh-wf-evaluations" aria-label={t('events.evaluations')}>
-      {evaluations.map((evaluation) => {
-        // The producer records a bare engine run id; the projection adds its
-        // source prefix, so the journal link must address the projected run.
-        const runId = evaluation.runId === undefined ? undefined : projectedRunId(evaluation.runId)
-        return (
-          <li
-            key={evaluation.id}
-            data-trigger={evaluation.id}
-            data-matched={evaluation.matched ? 'true' : 'false'}
-          >
-            <span className="dsh-wf-trigger">{evaluation.id}</span>
-            <span className="dsh-wf-reason">{reasonLabel(evaluation.reason, t)}</span>
-            {evaluation.path === undefined ? null : (
-              <span className="dsh-wf-muted">{`${t('triggers.filter')}: ${evaluation.path}`}</span>
-            )}
-            {evaluation.filter === undefined ? null : (
-              <span className="dsh-wf-muted">{evaluation.filter}</span>
-            )}
-            {evaluation.detail === undefined ? null : (
-              <span className="dsh-wf-muted">{evaluation.detail}</span>
-            )}
-            {runId === undefined ? null : runLink(runId, t, props.open)}
-          </li>
-        )
-      })}
-    </ul>
-  )
-}
-
-/** The journal segment: events in time order with their evaluations inline. */
-export function JournalList(props: {
-  readonly events: readonly JournalEvent[]
-  readonly t: Translate
-  readonly onOpenRun?: (runId: string) => void
-}): ReactNode {
-  const { events, t } = props
-  if (events.length === 0) {
-    return (
-      <p className="dsh-wf-muted" data-section="journal" data-state="empty">
-        {t('events.empty')}
-      </p>
-    )
-  }
-  const open = props.onOpenRun ?? (() => {})
-  return (
-    <ol className="dsh-wf-events" data-section="journal">
-      {events.map((event, index) => (
-        <li key={`${String(event.at)}:${String(index)}`} data-kind={event.kind}>
-          <div className="dsh-wf-event-head">
-            <span className="dsh-wf-time">{formatTime(event.at, t)}</span>
-            <Tag tone="quiet">{event.kind}</Tag>
-            <span className="dsh-wf-subject">{event.subject}</span>
-            <span className="dsh-wf-summary">{event.summary}</span>
-            {event.truncated ? <Tag tone="warning">{t('events.truncated')}</Tag> : null}
-          </div>
-          <Evaluations event={event} t={t} open={open} />
-        </li>
-      ))}
-    </ol>
   )
 }

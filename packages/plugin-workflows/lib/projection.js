@@ -4,6 +4,14 @@ import { join } from 'node:path';
 import { isInside } from './fs-change.js';
 import { redactPayload, redactText } from './redact.js';
 import { definitionRefOf } from './runs.js';
+const RUN_LIFECYCLES = new Set([
+    'completed',
+    'failed',
+    'cancelled',
+    'interrupted',
+    'running',
+    'blocked',
+]);
 export const KNOWN_STEP_STATES = new Set(['open', 'done', 'blocked', 'failed', 'cancelled']);
 const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints');
 export const DELEGATION_DIR = join('.dsh', 'delegation');
@@ -698,6 +706,9 @@ export async function engineRuns(workspace) {
                 : statusValue === 'running' || statusValue === 'blocked' || statusValue === 'interrupted'
                     ? 'running'
                     : 'unknown';
+        const lifecycle = typeof statusValue === 'string' && RUN_LIFECYCLES.has(statusValue)
+            ? statusValue
+            : undefined;
         const steps = [];
         for (const entry of Array.isArray(record.steps) ? record.steps : []) {
             if (!isRecord(entry) || typeof entry.id !== 'string')
@@ -781,6 +792,7 @@ export async function engineRuns(workspace) {
             title: subject === undefined ? definition.name : `${definition.name} · ${subject}`,
             startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
             status,
+            ...(lifecycle === undefined ? {} : { lifecycle }),
             steps,
             definition,
             ...(trigger === undefined ? {} : { trigger }),

@@ -1097,7 +1097,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 }
                 let first: StartRunOutcome | undefined
                 let suppressed: StartRunOutcome | undefined
-                for (const taskId of taskReviewTaskIds) {
+                // Task identity hashes only the text, so two checked tasks with
+                // the same text share an id and must not start two runs.
+                for (const taskId of new Set(taskReviewTaskIds)) {
                   // A live run for the same change and task already owns the
                   // obligation; a dead-session run must not block the new one.
                   const duplicate = knownRuns.find(
@@ -1703,16 +1705,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const markSessionRunsInterrupted = async (
     sessionId: string,
     workspace: string,
+    expectedGenerations: ReadonlyMap<string, number>,
   ): Promise<void> => {
     const auth = storedAuth ?? (await ensureAuth())
     if (auth === undefined) return
-    const observed = await stableRuns(workspace, auth)
-    const epochs = observed.generations
-    for (const run of observed.runs) {
+    const observed = await listAuthenticatedRuns(workspace, auth)
+    for (const run of observed) {
       if (run.session !== sessionId) continue
       if (run.status !== 'running' && run.status !== 'blocked') continue
+      // Bind to the generation captured when the disposal event arrived; a run
+      // resumed afterwards must not be interrupted by this delayed batch.
+      if ((expectedGenerations.get(run.id) ?? 0) !== runGeneration(run.id)) continue
       await withRunLock(run.id, async () => {
-        if (epochs.get(run.id) !== runGeneration(run.id)) return
+        if ((expectedGenerations.get(run.id) ?? 0) !== runGeneration(run.id)) return
         const current = await readAuthenticatedRun(workspace, run.id, auth)
         if (current === undefined) return
         if (current.status !== 'running' && current.status !== 'blocked') return
@@ -1736,14 +1741,18 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   listen(() =>
     ctx.on('agent/disposed', ({ agent }) => {
       // Fence the session synchronously; the store read below is asynchronous
-      // and an in-flight advance must not win the race.
+      // and an in-flight advance must not win the race. The generation snapshot
+      // binds this disposal to the state at the event.
       endedSessionIds.add(String(agent.session.id))
+      const expectedGenerations = new Map(runGenerations)
       try {
         const workspace = workspaceFor(services, agent.session)
         if (workspace === undefined) return undefined
-        void markSessionRunsInterrupted(String(agent.session.id), workspace).catch(
-          (error: unknown) => publishListenerError(workspace, error),
-        )
+        void markSessionRunsInterrupted(
+          String(agent.session.id),
+          workspace,
+          expectedGenerations,
+        ).catch((error: unknown) => publishListenerError(workspace, error))
       } catch (error) {
         publishListenerError(workspaceFor(services, agent.session), error)
       }

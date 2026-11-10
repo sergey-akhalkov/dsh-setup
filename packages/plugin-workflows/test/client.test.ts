@@ -71,7 +71,6 @@ interface LoadedModule {
   DefinitionHistory?: (props: Record<string, unknown>) => unknown
   WorkflowOverview?: (props: Record<string, unknown>) => unknown
   WorkflowPage?: (props: Record<string, unknown>) => unknown
-  JournalList?: (props: Record<string, unknown>) => unknown
   RunDetailPage?: (props: Record<string, unknown>) => unknown
   MissingRunPage?: (props: Record<string, unknown>) => unknown
   TriggersTable?: (props: Record<string, unknown>) => unknown

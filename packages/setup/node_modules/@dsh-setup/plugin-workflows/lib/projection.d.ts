@@ -6,6 +6,8 @@
 export type RunSource = 'checkpoint' | 'delegation' | 'review' | 'workflow';
 export type RunAttribution = 'local' | 'portable' | 'unattributed';
 export type RunStatus = 'running' | 'done' | 'failed' | 'unknown';
+/** The stored lifecycle of a workflow run, before the display status folds it. */
+export type RunLifecycle = 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'running' | 'blocked';
 /** One step of a projected run; evidence is the file, call id, or target. */
 export interface RunStep {
     readonly id: string;
@@ -46,6 +48,8 @@ export interface RunView {
     readonly title: string;
     readonly startedAt: number;
     readonly status: RunStatus;
+    /** The stored lifecycle, before the display status folds the six states. */
+    readonly lifecycle?: RunLifecycle;
     readonly steps: readonly RunStep[];
     /** The recorded definition identity; workflow runs only. */
     readonly definition?: RunDefinitionView;

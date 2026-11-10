@@ -62,7 +62,7 @@ function resolveSession(services, request) {
         return { response: json(400, { error: 'the session workspace is unavailable' }) };
     }
 }
-/** Every stored evaluation for a session, keyed by trigger, last one wins. */
+/** Every stored evaluation for a session: last one wins, plus the counters. */
 async function lastEvaluations(services, workspace, session) {
     const latest = new Map();
     let cursor = 0;
@@ -70,10 +70,13 @@ async function lastEvaluations(services, workspace, session) {
         const page = await services.journal.read(workspace, session, cursor, MAX_LIMIT);
         for (const record of page.records) {
             for (const evaluation of record.triggers ?? []) {
+                const previous = latest.get(evaluation.id);
                 latest.set(evaluation.id, {
                     at: record.at,
                     matched: evaluation.matched,
                     reason: evaluation.reason,
+                    matchedCount: (previous?.matchedCount ?? 0) + (evaluation.matched ? 1 : 0),
+                    total: (previous?.total ?? 0) + 1,
                 });
             }
         }
@@ -202,6 +205,32 @@ export function createWorkflowRoutes(services) {
             // Resolved after attribution, so another session's run is never returned.
             if (run !== null && run !== '')
                 runs = runs.filter((entry) => entry.id === run);
+            if (url.searchParams.get('stats') === '1') {
+                const definitions = {};
+                for (const entry of runs) {
+                    if (entry.definition === undefined)
+                        continue;
+                    const bucket = entry.lifecycle ??
+                        (entry.status === 'done'
+                            ? 'completed'
+                            : entry.status === 'failed'
+                                ? 'failed'
+                                : 'running');
+                    const counts = definitions[entry.definition.id] ?? {
+                        completed: 0,
+                        failed: 0,
+                        cancelled: 0,
+                        interrupted: 0,
+                        running: 0,
+                        blocked: 0,
+                        total: 0,
+                    };
+                    definitions[entry.definition.id] = counts;
+                    counts[bucket] = (counts[bucket] ?? 0) + 1;
+                    counts.total = (counts.total ?? 0) + 1;
+                }
+                return json(200, { session: resolved.session, stats: { definitions } });
+            }
             // A definition-filtered request is the editor overlay: newest first.
             if ((definition ?? '') !== '' || order === 'newest')
                 runs = [...runs].reverse();
@@ -220,30 +249,45 @@ export function createWorkflowRoutes(services) {
                 return resolved.response;
             const evaluations = await lastEvaluations(services, resolved.workspace, resolved.session);
             const definitions = services.definitionsFor?.(resolved.workspace) ?? [];
+            const lastOf = (id) => {
+                const evaluation = evaluations.get(id);
+                return evaluation === undefined
+                    ? undefined
+                    : { at: evaluation.at, matched: evaluation.matched, reason: evaluation.reason };
+            };
+            const countsOf = (id) => {
+                const evaluation = evaluations.get(id);
+                return { matched: evaluation?.matchedCount ?? 0, total: evaluation?.total ?? 0 };
+            };
             return json(200, {
                 session: resolved.session,
                 triggers: [
-                    ...services.triggers.map((trigger) => ({
-                        id: trigger.id,
-                        event: trigger.event,
-                        filter: trigger.filter,
-                        mode: trigger.mode,
-                        dedupe: trigger.dedupe,
-                        ...(evaluations.get(trigger.id) === undefined
-                            ? {}
-                            : { last: evaluations.get(trigger.id) }),
-                    })),
-                    ...definitions.map((definition) => ({
-                        id: `definition:${definition.id}`,
-                        event: definition.trigger.kind,
-                        filter: definition.trigger.match,
-                        mode: definition.trigger.mode,
-                        dedupe: definition.trigger.dedupe,
-                        source: 'workflow-definition',
-                        ...(evaluations.get(`definition:${definition.id}`) === undefined
-                            ? {}
-                            : { last: evaluations.get(`definition:${definition.id}`) }),
-                    })),
+                    ...services.triggers.map((trigger) => {
+                        const last = lastOf(trigger.id);
+                        return {
+                            id: trigger.id,
+                            event: trigger.event,
+                            filter: trigger.filter,
+                            mode: trigger.mode,
+                            dedupe: trigger.dedupe,
+                            ...(last === undefined ? {} : { last }),
+                            counts: countsOf(trigger.id),
+                        };
+                    }),
+                    ...definitions.map((definition) => {
+                        const id = `definition:${definition.id}`;
+                        const last = lastOf(id);
+                        return {
+                            id,
+                            event: definition.trigger.kind,
+                            filter: definition.trigger.match,
+                            mode: definition.trigger.mode,
+                            dedupe: definition.trigger.dedupe,
+                            source: 'workflow-definition',
+                            ...(last === undefined ? {} : { last }),
+                            counts: countsOf(id),
+                        };
+                    }),
                 ],
             });
         }),

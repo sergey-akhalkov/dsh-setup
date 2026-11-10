@@ -15,6 +15,24 @@ export type RunSource = 'checkpoint' | 'delegation' | 'review' | 'workflow'
 export type RunAttribution = 'local' | 'portable' | 'unattributed'
 export type RunStatus = 'running' | 'done' | 'failed' | 'unknown'
 
+/** The stored lifecycle of a workflow run, before the display status folds it. */
+export type RunLifecycle =
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'running'
+  | 'blocked'
+
+const RUN_LIFECYCLES = new Set<RunLifecycle>([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+  'running',
+  'blocked',
+])
+
 /** One step of a projected run; evidence is the file, call id, or target. */
 export interface RunStep {
   readonly id: string
@@ -54,6 +72,8 @@ export interface RunView {
   readonly title: string
   readonly startedAt: number
   readonly status: RunStatus
+  /** The stored lifecycle, before the display status folds the six states. */
+  readonly lifecycle?: RunLifecycle
   readonly steps: readonly RunStep[]
   /** The recorded definition identity; workflow runs only. */
   readonly definition?: RunDefinitionView
@@ -917,6 +937,10 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
           : statusValue === 'running' || statusValue === 'blocked' || statusValue === 'interrupted'
             ? 'running'
             : 'unknown'
+    const lifecycle: RunLifecycle | undefined =
+      typeof statusValue === 'string' && RUN_LIFECYCLES.has(statusValue as RunLifecycle)
+        ? (statusValue as RunLifecycle)
+        : undefined
     const steps: RunStep[] = []
     for (const entry of Array.isArray(record.steps) ? record.steps : []) {
       if (!isRecord(entry) || typeof entry.id !== 'string') continue
@@ -1010,6 +1034,7 @@ export async function engineRuns(workspace: string): Promise<RunView[]> {
       title: subject === undefined ? definition.name : `${definition.name} · ${subject}`,
       startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
       status,
+      ...(lifecycle === undefined ? {} : { lifecycle }),
       steps,
       definition,
       ...(trigger === undefined ? {} : { trigger }),
