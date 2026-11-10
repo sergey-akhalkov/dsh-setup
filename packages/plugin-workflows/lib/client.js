@@ -13645,7 +13645,7 @@ window.__ModuleLoader__.load({
       return { definitions };
     }
     async function readLatestRuns(session, definitionIds) {
-      let failed2 = false;
+      const failed2 = [];
       const entries = await Promise.all(
         definitionIds.map(async (id2) => {
           try {
@@ -13655,7 +13655,7 @@ window.__ModuleLoader__.load({
             const run = body.runs?.find((entry) => entry.definition?.id === id2);
             return run === void 0 ? void 0 : [id2, run];
           } catch {
-            failed2 = true;
+            failed2.push(id2);
             return void 0;
           }
         })
@@ -13949,7 +13949,13 @@ window.__ModuleLoader__.load({
             );
             if (isStaleGeneration(generation, loadId.current)) return;
             const previousLatest = stateRef.current.loaded?.latestRuns;
-            const latestRuns = mode === "background" && previousLatest !== void 0 ? { ...previousLatest, ...latestResult.latest } : latestResult.latest;
+            const retained = {};
+            if (mode === "background" && previousLatest !== void 0) {
+              for (const id2 of latestResult.failed) {
+                if (Object.hasOwn(previousLatest, id2)) retained[id2] = previousLatest[id2];
+              }
+            }
+            const latestRuns = { ...retained, ...latestResult.latest };
             runsPages.current = runPages;
             setState({
               phase: "ready",
@@ -13961,14 +13967,17 @@ window.__ModuleLoader__.load({
                 latestRuns,
                 ...stats === void 0 ? {} : { stats }
               },
-              ...latestResult.failed ? { refreshError: t("overview.latestUnavailable") } : {}
+              ...latestResult.failed.length === 0 ? {} : { refreshError: t("overview.latestUnavailable") }
             });
             const open = selectedRef.current;
             if (open !== void 0) {
-              if (runs.items.some((run) => run.id === open)) {
+              const feed = runs.items.find((run) => run.id === open);
+              const workflowCopy = workflowRef.current.runs?.items.find((run) => run.id === open);
+              const preferred = runOrigin.current === "workflow" ? workflowCopy ?? feed : feed ?? workflowCopy;
+              if (preferred !== void 0) {
                 lookupId.current += 1;
-                knownRun.current = runs.items.find((run) => run.id === open);
-                setDetail(void 0);
+                knownRun.current = preferred;
+                setDetail(preferred);
                 setMissing(false);
                 setDetailError(void 0);
               } else {
@@ -13992,6 +14001,11 @@ window.__ModuleLoader__.load({
             if (openDefinition !== void 0 && workflowRef.current.phase !== "ready") {
               const token = ++workflowToken.current;
               loadWorkflowPage(generation, token, openDefinition, "initial");
+            }
+            const openRun2 = selectedRef.current;
+            if (openRun2 !== void 0) {
+              const token = ++lookupId.current;
+              resolveSelected(generation, token, sessionId, openRun2);
             }
           }
         );
