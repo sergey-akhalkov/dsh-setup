@@ -462,10 +462,15 @@ shipped map in `packages/setup/defaults.yml`:
 [`packages/plugin-workflows`](../packages/plugin-workflows) adds a **Workflows** conversation view
 (order 30, directly after Observability), a **Workflow design** page in the right sidebar (opened from
 the Start guide card when the sidebar services exist), and a read-only Host recorder. The session tab
-answers what ran in this session: one status line, the session's runs newest first, one run's detail
-page, and a Journal segment whose events carry their trigger evaluations inline. The design page holds
-the definition list, the editor, the trigger catalog with its last evaluation, and the receipts. Neither
-surface steers, injects, blocks, or runs a workflow.
+has two segments, `Workflows` and `Runs`. `Workflows` groups the installed definitions by trigger kind
+with each definition's own mode and filter, the group's firing count (`matched/total` summed over the
+bound definitions' own evaluations) and each workflow's `completed / total` runs with separate
+`failed`, `running`, `cancelled` and `interrupted` counts; selecting a workflow opens its page with the
+definition's description, ordered step chain, trigger binding, its runs and its evaluation history.
+`Runs` is the session's all-runs feed with one run's detail page. The design page holds the definition
+list, the editor, the trigger catalog with its last evaluation, and the receipts. Neither surface
+steers, injects, blocks, or runs a workflow. **Breaking:** the `Journal` segment is removed; its
+content moved to the workflow page's evaluation history.
 
 The Host records `agent/pre-step`, `agent/turn-stopping`, `tools/result`, `subagent/start` and
 `subagent/end` events as one bounded JSONL record per event under
@@ -490,19 +495,26 @@ recorded definition name and the recorded subject (change, checkpoint turn, or t
 recorded trigger and, once terminal, the latest settlement time of their recorded steps. A run row shows
 the title, trigger (or legacy source), relative start time with the absolute time on hover, status and
 duration; selecting it replaces the list with the detail page, and its back control restores the scroll
-position and focus. The Journal segment renders each event's evaluations beside it and links only an
-evaluation that carries a run id.
+position and focus. The workflow page's evaluation history renders only that definition's
+evaluations (`definition:<id>`) beside their events, with the event time, matched state and plain
+reason, and links only an evaluation that carries a run id.
 
 The read API is carrier-neutral and GET-only: `GET /api/workflows/events?session=<id>`,
 `GET /api/workflows/runs?session=<id>`, `GET /api/workflows/triggers?session=<id>`,
 `GET /api/workflows/health?session=<id>` and
-`GET /api/workflows/evidence?session=<id>&path=<relative>` for redacted record links. Every route
-resolves the workspace from the session, scopes reads to it, refuses a path outside the workspace, and
-returns a bounded error body; a non-GET method is 405. The `events` and `runs` routes accept `limit`
-(default 50, max 200) and a `cursor`; `runs` also accepts `order=newest` (reverse after the source and
-definition filters, before paging) and `run=<id>` (one attributed run, resolved after session
-attribution). `triggers`, `health` and `evidence` return one unpaginated response. A host without the
-connection fetch registry registers no API.
+`GET /api/workflows/evidence?session=<id>&path=<relative>` for redacted record links. Every trigger
+entry carries `counts: { matched, total }` for the requesting session (`0/0` when it never
+evaluated), and the `runs` route accepts `stats=1`, which skips paging and returns
+`{ session, stats: { definitions: { <id>: { completed, failed, cancelled, interrupted, running,
+blocked, total } } } }` so the overview reads one per-definition summary instead of every run. Each
+projected run also carries an additive `lifecycle` field with the stored status behind the lossy
+displayed one. Both extensions add reads only: every route resolves the workspace from the session,
+scopes reads to it, refuses a path outside the workspace, and returns a bounded error body; a non-GET
+method is 405. The `events` and `runs` routes accept `limit` (default 50, max 200) and a `cursor`;
+`runs` also accepts `order=newest` (reverse after the source and definition filters, before paging)
+and `run=<id>` (one attributed run, resolved after session attribution). `triggers`, `health` and
+`evidence` return one unpaginated response. A host without the connection fetch registry registers no
+API. The view performs only GET requests and writes nothing.
 
 `health.json` beside the journal carries the listener count (5 expected), last event time, journal
 writability, trigger count and last error. A 60-second self-check writes it, and the status line
