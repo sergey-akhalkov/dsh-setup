@@ -6,11 +6,12 @@ import { createWorkflowRoutes, RUNS_ROUTE } from '../src/host/api.ts'
 import { installDefinition, loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { loadShippedDefinitions } from '../src/host/definitions.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
-import { engineRuns } from '../src/host/projection.ts'
+import { engineRuns, hashSession } from '../src/host/projection.ts'
 import {
   addViolation,
   classifyFailure,
   createRun,
+  incrementTurnBlocks,
   readAuthenticatedRun,
   runsDirectory,
   setRunStatus,
@@ -260,6 +261,172 @@ describe('run provenance record', () => {
       { stepId: 'two', at: 1_250, reason: 'the user bypassed the step' },
     ])
   })
+
+  it('composes the title from the recorded definition and subject', async () => {
+    const workspace = await tempWorkspace()
+    const runs = [
+      createRun({
+        definition: { id: 'change-intake', name: 'OpenSpec change intake', version: 1 },
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace,
+        context: { name: 'redesign-workflows-ui' },
+        steps: ['requirements'],
+        id: 'run-intake',
+        now: 1_000,
+      }),
+      createRun({
+        definition: { id: 'retro', name: 'Work checkpoint', version: 1 },
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { checkpoint: `.dsh/work-checkpoints/${hashSession('session-1')}/6.json` },
+        steps: ['gate'],
+        id: 'run-retro',
+        now: 1_000,
+      }),
+      createRun({
+        definition: { id: 'task-review', name: 'Task review', version: 1 },
+        trigger: 'fs.change',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth', taskId: '9090eae78b47a85c' },
+        steps: ['review'],
+        id: 'run-review',
+        now: 1_000,
+      }),
+      createRun({
+        definition: { id: 'retro', name: 'Work checkpoint', version: 1 },
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { checkpoint: '', name: 'fallback-change' },
+        steps: ['gate'],
+        id: 'run-empty-checkpoint',
+        now: 1_000,
+      }),
+      createRun({
+        definition: { id: 'retro', name: 'Work checkpoint', version: 1 },
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        context: { checkpoint: '.dsh/work-checkpoints/abc123/', name: 'fallback-change' },
+        steps: ['gate'],
+        id: 'run-directory-checkpoint',
+        now: 1_000,
+      }),
+      createRun({
+        definition: { id: 'verify', name: 'Verification check', version: 1 },
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        steps: ['checks'],
+        id: 'run-verify',
+        now: 1_000,
+      }),
+    ]
+    for (const run of runs) await writeRun(workspace, run, auth())
+    const views = await engineRuns(workspace)
+    const titleOf = (id: string): string | undefined =>
+      views.find((view) => view.id === `workflow:${id}`)?.title
+    expect(titleOf('run-intake')).toBe('OpenSpec change intake · redesign-workflows-ui')
+    expect(titleOf('run-retro')).toBe('Work checkpoint · turn 6')
+    // An absent or directory-only checkpoint is not turn 0; the change names it.
+    expect(titleOf('run-empty-checkpoint')).toBe('Work checkpoint · fallback-change')
+    expect(titleOf('run-directory-checkpoint')).toBe('Work checkpoint · fallback-change')
+    // A task review's subject is the task, not the change it belongs to.
+    expect(titleOf('run-review')).toBe('Task review · 9090eae7')
+    expect(titleOf('run-verify')).toBe('Verification check')
+  })
+
+  it('exposes the recorded trigger and derives the terminal time from settled steps', async () => {
+    const workspace = await tempWorkspace()
+    const running = settleStep(
+      createRun({
+        definition: 'demo',
+        definitionName: 'Demo',
+        definitionVersion: 1,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        steps: ['one'],
+        id: 'run-running',
+        now: 1_000,
+      }),
+      'one',
+      'done',
+      { at: 1_100 },
+    )
+    await writeRun(workspace, running, auth())
+    const completed = setRunStatus(
+      settleStep(
+        createRun({
+          definition: 'demo',
+          definitionName: 'Demo',
+          definitionVersion: 1,
+          trigger: 'turn.stopping',
+          session: 'session-1',
+          workspace,
+          steps: ['one'],
+          id: 'run-completed',
+          now: 2_000,
+        }),
+        'one',
+        'done',
+        { at: 2_100 },
+      ),
+      'completed',
+      2_900,
+    )
+    await writeRun(workspace, completed, auth())
+    const empty = setRunStatus(
+      createRun({
+        definition: 'demo',
+        definitionName: 'Demo',
+        definitionVersion: 1,
+        trigger: 'turn.stopping',
+        session: 'session-1',
+        workspace,
+        steps: ['never-settled'],
+        id: 'run-empty',
+        now: 3_000,
+      }),
+      'completed',
+      3_900,
+    )
+    await writeRun(workspace, empty, auth())
+    const views = await engineRuns(workspace)
+    const view = (id: string): (typeof views)[number] | undefined =>
+      views.find((entry) => entry.id === `workflow:${id}`)
+    expect(view('run-running')?.trigger).toBe('turn.stopping')
+    expect(view('run-running')?.endedAt).toBeUndefined()
+    // The end time is the latest settlement, never the later update stamp.
+    expect(view('run-completed')?.endedAt).toBe(2_100)
+    expect(view('run-empty')?.endedAt).toBeUndefined()
+  })
+
+  it('keeps a completed retro terminal time after a later turn block and violation', async () => {
+    const workspace = await tempWorkspace()
+    let run = createRun({
+      definition: { id: 'retro', name: 'Work checkpoint', version: 1 },
+      trigger: 'turn.stopping',
+      session: 'session-1',
+      workspace,
+      context: { checkpoint: `.dsh/work-checkpoints/${hashSession('session-1')}/6.json` },
+      steps: ['gate'],
+      id: 'run-retro-late',
+      now: 1_000,
+    })
+    run = settleStep(run, 'gate', 'done', { at: 1_500 })
+    run = setRunStatus(run, 'completed', 1_600)
+    run = addViolation(run, 'the turn closed early', { step: 'gate', at: 2_000 })
+    run = incrementTurnBlocks(run, 2_500)
+    await writeRun(workspace, run, auth())
+    const view = (await engineRuns(workspace))[0]
+    expect(view?.endedAt).toBe(1_500)
+    expect(view?.violations).toHaveLength(1)
+    expect(view?.steps.some((step) => step.synthetic === true)).toBe(true)
+  })
 })
 
 describe('runs route definition filter', () => {
@@ -399,5 +566,68 @@ describe('runs route definition filter', () => {
     )
     // The projection uses the engine's own definition ids, not the shipped set.
     expect(loadShippedDefinitions().some((entry) => entry.id === 'alpha')).toBe(false)
+  })
+
+  it('orders newest first on request and resolves one attributed run', async () => {
+    const workspace = await tempWorkspace()
+    const write = async (id: string, session: string, now: number): Promise<void> => {
+      await writeRun(
+        workspace,
+        createRun({
+          definition: 'demo',
+          definitionName: 'Demo',
+          definitionVersion: 1,
+          trigger: 'turn.stopping',
+          session,
+          workspace,
+          steps: ['one'],
+          id,
+          now,
+        }),
+        auth(),
+      )
+    }
+    await write('run-old', 'session-1', 1_000)
+    await write('run-mid', 'session-1', 2_000)
+    await write('run-new', 'session-1', 3_000)
+    await write('run-other', 'session-2', 4_000)
+    const routes = createWorkflowRoutes({
+      agents: { get: () => ({ session: {} }) },
+      workingDirectory: { get: () => workspace },
+      journal: { read: async () => ({ records: [] }) } as never,
+      healthFor: () =>
+        ({
+          snapshot: () => ({ listenerCount: 5, journalWritable: true, triggerCount: 9 }),
+          stateFor: () => 'healthy',
+        }) as never,
+      triggers: [],
+    })
+    const runsRoute = routes.find((entry) => entry.path === RUNS_ROUTE)
+    if (runsRoute === undefined) throw new Error('the runs route was not registered')
+    const get = async (query: string): Promise<{ runs: Array<{ id: string }>; next?: string }> =>
+      (await (
+        await runsRoute.fetch(
+          new Request(`http://localhost${RUNS_ROUTE}?session=session-1&${query}`),
+        )
+      ).json()) as { runs: Array<{ id: string }>; next?: string }
+    const ascending = ['workflow:run-old', 'workflow:run-mid', 'workflow:run-new']
+    expect((await get('limit=10')).runs.map((run) => run.id)).toEqual(ascending)
+    expect((await get('limit=10&order=oldest')).runs.map((run) => run.id)).toEqual(ascending)
+    const first = await get('limit=2&order=newest')
+    expect(first.runs.map((run) => run.id)).toEqual(['workflow:run-new', 'workflow:run-mid'])
+    expect(first.next).toBe('2')
+    const second = await get(`limit=2&order=newest&cursor=${first.next ?? ''}`)
+    expect(second.runs.map((run) => run.id)).toEqual(['workflow:run-old'])
+    expect(second.next).toBeUndefined()
+    // A definition request is already newest first and is reversed once.
+    expect((await get('definition=demo&order=newest&limit=10')).runs.map((run) => run.id)).toEqual(
+      [...ascending].reverse(),
+    )
+    // The lookup is session-scoped and resolved after attribution.
+    expect((await get('run=workflow:run-mid')).runs.map((run) => run.id)).toEqual([
+      'workflow:run-mid',
+    ])
+    expect((await get('run=workflow:run-absent')).runs).toEqual([])
+    expect((await get('run=workflow:run-other')).runs).toEqual([])
   })
 })

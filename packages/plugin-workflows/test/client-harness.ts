@@ -109,7 +109,18 @@ ${output.text}
       }
     }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
-      return { Tag: (props: Record<string, unknown>) => jsx('tag', props) }
+      return {
+        Tag: (props: Record<string, unknown>) => jsx('tag', props),
+        Button: (props: Record<string, unknown>) => jsx('button', props),
+        Menu: (props: Record<string, unknown>) => jsx('menu', props),
+        DisclosureRow: (props: Record<string, unknown>) => jsx('disclosure', props),
+        SegmentedControl: (props: Record<string, unknown>) => jsx('segmented', props),
+        Tooltip: (props: Record<string, unknown>) => jsx('tooltip', props),
+        StateDot: (props: Record<string, unknown>) => jsx('statedot', props),
+        Pill: (props: Record<string, unknown>) => jsx('pill', props),
+        PathLabel: (props: Record<string, unknown>) =>
+          jsx('pathlabel', { ...props, children: props.path }),
+      }
     }
     return stubs[id] ?? {}
   })

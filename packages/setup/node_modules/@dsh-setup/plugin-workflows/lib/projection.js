@@ -609,6 +609,52 @@ export async function delegationObservations(workspace) {
         sessions.set(runId, entry.session);
     return sessions;
 }
+/** The checkpoint turn a recorded path names, as the run title shows it. */
+function checkpointSubject(path) {
+    const name = path.replaceAll('\\', '/').split('/').at(-1) ?? '';
+    const raw = name.replace(/\.json$/u, '');
+    // An empty basename (a directory path) is not a turn; Number('') would be 0.
+    if (!/^\d+$/u.test(raw))
+        return undefined;
+    const turn = Number(raw);
+    return Number.isSafeInteger(turn) ? `turn ${String(turn)}` : undefined;
+}
+/**
+ * The recorded subject of an engine run: the checkpoint turn, the reviewed
+ * task, or the observed change. A missing subject renders without one.
+ */
+function engineSubject(context) {
+    if (context === undefined)
+        return undefined;
+    if (typeof context.checkpoint === 'string') {
+        const turn = checkpointSubject(context.checkpoint);
+        if (turn !== undefined)
+            return turn;
+    }
+    if (typeof context.taskId === 'string' && context.taskId !== '') {
+        return safeText(context.taskId.slice(0, 8));
+    }
+    if (typeof context.name === 'string' && context.name !== '')
+        return safeText(context.name);
+    return undefined;
+}
+/**
+ * A terminal run's end time: the latest settlement time of its recorded steps.
+ * The record's update time moves after completion (a turn block or a later
+ * violation), so it is never an end time.
+ */
+function settledEnd(steps, terminal) {
+    if (!terminal)
+        return undefined;
+    let latest;
+    for (const entry of steps) {
+        if (!isRecord(entry) || typeof entry.at !== 'number' || !Number.isFinite(entry.at))
+            continue;
+        if (latest === undefined || entry.at > latest)
+            latest = entry.at;
+    }
+    return latest;
+}
 /**
  * Engine obligation runs from `.dsh/workflows/runs/`. They are display-only
  * here; authority reads authenticate them separately. A malformed or unsigned
@@ -722,16 +768,23 @@ export async function engineRuns(workspace) {
             name: safeText(definitionName) ?? definitionId,
             version: definitionRef.version,
         };
+        const subject = engineSubject(isRecord(record.context) ? record.context : undefined);
+        const trigger = typeof record.trigger === 'string' && record.trigger !== ''
+            ? safeText(record.trigger)
+            : undefined;
+        const endedAt = settledEnd(Array.isArray(record.steps) ? record.steps : [], status === 'done' || status === 'failed');
         runs.push({
             id: `workflow:${redactText(typeof record.id === 'string' ? record.id : id)}`,
             source: 'workflow',
             ...(session === undefined ? {} : { session }),
             attribution: session === undefined ? 'unattributed' : 'local',
-            title: `${definitionId} intake`,
+            title: subject === undefined ? definition.name : `${definition.name} · ${subject}`,
             startedAt: typeof record.createdAt === 'number' ? record.createdAt : 0,
             status,
             steps,
             definition,
+            ...(trigger === undefined ? {} : { trigger }),
+            ...(endedAt === undefined ? {} : { endedAt }),
             ...(violationViews.length === 0 ? {} : { violations: violationViews }),
             ...(typeof record.reason === 'string' && status === 'failed'
                 ? { error: safeError(record.reason) }

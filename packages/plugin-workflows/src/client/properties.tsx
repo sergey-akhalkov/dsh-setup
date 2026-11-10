@@ -1,3 +1,4 @@
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import { type ReactNode, useState } from 'react'
 import { connectChoices, currentTarget, EDGE_LABELS, outputKinds } from './edges.ts'
 import type { EditorState } from './editor.ts'
@@ -442,9 +443,9 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
         ? null
         : outputKinds(node.kind).map((kind) => selectTarget(props, node, kind))}
       <div className="dsh-wf-row-actions">
-        <button type="button" onClick={() => props.onDelete(node.id)}>
+        <Button type="button" variant="ghost" size="sm" onClick={() => props.onDelete(node.id)}>
           Delete step
-        </button>
+        </Button>
       </div>
     </>
   )

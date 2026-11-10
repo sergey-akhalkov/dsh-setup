@@ -1,3 +1,4 @@
+import { Button, DisclosureRow, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -42,7 +43,7 @@ import { fetchEditorApi } from './editor-client.ts'
 import type { EdgeKind, NodeKind } from './graph.ts'
 import { ListEditor } from './list.tsx'
 import { overlayFor, withOverlay } from './overlay.ts'
-import { Palette } from './palette.tsx'
+import { PaletteMenu } from './palette.tsx'
 import type { RunView, Translate } from './panel.tsx'
 import { PropertyPanel } from './properties.tsx'
 import { activeRun, createRunSelection } from './run-selection.ts'
@@ -63,15 +64,19 @@ interface Library {
 interface DesignModeProps {
   readonly sessionId?: string
   readonly t: Translate
+  /** The panel's measured width; absent falls back to the window width. */
+  readonly surfaceWidth?: number
   readonly onClose?: () => void
+  readonly onDirtyChange?: (dirty: boolean) => void
 }
 
 function windowWidth(): number {
   return typeof window === 'undefined' ? 1024 : window.innerWidth
 }
 
-function defaultSurface(): 'canvas' | 'list' {
-  return defaultMode(windowWidth())
+/** The panel's measured width decides the opening surface; below it, the list. */
+export function defaultSurface(width?: number): 'canvas' | 'list' {
+  return defaultMode(width ?? windowWidth())
 }
 
 /**
@@ -112,6 +117,13 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   const [message, setMessage] = useState<string>()
   const [templateName, setTemplateName] = useState('')
   const [draftName, setDraftName] = useState('')
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [propertiesOpen, setPropertiesOpen] = useState(true)
+
+  const dirty = editor?.dirty === true
+  useEffect(() => {
+    props.onDirtyChange?.(dirty)
+  }, [dirty])
 
   const taken = useMemo(() => idsOf(library.definitions), [library])
 
@@ -138,8 +150,12 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   }, [sessionId])
 
   // Keyboard connect: with a node selected, `C` opens the labelled target list.
+  // The listener is scoped to this editor's root: a hidden retained editor must
+  // never receive the visible editor's key events.
+  const root = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    if (typeof window === 'undefined' || selected === undefined) return
+    const element = root.current
+    if (element === null || selected === undefined) return
     const onKeyDown = (event: KeyboardEvent): void => {
       if (
         !isConnectShortcut({
@@ -157,8 +173,8 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       event.preventDefault()
       setConnectValue('')
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    element.addEventListener('keydown', onKeyDown)
+    return () => element.removeEventListener('keydown', onKeyDown)
   }, [selected])
 
   const runSelection = useMemo(
@@ -187,7 +203,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     try {
       const [document, layout] = await Promise.all([api.read(id), api.readLayout(id)])
       const next = openDocument({ ...document, layout })
-      setEditor({ ...next, mode: defaultSurface() })
+      setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) })
       setSelected(undefined)
       setConfirmDelete(false)
       setCanvasFailed(false)
@@ -261,7 +277,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
 
   const startBlank = (): void => {
     const next = openNew(blankDefinition(taken))
-    setEditor({ ...next, mode: defaultSurface() })
+    setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) })
     setSelected(undefined)
     clearRuns()
     setCanvasFailed(false)
@@ -272,7 +288,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     const template = library.templates.find((entry) => entry.id === templateName)
     if (template === undefined) return
     const copy = copyDefinition(template.definition, taken)
-    setEditor({ ...openNew(copy), mode: defaultSurface() })
+    setEditor({ ...openNew(copy), mode: defaultSurface(props.surfaceWidth) })
     setSelected(undefined)
     clearRuns()
     setCanvasFailed(false)
@@ -283,7 +299,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setLoading(true)
     try {
       const definition = await api.readDraft(draftName)
-      setEditor({ ...openDraft(draftName, definition), mode: defaultSurface() })
+      setEditor({ ...openDraft(draftName, definition), mode: defaultSurface(props.surfaceWidth) })
       setSelected(undefined)
       clearRuns()
       setCanvasFailed(false)
@@ -338,10 +354,17 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   /** An action that replaces the open document warns before discarding edits. */
   const guard = (action: () => void): void => {
     const confirmed = (): boolean =>
-      typeof window !== 'undefined' &&
-      window.confirm('Discard the unsaved changes to this definition?')
+      typeof window !== 'undefined' && window.confirm(t('design.closeUnsaved'))
     if (!leaveEditor(editor, confirmed)) return
     action()
+  }
+
+  /** Add one step from the page's `Add step` menu. */
+  const addFromPalette = (kind: NodeKind): void => {
+    if (editor === undefined) return
+    const next = addStep(editor, kind)
+    apply(next)
+    setSelected(next.diagram.nodes.at(-1)?.id)
   }
 
   if (sessionId === undefined) {
@@ -380,10 +403,15 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           <ul className="dsh-wf-runs">
             {library.definitions.map((entry) => (
               <li key={entry.id}>
-                <button type="button" onClick={() => guard(() => void open(entry.id))}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => guard(() => void open(entry.id))}
+                >
                   {entry.name} ({entry.id}) v{entry.version} · {entry.source} ·{' '}
                   {String(entry.stepCount)} steps
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -412,13 +440,6 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           </p>
         )}
         <div className="dsh-wf-design-body" data-mode={surface}>
-          <Palette
-            onAdd={(kind: NodeKind) => {
-              const next = addStep(editor, kind)
-              apply(next)
-              setSelected(next.diagram.nodes.at(-1)?.id)
-            }}
-          />
           {surface === 'list' ? (
             <ListEditor
               state={editor}
@@ -473,18 +494,29 @@ export function DesignMode(props: DesignModeProps): ReactNode {
               </CanvasBoundary>
             </div>
           )}
-          <PropertyPanel
-            state={editor}
-            {...(selected === undefined ? {} : { selected })}
-            onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
-            onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
-            onConnect={(source, target, kind) => apply(connectSteps(editor, source, target, kind))}
-            onRename={(nodeId, nextId) => apply(renameStepId(editor, nodeId, nextId))}
-            onDelete={(stepId) => {
-              apply(deleteStep(editor, stepId))
-              setSelected(undefined)
-            }}
-          />
+          <DisclosureRow
+            icon={null}
+            title={t('design.properties')}
+            open={propertiesOpen}
+            expandable
+            expandOnRowClick
+            onToggle={() => setPropertiesOpen((current) => !current)}
+          >
+            <PropertyPanel
+              state={editor}
+              {...(selected === undefined ? {} : { selected })}
+              onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
+              onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
+              onConnect={(source, target, kind) =>
+                apply(connectSteps(editor, source, target, kind))
+              }
+              onRename={(nodeId, nextId) => apply(renameStepId(editor, nodeId, nextId))}
+              onDelete={(stepId) => {
+                apply(deleteStep(editor, stepId))
+                setSelected(undefined)
+              }}
+            />
+          </DisclosureRow>
         </div>
         {connectValue === undefined ? null : (
           <div className="dsh-wf-design-bar">
@@ -503,8 +535,10 @@ export function DesignMode(props: DesignModeProps): ReactNode {
                 </option>
               ))}
             </select>
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               disabled={connectValue === ''}
               onClick={() => {
                 if (selected === undefined) return
@@ -516,10 +550,15 @@ export function DesignMode(props: DesignModeProps): ReactNode {
               }}
             >
               Connect
-            </button>
-            <button type="button" onClick={() => setConnectValue(undefined)}>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setConnectValue(undefined)}
+            >
               Cancel
-            </button>
+            </Button>
           </div>
         )}
         {issues.length === 0 ? null : (
@@ -536,16 +575,27 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   }
 
   return (
-    <div className="dsh-wf-design" data-state={loading ? 'loading' : 'ready'}>
+    <div className="dsh-wf-design" data-state={loading ? 'loading' : 'ready'} ref={root}>
       <style>{FLOW_CSS}</style>
       <div className="dsh-wf-design-bar">
         <strong>{t('design.title')}</strong>
-        <button type="button" onClick={() => guard(() => props.onClose?.())}>
+        <Button
+          type="button"
+          variant="toolbar"
+          size="sm"
+          onClick={() => guard(() => props.onClose?.())}
+        >
           {t('design.close')}
-        </button>
-        <button type="button" onClick={() => guard(startBlank)} disabled={loading}>
+        </Button>
+        <Button
+          type="button"
+          variant="toolbar"
+          size="sm"
+          onClick={() => guard(startBlank)}
+          disabled={loading}
+        >
           {t('design.new')}
-        </button>
+        </Button>
         <select
           aria-label={t('design.open')}
           value={editor?.document.definition.id ?? ''}
@@ -572,13 +622,15 @@ export function DesignMode(props: DesignModeProps): ReactNode {
             </option>
           ))}
         </select>
-        <button
+        <Button
           type="button"
+          variant="toolbar"
+          size="sm"
           onClick={() => guard(takeTemplate)}
           disabled={templateName === '' || loading}
         >
           {t('design.copyTemplate')}
-        </button>
+        </Button>
         <select
           aria-label={t('design.draft')}
           value={draftName}
@@ -592,44 +644,62 @@ export function DesignMode(props: DesignModeProps): ReactNode {
             </option>
           ))}
         </select>
-        <button
+        <Button
           type="button"
+          variant="toolbar"
+          size="sm"
           onClick={() => guard(() => void startDraft())}
           disabled={draftName === '' || loading}
         >
           {t('design.openDraft')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="primary"
+          size="sm"
           onClick={() => void saveCurrent()}
           disabled={editor === undefined || loading || editor.status === 'saving'}
         >
           {t('design.save')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="toolbar"
+          size="sm"
           onClick={() => guard(() => void reloadCurrent())}
           disabled={editor === undefined || loading}
         >
           {t('design.reload')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="toolbar"
+          size="sm"
           onClick={() => guard(() => void removeCurrent())}
           disabled={editor === undefined || editor.document.revision === null || loading}
         >
           {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
-        </button>
-        <button
-          type="button"
-          onClick={() =>
-            editor !== undefined &&
-            setEditor(setMode(editor, editor.mode === 'canvas' ? 'list' : 'canvas'))
-          }
-          disabled={editor === undefined}
-        >
-          {editor?.mode === 'canvas' ? t('design.listMode') : t('design.canvasMode')}
-        </button>
+        </Button>
+        <SegmentedControl
+          id="dsh-wf-surface"
+          value={surface}
+          options={[
+            { value: 'list', label: t('design.listMode') },
+            { value: 'canvas', label: t('design.canvasMode') },
+          ]}
+          onChange={(next) => {
+            if (editor === undefined) return
+            setEditor(setMode(editor, next))
+          }}
+          label={t('design.mode')}
+        />
+        <PaletteMenu
+          open={paletteOpen}
+          onOpen={() => setPaletteOpen(true)}
+          onClose={() => setPaletteOpen(false)}
+          onAdd={addFromPalette}
+          {...(editor === undefined ? { disabled: true } : {})}
+        />
         <select
           aria-label={t('design.run')}
           value={runId ?? ''}
@@ -654,16 +724,27 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       {conflict === undefined ? null : (
         <div className="dsh-wf-design-bar" role="alert" data-conflict={conflict.kind}>
           <span>{editor?.message ?? t('design.conflict')}</span>
-          <button type="button" onClick={() => guard(() => void reloadCurrent())}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => guard(() => void reloadCurrent())}
+          >
             {t('design.reload')}
-          </button>
-          <button type="button" onClick={() => void copyCurrent()} disabled={loading}>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void copyCurrent()}
+            disabled={loading}
+          >
             {t('design.saveCopy')}
-          </button>
+          </Button>
           {conflict.nextId === undefined ? null : (
-            <button type="button" onClick={useNextId}>
+            <Button type="button" variant="outline" size="sm" onClick={useNextId}>
               {t('design.useId')} {conflict.nextId}
-            </button>
+            </Button>
           )}
         </div>
       )}

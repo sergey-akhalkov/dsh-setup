@@ -239,12 +239,16 @@ describe('canvas node rendering', () => {
 
   it('exposes tab stops on the palette, canvas, and properties in order', () => {
     expect(TAB_ORDER).toEqual(['palette', 'canvas', 'properties'])
-    const paletteTree = call(ui, 'Palette', { onAdd: () => {} })
-    expect(
-      elements(paletteTree).some(
-        (element) => element.type === 'button' && element.props['tabIndex'] !== -1,
-      ),
-    ).toBe(true)
+    const paletteTree = call(ui, 'PaletteMenu', {
+      open: true,
+      onOpen: () => {},
+      onClose: () => {},
+      onAdd: () => {},
+    })
+    const menu = elements(paletteTree).find((element) => element.type === 'menu')
+    expect(menu).toBeDefined()
+    expect(menu?.props.open).toBe(true)
+    expect(elements(paletteTree).some((element) => element.type === 'button')).toBe(true)
     expect(
       elements(
         call(ui, 'DesignCanvas', {
@@ -295,27 +299,42 @@ describe('canvas node rendering', () => {
 })
 
 describe('palette and property panel', () => {
-  it('adds a step by click and by keyboard Enter', () => {
+  it('adds a step from the Add step menu', () => {
     const kinds: string[] = []
-    const tree = call(ui, 'Palette', { onAdd: (kind: string) => kinds.push(kind) })
-    const buttons = elements(tree).filter((element) => element.type === 'button')
-    expect(buttons.map((button) => button.props['data-kind'])).toEqual([
-      'step',
-      'branch',
-      'loop',
-      'human',
+    let closed = 0
+    let opened = 0
+    const tree = call(ui, 'PaletteMenu', {
+      open: true,
+      onOpen: () => (opened += 1),
+      onClose: () => (closed += 1),
+      onAdd: (kind: string) => kinds.push(kind),
+    })
+    const menu = elements(tree).find((element) => element.type === 'menu')
+    expect(menu).toBeDefined()
+    const items = menu?.props.items as Array<{ id: string; label: string }>
+    expect(items.map((item) => item.id)).toEqual(['step', 'branch', 'loop', 'human'])
+    expect(items.map((item) => item.label)).toEqual([
+      'Add step',
+      'Add branch',
+      'Add loop',
+      'Add human',
     ])
+    ;(menu?.props.onSelect as (id: string) => void)?.('branch')
+    expect(kinds).toEqual(['branch'])
+    expect(closed).toBe(1)
     fire(
-      buttons.find((button) => button.props['data-kind'] === 'step'),
+      elements(tree).find((element) => element.type === 'button'),
       'onClick',
     )
-    expect(kinds).toEqual(['step'])
-    fire(
-      buttons.find((button) => button.props['data-kind'] === 'branch'),
-      'onKeyDown',
-      'Enter',
-    )
-    expect(kinds).toEqual(['step', 'branch'])
+    expect(opened).toBe(1)
+    // The anchor stays rendered while the menu is closed.
+    const closedTree = call(ui, 'PaletteMenu', {
+      open: false,
+      onOpen: () => {},
+      onClose: () => {},
+      onAdd: () => {},
+    })
+    expect(elements(closedTree).find((element) => element.type === 'menu')?.props.open).toBe(false)
   })
 
   it('edits a field, a connection, and deletes from the property panel', () => {

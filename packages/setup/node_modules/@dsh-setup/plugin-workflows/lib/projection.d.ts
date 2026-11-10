@@ -49,6 +49,10 @@ export interface RunView {
     readonly steps: readonly RunStep[];
     /** The recorded definition identity; workflow runs only. */
     readonly definition?: RunDefinitionView;
+    /** The trigger kind that started an engine run. */
+    readonly trigger?: string;
+    /** The latest settlement time of a terminal run's recorded steps. */
+    readonly endedAt?: number;
     readonly violations?: readonly RunViolationView[];
     readonly error?: string;
     /** The absolute or workspace-relative record path this view came from. */

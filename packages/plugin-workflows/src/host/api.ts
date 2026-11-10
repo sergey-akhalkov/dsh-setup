@@ -261,13 +261,17 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       if ('response' in paging) return paging.response
       const source = url.searchParams.get('source')
       const definition = url.searchParams.get('definition')
+      const order = url.searchParams.get('order')
+      const run = url.searchParams.get('run')
       let runs: RunView[] = await sessionRuns(resolved.workspace, resolved.session)
-      if (source !== null && source !== '') runs = runs.filter((run) => run.source === source)
+      if (source !== null && source !== '') runs = runs.filter((entry) => entry.source === source)
       if (definition !== null && definition !== '') {
-        runs = runs.filter((run) => run.definition?.id === definition)
+        runs = runs.filter((entry) => entry.definition?.id === definition)
       }
+      // Resolved after attribution, so another session's run is never returned.
+      if (run !== null && run !== '') runs = runs.filter((entry) => entry.id === run)
       // A definition-filtered request is the editor overlay: newest first.
-      if ((definition ?? '') !== '') runs = [...runs].reverse()
+      if ((definition ?? '') !== '' || order === 'newest') runs = [...runs].reverse()
       const start = Math.min(paging.cursor, runs.length)
       const page = runs.slice(start, start + paging.limit)
       const next = start + page.length < runs.length ? String(start + page.length) : undefined

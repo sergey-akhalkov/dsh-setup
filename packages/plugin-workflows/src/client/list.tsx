@@ -1,3 +1,4 @@
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { connectChoices, currentTarget, EDGE_LABELS } from './edges.ts'
 import type { EditorState } from './editor.ts'
@@ -357,9 +358,14 @@ export function ListEditor(props: ListEditorProps): ReactNode {
                   ))}
                 </td>
                 <td>
-                  <button type="button" onClick={() => props.onDelete(graphId)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => props.onDelete(graphId)}
+                  >
                     Delete
-                  </button>
+                  </Button>
                 </td>
               </tr>
             )

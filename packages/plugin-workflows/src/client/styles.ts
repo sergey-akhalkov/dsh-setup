@@ -5,14 +5,12 @@
  */
 
 export const FLOW_CSS = `
+.dsh-wf-page { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; height: 100%; min-height: 0; padding: 12px; overflow: auto; color: var(--dsw-alias-label-primary); }
 .dsh-wf-design { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .dsh-wf-design-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.dsh-wf-design-bar button, .dsh-wf-design-bar select { padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }
-.dsh-wf-design-bar button:focus-visible, .dsh-wf-design-bar select:focus-visible, .dsh-wf-design button:focus-visible { outline: 2px solid var(--dsw-alias-state-success-primary); outline-offset: 1px; }
-.dsh-wf-design-body { display: grid; grid-template-columns: 150px minmax(280px, 1fr) 260px; gap: 8px; min-height: 420px; }
-.dsh-wf-palette { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); }
-.dsh-wf-palette h4, .dsh-wf-properties h4 { margin: 0 0 4px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.dsh-wf-palette button { text-align: left; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }
+.dsh-wf-design-bar select { padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }
+.dsh-wf-design-body { display: flex; flex-direction: column; gap: 8px; min-height: 320px; }
+.dsh-wf-properties h4 { margin: 0 0 4px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dsh-wf-canvas { position: relative; min-height: 420px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: hidden; }
 .dsh-wf-summary { margin: 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dsh-wf-properties { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: auto; }
@@ -44,7 +42,6 @@ export const FLOW_CSS = `
 .dsh-wf-canvas .react-flow__renderer { z-index: 4; }
 .dsh-wf-canvas .react-flow__node { position: absolute; user-select: none; pointer-events: all; transform-origin: 0 0; box-sizing: border-box; cursor: grab; }
 .dsh-wf-canvas .react-flow__node.dragging { cursor: grabbing; }
-.dsh-wf-canvas .react-flow__node:focus-visible { outline: 2px solid var(--dsw-alias-state-success-primary); outline-offset: 2px; }
 .dsh-wf-canvas .react-flow__handle { position: absolute; pointer-events: none; min-width: 6px; min-height: 6px; width: 6px; height: 6px; background: var(--xy-handle-background-color, var(--xy-handle-background-color-default)); border: 1px solid var(--dsw-alias-bg-base); border-radius: 100%; }
 .dsh-wf-canvas .react-flow__handle-top { top: -4px; left: 50%; transform: translate(-50%, 0); }
 .dsh-wf-canvas .react-flow__handle-bottom { bottom: -4px; left: 50%; transform: translate(-50%, 0); }

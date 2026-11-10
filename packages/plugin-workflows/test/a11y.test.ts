@@ -179,18 +179,25 @@ describe('summary and keyboard', () => {
     expect(paletteLabel('step')).toBe('Add step')
     expect(paletteLabel('branch')).toBe('Add branch')
     expect(TAB_ORDER).toEqual(['palette', 'canvas', 'properties'])
+    // The design page passes the panel's measured width, not the window's.
+    const surfaceOf = ui.defaultSurface as (width?: number) => string
+    expect(surfaceOf(600)).toBe('list')
+    expect(surfaceOf(719)).toBe('list')
+    expect(surfaceOf(720)).toBe('canvas')
+    expect(surfaceOf(900)).toBe('canvas')
   })
 
   it('creates a two-step definition with the keyboard add and connect list only', async () => {
     const kinds: string[] = []
-    const palette = call(ui, 'Palette', { onAdd: (kind: string) => kinds.push(kind) })
-    const buttons = elements(palette).filter((element) => element.type === 'button')
-    fire(
-      buttons.find((button) => button.props['data-kind'] === 'step'),
-      'onKeyDown',
-      'Enter',
-    )
-    // The palette handler only reports the choice; the container applies it.
+    const palette = call(ui, 'PaletteMenu', {
+      open: true,
+      onOpen: () => {},
+      onClose: () => {},
+      onAdd: (kind: string) => kinds.push(kind),
+    })
+    const menu = elements(palette).find((element) => element.type === 'menu')
+    // The menu item choice reports the kind; the container applies it.
+    ;(menu?.props.onSelect as (id: string) => void)?.('step')
     expect(kinds).toEqual(['step'])
     let state = openNew(blankDefinition(new Set(['new-workflow'])))
     state = addStep(state, 'step')

@@ -460,10 +460,12 @@ shipped map in `packages/setup/defaults.yml`:
 ## Workflows view
 
 [`packages/plugin-workflows`](../packages/plugin-workflows) adds a **Workflows** conversation view
-(order 30, directly after Observability) and a read-only Host recorder. It answers what the process did
-in this session: which shadow trigger was evaluated, which checkpoint, delegation or review run
-existed, why a trigger did not fire, and whether the listeners are alive. It never steers, injects,
-blocks, or runs a workflow.
+(order 30, directly after Observability), a **Workflow design** page in the right sidebar (opened from
+the Start guide card when the sidebar services exist), and a read-only Host recorder. The session tab
+answers what ran in this session: one status line, the session's runs newest first, one run's detail
+page, and a Journal segment whose events carry their trigger evaluations inline. The design page holds
+the definition list, the editor, the trigger catalog with its last evaluation, and the receipts. Neither
+surface steers, injects, blocks, or runs a workflow.
 
 The Host records `agent/pre-step`, `agent/turn-stopping`, `tools/result`, `subagent/start` and
 `subagent/end` events as one bounded JSONL record per event under
@@ -483,8 +485,13 @@ The view projects existing records without copying them: checkpoints from
 `.dsh/work-checkpoints/<sha256(session) first 16 hex>/<turn>.json`, delegation runs and settled review
 records from `.dsh/delegation/`, and portable `openspec/changes/*/reviews/<taskId>.json` approvals,
 merged into one time-ordered run timeline with explicit session attribution (`unattributed` when no
-session resolves). Those files are read, never modified. The tabs are Triggers, Session, Runs, Why-not
-and Health; a run detail shows step state, time, decision summary, evidence link and error.
+session resolves). Those files are read, never modified. Engine runs project a title composed from the
+recorded definition name and the recorded subject (change, checkpoint turn, or task), expose the
+recorded trigger and, once terminal, the latest settlement time of their recorded steps. A run row shows
+the title, trigger (or legacy source), relative start time with the absolute time on hover, status and
+duration; selecting it replaces the list with the detail page, and its back control restores the scroll
+position and focus. The Journal segment renders each event's evaluations beside it and links only an
+evaluation that carries a run id.
 
 The read API is carrier-neutral and GET-only: `GET /api/workflows/events?session=<id>`,
 `GET /api/workflows/runs?session=<id>`, `GET /api/workflows/triggers?session=<id>`,
@@ -492,16 +499,22 @@ The read API is carrier-neutral and GET-only: `GET /api/workflows/events?session
 `GET /api/workflows/evidence?session=<id>&path=<relative>` for redacted record links. Every route
 resolves the workspace from the session, scopes reads to it, refuses a path outside the workspace, and
 returns a bounded error body; a non-GET method is 405. The `events` and `runs` routes accept `limit`
-(default 50, max 200) and a `cursor`; `triggers`, `health` and `evidence` return one unpaginated
-response. A host without the connection fetch registry registers no API.
+(default 50, max 200) and a `cursor`; `runs` also accepts `order=newest` (reverse after the source and
+definition filters, before paging) and `run=<id>` (one attributed run, resolved after session
+attribution). `triggers`, `health` and `evidence` return one unpaginated response. A host without the
+connection fetch registry registers no API.
 
 `health.json` beside the journal carries the listener count (5 expected), last event time, journal
-writability, trigger count and last error. A 60-second self-check writes it, and the view distinguishes
-`healthy`, `waiting` (no event yet), `listener-down` (heartbeat older than 10 minutes) and
-`journal-readonly`, so silence is never mistaken for success. The plugin is inert when the
-conversation, resources, locale or filesystem services are absent: it registers nothing and reports one
-bounded diagnostic. It writes only under `.dsh/workflows/`, never steers a turn and never changes
-`openspec/`; disabling the `dsh-setup-workflows` row removes the view and the recorder together.
+writability, trigger count and last error. A 60-second self-check writes it, and the status line
+distinguishes `healthy`, `waiting` (no event yet), `listener-down` (heartbeat older than 10 minutes) and
+`journal-readonly`, with the counts and the error available in its tooltip, so silence is never mistaken
+for success. The session tab loads on open, on demand and when the window becomes visible again; a
+re-read follows the pages already loaded and resolves the open run by id, and only a confirmed lookup
+miss says the run is no longer recorded. The plugin is inert when the conversation, resources, locale or
+filesystem services are absent; without the right-sidebar services it registers the session view alone
+and attempts no design page. It writes only under `.dsh/workflows/`, never steers a turn and never
+changes `openspec/`; disabling the `dsh-setup-workflows` row removes both surfaces and the recorder
+together.
 
 ## Workflow engine
 
@@ -516,29 +529,36 @@ model-mediated writes, while a hostile same-user shell is outside the threat mod
 and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The shipped definitions are
 `change-intake` (active), and `task-review` and `retro` (active, `defer` until `retire-legacy-gates`).
 The `workflows` tool exposes list, start, resume, status, evidence and cancel, and the `/workflows`
-command family covers run, resume, install, adopt and status. The Workflows view gains Definitions, a
-run detail with step state, evidence, failure class and violations, and receipts; the bundle also
-contributes a bounded `workflows-active-runs` system-prompt context (at most five lines, and no section
-when none). The engine is inert without its host
+command family covers run, resume, install, adopt and status; `/workflows` itself names the Workflows
+tab as the session entry and the `Workflow design` card as the editor entry and opens nothing. The
+design page holds the definition list, the editor, the trigger catalog with its last evaluation and the
+receipts; the session tab keeps the run detail with step state, evidence, failure class and violations.
+The bundle also contributes a bounded `workflows-active-runs` system-prompt context (at most five lines,
+and no section when none). The engine is inert without its host
 services. Its configuration includes `checkpointApplicability` (`minToolCalls` default 4,
 `requireWrite` default true) for the deferred `retro` definition; the operator must mirror the installed
 `goal-continuity` checkpoint settings because one plugin row cannot read another's config. The setup
 default row is `- id: dsh-setup-workflows`. The full definition schema, evidence contract, gates,
 intake/adoption flow and migration are documented in [workflows](workflows.md).
 
-### Editor and Design mode
+### Editor and Workflow design page
 
-The Workflows view also gains a Design mode behind the same tab: a React Flow canvas bundled into the
-single client artifact, an equivalent List form editor, templates and local definitions opened through
-the revision-checked host write API, a layout sidecar, and the run overlay (the latest run per
+The editor lives in the right-sidebar **Workflow design** page, opened from its Start guide-card entry:
+a React Flow canvas bundled into the single client artifact, an equivalent List form editor (the narrow
+panel's default surface, below the shipped 720 px threshold), templates and local definitions opened
+through the revision-checked host write API, a layout sidecar, and the run overlay (the latest run per
 definition with step state, structured evidence references, failure class, violations, and an orphan
 badge; the recorded definition name/version, evidence, failure class and violations stay readable after
-the definition changes or is deleted). The graph stays a
+the definition changes or is deleted). The palette is one `Add step` menu and the property panel is a
+collapsible section under the editor. The tab type is kept mounted, so hiding the sidebar or
+switching tabs does not discard a draft; an explicit tab close with unsaved edits asks first through the
+sidebar's close-handler seam, and a declined prompt keeps the tab open. The graph stays a
 projection of the definition: create is create-only, updates and deletes send the revision from the
 last read, a mismatch returns 409 and leaves the file unchanged (reload or save-as-copy), and every
 save goes through the host-signed install/approve path, so an editor save is an authorized install.
 Keyboard editing, focus order, a screen-reader summary, and the List fallback cover the canvas; the
-editor is inert without the host write API.
+editor is inert without the host write API, and the page is not registered when the right-sidebar
+services are absent.
 
 ## OpenSpec apply picker
 

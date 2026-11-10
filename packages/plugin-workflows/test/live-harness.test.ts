@@ -363,6 +363,7 @@ describe('obligation engine live proxy', () => {
         title: string
         source: string
         session?: string
+        definition?: { id: string; name: string; version: number }
         steps: Array<{ id: string; title: string; state: string }>
       }>
     > => {
@@ -372,6 +373,7 @@ describe('obligation engine live proxy', () => {
           title: string
           source: string
           session?: string
+          definition?: { id: string; name: string; version: number }
           steps: Array<{ id: string; title: string; state: string }>
         }>
       }
@@ -440,7 +442,10 @@ describe('obligation engine live proxy', () => {
     })
     expect(subagentStarted?.kind).toBe('success')
     await turnStop(2)
-    const subagentView = (await runViews()).find((entry) => entry.title.startsWith('subagent-demo'))
+    const subagentView = (await runViews()).find(
+      (entry) => entry.definition?.id === 'subagent-demo',
+    )
+    expect(subagentView?.title).toContain('Subagent demo')
     expect(subagentView?.steps.find((step) => step.id === 'review')).toMatchObject({
       state: 'done',
     })
@@ -469,10 +474,12 @@ describe('obligation engine live proxy', () => {
     }
     expect(debugBody.runs.map((entry) => entry.source)).toContain('workflow')
     await waitFor(async () =>
-      (await runViews()).some((entry) => entry.title.startsWith('change-intake')),
+      (await runViews()).some((entry) => entry.definition?.id === 'change-intake'),
     )
-    const intake = (await runViews()).find((entry) => entry.title.startsWith('change-intake'))
+    const intake = (await runViews()).find((entry) => entry.definition?.id === 'change-intake')
     expect(intake).toBeDefined()
+    // The title names the recorded definition and the observed change subject.
+    expect(intake?.title).toBe('OpenSpec change intake · auth')
     const runId = String(intake?.id).replace(/^workflow:/u, '')
     expect(intake?.steps.find((step) => step.id === 'requirements')?.state).toBe('open')
 

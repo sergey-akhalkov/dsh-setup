@@ -3706,6 +3706,7 @@ describe('/workflows command starts and resumes work', () => {
     const display = await invoke('')
     expect(display.kind).toBe('success')
     expect(display.text).toContain('Workflows tab')
+    expect(display.text).toContain('Workflow design')
     expect(host.steers).toHaveLength(0)
 
     const started = await invoke(' run demo')

@@ -2618,7 +2618,7 @@ export function apply(ctx, config = {}) {
                         workspace,
                         session: sessionId,
                         ...(questions === undefined ? {} : { questions }),
-                        openView: () => 'The Workflows tab is the entry point; a Host command result cannot open a client view.',
+                        openView: () => 'The Workflows tab is the session entry point and the Workflow design card is the editor entry point; a Host command result cannot open a client view.',
                         run: async (definitionId) => {
                             await recoverIfNeeded(workspace);
                             const definition = definitions.find((entry) => entry.id === definitionId);

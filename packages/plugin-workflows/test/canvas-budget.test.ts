@@ -123,7 +123,10 @@ describe('canvas styles', () => {
     expect(styles).toContain('.react-flow__node')
     expect(styles).toContain('.react-flow__edges')
     expect(styles).toContain('overflow: visible')
-    expect(styles).toContain(':focus-visible')
+    // Focus uses the shared treatment: React Flow's focusable nodes plus the
+    // application's focus style; this plugin injects no outline override.
+    expect(styles).not.toMatch(/\boutline:/)
+    expect(source('canvas.tsx')).toContain('nodesFocusable')
     // The selection fill and the connection preview both follow theme tokens,
     // never a literal colour that would ignore the theme.
     expect(styles).toContain('--xy-selection-background-color-default: var(--dsw-alias-border-l2)')
