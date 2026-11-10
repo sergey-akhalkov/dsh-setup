@@ -3398,6 +3398,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workspace: string,
     auth: HostAuth,
     definitions: Definition[],
+    sessionGenerationAtEntry: number,
   ): WorkflowsToolHost => {
     const questions = questionsFor(agent)
     return {
@@ -3444,7 +3445,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       resumeRun: async (runId) => {
         await recoverIfNeeded(workspace)
         const sessionId = String(agent.session.id)
-        const entryGeneration = sessionGeneration(sessionId)
+        const entryGeneration = sessionGenerationAtEntry
         // The transition is read, validated and committed inside the lock; a
         // disposal that lands while it waits makes the commit fail.
         const committed = await withRunLock(runId, async () => {
@@ -3548,6 +3549,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           execute: async (args: unknown, exec: { agent?: Agent }) => {
             const agent = exec.agent
             if (agent === undefined) throw new Error('workflows: the tool needs a live session')
+            // Capture the session lifecycle before any await: a disposal while
+            // the pre-run reads are pending must invalidate a resume.
+            const sessionGenerationAtEntry = sessionGeneration(String(agent.session.id))
             const workspace = workspaceFor(services, agent.session)
             if (workspace === undefined)
               throw new Error('workflows: the session workspace is unavailable')
@@ -3558,7 +3562,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             return {
               text: await executeWorkflowsTool(
                 args,
-                toolHostFor(agent, workspace, auth, definitions),
+                toolHostFor(agent, workspace, auth, definitions, sessionGenerationAtEntry),
               ),
             }
           },
@@ -3583,6 +3587,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             text?: unknown
           }) => {
             try {
+              const sessionGenerationAtEntry = sessionGeneration(
+                String(invocation.agent.session.id),
+              )
               const workspace = workspaceFor(services, invocation.agent.session)
               if (workspace === undefined) {
                 return { kind: 'error', text: 'the session workspace is unavailable' }
@@ -3677,7 +3684,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 },
                 resume: async (runId) => {
                   await recoverIfNeeded(workspace)
-                  const entryGeneration = sessionGeneration(sessionId)
+                  const entryGeneration = sessionGenerationAtEntry
                   const resumed = await withRunLock(runId, async () => {
                     try {
                       const prior = await readAuthenticatedRun(workspace, runId, auth)

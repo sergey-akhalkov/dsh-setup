@@ -2798,7 +2798,7 @@ export function apply(ctx, config = {}) {
             publishListenerError(workspaceFor(services, payload.agent.session), error);
         }
     }));
-    const toolHostFor = (agent, workspace, auth, definitions) => {
+    const toolHostFor = (agent, workspace, auth, definitions, sessionGenerationAtEntry) => {
         const questions = questionsFor(agent);
         return {
             workspace,
@@ -2844,7 +2844,7 @@ export function apply(ctx, config = {}) {
             resumeRun: async (runId) => {
                 await recoverIfNeeded(workspace);
                 const sessionId = String(agent.session.id);
-                const entryGeneration = sessionGeneration(sessionId);
+                const entryGeneration = sessionGenerationAtEntry;
                 // The transition is read, validated and committed inside the lock; a
                 // disposal that lands while it waits makes the commit fail.
                 const committed = await withRunLock(runId, async () => {
@@ -2950,6 +2950,9 @@ export function apply(ctx, config = {}) {
                 const agent = exec.agent;
                 if (agent === undefined)
                     throw new Error('workflows: the tool needs a live session');
+                // Capture the session lifecycle before any await: a disposal while
+                // the pre-run reads are pending must invalidate a resume.
+                const sessionGenerationAtEntry = sessionGeneration(String(agent.session.id));
                 const workspace = workspaceFor(services, agent.session);
                 if (workspace === undefined)
                     throw new Error('workflows: the session workspace is unavailable');
@@ -2959,7 +2962,7 @@ export function apply(ctx, config = {}) {
                     throw new Error('workflows: the host key is unavailable');
                 const definitions = await definitionsFor(workspace);
                 return {
-                    text: await executeWorkflowsTool(args, toolHostFor(agent, workspace, auth, definitions)),
+                    text: await executeWorkflowsTool(args, toolHostFor(agent, workspace, auth, definitions, sessionGenerationAtEntry)),
                 };
             },
         }));
@@ -2973,6 +2976,7 @@ export function apply(ctx, config = {}) {
             description: 'Open the Workflows view, run/resume a workflow, install a definition after confirmation, adopt an existing change, or print a bounded status.',
             handler: async (invocation) => {
                 try {
+                    const sessionGenerationAtEntry = sessionGeneration(String(invocation.agent.session.id));
                     const workspace = workspaceFor(services, invocation.agent.session);
                     if (workspace === undefined) {
                         return { kind: 'error', text: 'the session workspace is unavailable' };
@@ -3062,7 +3066,7 @@ export function apply(ctx, config = {}) {
                         },
                         resume: async (runId) => {
                             await recoverIfNeeded(workspace);
-                            const entryGeneration = sessionGeneration(sessionId);
+                            const entryGeneration = sessionGenerationAtEntry;
                             const resumed = await withRunLock(runId, async () => {
                                 try {
                                     const prior = await readAuthenticatedRun(workspace, runId, auth);
