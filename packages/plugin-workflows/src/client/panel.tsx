@@ -36,6 +36,12 @@ export interface JournalEvent {
   readonly triggers?: readonly TriggerEvaluation[]
 }
 
+/** The session evaluation counts of one trigger (absent until the host serves them). */
+export interface TriggerCounts {
+  readonly matched: number
+  readonly total: number
+}
+
 export interface TriggerView {
   readonly id: string
   readonly event: string
@@ -43,6 +49,10 @@ export interface TriggerView {
   readonly mode: string
   readonly dedupe: string
   readonly last?: { readonly at: number; readonly matched: boolean; readonly reason: string }
+  /** The trigger route's additive session counts; absent on a host without them. */
+  readonly counts?: TriggerCounts
+  /** `workflow-definition` marks the per-definition trigger entries. */
+  readonly source?: string
 }
 
 export interface HealthView {
@@ -103,12 +113,126 @@ export interface Page<T> {
   readonly next?: string
 }
 
+/** One paged list the view can append to; each keeps its own state. */
+export type PageKind = 'runs' | 'workflowRuns' | 'history'
+
+export interface PageState {
+  readonly key: string
+  readonly phase: 'loading' | 'error'
+  readonly message?: string
+}
+
+export type PageStates = Record<PageKind, PageState | undefined>
+
+export function emptyPageStates(): PageStates {
+  return { runs: undefined, workflowRuns: undefined, history: undefined }
+}
+
+/** Replace only one list's pagination state; a sibling request keeps its own. */
+export function updatePageState(
+  states: PageStates,
+  kind: PageKind,
+  value: PageState | undefined,
+): PageStates {
+  return { ...states, [kind]: value }
+}
+
+/** The LoadMore props of one list's next page: loading, or the failed message. */
+export function pageLoadProps(
+  states: PageStates | undefined,
+  kind: PageKind,
+  next: string | undefined,
+  t: Translate,
+): { readonly loading?: true; readonly error?: string } {
+  const page = states?.[kind]
+  if (next === undefined || page?.key !== `${kind}:${next}`) return {}
+  if (page.phase === 'loading') return { loading: true }
+  return { error: page.message ?? t('state.error') }
+}
+
+/** A definition as the read-only overview and workflow page need it. */
+export interface DefinitionTriggerView {
+  readonly kind: string
+  readonly match?: Readonly<Record<string, unknown>>
+  readonly mode?: string
+  readonly dedupe?: string
+  readonly repeat?: boolean
+  readonly applicability?: string
+}
+
+export interface DefinitionBranchView {
+  readonly predicate?: unknown
+  readonly then?: string
+  readonly else?: string
+}
+
+export interface DefinitionLoopView {
+  readonly maxIterations?: number
+  readonly stop?: unknown
+  readonly next?: string
+  readonly cap?: string
+  readonly list?: string
+}
+
+export interface DefinitionStepView {
+  readonly id: string
+  readonly title: string
+  readonly executor: string
+  readonly ownership?: string
+  readonly blockTurnClose?: boolean
+  readonly next?: string
+  readonly branch?: DefinitionBranchView
+  readonly loop?: DefinitionLoopView
+}
+
+export interface DefinitionSettingsView {
+  readonly risk?: string
+  readonly gateOwnership?: string
+  readonly allowModelStart?: boolean
+}
+
+export interface DefinitionView {
+  readonly id: string
+  readonly name: string
+  readonly version?: number
+  /** Present on a complete definition document; the overview list omits it. */
+  readonly description?: string
+  readonly trigger?: DefinitionTriggerView
+  readonly risk?: string
+  readonly gateOwnership?: string
+  readonly settings?: DefinitionSettingsView
+  readonly steps?: readonly DefinitionStepView[]
+}
+
+/** The definition document route's body for `?id=`. */
+export interface DefinitionDocumentView {
+  readonly definition: DefinitionView
+  readonly revision?: string | null
+  readonly source?: string
+}
+
+/** The per-definition run buckets of the runs route's `stats=1` response. */
+export interface DefinitionStatView {
+  readonly completed: number
+  readonly failed: number
+  readonly cancelled: number
+  readonly interrupted: number
+  readonly running: number
+  readonly blocked: number
+  readonly total: number
+}
+
+export interface RunStatsView {
+  readonly definitions: Readonly<Record<string, DefinitionStatView>>
+}
+
 /** Document-relative API paths, so the Web page and desktop shell agree. */
 export const EVENTS_PATH = '/api/workflows/events'
 export const RUNS_PATH = '/api/workflows/runs'
 export const TRIGGERS_PATH = '/api/workflows/triggers'
 export const HEALTH_PATH = '/api/workflows/health'
 export const EVIDENCE_PATH = '/api/workflows/evidence'
+export const DEFINITIONS_PATH = '/api/workflows/definitions'
 
 function pageUrl(
   path: string,
@@ -133,16 +257,34 @@ export function runsUrl(
   session: string,
   cursor?: string,
   limit?: number,
-  options?: { readonly order?: 'newest'; readonly run?: string },
+  options?: {
+    readonly order?: 'newest'
+    readonly run?: string
+    readonly definition?: string
+    readonly stats?: boolean
+  },
 ): string {
   return pageUrl(RUNS_PATH, session, cursor, limit, {
     ...(options?.order === undefined ? {} : { order: options.order }),
     ...(options?.run === undefined ? {} : { run: options.run }),
+    ...(options?.definition === undefined ? {} : { definition: options.definition }),
+    ...(options?.stats === true ? { stats: '1' } : {}),
   })
 }
 
 export function triggersUrl(session: string): string {
   return pageUrl(TRIGGERS_PATH, session)
+}
+
+/** The definition list, or one definition document when `id` is named. */
+export function definitionsUrl(session: string, id?: string): string {
+  return pageUrl(
+    DEFINITIONS_PATH,
+    session,
+    undefined,
+    undefined,
+    id === undefined ? undefined : { id },
+  )
 }
 
 export function isRecordEvidence(value: string): boolean {

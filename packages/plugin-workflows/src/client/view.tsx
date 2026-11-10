@@ -4,8 +4,12 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode, RefObject } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { definitionEvaluationId, WorkflowOverview, WorkflowPage } from './overview.tsx'
 import {
+  type DefinitionView,
+  definitionsUrl,
   ErrorLine,
+  emptyPageStates,
   eventsUrl,
   type HealthView,
   healthUrl,
@@ -13,13 +17,19 @@ import {
   LoadingLine,
   LoadMore,
   type Page,
+  type PageStates,
+  pageLoadProps,
+  type RunStatsView,
   type RunView,
   requestJson,
   runsUrl,
   type Translate,
+  type TriggerView,
+  triggersUrl,
+  updatePageState,
 } from './panel.tsx'
 import { MissingRunPage, RunDetailPage, RunLookupPage } from './run-detail.tsx'
-import { JournalList, RunList, StatusLine } from './run-history.tsx'
+import { RunList, StatusLine } from './run-history.tsx'
 
 /** Layout only; every colour and spacing value is a shipped token. */
 export const VIEW_CSS = `
@@ -58,36 +68,32 @@ export const VIEW_CSS = `
 .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-secondary); }
 .dsh-wf-error { color: var(--dsw-alias-state-error-primary); }
 .dsh-wf-error-block { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.dsh-wf-overview { display: flex; flex-direction: column; gap: 12px; }
+.dsh-wf-group { display: flex; flex-direction: column; gap: 6px; }
+.dsh-wf-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.dsh-wf-group-title { margin: 8px 0 2px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.dsh-wf-workflow-row { flex-wrap: wrap; align-items: baseline; }
 `
 
-/** One page of the session surface, as the host returned it. */
+/** One page of the session's own surface, as the host returned it. */
 export interface Loaded {
   readonly health: HealthView
-  readonly events: Page<JournalEvent>
   readonly runs: Page<RunView>
+  readonly definitions: readonly DefinitionView[]
+  readonly triggers: readonly TriggerView[]
+  /** Present only when the host serves the additive `stats=1` response. */
+  readonly stats?: RunStatsView
 }
 
-export type Segment = 'runs' | 'journal'
+export type Segment = 'workflows' | 'runs'
 
-export type PageKind = 'events' | 'runs'
-export interface PageState {
-  readonly key: string
-  readonly phase: 'loading' | 'error'
+/** The open workflow page's own read-only data. */
+export interface WorkflowPageState {
+  readonly phase: 'loading' | 'ready' | 'error'
+  readonly document?: DefinitionView
+  readonly runs?: Page<RunView>
+  readonly events?: Page<JournalEvent>
   readonly message?: string
-}
-export type PageStates = Record<PageKind, PageState | undefined>
-
-export function emptyPageStates(): PageStates {
-  return { events: undefined, runs: undefined }
-}
-
-/** Replace only one list's pagination state; a sibling request keeps its own. */
-export function updatePageState(
-  states: PageStates,
-  kind: PageKind,
-  value: PageState | undefined,
-): PageStates {
-  return { ...states, [kind]: value }
 }
 
 /** A response from a previous session generation must never commit. */
@@ -103,13 +109,14 @@ export interface ListScrollHost {
 
 function isRow(
   value: unknown,
-  runId: string,
+  attribute: 'data-run' | 'data-workflow',
+  id: string,
 ): value is { focus(options?: { preventScroll?: boolean }): void } {
   return (
     typeof value === 'object' &&
     value !== null &&
     'getAttribute' in value &&
-    (value as { getAttribute(name: string): string | null }).getAttribute('data-run') === runId &&
+    (value as { getAttribute(name: string): string | null }).getAttribute(attribute) === id &&
     'focus' in value &&
     typeof (value as { focus?: unknown }).focus === 'function'
   )
@@ -117,20 +124,22 @@ function isRow(
 
 /**
  * Restore the list's scroll position and focus the row the detail came from.
- * The row is located by comparing its `data-run` value, never by building a
- * selector from a recorded run id (which may contain selector syntax).
+ * The row is located by comparing its data attribute, never by building a
+ * selector from a recorded id (which may contain selector syntax).
  */
 export function restoreListPosition(
   host: ListScrollHost | null,
-  runId: string,
+  id: string,
   scrollTop: number,
+  kind: 'run' | 'workflow' = 'run',
 ): void {
   if (host === null) return
   host.scrollTop = scrollTop
-  const rows = host.querySelectorAll('[data-run]')
+  const attribute = kind === 'run' ? 'data-run' : 'data-workflow'
+  const rows = host.querySelectorAll(`[${attribute}]`)
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]
-    if (!isRow(row, runId)) continue
+    if (!isRow(row, attribute, id)) continue
     // A restored row outside the saved viewport must not scroll itself in.
     row.focus({ preventScroll: true })
     return
@@ -165,34 +174,92 @@ function pageOf<T>(body: { next?: string }, items: readonly T[]): Page<T> {
   return { items, ...(body.next === undefined ? {} : { next: body.next }) }
 }
 
-/** Re-read the journal pages the user already opened. */
-export async function readEvents(session: string, pages: number): Promise<Page<JournalEvent>> {
-  const items: JournalEvent[] = []
-  let next: string | undefined
-  for (let index = 0; index < Math.max(1, pages); index += 1) {
-    const page = await requestJson<{ events: JournalEvent[]; next?: string }>(
-      eventsUrl(session, next),
-    )
-    items.push(...page.events)
-    next = page.next
-    if (next === undefined) break
-  }
-  return pageOf({ ...(next === undefined ? {} : { next }) }, items)
-}
-
 /** Re-read the run pages the user already opened, newest first. */
 export async function readRuns(session: string, pages: number): Promise<Page<RunView>> {
   const items: RunView[] = []
   let next: string | undefined
   for (let index = 0; index < Math.max(1, pages); index += 1) {
-    const page = await requestJson<{ runs: RunView[]; next?: string }>(
+    const page = await requestJson<{ runs?: RunView[]; next?: string }>(
       runsUrl(session, next, undefined, { order: 'newest' }),
     )
-    items.push(...page.runs)
+    items.push(...(page.runs ?? []))
     next = page.next
     if (next === undefined) break
   }
   return pageOf({ ...(next === undefined ? {} : { next }) }, sortNewestFirst(dedupeRuns(items)))
+}
+
+/** The installed definitions; an incomplete row still renders by id and name. */
+export async function readDefinitions(session: string): Promise<readonly DefinitionView[]> {
+  const body = await requestJson<{ definitions?: DefinitionView[] }>(definitionsUrl(session))
+  return Array.isArray(body.definitions) ? body.definitions : []
+}
+
+/** The trigger catalog plus the per-definition entries with their counts. */
+export async function readTriggers(session: string): Promise<readonly TriggerView[]> {
+  const body = await requestJson<{ triggers?: TriggerView[] }>(triggersUrl(session))
+  return Array.isArray(body.triggers) ? body.triggers : []
+}
+
+/** The additive per-definition run statistics; absent on a host without them. */
+export async function readRunStats(session: string): Promise<RunStatsView | undefined> {
+  const body = await requestJson<{ stats?: { definitions?: unknown } }>(
+    runsUrl(session, undefined, undefined, { stats: true }),
+  )
+  const definitions = body.stats?.definitions
+  if (definitions === null || definitions === undefined || typeof definitions !== 'object') {
+    return undefined
+  }
+  return { definitions: definitions as RunStatsView['definitions'] }
+}
+
+/** One full definition document, including its description and step targets. */
+export async function readDefinitionDocument(
+  session: string,
+  definitionId: string,
+): Promise<DefinitionView> {
+  const body = await requestJson<{ definition?: DefinitionView }>(
+    definitionsUrl(session, definitionId),
+  )
+  if (body.definition === undefined) throw new Error('the definition document is missing')
+  return body.definition
+}
+
+/** Re-read the workflow page's run pages, newest first. */
+export async function readDefinitionRuns(
+  session: string,
+  definitionId: string,
+  pages: number,
+): Promise<Page<RunView>> {
+  const items: RunView[] = []
+  let next: string | undefined
+  for (let index = 0; index < Math.max(1, pages); index += 1) {
+    const page = await requestJson<{ runs?: RunView[]; next?: string }>(
+      runsUrl(session, next, undefined, { definition: definitionId }),
+    )
+    items.push(...(page.runs ?? []))
+    next = page.next
+    if (next === undefined) break
+  }
+  return pageOf({ ...(next === undefined ? {} : { next }) }, sortNewestFirst(dedupeRuns(items)))
+}
+
+/** Re-read the session journal pages the workflow history shows. */
+export async function readDefinitionEvents(
+  session: string,
+  pages: number,
+): Promise<Page<JournalEvent>> {
+  const items: JournalEvent[] = []
+  let next: string | undefined
+  for (let index = 0; index < Math.max(1, pages); index += 1) {
+    const page = await requestJson<{ events?: JournalEvent[]; next?: string }>(
+      eventsUrl(session, next),
+    )
+    items.push(...(page.events ?? []))
+    next = page.next
+    if (next === undefined) break
+  }
+  return pageOf({ ...(next === undefined ? {} : { next }) }, items)
 }
 
 export interface WorkflowsLoadedProps {
@@ -200,6 +267,9 @@ export interface WorkflowsLoadedProps {
   readonly t: Translate
   readonly sessionId?: string
   readonly segment?: Segment
+  /** The selected workflow definition id; its page replaces the segment body. */
+  readonly definition?: string
+  readonly workflow?: WorkflowPageState
   readonly selected?: string
   /** The open run resolved outside the loaded pages. */
   readonly detail?: RunView
@@ -212,31 +282,37 @@ export interface WorkflowsLoadedProps {
   readonly refreshError?: string
   readonly scrollRef?: RefObject<HTMLDivElement | null>
   onSegment?(segment: Segment): void
+  onOpenWorkflow?(definitionId: string): void
+  onBackWorkflow?(): void
+  onRetryWorkflow?(): void
+  onOpenWorkflowRun?(runId: string): void
+  onLoadWorkflowRuns?(): void
+  onLoadHistory?(): void
   onSelect?(runId: string): void
-  onOpenRun?(runId: string): void
   onBack?(): void
   onRetryDetail?(): void
   onRefresh?(): void
   onRetryRefresh?(): void
-  onLoadEvents?(): void
   onLoadRuns?(): void
 }
 
 /** The loaded view body; pure so it renders without hooks in tests. */
 export function WorkflowsLoaded(props: WorkflowsLoadedProps): ReactNode {
   const { loaded, t } = props
-  const segment = props.segment ?? 'runs'
-  const selectedRun = props.detail ?? loaded.runs.items.find((run) => run.id === props.selected)
-  const pageProps = (kind: PageKind, next: string | undefined): Record<string, unknown> => {
-    const page = props.pageStates?.[kind]
-    if (next === undefined || page?.key !== `${kind}:${next}`) return {}
-    if (page.phase === 'loading') return { loading: true }
-    return { error: page.message ?? t('state.error') }
-  }
+  const segment = props.segment ?? 'workflows'
+  const currentDefinition = props.definition
+  const selectedRun =
+    props.detail ??
+    loaded.runs.items.find((run) => run.id === props.selected) ??
+    props.workflow?.runs?.items.find((run) => run.id === props.selected)
+  const definitionTrigger =
+    currentDefinition === undefined
+      ? undefined
+      : loaded.triggers.find((trigger) => trigger.id === definitionEvaluationId(currentDefinition))
   const empty = (): void => {}
   const options: SegmentedControlOption<Segment>[] = [
+    { value: 'workflows', label: t('segment.workflows') },
     { value: 'runs', label: t('segment.runs') },
-    { value: 'journal', label: t('segment.journal') },
   ]
   let body: ReactNode
   if (props.selected !== undefined) {
@@ -263,22 +339,38 @@ export function WorkflowsLoaded(props: WorkflowsLoadedProps): ReactNode {
         />
       )
     }
-  } else if (segment === 'journal') {
+  } else if (currentDefinition !== undefined) {
+    const workflow = props.workflow ?? { phase: 'loading' as const }
     body = (
-      <>
-        <JournalList
-          events={loaded.events.items}
-          t={t}
-          {...(props.onOpenRun === undefined ? {} : { onOpenRun: props.onOpenRun })}
-        />
-        <LoadMore
-          next={loaded.events.next}
-          t={t}
-          onLoad={props.onLoadEvents ?? empty}
-          {...(props.refreshing === true ? { loading: true } : {})}
-          {...pageProps('events', loaded.events.next)}
-        />
-      </>
+      <WorkflowPage
+        definitionId={currentDefinition}
+        phase={workflow.phase}
+        {...(workflow.document === undefined ? {} : { document: workflow.document })}
+        {...(definitionTrigger === undefined ? {} : { trigger: definitionTrigger })}
+        {...(workflow.runs === undefined ? {} : { runs: workflow.runs })}
+        {...(workflow.events === undefined ? {} : { events: workflow.events })}
+        {...(workflow.message === undefined ? {} : { message: workflow.message })}
+        {...(props.now === undefined ? {} : { now: props.now })}
+        {...(props.pageStates === undefined ? {} : { pageStates: props.pageStates })}
+        t={t}
+        onBack={props.onBackWorkflow ?? empty}
+        onOpenRun={props.onOpenWorkflowRun ?? empty}
+        onLoadRuns={props.onLoadWorkflowRuns ?? empty}
+        onLoadHistory={props.onLoadHistory ?? empty}
+        onRetry={props.onRetryWorkflow ?? empty}
+      />
+    )
+  } else if (segment === 'workflows') {
+    body = (
+      <WorkflowOverview
+        definitions={loaded.definitions}
+        triggers={loaded.triggers}
+        {...(loaded.stats === undefined ? {} : { stats: loaded.stats })}
+        runs={loaded.runs.items}
+        t={t}
+        {...(props.now === undefined ? {} : { now: props.now })}
+        onOpen={props.onOpenWorkflow ?? empty}
+      />
     )
   } else {
     body = (
@@ -294,16 +386,23 @@ export function WorkflowsLoaded(props: WorkflowsLoadedProps): ReactNode {
           t={t}
           onLoad={props.onLoadRuns ?? empty}
           {...(props.refreshing === true ? { loading: true } : {})}
-          {...pageProps('runs', loaded.runs.next)}
+          {...pageLoadProps(props.pageStates, 'runs', loaded.runs.next, t)}
         />
       </>
     )
   }
+  const detail = props.selected !== undefined || currentDefinition !== undefined
   return (
     <div
       className="dsh-wf-body"
       data-segment={segment}
-      data-view={props.selected === undefined ? 'list' : 'detail'}
+      data-view={
+        props.selected !== undefined
+          ? 'detail'
+          : currentDefinition === undefined
+            ? 'list'
+            : 'workflow'
+      }
     >
       <StatusLine
         health={loaded.health}
@@ -314,7 +413,11 @@ export function WorkflowsLoaded(props: WorkflowsLoadedProps): ReactNode {
       {props.refreshError === undefined ? null : (
         <ErrorLine message={props.refreshError} t={t} onRetry={props.onRetryRefresh ?? empty} />
       )}
-      {props.selected === undefined ? (
+      {detail ? (
+        <div className="dsh-wf-scroll" ref={props.scrollRef}>
+          {body}
+        </div>
+      ) : (
         <>
           <SegmentedControl
             id="dsh-wf-segments"
@@ -328,10 +431,6 @@ export function WorkflowsLoaded(props: WorkflowsLoadedProps): ReactNode {
             {body}
           </div>
         </>
-      ) : (
-        <div className="dsh-wf-scroll" ref={props.scrollRef}>
-          {body}
-        </div>
       )}
     </div>
   )
@@ -346,10 +445,17 @@ interface ViewState {
   readonly refreshError?: string
 }
 
+/** Where a detail page returns to when its back control is used. */
+interface ReturnTarget {
+  readonly id: string
+  readonly scrollTop: number
+  readonly surface: 'overview' | 'runs' | 'workflow'
+}
+
 /**
- * The Workflows conversation view: the session's runs newest first, one run's
- * detail page, and the journal. It reloads on open, on demand, and when the
- * window becomes visible again.
+ * The Workflows conversation view: the trigger-grouped overview, one workflow
+ * page, the session's runs newest first, and one run's detail page. It reloads
+ * on open, on demand, and when the window becomes visible again.
  */
 export function WorkflowsView(props: {
   readonly sessionId?: string
@@ -357,7 +463,9 @@ export function WorkflowsView(props: {
 }): ReactNode {
   const { sessionId, t } = props
   const [state, setState] = useState<ViewState>({ phase: 'loading' })
-  const [segment, setSegment] = useState<Segment>('runs')
+  const [segment, setSegment] = useState<Segment>('workflows')
+  const [definitionId, setDefinitionId] = useState<string>()
+  const [workflow, setWorkflow] = useState<WorkflowPageState>({ phase: 'loading' })
   const [selected, setSelected] = useState<string>()
   const [detail, setDetail] = useState<RunView>()
   const [missing, setMissing] = useState(false)
@@ -365,17 +473,29 @@ export function WorkflowsView(props: {
   const [pageStates, setPageStates] = useState<PageStates>(emptyPageStates())
   const loadId = useRef(0)
   const lookupId = useRef(0)
+  const workflowToken = useRef(0)
   const runsPages = useRef(1)
-  const eventsPages = useRef(1)
+  const workflowRunsPages = useRef(1)
+  const historyPages = useRef(1)
   const pendingPages = useRef(new Set<string>())
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const returnTo = useRef<{ runId: string; scrollTop: number } | undefined>(undefined)
+  /** The workflow page's own return target: the overview row that opened it. */
+  const overviewReturn = useRef<{ readonly id: string; readonly scrollTop: number } | undefined>(
+    undefined,
+  )
+  /** The run page's return target: the surface and row that opened it. */
+  const detailReturn = useRef<ReturnTarget | undefined>(undefined)
   const selectedRef = useRef<string | undefined>(undefined)
   selectedRef.current = selected
+  const definitionRef = useRef<string | undefined>(undefined)
+  definitionRef.current = definitionId
+  const runOrigin = useRef<'runs' | 'workflow'>('runs')
   /** The last known record of the open run, kept across a refresh. */
   const knownRun = useRef<RunView | undefined>(undefined)
   const stateRef = useRef<ViewState>(state)
   stateRef.current = state
+  const workflowRef = useRef<WorkflowPageState>(workflow)
+  workflowRef.current = workflow
 
   const messageOf = (error: unknown): string =>
     error instanceof Error ? error.message : String(error)
@@ -396,12 +516,12 @@ export function WorkflowsView(props: {
       !isStaleGeneration(generation, loadId.current) &&
       token === lookupId.current &&
       selectedRef.current === runId
-    void requestJson<{ runs: RunView[] }>(
+    void requestJson<{ runs?: RunView[] }>(
       runsUrl(session, undefined, undefined, { run: runId }),
     ).then(
       (body) => {
         if (!current()) return
-        const run = body.runs[0]
+        const run = body.runs?.[0]
         if (run === undefined) {
           setMissing(true)
           setDetail(undefined)
@@ -418,39 +538,94 @@ export function WorkflowsView(props: {
     )
   }
 
+  const loadWorkflowPage = (
+    generation: number,
+    token: number,
+    id: string,
+    mode: 'initial' | 'background',
+  ): void => {
+    if (sessionId === undefined) return
+    if (mode === 'initial') setWorkflow({ phase: 'loading' })
+    const runPages = Math.max(1, workflowRunsPages.current)
+    const eventPages = Math.max(1, historyPages.current)
+    const current = (): boolean =>
+      !isStaleGeneration(generation, loadId.current) &&
+      token === workflowToken.current &&
+      definitionRef.current === id
+    void Promise.all([
+      readDefinitionDocument(sessionId, id),
+      readDefinitionRuns(sessionId, id, runPages),
+      readDefinitionEvents(sessionId, eventPages),
+    ]).then(
+      ([document, runs, events]) => {
+        if (!current()) return
+        workflowRunsPages.current = runPages
+        historyPages.current = eventPages
+        setWorkflow({ phase: 'ready', document, runs, events })
+      },
+      (error: unknown) => {
+        if (!current()) return
+        const message = messageOf(error)
+        const loadedPage = workflowRef.current
+        // A failed background refresh keeps the loaded page; only a first
+        // load without data takes over the page.
+        if (mode === 'background' && loadedPage.phase === 'ready') {
+          setState((currentState) => ({ ...currentState, refreshError: message }))
+          return
+        }
+        setWorkflow({ phase: 'error', message })
+      },
+    )
+  }
+
   const load = (mode: 'initial' | 'background'): void => {
     if (sessionId === undefined) return
     const generation = ++loadId.current
-    // A new load supersedes every pending selected-run lookup.
+    // A new load supersedes every pending selected-run lookup and page.
     lookupId.current += 1
     pendingPages.current.clear()
     setPageStates(emptyPageStates())
     if (mode === 'initial') setState({ phase: 'loading' })
     else setState((current) => ({ ...current, refreshing: true }))
     const runPages = Math.max(1, runsPages.current)
-    const eventPages = Math.max(1, eventsPages.current)
     void Promise.all([
       requestJson<HealthView>(healthUrl(sessionId)),
-      readEvents(sessionId, eventPages),
       readRuns(sessionId, runPages),
+      readDefinitions(sessionId),
+      readTriggers(sessionId),
+      readRunStats(sessionId),
     ]).then(
-      ([health, events, runs]) => {
+      ([health, runs, definitions, triggers, stats]) => {
         if (isStaleGeneration(generation, loadId.current)) return
         runsPages.current = runPages
-        eventsPages.current = eventPages
-        setState({ phase: 'ready', loaded: { health, events, runs } })
+        setState({
+          phase: 'ready',
+          loaded: {
+            health,
+            runs,
+            definitions,
+            triggers,
+            ...(stats === undefined ? {} : { stats }),
+          },
+        })
         const open = selectedRef.current
-        if (open === undefined) return
-        if (runs.items.some((run) => run.id === open)) {
-          lookupId.current += 1
-          knownRun.current = runs.items.find((run) => run.id === open)
-          setDetail(undefined)
-          setMissing(false)
-          setDetailError(undefined)
-          return
+        if (open !== undefined) {
+          if (runs.items.some((run) => run.id === open)) {
+            lookupId.current += 1
+            knownRun.current = runs.items.find((run) => run.id === open)
+            setDetail(undefined)
+            setMissing(false)
+            setDetailError(undefined)
+          } else {
+            const token = ++lookupId.current
+            resolveSelected(generation, token, sessionId, open)
+          }
         }
-        const token = ++lookupId.current
-        resolveSelected(generation, token, sessionId, open)
+        const openDefinition = definitionRef.current
+        if (openDefinition !== undefined) {
+          const token = ++workflowToken.current
+          loadWorkflowPage(generation, token, openDefinition, 'background')
+        }
       },
       (error: unknown) => {
         if (isStaleGeneration(generation, loadId.current)) return
@@ -473,8 +648,14 @@ export function WorkflowsView(props: {
     load('initial')
     return () => {
       loadId.current += 1
+      workflowToken.current += 1
     }
     // The session id identifies the view; a background reload re-reads it.
+  }, [sessionId])
+
+  useEffect(() => {
+    overviewReturn.current = undefined
+    detailReturn.current = undefined
   }, [sessionId])
 
   useEffect(() => {
@@ -487,14 +668,33 @@ export function WorkflowsView(props: {
   }, [])
 
   useLayoutEffect(() => {
-    if (selected !== undefined) return
-    const restore = returnTo.current
-    if (restore === undefined) return
-    returnTo.current = undefined
+    const target = detailReturn.current
+    if (target === undefined) return
+    const onTarget =
+      target.surface === 'workflow'
+        ? definitionId !== undefined && selected === undefined
+        : definitionId === undefined && selected === undefined
+    if (!onTarget) return
+    detailReturn.current = undefined
     const container = scrollRef.current
     if (container === null) return
-    restoreListPosition(container, restore.runId, restore.scrollTop)
-  }, [selected])
+    restoreListPosition(
+      container,
+      target.id,
+      target.scrollTop,
+      target.surface === 'overview' ? 'workflow' : 'run',
+    )
+  }, [definitionId, selected])
+
+  useLayoutEffect(() => {
+    if (definitionId !== undefined || selected !== undefined) return
+    const target = overviewReturn.current
+    if (target === undefined) return
+    overviewReturn.current = undefined
+    const container = scrollRef.current
+    if (container === null) return
+    restoreListPosition(container, target.id, target.scrollTop, 'workflow')
+  }, [definitionId, selected])
 
   if (sessionId === undefined) {
     return (
@@ -504,55 +704,95 @@ export function WorkflowsView(props: {
     )
   }
 
-  const openRun = (runId: string, fromList: boolean): void => {
+  const openWorkflowPage = (id: string): void => {
     const container = scrollRef.current
-    if (fromList && container !== null) {
-      returnTo.current = { runId, scrollTop: container.scrollTop }
+    if (container !== null) {
+      overviewReturn.current = { id, scrollTop: container.scrollTop }
     }
-    setSegment('runs')
+    workflowRunsPages.current = 1
+    historyPages.current = 1
+    setDefinitionId(id)
+    setWorkflow({ phase: 'loading' })
+    setSelected(undefined)
+    setDetail(undefined)
+    setMissing(false)
+    setDetailError(undefined)
+    setSegment('workflows')
+    const token = ++workflowToken.current
+    loadWorkflowPage(loadId.current, token, id, 'initial')
+  }
+
+  const backFromWorkflow = (): void => {
+    workflowToken.current += 1
+    setDefinitionId(undefined)
+    setWorkflow({ phase: 'loading' })
+    setSelected(undefined)
+    setDetail(undefined)
+    setMissing(false)
+    setDetailError(undefined)
+  }
+
+  const openRun = (runId: string, origin: 'runs' | 'workflow'): void => {
+    const container = scrollRef.current
+    if (container !== null) {
+      detailReturn.current = { id: runId, scrollTop: container.scrollTop, surface: origin }
+    }
+    runOrigin.current = origin
     setSelected(runId)
     setMissing(false)
     setDetail(undefined)
     setDetailError(undefined)
-    const token = ++lookupId.current
-    const loaded = stateRef.current.loaded
-    const listed = loaded?.runs.items.find((run) => run.id === runId)
+    const listed =
+      origin === 'runs'
+        ? stateRef.current.loaded?.runs.items.find((run) => run.id === runId)
+        : workflowRef.current.runs?.items.find((run) => run.id === runId)
     knownRun.current = listed
     if (listed !== undefined) return
+    const token = ++lookupId.current
     resolveSelected(loadId.current, token, sessionId, runId)
   }
 
-  const back = (): void => {
+  const backFromRun = (): void => {
     lookupId.current += 1
     // Capture the known record before clearing the ref: a deferred state update
     // must not depend on refs that this handler resets.
     const resolved = detail ?? knownRun.current
     const confirmedMissing = missing
-    const current = stateRef.current
-    const loaded = current.loaded
-    if (
-      resolved !== undefined &&
-      !confirmedMissing &&
-      loaded !== undefined &&
-      !loaded.runs.items.some((run) => run.id === resolved.id)
-    ) {
-      setState({
-        ...current,
-        loaded: {
-          ...loaded,
-          runs: {
-            ...loaded.runs,
-            items: sortNewestFirst([...loaded.runs.items, resolved]),
-          },
-        },
-      })
+    if (resolved !== undefined && !confirmedMissing) {
+      if (runOrigin.current === 'runs') {
+        const current = stateRef.current
+        const loaded = current.loaded
+        if (loaded !== undefined && !loaded.runs.items.some((run) => run.id === resolved.id)) {
+          setState({
+            ...current,
+            loaded: {
+              ...loaded,
+              runs: {
+                ...loaded.runs,
+                items: sortNewestFirst([...loaded.runs.items, resolved]),
+              },
+            },
+          })
+        }
+      } else {
+        setWorkflow((current) =>
+          current.runs === undefined || current.runs.items.some((run) => run.id === resolved.id)
+            ? current
+            : {
+                ...current,
+                runs: {
+                  ...current.runs,
+                  items: sortNewestFirst([...current.runs.items, resolved]),
+                },
+              },
+        )
+      }
     }
     knownRun.current = undefined
     setSelected(undefined)
     setDetail(undefined)
     setMissing(false)
     setDetailError(undefined)
-    setSegment('runs')
   }
 
   const retryDetail = (): void => {
@@ -561,43 +801,11 @@ export function WorkflowsView(props: {
     resolveSelected(loadId.current, token, sessionId, selected)
   }
 
-  const mergeEvents = (): void => {
-    // A page load must not race a refresh: the refresh replaces the pages it
-    // captured, so a page started during it would be lost.
-    if (stateRef.current.refreshing === true) return
-    const loaded = state.loaded
-    const next = loaded?.events.next
-    if (next === undefined) return
-    const key = `events:${next}`
-    if (pendingPages.current.has(key)) return
-    const generation = loadId.current
-    pendingPages.current.add(key)
-    setPageStates((current) => updatePageState(current, 'events', { key, phase: 'loading' }))
-    void requestJson<{ events: JournalEvent[]; next?: string }>(eventsUrl(sessionId, next)).then(
-      (page) => {
-        if (isStaleGeneration(generation, loadId.current)) return
-        pendingPages.current.delete(key)
-        eventsPages.current += 1
-        setPageStates((current) => updatePageState(current, 'events', undefined))
-        setState((current) => {
-          if (current.loaded === undefined) return current
-          return {
-            ...current,
-            loaded: {
-              ...current.loaded,
-              events: pageOf(page, [...current.loaded.events.items, ...page.events]),
-            },
-          }
-        })
-      },
-      (error: unknown) => {
-        if (isStaleGeneration(generation, loadId.current)) return
-        pendingPages.current.delete(key)
-        setPageStates((current) =>
-          updatePageState(current, 'events', { key, phase: 'error', message: messageOf(error) }),
-        )
-      },
-    )
+  const retryWorkflow = (): void => {
+    const id = definitionRef.current
+    if (id === undefined) return
+    const token = ++workflowToken.current
+    loadWorkflowPage(loadId.current, token, id, 'initial')
   }
 
   const mergeRuns = (): void => {
@@ -610,7 +818,7 @@ export function WorkflowsView(props: {
     const generation = loadId.current
     pendingPages.current.add(key)
     setPageStates((current) => updatePageState(current, 'runs', { key, phase: 'loading' }))
-    void requestJson<{ runs: RunView[]; next?: string }>(
+    void requestJson<{ runs?: RunView[]; next?: string }>(
       runsUrl(sessionId, next, undefined, { order: 'newest' }),
     ).then(
       (page) => {
@@ -626,7 +834,7 @@ export function WorkflowsView(props: {
               ...current.loaded,
               runs: pageOf(
                 page,
-                sortNewestFirst(dedupeRuns([...current.loaded.runs.items, ...page.runs])),
+                sortNewestFirst(dedupeRuns([...current.loaded.runs.items, ...(page.runs ?? [])])),
               ),
             },
           }
@@ -637,6 +845,85 @@ export function WorkflowsView(props: {
         pendingPages.current.delete(key)
         setPageStates((current) =>
           updatePageState(current, 'runs', { key, phase: 'error', message: messageOf(error) }),
+        )
+      },
+    )
+  }
+
+  const mergeWorkflowRuns = (): void => {
+    if (stateRef.current.refreshing === true) return
+    const id = definitionRef.current
+    const next = workflowRef.current.runs?.next
+    if (id === undefined || next === undefined) return
+    const key = `workflowRuns:${next}`
+    if (pendingPages.current.has(key)) return
+    const generation = loadId.current
+    const token = workflowToken.current
+    pendingPages.current.add(key)
+    setPageStates((current) => updatePageState(current, 'workflowRuns', { key, phase: 'loading' }))
+    void requestJson<{ runs?: RunView[]; next?: string }>(
+      runsUrl(sessionId, next, undefined, { definition: id }),
+    ).then(
+      (page) => {
+        if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return
+        pendingPages.current.delete(key)
+        workflowRunsPages.current += 1
+        setPageStates((current) => updatePageState(current, 'workflowRuns', undefined))
+        setWorkflow((current) => {
+          if (current.runs === undefined) return current
+          return {
+            ...current,
+            runs: pageOf(
+              page,
+              sortNewestFirst(dedupeRuns([...current.runs.items, ...(page.runs ?? [])])),
+            ),
+          }
+        })
+      },
+      (error: unknown) => {
+        if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return
+        pendingPages.current.delete(key)
+        setPageStates((current) =>
+          updatePageState(current, 'workflowRuns', {
+            key,
+            phase: 'error',
+            message: messageOf(error),
+          }),
+        )
+      },
+    )
+  }
+
+  const mergeHistory = (): void => {
+    if (stateRef.current.refreshing === true) return
+    const id = definitionRef.current
+    const next = workflowRef.current.events?.next
+    if (id === undefined || next === undefined) return
+    const key = `history:${next}`
+    if (pendingPages.current.has(key)) return
+    const generation = loadId.current
+    const token = workflowToken.current
+    pendingPages.current.add(key)
+    setPageStates((current) => updatePageState(current, 'history', { key, phase: 'loading' }))
+    void requestJson<{ events?: JournalEvent[]; next?: string }>(eventsUrl(sessionId, next)).then(
+      (page) => {
+        if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return
+        pendingPages.current.delete(key)
+        historyPages.current += 1
+        setPageStates((current) => updatePageState(current, 'history', undefined))
+        setWorkflow((current) => {
+          if (current.events === undefined) return current
+          return {
+            ...current,
+            events: pageOf(page, [...current.events.items, ...(page.events ?? [])]),
+          }
+        })
+      },
+      (error: unknown) => {
+        if (isStaleGeneration(generation, loadId.current) || token !== workflowToken.current) return
+        pendingPages.current.delete(key)
+        setPageStates((current) =>
+          updatePageState(current, 'history', { key, phase: 'error', message: messageOf(error) }),
         )
       },
     )
@@ -654,6 +941,8 @@ export function WorkflowsView(props: {
         t={t}
         sessionId={sessionId}
         segment={segment}
+        {...(definitionId === undefined ? {} : { definition: definitionId })}
+        workflow={workflow}
         {...(selected === undefined ? {} : { selected })}
         {...(detail === undefined ? {} : { detail })}
         {...(missing ? { missing: true } : {})}
@@ -663,13 +952,17 @@ export function WorkflowsView(props: {
         pageStates={pageStates}
         scrollRef={scrollRef}
         onSegment={setSegment}
-        onSelect={(runId) => openRun(runId, true)}
-        onOpenRun={(runId) => openRun(runId, false)}
-        onBack={back}
+        onOpenWorkflow={openWorkflowPage}
+        onBackWorkflow={backFromWorkflow}
+        onRetryWorkflow={retryWorkflow}
+        onOpenWorkflowRun={(runId) => openRun(runId, 'workflow')}
+        onLoadWorkflowRuns={mergeWorkflowRuns}
+        onLoadHistory={mergeHistory}
+        onSelect={(runId) => openRun(runId, 'runs')}
+        onBack={backFromRun}
         onRetryDetail={retryDetail}
         onRefresh={() => load('background')}
         onRetryRefresh={() => load('background')}
-        onLoadEvents={mergeEvents}
         onLoadRuns={mergeRuns}
       />
     )

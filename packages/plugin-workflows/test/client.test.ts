@@ -68,6 +68,9 @@ interface LoadedModule {
   WorkflowsLoaded?: (props: Record<string, unknown>) => unknown
   StatusLine?: (props: Record<string, unknown>) => unknown
   RunList?: (props: Record<string, unknown>) => unknown
+  DefinitionHistory?: (props: Record<string, unknown>) => unknown
+  WorkflowOverview?: (props: Record<string, unknown>) => unknown
+  WorkflowPage?: (props: Record<string, unknown>) => unknown
   JournalList?: (props: Record<string, unknown>) => unknown
   RunDetailPage?: (props: Record<string, unknown>) => unknown
   MissingRunPage?: (props: Record<string, unknown>) => unknown
@@ -83,15 +86,31 @@ interface LoadedModule {
   isStaleGeneration?: (requested: number, current: number) => boolean
   updatePageState?: (
     states: Record<string, unknown>,
-    kind: 'events' | 'runs',
+    kind: 'runs' | 'workflowRuns' | 'history',
     value: unknown,
   ) => Record<string, unknown>
   dedupeRuns?: (runs: readonly Record<string, unknown>[]) => readonly Record<string, unknown>[]
-  restoreListPosition?: (host: unknown, runId: string, scrollTop: number) => void
+  restoreListPosition?: (host: unknown, id: string, scrollTop: number, kind?: string) => void
   readRuns?: (
     session: string,
     pages: number,
   ) => Promise<{ items: Array<Record<string, unknown>>; next?: string }>
+  readDefinitionEvents?: (
+    session: string,
+    pages: number,
+  ) => Promise<{ items: Array<Record<string, unknown>>; next?: string }>
+  readDefinitionRuns?: (
+    session: string,
+    definitionId: string,
+    pages: number,
+  ) => Promise<{ items: Array<Record<string, unknown>>; next?: string }>
+  readDefinitionDocument?: (
+    session: string,
+    definitionId: string,
+  ) => Promise<Record<string, unknown>>
+  readRunStats?: (session: string) => Promise<Record<string, unknown> | undefined>
+  readDefinitions?: (session: string) => Promise<readonly Record<string, unknown>[]>
+  readTriggers?: (session: string) => Promise<readonly Record<string, unknown>[]>
   VIEW_CSS?: string
   eventsUrl?: (session: string, cursor?: string) => string
   runsUrl?: (
@@ -100,6 +119,7 @@ interface LoadedModule {
     limit?: number,
     options?: Record<string, unknown>,
   ) => string
+  definitionsUrl?: (session: string, id?: string) => string
   healthUrl?: (session: string) => string
 }
 
@@ -114,6 +134,7 @@ function loadModule(confirmControl: ConfirmControl = { answer: false, prompts: 0
       contents: `export * from './src/client/index.tsx'
 export * from './src/client/panel.tsx'
 export * from './src/client/view.tsx'
+export * from './src/client/overview.tsx'
 export * from './src/client/run-history.tsx'
 export * from './src/client/run-detail.tsx'
 export * from './src/client/design-page.tsx'
@@ -273,6 +294,87 @@ function runView(overrides: Record<string, unknown> = {}): Record<string, unknow
   }
 }
 
+/** The definition document, trigger entries, statistics, and history fixtures. */
+const definition = {
+  id: 'change-intake',
+  name: 'OpenSpec change intake',
+  version: 7,
+  description: 'Intake a new OpenSpec change.',
+  risk: 'low',
+  gateOwnership: 'own',
+  trigger: {
+    kind: 'tool.pre-execute',
+    match: { tool: 'shell' },
+    mode: 'active',
+    dedupe: 'name',
+  },
+  steps: [
+    { id: 'requirements', title: 'Requirements', executor: 'main', next: 'spec-review' },
+    {
+      id: 'spec-review',
+      title: 'Spec review',
+      executor: 'tool',
+      // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+      branch: { then: 'verify', else: 'requirements' },
+    },
+    {
+      id: 'verify',
+      title: 'Verify',
+      executor: 'loop',
+      loop: { maxIterations: 3, next: 'requirements', cap: 'blocked', list: 'checks' },
+    },
+  ],
+}
+
+const triggers = [
+  {
+    id: 'definition:change-intake',
+    event: 'tool.pre-execute',
+    filter: { tool: 'shell' },
+    mode: 'active',
+    dedupe: 'name',
+    source: 'workflow-definition',
+    counts: { matched: 2, total: 3 },
+  },
+  {
+    id: 'delegate-result',
+    event: 'tool.result',
+    filter: { tool: 'delegate' },
+    mode: 'shadow',
+    dedupe: 'none',
+    counts: { matched: 9, total: 20 },
+  },
+]
+
+const stats = {
+  definitions: {
+    'change-intake': {
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+      interrupted: 0,
+      running: 0,
+      blocked: 0,
+      total: 2,
+    },
+  },
+}
+
+const historyEvent = {
+  v: 1,
+  at: 1,
+  session: 'session-1',
+  kind: 'tool.pre-execute',
+  subject: 'shell',
+  summary: 'ran a shell call',
+  bytes: 20,
+  truncated: false,
+  triggers: [
+    { id: 'definition:change-intake', matched: true, reason: 'run-created', runId: 'run-1' },
+    { id: 'delegate-result', matched: true, reason: 'would-fire' },
+  ],
+}
+
 describe('Workflows Client half', () => {
   it('registers the conversation view with id, order, and a localized label', () => {
     const module = loadModule()
@@ -399,7 +501,7 @@ describe('Workflows Client half', () => {
     expect(childText(empty)).toContain('triggers.empty')
   })
 
-  it('renders each event’s evaluations inline and links only an evaluation with a run id', () => {
+  it('renders only the definition’s evaluations and links only one carrying a run id', () => {
     const module = loadModule()
     let opened: string | undefined
     const events = [
@@ -413,15 +515,14 @@ describe('Workflows Client half', () => {
         bytes: 20,
         truncated: true,
         triggers: [
-          { id: 'change-intake', matched: true, reason: 'run-created', runId: 'run-1' },
-          { id: 'openspec-tasks-checked', matched: true, reason: 'would-fire' },
           {
-            id: 'task-review',
-            matched: false,
-            reason: 'run-suppressed',
-            detail: 'the run limit was reached',
+            id: 'definition:change-intake',
+            matched: true,
+            reason: 'run-created',
+            runId: 'run-1',
           },
-          { id: 'verify', matched: false, reason: 'not-applicable' },
+          { id: 'openspec-tasks-checked', matched: true, reason: 'would-fire' },
+          { id: 'definition:task-review', matched: false, reason: 'run-suppressed' },
           {
             id: 'delegate-result',
             matched: false,
@@ -433,21 +534,22 @@ describe('Workflows Client half', () => {
       },
     ]
     const rendered = renderTree(
-      module.JournalList?.({
+      module.DefinitionHistory?.({
         events,
+        definitionId: 'change-intake',
         t: translate,
         onOpenRun: (runId: string) => (opened = runId),
       }),
     )
     const text = childText(rendered)
     expect(text).toContain('run-created')
-    expect(text).toContain('would-fire')
-    expect(text).toContain('run-suppressed')
-    expect(text).toContain('not-applicable')
-    expect(text).toContain('the run limit was reached')
-    expect(text).toContain('src/index.ts')
-    expect(text).toContain('openspec/changes/**')
     expect(text).toContain('events.truncated')
+    // The other trigger ids of the same event are excluded from this history.
+    expect(text).not.toContain('would-fire')
+    expect(text).not.toContain('run-suppressed')
+    expect(text).not.toContain('filter-mismatch')
+    expect(text).not.toContain('openspec-tasks-checked')
+    expect(text).not.toContain('src/index.ts')
     const links = elements(rendered).filter(
       (element) => element.type === 'button' && element.props['data-run'] !== undefined,
     )
@@ -455,9 +557,15 @@ describe('Workflows Client half', () => {
     expect(links[0]?.props['data-run']).toBe('workflow:run-1')
     ;(links[0]?.props.onClick as (() => void) | undefined)?.()
     expect(opened).toBe('workflow:run-1')
-    expect(childText(renderTree(module.JournalList?.({ events: [], t: translate })))).toContain(
-      'events.empty',
+    const empty = renderTree(
+      module.DefinitionHistory?.({
+        events,
+        definitionId: 'verify',
+        t: translate,
+        onOpenRun: () => {},
+      }),
     )
+    expect(childText(empty)).toContain('workflow.noHistory')
   })
 
   it('renders the newest-first run rows with the title, trigger, status, and duration', () => {
@@ -594,6 +702,26 @@ describe('Workflows Client half', () => {
     module.restoreListPosition?.(host, quoted, 320)
     expect(host.scrollTop).toBe(320)
     expect(focused).toEqual([`${quoted}:no-scroll`])
+    // A workflow row is found through its own attribute, never a selector.
+    const workflowRow = 'change-intake-"quoted"'
+    const workflowHost = {
+      scrollTop: 0,
+      querySelectorAll: (selector: string) => {
+        expect(selector).toBe('[data-workflow]')
+        return [
+          {
+            getAttribute: (name: string) => (name === 'data-workflow' ? workflowRow : null),
+            focus: (options?: { preventScroll?: boolean }) =>
+              focused.push(
+                `${workflowRow}:${options?.preventScroll === true ? 'no-scroll' : 'scroll'}`,
+              ),
+          },
+        ]
+      },
+    }
+    module.restoreListPosition?.(workflowHost, workflowRow, 90, 'workflow')
+    expect(workflowHost.scrollTop).toBe(90)
+    expect(focused).toContain(`${workflowRow}:no-scroll`)
     expect(() => module.restoreListPosition?.(null, 'workflow:run-1', 320)).not.toThrow()
   })
 
@@ -603,16 +731,20 @@ describe('Workflows Client half', () => {
     expect(module.isStaleGeneration?.(1, 1)).toBe(false)
   })
 
-  it('keeps events and runs pagination states independent', () => {
+  it('keeps the runs, workflow runs, and history pagination states independent', () => {
     const module = loadModule()
     const initial = {
-      events: { key: 'events:5', phase: 'error', message: 'events failed' },
-      runs: { key: 'runs:5', phase: 'loading' },
+      runs: { key: 'runs:5', phase: 'error', message: 'runs failed' },
+      workflowRuns: { key: 'workflowRuns:5', phase: 'loading' },
+      history: { key: 'history:5', phase: 'loading' },
     }
     const afterRuns = module.updatePageState?.(initial, 'runs', undefined)
-    expect(afterRuns?.events).toEqual(initial.events)
-    const afterEvents = module.updatePageState?.(initial, 'events', undefined)
-    expect(afterEvents?.runs).toEqual(initial.runs)
+    expect(afterRuns?.workflowRuns).toEqual(initial.workflowRuns)
+    expect(afterRuns?.history).toEqual(initial.history)
+    const afterWorkflow = module.updatePageState?.(initial, 'workflowRuns', undefined)
+    expect(afterWorkflow?.runs).toEqual(initial.runs)
+    const afterHistory = module.updatePageState?.(initial, 'history', undefined)
+    expect(afterHistory?.runs).toEqual(initial.runs)
   })
 
   it('renders pagination with loading, retry, and end states', () => {
@@ -667,6 +799,93 @@ describe('Workflows Client half', () => {
     expect(urls[1]).toContain('cursor=2')
   })
 
+  it('reads the overview data and stays truthful without the optional statistics', async () => {
+    const module = loadModule()
+    const urls: string[] = []
+    const original = globalThis.fetch
+    const response = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    globalThis.fetch = (async (input: unknown) => {
+      const url = String(input)
+      urls.push(url)
+      if (url.includes('/api/workflows/definitions') && url.includes('id=')) {
+        return response({
+          definition: { id: 'change-intake', name: 'Intake', settings: { risk: 'low' } },
+          revision: null,
+          source: 'shipped',
+        })
+      }
+      if (url.includes('/api/workflows/definitions')) {
+        return response({
+          definitions: [
+            {
+              id: 'change-intake',
+              name: 'Intake',
+              version: 1,
+              trigger: { kind: 'tool.pre-execute', mode: 'active' },
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/triggers')) {
+        return response({
+          triggers: [
+            {
+              id: 'definition:change-intake',
+              event: 'tool.pre-execute',
+              counts: { matched: 2, total: 3 },
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/runs') && url.includes('stats=1')) {
+        // A host without the additive stats mode answers with the paged response.
+        return response({ session: 's', runs: [] })
+      }
+      if (url.includes('/api/workflows/runs') && url.includes('definition=change-intake')) {
+        return response({ runs: [{ id: 'workflow:run-1', startedAt: 2 }], next: '9' })
+      }
+      if (url.includes('/api/workflows/events')) {
+        return response({
+          events: [
+            {
+              v: 1,
+              at: 1,
+              session: 's',
+              kind: 'tool.pre-execute',
+              subject: 'shell',
+              summary: 'ran',
+              bytes: 1,
+              truncated: false,
+              triggers: [{ id: 'definition:change-intake', matched: true, reason: 'run-created' }],
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/runs')) return response({ runs: [] })
+      throw new Error(`unexpected request ${url}`)
+    }) as typeof fetch
+    try {
+      expect(await module.readDefinitions?.('s')).toHaveLength(1)
+      expect(await module.readTriggers?.('s')).toHaveLength(1)
+      expect(await module.readRunStats?.('s')).toBeUndefined()
+      const document = await module.readDefinitionDocument?.('s', 'change-intake')
+      expect(document?.id).toBe('change-intake')
+      const runs = await module.readDefinitionRuns?.('s', 'change-intake', 1)
+      expect(runs?.items.map((run) => run.id)).toEqual(['workflow:run-1'])
+      expect(runs?.next).toBe('9')
+      const events = await module.readDefinitionEvents?.('s', 1)
+      expect(events?.items).toHaveLength(1)
+      expect(urls.some((url) => url.includes('stats=1'))).toBe(true)
+      expect(urls.some((url) => url.includes('definition=change-intake'))).toBe(true)
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
   it('builds document-relative API URLs and never redefines a shipped token', () => {
     const module = loadModule()
     expect(module.eventsUrl?.('session-1')).toContain('/api/workflows/events?session=session-1')
@@ -678,6 +897,14 @@ describe('Workflows Client half', () => {
     expect(module.runsUrl?.('session-1', undefined, 5, { run: 'workflow:run-1' })).toContain(
       'run=workflow%3Arun-1',
     )
+    expect(module.runsUrl?.('session-1', undefined, 5, { definition: 'change-intake' })).toContain(
+      'definition=change-intake',
+    )
+    expect(module.runsUrl?.('session-1', undefined, 5, { stats: true })).toContain('stats=1')
+    expect(module.definitionsUrl?.('session-1')).toBe(
+      '/api/workflows/definitions?session=session-1',
+    )
+    expect(module.definitionsUrl?.('session-1', 'change-intake')).toContain('id=change-intake')
     const css = module.VIEW_CSS ?? ''
     expect(css).not.toMatch(/--dsw-[a-z0-9-]+\s*:/u)
     expect(css).toContain('var(--dsw-')
@@ -727,7 +954,7 @@ describe('Workflows Client half', () => {
       'not-applicable',
     ]
     renderTree(
-      module.JournalList?.({
+      module.DefinitionHistory?.({
         events: [
           {
             v: 1,
@@ -738,10 +965,91 @@ describe('Workflows Client half', () => {
             summary: 'ran a shell call',
             bytes: 3,
             truncated: false,
-            triggers: reasons.map((reason) => ({ id: `trigger-${reason}`, matched: true, reason })),
+            triggers: reasons.map((reason) => ({
+              id: `definition:${reason}`,
+              matched: true,
+              reason,
+            })),
           },
         ],
+        definitionId: 'run-created',
         t: strict,
+        onOpenRun: () => {},
+      }),
+    )
+    for (const row of [definition, { ...definition, description: '', steps: [] }]) {
+      renderTree(
+        module.WorkflowOverview?.({
+          definitions: [row],
+          triggers,
+          stats,
+          runs: [runView()],
+          t: strict,
+          now: NOW,
+          onOpen: () => {},
+        }),
+      )
+    }
+    renderTree(
+      module.WorkflowOverview?.({
+        definitions: [definition],
+        triggers: [],
+        runs: [],
+        t: strict,
+        now: NOW,
+        onOpen: () => {},
+      }),
+    )
+    renderTree(
+      module.WorkflowOverview?.({
+        definitions: [{ id: 'incomplete', name: 'Incomplete' }],
+        triggers: [],
+        runs: [],
+        t: strict,
+        onOpen: () => {},
+      }),
+    )
+    renderTree(
+      module.WorkflowOverview?.({
+        definitions: [],
+        triggers,
+        t: strict,
+        onOpen: () => {},
+      }),
+    )
+    for (const phase of ['loading', 'error', 'ready']) {
+      renderTree(
+        module.WorkflowPage?.({
+          definitionId: 'change-intake',
+          phase,
+          document: definition,
+          trigger: triggers[0],
+          runs: { items: [runView()] },
+          events: { items: [historyEvent] },
+          message: 'failed',
+          t: strict,
+          now: NOW,
+          onBack: () => {},
+          onOpenRun: () => {},
+          onLoadRuns: () => {},
+          onLoadHistory: () => {},
+          onRetry: () => {},
+        }),
+      )
+    }
+    renderTree(
+      module.WorkflowPage?.({
+        definitionId: 'change-intake',
+        phase: 'ready',
+        document: definition,
+        runs: { items: [] },
+        events: { items: [] },
+        t: strict,
+        onBack: () => {},
+        onOpenRun: () => {},
+        onLoadRuns: () => {},
+        onLoadHistory: () => {},
+        onRetry: () => {},
       }),
     )
     for (const unit of ['now', 'minutes', 'hours', 'days', 'months', 'years']) {
@@ -753,36 +1061,38 @@ describe('Workflows Client half', () => {
 describe('Workflows loaded view', () => {
   const loaded = {
     health: health(),
-    events: {
-      items: [
-        {
-          v: 1,
-          at: 1,
-          session: 'session-1',
-          kind: 'tool.pre-execute',
-          subject: 'shell',
-          summary: 'ran a shell call',
-          bytes: 20,
-          truncated: false,
-          triggers: [{ id: 'change-intake', matched: true, reason: 'run-created', runId: 'run-1' }],
-        },
-      ],
-    },
     runs: { items: [runView()] },
+    definitions: [definition],
+    triggers,
+    stats,
+  }
+  const workflow = {
+    phase: 'ready',
+    document: definition,
+    runs: { items: [runView()] },
+    events: { items: [historyEvent] },
   }
 
-  it('renders the runs first and no catalog or authoring section', () => {
+  it('renders the trigger-grouped overview first and no catalog or authoring section', () => {
     const module = loadModule()
     const tree = renderTree(
       module.WorkflowsLoaded?.({ loaded, t: translate, sessionId: 'session-1', now: NOW }),
     )
-    expect(childText(tree)).toContain('OpenSpec change intake · auth')
+    const text = childText(tree)
+    expect(text).toContain('OpenSpec change intake')
+    expect(text).toContain('tool.pre-execute')
+    expect(text).toContain('overview.runs')
+    expect(text).toContain('overview.firings')
     const treeElements = elements(tree)
+    expect(treeElements.some((element) => element.props['data-workflow'] === 'change-intake')).toBe(
+      true,
+    )
     for (const section of ['definitions', 'triggers', 'receipts', 'why-not']) {
       expect(treeElements.some((element) => element.props['data-section'] === section)).toBe(false)
     }
     expect(treeElements.some((element) => element.props['data-view'] === 'list')).toBe(true)
-    // A failed background refresh keeps the list and offers a retry.
+    expect(treeElements.some((element) => element.props['data-segment'] === 'workflows')).toBe(true)
+    // A failed background refresh keeps the overview and offers a retry.
     const failedRefresh = renderTree(
       module.WorkflowsLoaded?.({
         loaded,
@@ -793,7 +1103,7 @@ describe('Workflows loaded view', () => {
         now: NOW,
       }),
     )
-    expect(childText(failedRefresh)).toContain('OpenSpec change intake · auth')
+    expect(childText(failedRefresh)).toContain('OpenSpec change intake')
     expect(childText(failedRefresh)).toContain('the refresh failed')
     expect(
       elements(failedRefresh).some(
@@ -802,26 +1112,106 @@ describe('Workflows loaded view', () => {
     ).toBe(true)
   })
 
-  it('renders the journal segment with evaluations inline', () => {
+  it('renders the workflow page with its document, chain, runs, and scoped history', () => {
     const module = loadModule()
+    let backed = 0
     const opened: string[] = []
     const tree = renderTree(
       module.WorkflowsLoaded?.({
         loaded,
         t: translate,
         sessionId: 'session-1',
-        segment: 'journal',
-        onOpenRun: (runId: string) => opened.push(runId),
+        definition: 'change-intake',
+        workflow,
+        now: NOW,
+        onBackWorkflow: () => (backed += 1),
+        onOpenWorkflowRun: (runId: string) => opened.push(runId),
+        onLoadWorkflowRuns: () => {},
+        onLoadHistory: () => {},
       }),
     )
     const text = childText(tree)
-    expect(text).toContain('ran a shell call')
+    expect(text).toContain('Intake a new OpenSpec change.')
+    expect(text).toContain('workflow.version')
+    expect(text).toContain('definitions.risk')
+    expect(text).toContain('workflow.gateOwnership')
+    expect(text).toContain('workflow.firings')
+    expect(text).toContain('2 / 3 overview.firings')
+    expect(text).toContain('workflow.architecture')
+    // The ordered chain carries every step's executor and next/branch/loop text.
+    expect(text).toContain('Requirements')
+    expect(text).toContain('next: spec-review')
+    expect(text).toContain('then: verify')
+    expect(text).toContain('else: requirements')
+    expect(text).toContain('loop: requirements (3 iterations, cap blocked, list checks)')
+    expect(text).toContain('workflow.history')
     expect(text).toContain('run-created')
-    const link = elements(tree).find(
+    // Another trigger id on the same event never reaches the definition history.
+    expect(text).not.toContain('would-fire')
+    const elementsTree = elements(tree)
+    expect(elementsTree.some((element) => element.props['data-view'] === 'workflow')).toBe(true)
+    const runLinks = elementsTree.filter(
       (element) => element.type === 'button' && element.props['data-run'] !== undefined,
     )
-    ;(link?.props.onClick as (() => void) | undefined)?.()
-    expect(opened).toEqual(['workflow:run-1'])
+    expect(runLinks.length).toBeGreaterThan(0)
+    ;(runLinks[0]?.props.onClick as (() => void) | undefined)?.()
+    expect(opened[0]).toBe('workflow:run-1')
+    const back = elementsTree.find(
+      (element) => element.type === 'button' && childText(element) === 'workflow.back',
+    )
+    ;(back?.props.onClick as (() => void) | undefined)?.()
+    expect(backed).toBe(1)
+  })
+
+  it('renders the workflow page loading, error, and empty states with a retry', () => {
+    const module = loadModule()
+    let retried = 0
+    const loading = renderTree(
+      module.WorkflowsLoaded?.({
+        loaded,
+        t: translate,
+        sessionId: 'session-1',
+        definition: 'change-intake',
+        workflow: { phase: 'loading' },
+        onBackWorkflow: () => {},
+      }),
+    )
+    expect(childText(loading)).toContain('state.loading')
+    const failed = renderTree(
+      module.WorkflowsLoaded?.({
+        loaded,
+        t: translate,
+        sessionId: 'session-1',
+        definition: 'change-intake',
+        workflow: { phase: 'error', message: 'the page failed' },
+        onBackWorkflow: () => {},
+        onRetryWorkflow: () => (retried += 1),
+      }),
+    )
+    expect(childText(failed)).toContain('the page failed')
+    const retry = elements(failed).find(
+      (element) => element.type === 'button' && childText(element) === 'state.retry',
+    )
+    ;(retry?.props.onClick as (() => void) | undefined)?.()
+    expect(retried).toBe(1)
+    const empty = renderTree(
+      module.WorkflowsLoaded?.({
+        loaded,
+        t: translate,
+        sessionId: 'session-1',
+        definition: 'change-intake',
+        workflow: {
+          phase: 'ready',
+          document: definition,
+          runs: { items: [] },
+          events: { items: [] },
+        },
+        onBackWorkflow: () => {},
+        onOpenWorkflowRun: () => {},
+      }),
+    )
+    expect(childText(empty)).toContain('workflow.noRuns')
+    expect(childText(empty)).toContain('workflow.noHistory')
   })
 
   it('opens the selected run’s detail and returns to the list', () => {

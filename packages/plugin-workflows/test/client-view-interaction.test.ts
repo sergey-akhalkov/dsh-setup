@@ -258,20 +258,91 @@ const HEALTH = {
   session: 'session-1',
 }
 
-const JOURNAL = {
+const DEFINITION = {
+  id: 'change-intake',
+  name: 'OpenSpec change intake',
+  version: 7,
+  description: 'Intake a new OpenSpec change.',
+  risk: 'low',
+  gateOwnership: 'own',
+  trigger: { kind: 'turn.stopping', match: {}, mode: 'active', dedupe: 'turn' },
+  steps: [
+    { id: 'requirements', title: 'Requirements', executor: 'main', next: 'spec-review' },
+    {
+      id: 'spec-review',
+      title: 'Spec review',
+      executor: 'tool',
+      // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+      branch: { then: 'verify', else: 'requirements' },
+    },
+  ],
+}
+
+const TRIGGERS = {
+  triggers: [
+    {
+      id: 'definition:change-intake',
+      event: 'turn.stopping',
+      filter: {},
+      mode: 'active',
+      dedupe: 'turn',
+      source: 'workflow-definition',
+      counts: { matched: 2, total: 3 },
+    },
+  ],
+}
+
+const STATS = {
+  stats: {
+    definitions: {
+      'change-intake': {
+        completed: 1,
+        failed: 1,
+        cancelled: 0,
+        interrupted: 0,
+        running: 0,
+        blocked: 0,
+        total: 2,
+      },
+    },
+  },
+}
+
+const HISTORY = {
   events: [
     {
       v: 1,
       at: 1,
       session: 'session-1',
-      kind: 'tool.pre-execute',
-      subject: 'shell',
-      summary: 'ran a shell call',
+      kind: 'turn.stopping',
+      subject: 'turn 3',
+      summary: 'the turn is stopping',
       bytes: 3,
       truncated: false,
-      triggers: [{ id: 'change-intake', matched: true, reason: 'run-created', runId: 'run-c' }],
+      triggers: [
+        { id: 'definition:change-intake', matched: true, reason: 'run-created', runId: 'run-w' },
+        { id: 'agent-turn-stop', matched: true, reason: 'would-fire' },
+      ],
     },
   ],
+}
+
+/** The initial read of the overview's own endpoints. */
+function overviewResponse(url: string): Response | undefined {
+  if (url.includes('/api/workflows/definitions')) {
+    return url.includes('id=')
+      ? json({ definition: DEFINITION, revision: null, source: 'shipped' })
+      : json({ definitions: [DEFINITION] })
+  }
+  if (url.includes('/api/workflows/triggers')) return json(TRIGGERS)
+  if (url.includes('/api/workflows/runs') && url.includes('stats=1')) return json(STATS)
+  return undefined
+}
+
+/** Switch the session view to its Runs segment (the overview is the default). */
+function openRunsSegment(tree: unknown): void {
+  const segments = renderElements(tree).find((element) => element.props.id === 'dsh-wf-segments')
+  ;(segments?.props.onChange as ((next: string) => void) | undefined)?.('runs')
 }
 
 function button(tree: unknown, text: string): Element | undefined {
@@ -283,6 +354,12 @@ function button(tree: unknown, text: string): Element | undefined {
 function runButton(tree: unknown, runId: string): Element | undefined {
   return renderElements(tree).find(
     (element) => element.type === 'button' && element.props['data-run'] === runId,
+  )
+}
+
+function workflowButton(tree: unknown, definitionId: string): Element | undefined {
+  return renderElements(tree).find(
+    (element) => element.type === 'button' && element.props['data-workflow'] === definitionId,
   )
 }
 
@@ -333,8 +410,9 @@ describe('Workflows session view interaction', () => {
       WorkflowsView?: (props: Record<string, unknown>) => unknown
     }
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json({ events: [] })
       if (url.includes('/api/workflows/runs')) {
         return json(url.includes('cursor=2') ? { runs: LATER } : { runs: RUNS, next: '2' })
       }
@@ -345,6 +423,12 @@ describe('Workflows session view interaction', () => {
     if (view === undefined) throw new Error('WorkflowsView is not exported')
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
     let tree = await runtime.settle(render)
+    // The overview is the first segment and loads no journal page at all.
+    expect(renderText(tree)).toContain('OpenSpec change intake')
+    expect(workflowButton(tree, 'change-intake')).toBeDefined()
+    expect(urls.some((url) => url.includes('/api/workflows/events'))).toBe(false)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
     // The first page renders newest-first as returned.
     let rows = renderElements(tree).filter(
       (element) => element.type === 'button' && element.props['data-run'] !== undefined,
@@ -353,7 +437,7 @@ describe('Workflows session view interaction', () => {
     expect(rows.map((row) => row.props['data-run'])).toEqual(['workflow:run-b', 'workflow:run-a'])
     // Simulate a scrolled list; the row click captures the position.
     const scroll = renderElements(tree).find(
-      (element) => element.props['className'] === 'dsh-wf-scroll',
+      (element) => element.props.className === 'dsh-wf-scroll',
     )
     const host = {
       scrollTop: 140,
@@ -415,8 +499,9 @@ describe('Workflows session view interaction', () => {
     let runCalls = 0
     let fail = false
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json({ events: [] })
       runCalls += 1
       if (fail) return json({ error: 'the refresh failed' }, 500)
       return json({ runs: RUNS })
@@ -425,15 +510,17 @@ describe('Workflows session view interaction', () => {
     if (view === undefined) throw new Error('WorkflowsView is not exported')
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
     let tree = await runtime.settle(render)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
     expect(runCalls).toBe(1)
     fail = true
     ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
     tree = await runtime.settle(render)
     expect(runCalls).toBe(2)
-    const text = renderText(tree)
+    const body = renderText(tree)
     // The loaded rows and the detail stay; the failure is retryable.
-    expect(text).toContain('OpenSpec change intake · workflow:run-a')
-    expect(text).toContain('the refresh failed')
+    expect(body).toContain('OpenSpec change intake · workflow:run-a')
+    expect(body).toContain('the refresh failed')
     expect(button(tree, 'state.retry')).toBeDefined()
     expect(tracker.violations).toEqual([])
   })
@@ -459,8 +546,9 @@ describe('Workflows session view interaction', () => {
     })
     let runCalls = 0
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json({ events: [] })
       runCalls += 1
       return json({ runs: RUNS })
     })
@@ -468,6 +556,8 @@ describe('Workflows session view interaction', () => {
     if (view === undefined) throw new Error('WorkflowsView is not exported')
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
     let tree = await runtime.settle(render)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
     expect(handlers).toHaveLength(1)
     expect(runCalls).toBe(1)
     handlers[0]?.()
@@ -485,8 +575,9 @@ describe('Workflows session view interaction', () => {
     let pageRuns: readonly Record<string, unknown>[] = RUNS
     let lookupMissing = false
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json({ events: [] })
       if (url.includes('run=workflow%3Arun-b')) {
         return json({ runs: lookupMissing ? [] : [run('workflow:run-b', NOW - 60_000)] })
       }
@@ -496,6 +587,9 @@ describe('Workflows session view interaction', () => {
     const view = module.WorkflowsView
     if (view === undefined) throw new Error('WorkflowsView is not exported')
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
     const focused: string[] = []
     const host = {
       scrollTop: 90,
@@ -506,9 +600,8 @@ describe('Workflows session view interaction', () => {
         },
       ],
     }
-    let tree = await runtime.settle(render)
     const scrollRef = renderElements(tree).find(
-      (element) => element.props['className'] === 'dsh-wf-scroll',
+      (element) => element.props.className === 'dsh-wf-scroll',
     )?.props.ref as { current: unknown } | undefined
     if (scrollRef !== undefined) scrollRef.current = host
     ;(runButton(tree, 'workflow:run-b')?.props.onClick as (() => void) | undefined)?.()
@@ -545,26 +638,33 @@ describe('Workflows session view interaction', () => {
       WorkflowsView?: (props: Record<string, unknown>) => unknown
     }
     let resolveLookup: ((value: Response) => void) | undefined
+    let pageRuns: readonly Record<string, unknown>[] = RUNS
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json(JOURNAL)
-      if (url.includes('run=workflow%3Arun-c')) {
+      if (url.includes('run=workflow%3Arun-b')) {
         return new Promise<Response>((resolve) => {
           resolveLookup = resolve
         })
       }
-      if (url.includes('/api/workflows/runs')) return json({ runs: RUNS })
+      if (url.includes('/api/workflows/runs')) return json({ runs: pageRuns })
       throw new Error(`unexpected request ${url}`)
     })
     const view = module.WorkflowsView
     if (view === undefined) throw new Error('WorkflowsView is not exported')
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
     let tree = await runtime.settle(render)
-    const segments = renderElements(tree).find((element) => element.props.id === 'dsh-wf-segments')
-    ;(segments?.props.onChange as (next: string) => void)?.('journal')
+    openRunsSegment(tree)
     tree = runtime.commit(render)
-    ;(runButton(tree, 'workflow:run-c')?.props.onClick as (() => void) | undefined)?.()
+    // Open the newest run; it is in the loaded page, so no lookup starts.
+    ;(runButton(tree, 'workflow:run-b')?.props.onClick as (() => void) | undefined)?.()
     tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-b')
+    // A refresh pushes run-b out of the page: its id lookup stays pending.
+    pageRuns = [run('workflow:run-d', NOW + 1_000), RUNS[0] as Record<string, unknown>]
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
     expect(resolveLookup).toBeDefined()
     // Back, then select a different run that is already in the loaded page.
     ;(button(tree, 'runs.back')?.props.onClick as (() => void) | undefined)?.()
@@ -573,11 +673,11 @@ describe('Workflows session view interaction', () => {
     tree = runtime.commit(render)
     expect(renderText(tree)).toContain('OpenSpec change intake · v7')
     // The earlier lookup now answers; it must not replace the open run.
-    resolveLookup?.(json({ runs: [run('workflow:run-c', NOW)] }))
+    resolveLookup?.(json({ runs: [run('workflow:run-b', NOW - 60_000)] }))
     await new Promise((resolve) => setTimeout(resolve, 0))
     tree = runtime.commit(render)
     expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-a')
-    expect(renderText(tree)).not.toContain('OpenSpec change intake · workflow:run-c')
+    expect(renderText(tree)).not.toContain('OpenSpec change intake · workflow:run-b')
     expect(renderText(tree)).not.toContain('runs.missing')
     expect(tracker.violations).toEqual([])
   })
@@ -591,8 +691,9 @@ describe('Workflows session view interaction', () => {
     let resolveRefresh: ((value: Response) => void) | undefined
     let runCalls = 0
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json({ events: [] })
       runCalls += 1
       if (runCalls === 1) return json({ runs: RUNS, next: '2' })
       if (url.includes('cursor=2')) {
@@ -608,6 +709,8 @@ describe('Workflows session view interaction', () => {
     if (view === undefined) throw new Error('WorkflowsView is not exported')
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
     let tree = await runtime.settle(render)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
     ;(button(tree, 'paging.more')?.props.onClick as (() => void) | undefined)?.()
     tree = runtime.commit(render)
     ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
@@ -625,6 +728,201 @@ describe('Workflows session view interaction', () => {
     )
     // The refresh's pages are the consistent result; no appended page flickers.
     expect(rows.map((row) => row.props['data-run'])).toEqual(['workflow:run-d', 'workflow:run-a'])
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('renders the trigger-grouped overview, then the runs feed, without a journal request', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/runs')) return json({ runs: RUNS })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    const body = renderText(tree)
+    expect(body).toContain('OpenSpec change intake')
+    expect(body).toContain('2 / 3 overview.firings')
+    expect(body).toContain('1 / 2 overview.runs')
+    expect(body).toContain('definitions.mode: active')
+    expect(body).toContain('turn.stopping')
+    expect(workflowButton(tree, 'change-intake')).toBeDefined()
+    // The overview load reads its own endpoints and never the journal.
+    expect(tracker.urls.some((url) => url.includes('/api/workflows/definitions'))).toBe(true)
+    expect(tracker.urls.some((url) => url.includes('/api/workflows/triggers'))).toBe(true)
+    expect(tracker.urls.some((url) => url.includes('stats=1'))).toBe(true)
+    expect(tracker.urls.some((url) => url.includes('/api/workflows/events'))).toBe(false)
+    const segments = renderElements(tree).find((element) => element.props.id === 'dsh-wf-segments')
+    if (segments === undefined) throw new Error('the segment control is missing')
+    expect(
+      (segments.props.options as Array<{ value: string }>).map((option) => option.value),
+    ).toEqual(['workflows', 'runs'])
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-a')
+    expect(tracker.urls.some((url) => url.includes('/api/workflows/events'))).toBe(false)
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('orders delegate and review runs newest first in the runs feed', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const review = {
+      ...run('review:task-review-demo', NOW - 10_000),
+      source: 'review',
+      trigger: undefined,
+      definition: undefined,
+    }
+    const delegation = {
+      ...run('delegation:task-review-demo', NOW - 60_000),
+      source: 'delegation',
+      trigger: undefined,
+      definition: undefined,
+    }
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      // The host serves runs oldest-first; the view applies newest-first.
+      if (url.includes('/api/workflows/runs')) return json({ runs: [delegation, review] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
+    const order = renderElements(tree)
+      .filter((element) => element.type === 'button' && element.props['data-run'] !== undefined)
+      .map((element) => element.props['data-run'])
+    expect(order).toEqual(['review:task-review-demo', 'delegation:task-review-demo'])
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('opens the workflow page, then its run, and Back returns to the workflow page', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    const current = run('workflow:run-w', NOW - 1_000)
+    const older = run('workflow:run-w-old', NOW - 9_000)
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/events')) return json(HISTORY)
+      if (url.includes('definition=change-intake') && url.includes('cursor=2')) {
+        return json({ runs: [older] })
+      }
+      if (url.includes('definition=change-intake')) return json({ runs: [current], next: '2' })
+      if (url.includes('run=workflow%3Arun-w')) return json({ runs: [current] })
+      if (url.includes('/api/workflows/runs')) return json({ runs: RUNS })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    const focused: string[] = []
+    const workflowRow = {
+      getAttribute: (name: string) => (name === 'data-workflow' ? 'change-intake' : null),
+      focus: () => focused.push('workflow:change-intake'),
+    }
+    const runRow = {
+      getAttribute: (name: string) => (name === 'data-run' ? 'workflow:run-w' : null),
+      focus: () => focused.push('run:workflow:run-w'),
+    }
+    const host = {
+      scrollTop: 55,
+      querySelectorAll: (selector: string) =>
+        selector === '[data-workflow]' ? [workflowRow] : selector === '[data-run]' ? [runRow] : [],
+    }
+    const scrollRef = renderElements(tree).find(
+      (element) => element.props.className === 'dsh-wf-scroll',
+    )?.props.ref as { current: unknown } | undefined
+    if (scrollRef !== undefined)
+      scrollRef.current = host
+      // Open the workflow page from the overview.
+    ;(workflowButton(tree, 'change-intake')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    const pageBody = renderText(tree)
+    expect(pageBody).toContain('Intake a new OpenSpec change.')
+    expect(pageBody).toContain('workflow.architecture')
+    expect(pageBody).toContain('next: spec-review')
+    expect(pageBody).toContain('workflow.history')
+    expect(pageBody).toContain('run-created')
+    // Another trigger id on the same event is excluded from the history.
+    expect(pageBody).not.toContain('would-fire')
+    expect(tracker.urls.some((url) => url.includes('/api/workflows/events'))).toBe(true)
+    // The workflow page's own runs page and appended page stay newest first.
+    ;(button(tree, 'paging.more')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    const runIds = renderElements(tree)
+      .filter((element) => element.type === 'button' && element.props['data-run'] !== undefined)
+      .map((element) => element.props['data-run'])
+    expect(runIds.slice(0, 2)).toEqual(['workflow:run-w', 'workflow:run-w-old'])
+    // Open a run from the workflow page: Back returns to the workflow page.
+    ;(runButton(tree, 'workflow:run-w')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-w')
+    expect(renderText(tree)).not.toContain('workflow.history')
+    ;(button(tree, 'runs.back')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('workflow.history')
+    expect(focused).toContain('run:workflow:run-w')
+    // Back from the workflow page restores the overview row and scroll.
+    ;(button(tree, 'workflow.back')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('overview.runs')
+    expect(host.scrollTop).toBe(55)
+    expect(focused).toContain('workflow:change-intake')
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('keeps the open workflow page when its refresh fails', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    let failPage = false
+    const tracker = installFetch((url) => {
+      if (failPage && url.includes('/api/workflows/definitions') && url.includes('id=')) {
+        return json({ error: 'the page refresh failed' }, 500)
+      }
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/events')) return json(HISTORY)
+      if (url.includes('definition=change-intake'))
+        return json({ runs: [run('workflow:run-w', NOW)] })
+      if (url.includes('/api/workflows/runs')) return json({ runs: RUNS })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    ;(workflowButton(tree, 'change-intake')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    expect(renderText(tree)).toContain('Intake a new OpenSpec change.')
+    failPage = true
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    const body = renderText(tree)
+    expect(body).toContain('Intake a new OpenSpec change.')
+    expect(body).toContain('workflow.history')
+    expect(body).toContain('the page refresh failed')
+    expect(button(tree, 'state.retry')).toBeDefined()
     expect(tracker.violations).toEqual([])
   })
 
@@ -713,35 +1011,14 @@ describe('Workflows session view interaction', () => {
     const middle = run('workflow:run-c', NOW - 10_000)
     const older = run('workflow:run-b', NOW - 20_000)
     const oldest = run('workflow:run-a', NOW - 30_000)
+    let pageRuns: readonly Record<string, unknown>[] = [newer, middle]
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) {
-        return json({
-          events: [
-            {
-              v: 1,
-              at: 1,
-              session: 'session-1',
-              kind: 'tool.pre-execute',
-              subject: 'shell',
-              summary: 'ran a shell call',
-              bytes: 3,
-              truncated: false,
-              triggers: [
-                {
-                  id: 'change-intake',
-                  matched: true,
-                  reason: 'run-created',
-                  runId: `${oldest.id}`.replace('workflow:', ''),
-                },
-              ],
-            },
-          ],
-        })
-      }
-      if (url.includes('run=workflow%3Arun-a')) return json({ runs: [oldest] })
+      if (url.includes('run=workflow%3Arun-c')) return json({ runs: [middle] })
       if (url.includes('cursor=2')) return json({ runs: [older, oldest] })
-      return json({ runs: [newer, middle], next: '2' })
+      return json({ runs: pageRuns, next: '2' })
     })
     const view = module.WorkflowsView
     if (view === undefined) throw new Error('WorkflowsView is not exported')
@@ -751,21 +1028,22 @@ describe('Workflows session view interaction', () => {
         .filter((element) => element.type === 'button' && element.props['data-run'] !== undefined)
         .map((element) => element.props['data-run'])
     let tree = await runtime.settle(render)
-    expect(rowIds(tree)).toEqual(['workflow:run-d', 'workflow:run-c'])
-    // Open the oldest run from the journal: it is outside the loaded page.
-    const segments = renderElements(tree).find((element) => element.props.id === 'dsh-wf-segments')
-    ;(segments?.props.onChange as (next: string) => void)?.('journal')
+    openRunsSegment(tree)
     tree = runtime.commit(render)
-    ;(runButton(tree, 'workflow:run-a')?.props.onClick as (() => void) | undefined)?.()
-    tree = await runtime.settle(render)
-    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-a')
-    // A refresh keeps it selected through the id lookup; Back reinserts it.
+    expect(rowIds(tree)).toEqual(['workflow:run-d', 'workflow:run-c'])
+    // Open a run from the loaded page, then push it out of the refreshed window.
+    ;(runButton(tree, 'workflow:run-c')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-c')
+    pageRuns = [newer]
     ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
     tree = await runtime.settle(render)
+    // The id lookup confirms it, so it stays selected through the refresh.
+    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-c')
     ;(button(tree, 'runs.back')?.props.onClick as (() => void) | undefined)?.()
     tree = runtime.commit(render)
-    expect(rowIds(tree)).toEqual(['workflow:run-d', 'workflow:run-c', 'workflow:run-a'])
-    // The next page carries a run newer than the reinserted one; order is kept.
+    expect(rowIds(tree)).toEqual(['workflow:run-d', 'workflow:run-c'])
+    // The next page carries older runs; newest first survives the reinsertion.
     ;(button(tree, 'paging.more')?.props.onClick as (() => void) | undefined)?.()
     tree = await runtime.settle(render)
     expect(rowIds(tree)).toEqual([
@@ -785,8 +1063,9 @@ describe('Workflows session view interaction', () => {
     let resolveLookup: ((value: Response) => void) | undefined
     let pageRuns: readonly Record<string, unknown>[] = RUNS
     const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
-      if (url.includes('/api/workflows/events')) return json({ events: [] })
       if (url.includes('run=workflow%3Arun-b')) {
         return new Promise<Response>((resolve) => {
           resolveLookup = resolve
@@ -800,8 +1079,10 @@ describe('Workflows session view interaction', () => {
     const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
     const focused: string[] = []
     let tree = await runtime.settle(render)
+    openRunsSegment(tree)
+    tree = runtime.commit(render)
     const scrollRef = renderElements(tree).find(
-      (element) => element.props['className'] === 'dsh-wf-scroll',
+      (element) => element.props.className === 'dsh-wf-scroll',
     )?.props.ref as { current: unknown } | undefined
     if (scrollRef !== undefined) {
       scrollRef.current = {
