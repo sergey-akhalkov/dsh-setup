@@ -560,7 +560,7 @@ export function apply(ctx, config = {}) {
             // A queued trigger evaluation can run after the session was disposed.
             creationCounter += 1;
             runCreationOrder.set(run.id, creationCounter);
-            knownRunIds.add(run.id);
+            knownRunsById.set(run.id, run.session);
             const fenced = endedSessionIds.has(session) || entryGeneration !== sessionGeneration(session);
             writeRunSync(workspace, fenced
                 ? setRunStatus(run, 'interrupted', journal.time(), 'the session ended before the run started')
@@ -756,7 +756,7 @@ export function apply(ctx, config = {}) {
     let creationCounter = 0;
     const runCreationOrder = new Map();
     /** Run ids known before a disposal; fenced until an explicit resume. */
-    const knownRunIds = new Set();
+    const knownRunsById = new Map();
     const disposalFenced = new Set();
     /** Global lifecycle epoch, bumped by every generation bump. */
     let lifecycleEpoch = 0;
@@ -782,7 +782,7 @@ export function apply(ctx, config = {}) {
     const stableRuns = async (workspace, auth) => {
         const snapshot = (runs, stable) => {
             for (const run of runs)
-                knownRunIds.add(run.id);
+                knownRunsById.set(run.id, run.session);
             return {
                 runs,
                 generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)])),
@@ -1180,7 +1180,7 @@ export function apply(ctx, config = {}) {
                                         });
                                         creationCounter += 1;
                                         runCreationOrder.set(run.id, creationCounter);
-                                        knownRunIds.add(run.id);
+                                        knownRunsById.set(run.id, run.session);
                                         const fenced = endedSessionIds.has(sessionId) ||
                                             entryGeneration !== sessionGeneration(sessionId);
                                         writeRunSync(activeWorkspace, fenced
@@ -1504,10 +1504,15 @@ export function apply(ctx, config = {}) {
         const expectedGenerations = new Map(runGenerations);
         // Runs created after this event belong to the replacement agent.
         const disposalSeq = creationCounter;
-        // Fence the runs known at the event synchronously: a recreated agent
-        // must not complete them while this batch is still listing the store.
-        for (const runId of knownRunIds)
+        // Fence only this disposed session's runs synchronously: a recreated
+        // agent must not complete them while the batch is still listing, while
+        // another live session's runs must keep advancing.
+        const disposedSession = String(agent.session.id);
+        for (const [runId, ownerSession] of knownRunsById) {
+            if (ownerSession !== disposedSession)
+                continue;
             disposalFenced.add(runId);
+        }
         try {
             const workspace = workspaceFor(services, agent.session);
             if (workspace === undefined)
@@ -1996,7 +2001,7 @@ export function apply(ctx, config = {}) {
             });
             creationCounter += 1;
             runCreationOrder.set(run.id, creationCounter);
-            knownRunIds.add(run.id);
+            knownRunsById.set(run.id, run.session);
             // A start that raced a disposal is persisted interrupted: the disposal's
             // listing may have finished before this file appeared.
             const fenced = endedSessionIds.has(sessionId) || entryGeneration !== sessionGeneration(sessionId);
