@@ -41,6 +41,7 @@ const runStoreFaults = vi.hoisted(() => ({
   readdir: undefined as string | undefined,
   stat: undefined as string | undefined,
   writeFile: undefined as string | undefined,
+  pauseNextWrite: undefined as Promise<void> | undefined,
 }))
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -61,13 +62,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     readdir: fault(actual.readdir, () => runStoreFaults.readdir),
     stat: fault(actual.stat, () => runStoreFaults.stat),
-    writeFile: ((...args: Parameters<typeof actual.writeFile>) => {
+    writeFile: (async (...args: Parameters<typeof actual.writeFile>) => {
       const target = String(args[0]).replaceAll('\\', '/')
-      return runStoreFaults.writeFile !== undefined &&
-        target.includes('/workflows/runs/') &&
-        target.endsWith('.tmp')
-        ? reject(runStoreFaults.writeFile)
-        : actual.writeFile(...args)
+      const inRunStore = target.includes('/workflows/runs/') && target.endsWith('.tmp')
+      if (inRunStore && runStoreFaults.pauseNextWrite !== undefined) {
+        const wait = runStoreFaults.pauseNextWrite
+        runStoreFaults.pauseNextWrite = undefined
+        await wait
+      }
+      if (runStoreFaults.writeFile !== undefined && inRunStore) {
+        return reject(runStoreFaults.writeFile)
+      }
+      return actual.writeFile(...args)
     }) as typeof actual.writeFile,
   }
 })
@@ -83,6 +89,7 @@ afterEach(async () => {
   runStoreFaults.readdir = undefined
   runStoreFaults.stat = undefined
   runStoreFaults.writeFile = undefined
+  runStoreFaults.pauseNextWrite = undefined
   await Promise.all(
     TEMP_DIRECTORIES.splice(0).map(async (directory) => {
       await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
@@ -1846,6 +1853,130 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(settledA?.steps.find((step) => step.id === 'await-review')?.state).toBe('open')
     // The gate's cached write for the earlier run must not land after the resume.
     expect(settledA?.turnBlocks).toBeUndefined()
+  })
+
+  it('keeps a resumed later run when an earlier dispatch is pending', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const runs = await import('../src/host/runs.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let release: () => void = () => undefined
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const host = fakeHost(workspace, { toolExecute: true, delegateBarrier: barrier })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const makeRun = (
+      taskId: string,
+      now: number,
+      failed: boolean,
+    ): ReturnType<typeof runs.createRun> => {
+      let entry = runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth', taskId },
+        steps: ['start-review', 'await-review', 'complete-review'],
+        now,
+      })
+      if (failed) {
+        entry = runs.settleStep(entry, 'start-review', 'failed', {
+          at: now + 1,
+          reason: 'tool call aborted',
+          attempts: 2,
+        })
+      }
+      return runs.setRunStatus(entry, 'blocked', now + 2)
+    }
+    const runA = makeRun(taskIdOf('A'), 1_000, false)
+    const runB = makeRun(taskIdOf('B'), 1_100, true)
+    await runs.writeRun(workspace, runA, auth)
+    await runs.writeRun(workspace, runB, auth)
+    const closing = host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => host.toolExecutions.some((entry) => entry.name === 'delegate'))
+    await host.emit('agent/disposed', { agent: host.agent })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, runB.id, auth))?.status === 'interrupted',
+    )
+    await host.emit('agent/created', { agent: host.agent })
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    await tool?.execute({ action: 'resume', runId: runB.id }, { agent: host.agent })
+    release()
+    await closing
+    const settledB = await runs.readAuthenticatedRun(workspace, runB.id, auth)
+    expect(settledB?.status).toBe('running')
+    const step = settledB?.steps.find((entry) => entry.id === 'start-review')
+    expect(step?.state).toBe('open')
+    expect(step?.attempts).toBe(0)
+  })
+
+  it('does not let a delayed disposal overwrite a resumed run', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const runs = await import('../src/host/runs.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const makeRun = (taskId: string, now: number): ReturnType<typeof runs.createRun> =>
+      runs.setRunStatus(
+        runs.createRun({
+          definition: 'task-review',
+          trigger: 'fs.change',
+          session: 'session-1',
+          workspace,
+          context: { name: 'auth', taskId },
+          steps: ['start-review', 'await-review', 'complete-review'],
+          now,
+        }),
+        'blocked',
+        now + 1,
+      )
+    const runA = makeRun(taskIdOf('A'), 1_000)
+    const runB = makeRun(taskIdOf('B'), 1_100)
+    await runs.writeRun(workspace, runA, auth)
+    await runs.writeRun(workspace, runB, auth)
+    let release: () => void = () => undefined
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    runStoreFaults.pauseNextWrite = barrier
+    void host.emit('agent/disposed', { agent: host.agent })
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined)
+    await host.emit('agent/created', { agent: host.agent })
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    await tool?.execute({ action: 'resume', runId: runB.id }, { agent: host.agent })
+    release()
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, runA.id, auth))?.status === 'interrupted',
+    )
+    const settledB = await runs.readAuthenticatedRun(workspace, runB.id, auth)
+    expect(settledB?.status).toBe('running')
+    expect(settledB?.steps.find((entry) => entry.id === 'start-review')?.state).toBe('open')
   })
 })
 

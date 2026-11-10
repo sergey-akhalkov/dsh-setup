@@ -1379,16 +1379,27 @@ export function apply(ctx, config = {}) {
         const auth = storedAuth ?? (await ensureAuth());
         if (auth === undefined)
             return;
-        for (const run of await listAuthenticatedRuns(workspace, auth)) {
+        const observed = await listAuthenticatedRuns(workspace, auth);
+        // An epoch captured at the event: a run resumed while this loop waits must
+        // not be interrupted from the stale batch.
+        const epochs = new Map(observed.map((run) => [run.id, runGeneration(run.id)]));
+        for (const run of observed) {
             if (run.session !== sessionId)
                 continue;
             if (run.status !== 'running' && run.status !== 'blocked')
                 continue;
             await withRunLock(run.id, async () => {
+                if (epochs.get(run.id) !== runGeneration(run.id))
+                    return;
+                const current = await readAuthenticatedRun(workspace, run.id, auth);
+                if (current === undefined)
+                    return;
+                if (current.status !== 'running' && current.status !== 'blocked')
+                    return;
                 endedRunIds.add(run.id);
                 // Invalidate any advance that was in flight when the session ended.
                 bumpRunGeneration(run.id);
-                await writeRun(workspace, setRunStatus(run, 'interrupted', journal.time(), 'the session ended while this run was unfinished'), auth);
+                await writeRun(workspace, setRunStatus(current, 'interrupted', journal.time(), 'the session ended while this run was unfinished'), auth);
             });
         }
         await refreshPromptRuns(workspace);
@@ -1727,8 +1738,13 @@ export function apply(ctx, config = {}) {
         return written;
     });
     /** Advance one run through its verified evidence; a deferred step never steers. */
-    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn) => {
-        const generation = runGeneration(run.id);
+    const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration) => {
+        if (capturedGeneration !== undefined && capturedGeneration !== runGeneration(run.id)) {
+            // The snapshot was read before a resume replaced its lifecycle; never
+            // dispatch or persist from it.
+            return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run;
+        }
+        const generation = capturedGeneration ?? runGeneration(run.id);
         const writeMetrics = turnMetrics.get(String(agent.session.id));
         // Only a fully applicable deferred observation advances; a run whose
         // trigger is no longer applicable becomes terminal and pruneable.
@@ -2285,6 +2301,9 @@ export function apply(ctx, config = {}) {
                 return;
             const definitions = await definitionsFor(workspace);
             const runs = await listAuthenticatedRuns(workspace, auth);
+            // Bind the expected generation to this read; a run resumed while the
+            // close awaits another dispatch must not be advanced from this snapshot.
+            const runGenerationsAtRead = new Map(runs.map((run) => [run.id, runGeneration(run.id)]));
             const sessionId = String(payload.agent.session.id);
             // A later code write invalidates a completed verification for the same
             // turn; reopen the run so a fresh check is required before the close.
@@ -2386,7 +2405,7 @@ export function apply(ctx, config = {}) {
                 const definition = definitions.find((entry) => entry.id === run.definition.id);
                 if (definition === undefined)
                     continue;
-                const generation = runGeneration(run.id);
+                const generation = runGenerationsAtRead.get(run.id) ?? runGeneration(run.id);
                 // A retro run must not complete on the record alone: while the host
                 // checkpoint remedy/age rule fails, keep the run open and steer.
                 if (workflowOwnsCheckpoint &&
@@ -2409,7 +2428,7 @@ export function apply(ctx, config = {}) {
                     definitionOf.set(run.id, definition);
                     continue;
                 }
-                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn);
+                const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn, generation);
                 advanced.set(run.id, current);
                 advancedGenerations.set(run.id, generation);
                 definitionOf.set(run.id, definition);
