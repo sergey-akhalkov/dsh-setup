@@ -768,7 +768,6 @@ export function apply(ctx, config = {}) {
         const snapshot = (runs, stable) => ({
             runs,
             generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)])),
-            sessionGenerations: new Map(runs.map((run) => [run.id, sessionGeneration(run.session)])),
             stable,
         });
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -815,6 +814,7 @@ export function apply(ctx, config = {}) {
     const recordNow = async (workspace, input, event) => {
         const health = healthFor(workspace);
         activeSession.set(workspace, input.session);
+        const entrySessionGeneration = sessionGeneration(input.session);
         await loadDefinitions(workspace);
         await recoverIfNeeded(workspace);
         try {
@@ -839,13 +839,11 @@ export function apply(ctx, config = {}) {
                 ? {
                     runs: [],
                     generations: new Map(),
-                    sessionGenerations: new Map(),
                     stable: true,
                 }
                 : await stableRuns(workspace, storedAuth);
             const knownRuns = stableKnown.runs;
             const knownRunGenerations = stableKnown.generations;
-            const knownSessionGenerations = stableKnown.sessionGenerations;
             const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns);
             let startedThisEvent = 0;
             const records = evaluateEvent(triggers, event, sessionSeen, true, input.at);
@@ -970,7 +968,7 @@ export function apply(ctx, config = {}) {
                         (run.status === 'running' || run.status === 'blocked'));
                     if (existing === undefined)
                         continue;
-                    await persistRun(workspace, completeNotApplicable(existing, input.at), storedAuth, knownRunGenerations.get(existing.id), knownSessionGenerations.get(existing.id), existing.updatedAt);
+                    await persistRun(workspace, completeNotApplicable(existing, input.at), storedAuth, knownRunGenerations.get(existing.id), entrySessionGeneration, existing.updatedAt);
                 }
             }
             const { record: bounded } = journal.record({
@@ -1824,18 +1822,27 @@ export function apply(ctx, config = {}) {
             return current;
         }
         const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session);
-        const written = interruptEndedRun(run, ended(), journal.time()) ?? run;
-        if (written !== current)
-            await writeCommit(workspace, written, auth);
+        const interruptedFrom = () => interruptEndedRun(current, true, journal.time()) ?? current;
+        // A disposal already fenced the session: never persist the running
+        // proposal, and keep the prior durable pending steps so resume works.
+        if (ended() || sessionStale()) {
+            const replacement = interruptedFrom();
+            if (replacement !== current)
+                await writeCommit(workspace, replacement, auth);
+            return replacement;
+        }
+        if (run !== current)
+            await writeCommit(workspace, run, auth);
         // A disposal can fence the session during the write; the lock serializes
         // the writers, but the fence and the session generation are set
         // synchronously, so re-check both after the write.
-        const late = ended() || sessionStale() ? interruptEndedRun(written, true, journal.time()) : undefined;
-        if (late !== undefined && late !== written) {
-            await writeCommit(workspace, late, auth);
-            return late;
+        if (ended() || sessionStale()) {
+            const replacement = interruptedFrom();
+            if (replacement !== run)
+                await writeCommit(workspace, replacement, auth);
+            return replacement;
         }
-        return written;
+        return run;
     });
     /** Advance one run through its verified evidence; a deferred step never steers. */
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn, capturedGeneration, capturedSessionGeneration) => {
@@ -1949,6 +1956,7 @@ export function apply(ctx, config = {}) {
     };
     const boundedError = (error) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
     const startRunForUnlocked = async (workspace, sessionId, auth, definition, context = {}, dedupeKey) => {
+        const entryGeneration = sessionGeneration(sessionId);
         const runs = await listAuthenticatedRuns(workspace, auth);
         if (atRunLimit(workspace, runs)) {
             throw new Error(`the run limit (${String(maxRuns)}) is reached; finish or cancel an open run first`);
@@ -1965,11 +1973,15 @@ export function apply(ctx, config = {}) {
                 now: journal.time(),
                 ...(dedupeKey === undefined ? {} : { dedupeKey }),
             });
-            await writeRun(workspace, run, auth);
-            storeRevision += 1;
-            lifecycleEpoch += 1;
+            // A start that raced a disposal is persisted interrupted: the disposal's
+            // listing may have finished before this file appeared.
+            const fenced = endedSessionIds.has(sessionId) || entryGeneration !== sessionGeneration(sessionId);
+            const toWrite = fenced
+                ? setRunStatus(run, 'interrupted', journal.time(), 'the session ended before the run started')
+                : run;
+            await writeCommit(workspace, toWrite, auth);
             void refreshPromptRuns(workspace);
-            return run;
+            return toWrite;
         }
         finally {
             releaseStart(workspace);
@@ -2172,16 +2184,25 @@ export function apply(ctx, config = {}) {
                                         return { runId: run.id };
                                     },
                                     resumeRun: async (runId) => {
-                                        const before = await readAuthenticatedRun(workspace, runId, auth);
-                                        const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
-                                        // The intake-gate resume is a lifecycle change too: clear
-                                        // the ended fence and bump the generation under the lock.
-                                        await withRunLock(runId, async () => {
-                                            endedRunIds.delete(runId);
-                                            endedSessionIds.delete(sessionId);
-                                            await finishCommit(workspace, resumed.run, auth, before?.updatedAt ?? resumed.run.updatedAt);
-                                            bumpRunGeneration(runId);
+                                        const entryGeneration = sessionGeneration(sessionId);
+                                        const resumed = await withRunLock(runId, async () => {
+                                            try {
+                                                const result = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
+                                                if (entryGeneration !== sessionGeneration(sessionId))
+                                                    return undefined;
+                                                await writeCommit(workspace, result.run, auth);
+                                                endedRunIds.delete(runId);
+                                                endedSessionIds.delete(sessionId);
+                                                bumpRunGeneration(runId);
+                                                return result;
+                                            }
+                                            catch {
+                                                return undefined;
+                                            }
                                         });
+                                        if (resumed === undefined) {
+                                            throw new Error('the run could not be resumed; retry');
+                                        }
                                         return { stepId: resumed.stepId };
                                     },
                                 });
@@ -2786,33 +2807,50 @@ export function apply(ctx, config = {}) {
             },
             resumeRun: async (runId) => {
                 await recoverIfNeeded(workspace);
-                const before = await readAuthenticatedRun(workspace, runId, auth);
-                const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id), false);
-                // An explicit resume is a new lifecycle generation for the run; the
-                // commit refuses when the durable run moved since the snapshot.
-                await withRunLock(runId, async () => {
-                    endedRunIds.delete(runId);
-                    endedSessionIds.delete(String(agent.session.id));
-                    await finishCommit(workspace, resumed.run, auth, before?.updatedAt ?? resumed.run.updatedAt);
-                    bumpRunGeneration(runId);
+                const sessionId = String(agent.session.id);
+                const entryGeneration = sessionGeneration(sessionId);
+                // The transition is read, validated and committed inside the lock; a
+                // disposal that lands while it waits makes the commit fail.
+                const committed = await withRunLock(runId, async () => {
+                    try {
+                        const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
+                        if (entryGeneration !== sessionGeneration(sessionId))
+                            return undefined;
+                        await writeCommit(workspace, resumed.run, auth);
+                        endedRunIds.delete(runId);
+                        endedSessionIds.delete(sessionId);
+                        bumpRunGeneration(runId);
+                        return resumed;
+                    }
+                    catch {
+                        return undefined;
+                    }
                 });
+                if (committed === undefined)
+                    throw new Error('the run could not be resumed; retry');
                 void refreshPromptRuns(workspace);
-                return { run: resumed.run, stepId: resumed.stepId };
+                return { run: committed.run, stepId: committed.stepId };
             },
             cancelRun: async (runId) => {
                 await recoverIfNeeded(workspace);
-                // The tool already refused a live foreign session; dropping the
-                // session here lets the host clear a run whose owner is gone.
-                const before = await readAuthenticatedRun(workspace, runId, auth);
-                const cancelled = await cancelRun(workspace, runId, auth, Date.now(), undefined, false);
-                // Serialize the cancellation with disposal and invalidate older
-                // advances, so a delayed disposal cannot overwrite a terminal cancel.
-                await withRunLock(runId, async () => {
-                    await finishCommit(workspace, cancelled, auth, before?.updatedAt ?? cancelled.updatedAt);
-                    bumpRunGeneration(runId);
+                // The transition is read, validated and committed inside the lock; a
+                // delayed disposal either goes first (and the cancel reads it) or sees
+                // the terminal cancellation and skips.
+                const committed = await withRunLock(runId, async () => {
+                    try {
+                        const cancelled = await cancelRun(workspace, runId, auth, Date.now(), undefined, false);
+                        await writeCommit(workspace, cancelled, auth);
+                        bumpRunGeneration(runId);
+                        return cancelled;
+                    }
+                    catch {
+                        return undefined;
+                    }
                 });
+                if (committed === undefined)
+                    throw new Error('the run could not be cancelled; retry');
                 void refreshPromptRuns(workspace);
-                return cancelled;
+                return committed;
             },
         };
     };
@@ -2974,15 +3012,24 @@ export function apply(ctx, config = {}) {
                         },
                         resume: async (runId) => {
                             await recoverIfNeeded(workspace);
-                            const before = await readAuthenticatedRun(workspace, runId, auth);
-                            const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
-                            // An explicit resume is a new lifecycle generation for the run.
-                            await withRunLock(runId, async () => {
-                                endedRunIds.delete(runId);
-                                endedSessionIds.delete(sessionId);
-                                await finishCommit(workspace, resumed.run, auth, before?.updatedAt ?? resumed.run.updatedAt);
-                                bumpRunGeneration(runId);
+                            const entryGeneration = sessionGeneration(sessionId);
+                            const resumed = await withRunLock(runId, async () => {
+                                try {
+                                    const result = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
+                                    if (entryGeneration !== sessionGeneration(sessionId))
+                                        return undefined;
+                                    await writeCommit(workspace, result.run, auth);
+                                    endedRunIds.delete(runId);
+                                    endedSessionIds.delete(sessionId);
+                                    bumpRunGeneration(runId);
+                                    return result;
+                                }
+                                catch {
+                                    return undefined;
+                                }
                             });
+                            if (resumed === undefined)
+                                throw new Error('the run could not be resumed; retry');
                             void refreshPromptRuns(workspace);
                             await steerPending(invocation.agent, runId);
                             return { stepId: resumed.stepId };
