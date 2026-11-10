@@ -736,6 +736,12 @@ export function apply(ctx, config = {}) {
     const endedRunIds = new Set();
     /** Sessions whose agent was disposed; fenced synchronously before any store read. */
     const endedSessionIds = new Set();
+    /** Per-run lifecycle generations; a disposal or resume invalidates in-flight advances. */
+    const runGenerations = new Map();
+    const runGeneration = (runId) => runGenerations.get(runId) ?? 0;
+    const bumpRunGeneration = (runId) => {
+        runGenerations.set(runId, runGeneration(runId) + 1);
+    };
     /** The last turn whose user message was classified, one classification per turn. */
     const intentTurns = new Map();
     const metricsFor = (session, turn) => {
@@ -1379,6 +1385,8 @@ export function apply(ctx, config = {}) {
             if (run.status !== 'running' && run.status !== 'blocked')
                 continue;
             endedRunIds.add(run.id);
+            // Invalidate any advance that was in flight when the session ended.
+            bumpRunGeneration(run.id);
             await writeRun(workspace, setRunStatus(run, 'interrupted', journal.time(), 'the session ended while this run was unfinished'), auth);
         }
         await refreshPromptRuns(workspace);
@@ -1678,7 +1686,12 @@ export function apply(ctx, config = {}) {
         };
     };
     /** Persist an advance unless the run's session ended meanwhile. */
-    const persistRun = async (workspace, run, auth) => {
+    const persistRun = async (workspace, run, auth, generation) => {
+        if (generation !== undefined && generation !== runGeneration(run.id)) {
+            // A disposal or resume happened while this advance was in flight; the
+            // stored state is newer, so the stale advance must not be written.
+            return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run;
+        }
         const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session);
         const written = interruptEndedRun(run, ended(), journal.time()) ?? run;
         await writeRun(workspace, written, auth);
@@ -1693,6 +1706,7 @@ export function apply(ctx, config = {}) {
     };
     /** Advance one run through its verified evidence; a deferred step never steers. */
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn) => {
+        const generation = runGeneration(run.id);
         const writeMetrics = turnMetrics.get(String(agent.session.id));
         // Only a fully applicable deferred observation advances; a run whose
         // trigger is no longer applicable becomes terminal and pruneable.
@@ -1708,7 +1722,7 @@ export function apply(ctx, config = {}) {
                 requireWrite: checkpointApplicability.requireWrite,
             });
             if (!applicable) {
-                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth);
+                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth, generation);
             }
         }
         if (definition.trigger.applicability === 'code-write') {
@@ -1718,7 +1732,7 @@ export function apply(ctx, config = {}) {
             const writeAt = lastCodeWriteAt(calls, workspace) ??
                 (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined);
             if (writeAt === undefined) {
-                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth);
+                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth, generation);
             }
         }
         const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked');
@@ -1768,7 +1782,7 @@ export function apply(ctx, config = {}) {
             now: journal.time(),
         });
         if (result.run !== run)
-            return await persistRun(workspace, result.run, auth);
+            return await persistRun(workspace, result.run, auth, generation);
         return result.run;
     };
     const boundedError = (error) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
@@ -2372,19 +2386,21 @@ export function apply(ctx, config = {}) {
                 const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn);
                 advanced.set(run.id, current);
                 definitionOf.set(run.id, definition);
-            }
-            for (const run of ordered) {
-                const current = advanced.get(run.id);
-                const definition = definitionOf.get(run.id);
-                if (current === undefined || definition === undefined)
-                    continue;
-                // A superseded run no longer suppresses a restored identical event.
+                // A superseded run no longer suppresses a restored identical event;
+                // this pass always visits every run, unlike the gate loop that breaks
+                // at the first refusal.
                 if (current.status === 'cancelled' && (current.reason ?? '').includes('superseded')) {
                     const sessionSeen = seen.get(current.session);
                     if (sessionSeen !== undefined && current.dedupeKey !== undefined) {
                         sessionSeen.delete(current.dedupeKey);
                     }
                 }
+            }
+            for (const run of ordered) {
+                const current = advanced.get(run.id);
+                const definition = definitionOf.get(run.id);
+                if (current === undefined || definition === undefined)
+                    continue;
                 // A prior turn's retro obligation is obsolete: work_checkpoint only
                 // writes the current turn's record, so supersede it (keeping its
                 // violation history) instead of demanding the old record forever.
@@ -2563,6 +2579,7 @@ export function apply(ctx, config = {}) {
                 // An explicit resume is a new lifecycle generation for the run.
                 endedRunIds.delete(runId);
                 endedSessionIds.delete(String(agent.session.id));
+                bumpRunGeneration(runId);
                 await writeRun(workspace, resumed.run, auth);
                 void refreshPromptRuns(workspace);
                 return { run: resumed.run, stepId: resumed.stepId };
@@ -2736,6 +2753,7 @@ export function apply(ctx, config = {}) {
                             // An explicit resume is a new lifecycle generation for the run.
                             endedRunIds.delete(runId);
                             endedSessionIds.delete(sessionId);
+                            bumpRunGeneration(runId);
                             await writeRun(workspace, resumed.run, auth);
                             void refreshPromptRuns(workspace);
                             await steerPending(invocation.agent, runId);

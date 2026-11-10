@@ -959,6 +959,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const endedRunIds = new Set<string>()
   /** Sessions whose agent was disposed; fenced synchronously before any store read. */
   const endedSessionIds = new Set<string>()
+  /** Per-run lifecycle generations; a disposal or resume invalidates in-flight advances. */
+  const runGenerations = new Map<string, number>()
+  const runGeneration = (runId: string): number => runGenerations.get(runId) ?? 0
+  const bumpRunGeneration = (runId: string): void => {
+    runGenerations.set(runId, runGeneration(runId) + 1)
+  }
   /** The last turn whose user message was classified, one classification per turn. */
   const intentTurns = new Map<string, number>()
   const metricsFor = (session: string, turn: number): TurnMetrics => {
@@ -1673,6 +1679,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       if (run.session !== sessionId) continue
       if (run.status !== 'running' && run.status !== 'blocked') continue
       endedRunIds.add(run.id)
+      // Invalidate any advance that was in flight when the session ended.
+      bumpRunGeneration(run.id)
       await writeRun(
         workspace,
         setRunStatus(
@@ -2011,7 +2019,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     workspace: string,
     run: WorkflowRun,
     auth: HostAuth,
+    generation?: number,
   ): Promise<WorkflowRun> => {
+    if (generation !== undefined && generation !== runGeneration(run.id)) {
+      // A disposal or resume happened while this advance was in flight; the
+      // stored state is newer, so the stale advance must not be written.
+      return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
+    }
     const ended = (): boolean => endedRunIds.has(run.id) || endedSessionIds.has(run.session)
     const written = interruptEndedRun(run, ended(), journal.time()) ?? run
     await writeRun(workspace, written, auth)
@@ -2035,6 +2049,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     enabledLegacy: ReadonlySet<string>,
     turn: number,
   ): Promise<WorkflowRun> => {
+    const generation = runGeneration(run.id)
     const writeMetrics = turnMetrics.get(String(agent.session.id))
     // Only a fully applicable deferred observation advances; a run whose
     // trigger is no longer applicable becomes terminal and pruneable.
@@ -2050,7 +2065,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         requireWrite: checkpointApplicability.requireWrite,
       })
       if (!applicable) {
-        return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth)
+        return await persistRun(
+          workspace,
+          completeNotApplicable(run, journal.time()),
+          auth,
+          generation,
+        )
       }
     }
     if (definition.trigger.applicability === 'code-write') {
@@ -2063,7 +2083,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         lastCodeWriteAt(calls, workspace) ??
         (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined)
       if (writeAt === undefined) {
-        return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth)
+        return await persistRun(
+          workspace,
+          completeNotApplicable(run, journal.time()),
+          auth,
+          generation,
+        )
       }
     }
     const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked')
@@ -2113,7 +2138,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       auth,
       now: journal.time(),
     })
-    if (result.run !== run) return await persistRun(workspace, result.run, auth)
+    if (result.run !== run) return await persistRun(workspace, result.run, auth, generation)
     return result.run
   }
   const boundedError = (error: unknown): string =>
@@ -2810,18 +2835,20 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           )
           advanced.set(run.id, current)
           definitionOf.set(run.id, definition)
-        }
-        for (const run of ordered) {
-          const current = advanced.get(run.id)
-          const definition = definitionOf.get(run.id)
-          if (current === undefined || definition === undefined) continue
-          // A superseded run no longer suppresses a restored identical event.
+          // A superseded run no longer suppresses a restored identical event;
+          // this pass always visits every run, unlike the gate loop that breaks
+          // at the first refusal.
           if (current.status === 'cancelled' && (current.reason ?? '').includes('superseded')) {
             const sessionSeen = seen.get(current.session)
             if (sessionSeen !== undefined && current.dedupeKey !== undefined) {
               sessionSeen.delete(current.dedupeKey)
             }
           }
+        }
+        for (const run of ordered) {
+          const current = advanced.get(run.id)
+          const definition = definitionOf.get(run.id)
+          if (current === undefined || definition === undefined) continue
           // A prior turn's retro obligation is obsolete: work_checkpoint only
           // writes the current turn's record, so supersede it (keeping its
           // violation history) instead of demanding the old record forever.
@@ -3045,6 +3072,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // An explicit resume is a new lifecycle generation for the run.
         endedRunIds.delete(runId)
         endedSessionIds.delete(String(agent.session.id))
+        bumpRunGeneration(runId)
         await writeRun(workspace, resumed.run, auth)
         void refreshPromptRuns(workspace)
         return { run: resumed.run, stepId: resumed.stepId }
@@ -3238,6 +3266,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   // An explicit resume is a new lifecycle generation for the run.
                   endedRunIds.delete(runId)
                   endedSessionIds.delete(sessionId)
+                  bumpRunGeneration(runId)
                   await writeRun(workspace, resumed.run, auth)
                   void refreshPromptRuns(workspace)
                   await steerPending(invocation.agent, runId)
