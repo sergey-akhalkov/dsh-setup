@@ -21,8 +21,8 @@ export interface ResumeResult {
     readonly stepId: string;
 }
 /**
- * Resume one interrupted or blocked run at its pending step. A completed,
- * failed, cancelled, running, forged, or unsigned run is refused.
+ * Resume one interrupted, blocked, or failed run at its pending step. A
+ * completed, cancelled, or running run is refused.
  */
 export declare function resumeRun(workspace: string, runId: string, auth: HostAuth, now?: number, session?: string): Promise<ResumeResult>;
 /** Cancel one open run; an open or blocked step is recorded as cancelled. */

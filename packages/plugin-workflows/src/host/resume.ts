@@ -68,8 +68,8 @@ export interface ResumeResult {
 }
 
 /**
- * Resume one interrupted or blocked run at its pending step. A completed,
- * failed, cancelled, running, forged, or unsigned run is refused.
+ * Resume one interrupted, blocked, or failed run at its pending step. A
+ * completed, cancelled, or running run is refused.
  */
 export async function resumeRun(
   workspace: string,
@@ -87,16 +87,24 @@ export async function resumeRun(
   if (run === undefined) {
     throw new Error(`run "${runId}" is unsigned, modified, or unreadable; it cannot be resumed`)
   }
-  if (run.status !== 'interrupted' && run.status !== 'blocked') {
+  if (run.status !== 'interrupted' && run.status !== 'blocked' && run.status !== 'failed') {
     throw new Error(
-      `run "${runId}" is ${run.status}; only an interrupted or blocked run can be resumed`,
+      `run "${runId}" is ${run.status}; only an interrupted, blocked, or failed run can be resumed`,
     )
   }
-  const stepId = pendingStep(run)
+  // A failed step is reopened without its old failure evidence so the pending
+  // step names the work the resume retries.
+  const reopened: WorkflowRun = {
+    ...run,
+    steps: run.steps.map((step) =>
+      step.state === 'failed' ? { id: step.id, state: 'open' as const, attempts: 0 } : step,
+    ),
+  }
+  const stepId = pendingStep(reopened)
   if (stepId === undefined) {
     throw new Error(`run "${runId}" has no pending step; cancel it instead of resuming`)
   }
-  let resumed = settleStep(run, stepId, 'open', { at: now })
+  let resumed = settleStep(reopened, stepId, 'open', { at: now })
   resumed = setRunStatus(resumed, 'running', now)
   await writeRun(workspace, resumed, auth)
   return { run: resumed, stepId }

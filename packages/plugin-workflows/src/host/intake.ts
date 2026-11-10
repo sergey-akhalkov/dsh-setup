@@ -19,7 +19,14 @@ import {
 import { runDeferredStep } from './gates.js'
 import type { HostAuth } from './host-auth.js'
 import { issueCompletionReceipt } from './receipts.js'
-import { setRunStatus, settleStep, type WorkflowRun, writeRun } from './runs.js'
+import {
+  MAX_TOOL_STEP_ATTEMPTS,
+  setRunStatus,
+  settleStep,
+  type WorkflowRun,
+  writeRun,
+} from './runs.js'
+import { checkedTaskIdsOf } from './tasks.js'
 
 /**
  * The intake runner. It walks the declared steps in order, completes a main
@@ -127,11 +134,52 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
       }
       return { run: completedRun, completed: true }
     }
+    // A task-review obligation whose checked task disappeared is superseded
+    // before any step runs, including a run already waiting at await-review.
+    if (input.definition.id === 'task-review') {
+      const name = run.context.name
+      const taskId = run.context.taskId
+      if (typeof name === 'string' && typeof taskId === 'string') {
+        const checked = checkedTaskIdsOf(input.evidenceContext.workspace, name)
+        if (checked === undefined || !checked.includes(taskId)) {
+          const reason =
+            checked === undefined
+              ? `openspec/changes/${name}/tasks.md is unreadable; the run is superseded`
+              : `the checked task ${taskId} is no longer present in openspec/changes/${name}/tasks.md; the run is superseded`
+          return {
+            run: setRunStatus(
+              settleStep(run, pending.step.id, 'cancelled', { at, reason }),
+              'cancelled',
+              at,
+              reason,
+            ),
+            completed: false,
+          }
+        }
+      }
+    }
     if (
       pending.state === 'failed' &&
       pending.step.executor === 'tool' &&
       input.definition.id === 'task-review'
     ) {
+      const failed = run.steps.find((entry) => entry.id === pending.step.id)
+      const attempts = failed?.attempts ?? 0
+      // After the bounded attempts the dispatch is terminal: the run stops
+      // driving the close and resume/cancel is the documented recovery.
+      if (attempts >= MAX_TOOL_STEP_ATTEMPTS) {
+        return {
+          run: setRunStatus(
+            run,
+            'failed',
+            at,
+            `the review dispatch failed ${String(attempts)} time(s); resume or cancel the run${
+              failed?.reason === undefined ? '' : ` (${failed.reason.slice(0, 160)})`
+            }`,
+          ),
+          completed: false,
+        }
+      }
       // A rejected dispatch stays retryable: reset the tool step so the next
       // close dispatches it again instead of closing without the obligation.
       run = {
@@ -186,6 +234,22 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
     }
     if (step.executor === 'tool') {
       const current = run.steps.find((entry) => entry.id === step.id)
+      // Task-review: a matching PASS/ERROR record settles the start step
+      // without dispatching delegate again.
+      if (input.definition.id === 'task-review' && step.id === 'start-review') {
+        const name = run.context.name
+        const taskId = run.context.taskId
+        if (typeof name === 'string' && typeof taskId === 'string') {
+          const reviewStep = input.definition.steps.find((entry) => entry.id === 'await-review')
+          if (reviewStep?.evidence !== undefined) {
+            const reused = await verifyEvidence(reviewStep.evidence, input.evidenceContext)
+            if (reused.ok) {
+              run = settleStep(run, step.id, 'done', { at, evidence: reused.evidence })
+              continue
+            }
+          }
+        }
+      }
       // A dispatch already happened when the step still carries its tool
       // evidence; the missing file is rechecked without dispatching again.
       const alreadyDispatched = current?.state === 'done' || current?.evidence?.kind === 'tool'

@@ -30,6 +30,8 @@ export interface WorkflowsToolHost {
     readonly questions?: HumanQuestionService;
     readonly maxRuns?: number;
     readonly now?: () => number;
+    /** Whether a session still has a live agent; absent means "treat it as live". */
+    readonly sessionLive?: (session: string) => boolean;
     /** The host-owned starter; it persists the run before returning. */
     startRun(definition: Definition, at: number): Promise<{
         readonly run: WorkflowRun;

@@ -1441,6 +1441,14 @@ describe('task-review runtime from a tasks.md change', () => {
         `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
         'utf8',
       )
+      await mkdir(join(workspace, '.dsh', 'delegation', 'task-review', 'auth', 'tasks'), {
+        recursive: true,
+      })
+      await writeFile(
+        join(workspace, '.dsh', 'delegation', 'task-review', 'auth', 'tasks', `${taskId}.json`),
+        `${JSON.stringify({ rule: 'task-review', change: 'auth', phase: 'task', scope: 'task', taskId, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+        'utf8',
+      )
     }
     const host = fakeHost(workspace, { toolExecute: true })
     apply(host.ctx as never)
@@ -1478,39 +1486,99 @@ describe('task-review runtime from a tasks.md change', () => {
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     for (const run of created) {
       const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
-      expect(settled?.steps[0]?.state).toBe('done')
+      expect(settled?.steps.every((step) => step.state === 'done')).toBe(true)
+      expect(settled?.status).toBe('completed')
     }
     const { sessionRuns } = await import('../src/host/projection.ts')
     const views = await sessionRuns(workspace, 'session-1')
     for (const run of created) {
       const view = views.find((entry) => entry.id === `workflow:${run.id}`)
       expect(view).toBeDefined()
-      expect(view?.steps[0]?.state).toBe('done')
+      expect(view?.steps.every((step) => step.state === 'done')).toBe(true)
     }
-    // Each task dispatches its review exactly once; a second close must not
-    // dispatch the completed start step again.
+    // Each matching record settles its run; the engine never dispatches
+    // delegate again, and a second close changes nothing.
     const delegateCalls = (): number =>
       host.toolExecutions.filter((entry) => entry.name === 'delegate').length
-    expect(delegateCalls()).toBe(2)
+    expect(delegateCalls()).toBe(0)
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 2 })
-    expect(delegateCalls()).toBe(2)
-
-    // The owned definition steers the review call while the record is missing.
-    expect(host.steers.length).toBeGreaterThan(0)
-    const steerText = host.steers
-      .map((message) =>
-        ((message as { content?: Array<{ text?: string }> }).content ?? [])
-          .map((block) => block.text ?? '')
-          .join(''),
-      )
-      .join('\\n')
-    expect(steerText).toContain('task-review')
+    expect(delegateCalls()).toBe(0)
 
     // An edit that checks nothing starts no second observational run.
     await writeFile(join(changeDir, 'tasks.md'), '# Notes\n\n- [x] 1.1 Task\n', 'utf8')
     host.fireFs()
     await waitFor(async () => (await rows()).some((row) => row.reason === 'run-suppressed'))
     expect(await taskRuns()).toHaveLength(2)
+  })
+
+  it('suppresses a second run for a task a live run already covers', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const taskId = taskIdOf('Task')
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const existing = runs.createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: ['start-review', 'await-review', 'complete-review'],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, existing, auth)
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    const journalFile = join(workspace, '.dsh', 'workflows', 'events', 'session-1.jsonl')
+    const rows = async (): Promise<Array<Record<string, unknown>>> =>
+      (await readFile(journalFile, 'utf8').catch(() => ''))
+        .trim()
+        .split('\n')
+        .filter((line) => line !== '')
+        .flatMap((line) => {
+          try {
+            const entry = JSON.parse(line) as { triggers?: Array<Record<string, unknown>> }
+            return entry.triggers ?? []
+          } catch {
+            return []
+          }
+        })
+        .filter((row) => row.id === 'definition:task-review')
+    await waitFor(async () =>
+      (await rows()).some(
+        (row) => row.reason === 'run-suppressed' && String(row.detail).includes('already covers'),
+      ),
+    )
+    const reviewRuns = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+      (entry) => entry.definition.id === 'task-review',
+    )
+    expect(reviewRuns.map((entry) => entry.id)).toEqual([existing.id])
+    // Restoring a task whose run was cancelled starts a fresh run.
+    const beforeUncheck = (await rows()).length
+    await writeFile(join(changeDir, 'tasks.md'), '- [ ] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () => (await rows()).length > beforeUncheck)
+    const afterUncheck = (await rows()).length
+    const { cancelRun } = await import('../src/host/resume.ts')
+    await cancelRun(workspace, existing.id, auth)
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 Task\n', 'utf8')
+    host.fireFs()
+    await waitFor(async () => (await rows()).length > afterUncheck)
+    const restored = (await runs.listAuthenticatedRuns(workspace, auth)).filter(
+      (entry) => entry.definition.id === 'task-review',
+    )
+    expect(restored).toHaveLength(2)
+    expect(restored.some((entry) => entry.id !== existing.id && entry.status === 'running')).toBe(
+      true,
+    )
   })
 })
 
@@ -4204,6 +4272,86 @@ describe('active-runs prompt context', () => {
     expect(textB).not.toContain(runA?.id ?? 'missing')
   })
 
+  it('lists only the requesting session runs when both share one workspace', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const demo = {
+      v: 1,
+      id: 'demo',
+      name: 'Demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'demo.json'), `${JSON.stringify(demo)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'demo.json'), auth)
+    const host = fakeHost(workspace, { workspaces: { 'session-2': workspace } })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const contribution = host.promptContributions.find(
+      (entry) => entry.name === 'workflows-active-runs',
+    )
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | {
+          handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }>
+        }
+      | undefined
+    if (contribution === undefined || command === undefined) return
+    const otherAgent = {
+      ...host.agent,
+      id: 'session-2',
+      session: { id: 'session-2', header: { origin: 'root' } },
+    }
+    await host.emit('agent/created', { agent: otherAgent })
+    const start = (agent: Record<string, unknown>, id: string): Promise<{ kind?: string }> =>
+      command.handler({
+        agent,
+        commandId: `cmd-${id}`,
+        rawInput: ' run demo',
+        attachments: [],
+        signal: new AbortController().signal,
+      })
+    await start(host.agent, 'a')
+    await start(otherAgent, 'b')
+    const runs = await import('../src/host/runs.ts')
+    const all = await runs.listAuthenticatedRuns(workspace, auth)
+    const runA = all.find(
+      (entry) => entry.definition.id === 'demo' && entry.session === 'session-1',
+    )
+    const runB = all.find(
+      (entry) => entry.definition.id === 'demo' && entry.session === 'session-2',
+    )
+    expect(runA).toBeDefined()
+    expect(runB).toBeDefined()
+    await waitFor(
+      () =>
+        contribution.text({ scope: 'session-1' }).includes(runA?.id ?? 'missing') &&
+        contribution.text({ scope: 'session-2' }).includes(runB?.id ?? 'missing'),
+    )
+    expect(contribution.text({ scope: 'session-1' })).not.toContain(runB?.id ?? 'missing')
+    expect(contribution.text({ scope: 'session-2' })).not.toContain(runA?.id ?? 'missing')
+  })
+
   it('shows recovered and automatically started runs before turn close', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
@@ -4248,6 +4396,76 @@ describe('active-runs prompt context', () => {
     await waitFor(
       () => contribution?.text({ scope: 'session-1' }).includes('change-intake') === true,
     )
+  })
+})
+
+describe('session disposal', () => {
+  it('marks the session runs interrupted so no other session inherits them', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const demo = {
+      v: 1,
+      id: 'demo',
+      name: 'Demo',
+      version: 1,
+      trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'observe',
+          title: 'Observe',
+          executor: 'main',
+          prompt: 'Write out.md.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+    await writeFile(join(workspace, 'demo.json'), `${JSON.stringify(demo)}\n`, 'utf8')
+    const { installDefinition } = await import('../src/host/approval-store.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    await installDefinition(workspace, join(workspace, 'demo.json'), auth)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | {
+          handler: (invocation: unknown) => Promise<{ kind?: string; text?: string }>
+        }
+      | undefined
+    if (command === undefined) return
+    await command.handler({
+      agent: host.agent,
+      commandId: 'cmd-run',
+      rawInput: ' run demo',
+      attachments: [],
+      signal: new AbortController().signal,
+    })
+    const runs = await import('../src/host/runs.ts')
+    const started = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.definition.id === 'demo',
+    )
+    expect(started).toBeDefined()
+    await host.emit('agent/disposed', { agent: host.agent })
+    await waitFor(
+      async () =>
+        (await runs.listAuthenticatedRuns(workspace, auth)).find(
+          (entry) => entry.id === started?.id,
+        )?.status === 'interrupted',
+    )
+    const after = (await runs.listAuthenticatedRuns(workspace, auth)).find(
+      (entry) => entry.id === started?.id,
+    )
+    expect(after?.reason).toContain('session ended')
+    expect(after?.steps.every((step) => step.state === 'open')).toBe(true)
   })
 })
 

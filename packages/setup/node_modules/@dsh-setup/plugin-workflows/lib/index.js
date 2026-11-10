@@ -22,7 +22,7 @@ import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifyS
 import { registerActiveRunsContext } from './prompt.js';
 import { listReceipts } from './receipts.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
-import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, incrementTurnBlocks, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, storedRuns, writeRun, writeRunSync, } from './runs.js';
+import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { checkedTaskIds } from './tasks.js';
 import { executeWorkflowsTool } from './tools.js';
 import { checkpointRequired, classifyIntent, evaluateDefinitions, evaluateDefinitionTrigger, evaluateIntents, intentDedupeKey, loadCatalog, obligationDedupeKey, } from './triggers.js';
@@ -600,7 +600,12 @@ export function apply(ctx, config = {}) {
     const activePromptRuns = (context) => {
         const session = scopeSession(context?.scope);
         const workspace = session === undefined ? promptWorkspace : (sessionWorkspaces.get(session) ?? promptWorkspace);
-        return workspace === undefined ? [] : (promptRunsByWorkspace.get(workspace) ?? []);
+        if (workspace === undefined)
+            return [];
+        const runs = promptRunsByWorkspace.get(workspace) ?? [];
+        // Another session's run is viewable in the UI but is not this session's
+        // obligation; an unknown scope keeps the workspace-scoped list.
+        return session === undefined ? runs : runs.filter((run) => run.session === session);
     };
     /** Mark unfinished runs from a previous process interrupted, never completed. */
     const recoveries = new Map();
@@ -727,6 +732,8 @@ export function apply(ctx, config = {}) {
     };
     /** The session's current main-step owner; a second run waits for it to settle. */
     const mainStepOwners = new Map();
+    /** Runs whose session ended; a later stale advance must not revive them. */
+    const endedRunIds = new Set();
     /** The last turn whose user message was classified, one classification per turn. */
     const intentTurns = new Map();
     const metricsFor = (session, turn) => {
@@ -807,15 +814,35 @@ export function apply(ctx, config = {}) {
                             return { ok: false, reason: 'no newly checked task in this tasks.md change' };
                         }
                         let first;
+                        let suppressed;
                         for (const taskId of taskReviewTaskIds) {
+                            // A live run for the same change and task already owns the
+                            // obligation; a dead-session run must not block the new one.
+                            const duplicate = knownRuns.find((run) => run.definition.id === 'task-review' &&
+                                run.context.name === matched.name &&
+                                run.context.taskId === taskId &&
+                                isOpenRun(run) &&
+                                services.agents.get(run.session) !== undefined);
+                            if (duplicate !== undefined) {
+                                suppressed ??= {
+                                    ok: false,
+                                    reason: `a live run "${duplicate.id}" already covers task "${taskId}"`,
+                                };
+                                continue;
+                            }
                             const outcome = startDefinitionRun(workspace, definition, matched, limited(), {
                                 taskId,
                             });
-                            if (outcome.ok)
+                            if (outcome.ok) {
                                 startedThisEvent += 1;
-                            first ??= outcome;
+                                first ??= outcome;
+                            }
+                            else {
+                                suppressed ??= outcome;
+                            }
                         }
-                        return first ?? { ok: false, reason: 'the observational run was not started' };
+                        return (first ??
+                            suppressed ?? { ok: false, reason: 'the observational run was not started' });
                     }
                     const extraContext = definition.id === 'retro' &&
                         matched.turn !== undefined &&
@@ -1337,6 +1364,33 @@ export function apply(ctx, config = {}) {
         }
         return undefined;
     }));
+    /** A disposed session can no longer satisfy its runs; mark them interrupted. */
+    const markSessionRunsInterrupted = async (sessionId, workspace) => {
+        const auth = storedAuth ?? (await ensureAuth());
+        if (auth === undefined)
+            return;
+        for (const run of await listAuthenticatedRuns(workspace, auth)) {
+            if (run.session !== sessionId)
+                continue;
+            if (run.status !== 'running' && run.status !== 'blocked')
+                continue;
+            endedRunIds.add(run.id);
+            await writeRun(workspace, setRunStatus(run, 'interrupted', journal.time(), 'the session ended while this run was unfinished'), auth);
+        }
+        await refreshPromptRuns(workspace);
+    };
+    listen(() => ctx.on('agent/disposed', ({ agent }) => {
+        try {
+            const workspace = workspaceFor(services, agent.session);
+            if (workspace === undefined)
+                return undefined;
+            void markSessionRunsInterrupted(String(agent.session.id), workspace).catch((error) => publishListenerError(workspace, error));
+        }
+        catch (error) {
+            publishListenerError(workspaceFor(services, agent.session), error);
+        }
+        return undefined;
+    }));
     // A reload or late mount keeps observing agents that are already live; a
     // quiet workspace still gets its health file and self-check at boot.
     try {
@@ -1616,6 +1670,21 @@ export function apply(ctx, config = {}) {
             },
         };
     };
+    /** Persist an advance unless the run's session ended meanwhile. */
+    const persistRun = async (workspace, run, auth) => {
+        const written = interruptEndedRun(run, endedRunIds.has(run.id), journal.time()) ?? run;
+        await writeRun(workspace, written, auth);
+        // A disposal can land between the check and the write; re-check after it so
+        // a stale advance never leaves the run running or blocked.
+        const late = endedRunIds.has(run.id)
+            ? interruptEndedRun(written, true, journal.time())
+            : undefined;
+        if (late !== undefined) {
+            await writeRun(workspace, late, auth);
+            return late;
+        }
+        return written;
+    };
     /** Advance one run through its verified evidence; a deferred step never steers. */
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn) => {
         const writeMetrics = turnMetrics.get(String(agent.session.id));
@@ -1633,9 +1702,7 @@ export function apply(ctx, config = {}) {
                 requireWrite: checkpointApplicability.requireWrite,
             });
             if (!applicable) {
-                const completed = completeNotApplicable(run, journal.time());
-                await writeRun(workspace, completed, auth);
-                return completed;
+                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth);
             }
         }
         if (definition.trigger.applicability === 'code-write') {
@@ -1645,9 +1712,7 @@ export function apply(ctx, config = {}) {
             const writeAt = lastCodeWriteAt(calls, workspace) ??
                 (writeMetrics?.turn === turn ? writeMetrics.lastWriteAt : undefined);
             if (writeAt === undefined) {
-                const completed = completeNotApplicable(run, journal.time());
-                await writeRun(workspace, completed, auth);
-                return completed;
+                return await persistRun(workspace, completeNotApplicable(run, journal.time()), auth);
             }
         }
         const pending = run.steps.find((step) => step.state === 'open' || step.state === 'blocked');
@@ -1697,7 +1762,7 @@ export function apply(ctx, config = {}) {
             now: journal.time(),
         });
         if (result.run !== run)
-            await writeRun(workspace, result.run, auth);
+            return await persistRun(workspace, result.run, auth);
         return result.run;
     };
     const boundedError = (error) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
@@ -2214,8 +2279,8 @@ export function apply(ctx, config = {}) {
                             attempts: 0,
                         })),
                     };
-                    await writeRun(workspace, reopened, auth);
-                    runs.splice(runs.indexOf(completedVerify), 1, reopened);
+                    const persisted = await persistRun(workspace, reopened, auth);
+                    runs.splice(runs.indexOf(completedVerify), 1, persisted);
                 }
             }
             const eligible = runs.filter((run) => run.session === sessionId && (run.status === 'running' || run.status === 'blocked'));
@@ -2301,7 +2366,7 @@ export function apply(ctx, config = {}) {
                     typeof run.context.checkpoint === 'string' &&
                     checkpointTurnOf(run.context.checkpoint) !== payload.turn) {
                     const superseded = { ...run, status: 'cancelled', updatedAt: journal.time() };
-                    await writeRun(workspace, superseded, auth);
+                    await persistRun(workspace, superseded, auth);
                     ordered.splice(ordered.indexOf(run), 1, superseded);
                     continue;
                 }
@@ -2360,7 +2425,7 @@ export function apply(ctx, config = {}) {
                     onError: (error) => publishListenerError(workspace, error),
                 });
                 if (outcome.run !== current)
-                    await writeRun(workspace, outcome.run, auth);
+                    await persistRun(workspace, outcome.run, auth);
                 // Keep the session's main-step owner until its step settles; a
                 // second run may take over only after that.
                 if (outcome.kind !== 'allow') {
@@ -2432,6 +2497,7 @@ export function apply(ctx, config = {}) {
             maxRuns,
             ...(questions === undefined ? {} : { questions }),
             now: () => journal.time(),
+            sessionLive: (session) => services.agents.get(session) !== undefined,
             evidenceContext: (run, step) => {
                 const sessionId = String(agent.session.id);
                 const state = run.steps.find((entry) => entry.id === step.id);
@@ -2473,7 +2539,9 @@ export function apply(ctx, config = {}) {
             },
             cancelRun: async (runId) => {
                 await recoverIfNeeded(workspace);
-                const cancelled = await cancelRun(workspace, runId, auth, Date.now(), String(agent.session.id));
+                // The tool already refused a live foreign session; dropping the
+                // session here lets the host clear a run whose owner is gone.
+                const cancelled = await cancelRun(workspace, runId, auth, Date.now());
                 await writeRun(workspace, cancelled, auth);
                 void refreshPromptRuns(workspace);
                 return cancelled;
@@ -2585,6 +2653,10 @@ export function apply(ctx, config = {}) {
                         const state = legacySignalState();
                         const resolved = resolveOwnership(definition, state.installed, state.enabled).steps.find((entry) => entry.id === step.id);
                         if (resolved?.ownership !== 'own')
+                            return;
+                        // The host dispatches a tool, subagent, or human step at the
+                        // turn close; steering the model would ask it to forge evidence.
+                        if (step.executor !== 'main')
                             return;
                         // An explicit user run or resume gets a fresh bounded budget.
                         const budgeted = {

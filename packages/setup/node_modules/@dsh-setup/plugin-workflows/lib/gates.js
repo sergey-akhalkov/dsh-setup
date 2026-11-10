@@ -32,8 +32,9 @@ export function evaluateTurnClose(input) {
         if (input.origin === 'subagent') {
             return { kind: 'allow', run: input.run, reason: 'a subagent turn is exempt' };
         }
-        // A failed task-review dispatch is an unresolved obligation: it must not
-        // let the run terminal-allow before the review retry path is used.
+        // A failed task-review dispatch is an unresolved obligation while the run
+        // has retries left. A capped run is terminal (`failed`) and skips only this
+        // branch; its completion coverage is still evaluated below.
         const blocksForTurn = (run) => run.turnBlocksTurn === input.turn ? (run.turnBlocks ?? 0) : 0;
         // A new turn starts from zero, not from the previous turn's count.
         const budgetRun = (run) => run.turnBlocksTurn === input.turn ? run : { ...run, turnBlocks: 0 };
@@ -41,7 +42,7 @@ export function evaluateTurnClose(input) {
             ...run,
             turnBlocksTurn: input.turn,
         });
-        if (input.definition.id === 'task-review') {
+        if (input.definition.id === 'task-review' && input.run.status !== 'failed') {
             const failed = input.definition.steps.find((step) => step.blockTurnClose === true &&
                 input.run.steps.find((entry) => entry.id === step.id)?.state === 'failed');
             if (failed !== undefined) {
@@ -54,7 +55,7 @@ export function evaluateTurnClose(input) {
                         detail,
                     };
                 }
-                const text = `step "${failed.id}" has a failed dispatch; retry it before the close`;
+                const text = `step "${failed.id}" has a failed dispatch; retry it with workflows resume before the close`;
                 input.agent.steer(text);
                 return {
                     kind: 'refuse',
@@ -63,16 +64,6 @@ export function evaluateTurnClose(input) {
                     text,
                 };
             }
-        }
-        // A terminal run is never revived by a later steer.
-        if (input.run.status === 'completed' ||
-            input.run.status === 'failed' ||
-            input.run.status === 'cancelled') {
-            return {
-                kind: 'allow',
-                run: input.run,
-                reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
-            };
         }
         // The maxBlocks budget is per turn: a new turn starts a fresh budget, so a
         // capped run never suppresses the obligation on a later turn.
@@ -83,7 +74,7 @@ export function evaluateTurnClose(input) {
             (input.completion?.ok === false
                 ? (input.completion.text ?? 'the completion coverage is incomplete')
                 : undefined);
-        if (ownedText !== undefined && step === undefined) {
+        const ownedRefusal = (text) => {
             const blocks = blocksForTurn(input.run);
             if (blocks >= input.maxBlocks) {
                 const detail = `turn close was refused ${String(blocks)} time(s) by an owned workflow rule; the close is allowed once as a VIOLATION, never as a pass`;
@@ -94,8 +85,26 @@ export function evaluateTurnClose(input) {
                 kind: 'refuse',
                 run: markTurn(incrementTurnBlocks(budgetRun(input.run), at)),
                 stepId: input.definition.steps.at(-1)?.id ?? 'owned-rule',
-                text: ownedText,
+                text,
             };
+        };
+        // A terminal run is never revived by a later steer, and a run whose
+        // session ended (interrupted) is not steered; the owned completion or
+        // checkpoint decision still refuses a terminal run.
+        if (input.run.status === 'completed' ||
+            input.run.status === 'failed' ||
+            input.run.status === 'cancelled' ||
+            input.run.status === 'interrupted') {
+            if (ownedText !== undefined)
+                return ownedRefusal(ownedText);
+            return {
+                kind: 'allow',
+                run: input.run,
+                reason: `run "${input.run.id}" is terminal (${input.run.status}); no steer`,
+            };
+        }
+        if (ownedText !== undefined && step === undefined) {
+            return ownedRefusal(ownedText);
         }
         if (step === undefined) {
             return {
@@ -154,7 +163,7 @@ export function evaluateTurnClose(input) {
                     kind: 'refuse',
                     run,
                     stepId: step.id,
-                    text: `step "${step.id}" has a failed dispatch; retry it before the close`,
+                    text: `step "${step.id}" has a failed dispatch; retry it with workflows resume before the close`,
                 };
             }
             const message = `step "${step.id}" could not be steered: ${steered.reason}`;

@@ -71,7 +71,9 @@ The editor lives on the right-sidebar **Workflow design** page, opened from its 
 
 ## Runs
 
-Each run is one JSON file under `.dsh/workflows/runs/<runId>.json`, replaced atomically on every transition. Statuses: `running`, `blocked`, `completed`, `failed`, `cancelled`, `interrupted`. A run is scoped to one session and one workspace; another session can view it but cannot satisfy its steps. On startup an unfinished run becomes `interrupted` with a bounded reason and is never auto-completed; `/workflows resume <runId>` (or the `workflows` tool `resume`) re-evaluates its pending step without recreating a change directory or starting a second run. Runs execute one requested step at a time, and one start per dedupe key.
+Each run is one JSON file under `.dsh/workflows/runs/<runId>.json`, replaced atomically on every transition. Statuses: `running`, `blocked`, `completed`, `failed`, `cancelled`, `interrupted`. A run is scoped to one session and one workspace; another session can view it but cannot satisfy its steps. On startup an unfinished run becomes `interrupted` with a bounded reason and is never auto-completed. When the owning session ends, its `running` and `blocked` runs are marked `interrupted` the same way; the advance path records that ended identity and replaces a stale in-flight advance with the interrupted state instead of reviving the run. `/workflows resume <runId>` (or the `workflows` tool `resume`) re-evaluates an `interrupted`, `blocked`, or `failed` run's pending step without recreating a change directory or starting a second run; a failed step is reopened with its evidence, reason, failure class, and attempt count cleared. Runs execute one requested step at a time, and one start per dedupe key. The active-runs system-prompt section lists only the requesting session's runs.
+
+A `task-review` run settles its `start-review` step from an existing matching PASS/ERROR record instead of dispatching `delegate`; a run whose checked task id no longer exists in the change's `tasks.md` is cancelled as superseded before its next advance, and a restored task starts a fresh run. A failed tool dispatch is retried at most three times across turn closes; after the cap the run becomes `failed` (terminal), the failed-dispatch refusal stops, the completion-coverage check still refuses a final tick without a portable PASS, and `resume` or `cancel` is the recovery.
 
 Retention: terminal runs are pruned after 30 days or when the workspace exceeds 20 MB; open runs are retained. Receipts are separate files and survive pruning while the change exists, so an archive authorization is not revoked by pruning.
 
@@ -89,12 +91,12 @@ User commands:
 
 - `/workflows` — names the Workflows tab as the entry point (a Host command result is text-only and cannot open a client view); nothing starts.
 - `/workflows run <definitionId>` — user-started run.
-- `/workflows resume <runId>` — resumes an interrupted/blocked run.
+- `/workflows resume <runId>` — resumes an interrupted, blocked, or failed run.
 - `/workflows install <path>` — validates, asks the user, copies into the definitions directory, and records the hash + host signature.
 - `/workflows adopt <name>` — verifies an existing change's four artifacts and the current whole-spec PASS record, asks the user, and writes the adoption receipt without recreating the directory or calling `openspec new change`.
 - `/workflows status` — bounded text summary.
 
-The model tool `workflows` offers `list`, `start`, `resume`, `status`, `evidence`, `cancel`. It refuses a raw script or definition, a start without `allowModelStart` (and a high-risk start without a direct user yes), a resume/cancel in another session, unauthenticated runs, an unverified evidence claim, an install, and an adoption. The tool never writes an approval or receipt.
+The model tool `workflows` offers `list`, `start`, `resume`, `status`, `evidence`, `cancel`. It refuses a raw script or definition, a start without `allowModelStart` (and a high-risk start without a direct user yes), a resume in another session, and unauthenticated runs, an unverified evidence claim, an install, and an adoption; `cancel` also accepts a run whose owning session has no live agent, because no agent can satisfy it. `list` names a definition with `allowModelStart: false` as user-started, never as a refused model start. The tool never writes an approval or receipt.
 
 ## Intake flow
 

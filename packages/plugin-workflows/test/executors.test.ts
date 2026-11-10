@@ -1169,6 +1169,7 @@ it('keeps the call id on both failed dispatch paths', async () => {
     detail: 'the tool call failed',
   })
   expect(thrown.steps[0]?.evidence?.callId).toMatch(/^owned-/u)
+  expect(thrown.steps[0]?.attempts).toBe(1)
   const rejected = await runToolStep({
     run: toolRun(),
     definition: toolDefinition,
@@ -1186,6 +1187,24 @@ it('keeps the call id on both failed dispatch paths', async () => {
     detail: 'the tool call failed',
   })
   expect(rejected.steps[0]?.evidence?.callId).toMatch(/^owned-/u)
+  expect(rejected.steps[0]?.attempts).toBe(1)
+  // A retry of an already-failed step counts up, not back to one.
+  const retried = await runToolStep({
+    run: {
+      ...toolRun(),
+      steps: toolRun().steps.map((step) => ({ ...step, attempts: 2 })),
+    },
+    definition: toolDefinition,
+    step: toolDefinition.steps[0] as (typeof toolDefinition.steps)[number],
+    runner: {
+      async call() {
+        return { ok: false, error: 'refused again' }
+      },
+    },
+    owned: new OwnedCalls(),
+    evidenceContext,
+  })
+  expect(retried.steps[0]?.attempts).toBe(3)
 })
 
 it('refuses placeholders other than {name} before dispatch', async () => {

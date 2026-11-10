@@ -112,12 +112,18 @@ function definitionById(host, id) {
         fail(`no definition "${id}" is installed`);
     return definition;
 }
-/** The run must authenticate and belong to this session before it is changed. */
-async function sessionRun(host, runId) {
+/**
+ * The run must authenticate. A change also requires this session, unless the
+ * owning session is no longer live and the action allows clearing its run.
+ */
+async function sessionRun(host, runId, options = {}) {
     const run = await host.readRun(runId);
     if (run === undefined)
         fail(`run "${runId}" is unsigned, modified, or unreadable`);
     if (run.session !== host.session) {
+        const live = host.sessionLive?.(run.session) ?? true;
+        if (!live && options.allowDeadOwner === true)
+            return run;
         fail(`run "${runId}" belongs to another session; it can be viewed but not changed here`);
     }
     return run;
@@ -128,7 +134,7 @@ export async function executeWorkflowsTool(value, host) {
     const at = host.now?.() ?? Date.now();
     switch (request.action) {
         case 'list': {
-            const lines = host.definitions.map((definition) => `- ${definition.id} (${definition.settings.risk}, ${definition.trigger.mode}, model start ${definition.settings.allowModelStart ? 'allowed' : 'refused'})`);
+            const lines = host.definitions.map((definition) => `- ${definition.id} (${definition.settings.risk}, ${definition.trigger.mode}, ${definition.settings.allowModelStart ? 'model-start allowed' : 'user-started'})`);
             return bounded(lines.length === 0 ? 'no definitions are installed' : lines.join('\n'));
         }
         case 'start': {
@@ -223,7 +229,7 @@ export async function executeWorkflowsTool(value, host) {
         case 'cancel': {
             if (request.runId === undefined)
                 fail('cancel needs a runId');
-            await sessionRun(host, request.runId);
+            await sessionRun(host, request.runId, { allowDeadOwner: true });
             await host.cancelRun(request.runId, at);
             return `run ${request.runId} cancelled`;
         }

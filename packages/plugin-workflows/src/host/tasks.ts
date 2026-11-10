@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /**
  * Task identity for the deferred task-review workflow. The delegation engine
@@ -19,4 +21,15 @@ export function checkedTaskIds(markdown: string): string[] {
     ids.push(taskIdOf(match[2] ?? ''))
   }
   return ids
+}
+
+/** The checked task ids of one change, or undefined when its tasks.md is unreadable. */
+export function checkedTaskIdsOf(workspace: string, change: string): string[] | undefined {
+  try {
+    return checkedTaskIds(
+      readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8'),
+    )
+  } catch {
+    return undefined
+  }
 }

@@ -145,9 +145,16 @@ export declare function settleStep(run: WorkflowRun, stepId: string, state: Step
     readonly evidence?: RunEvidence;
     readonly reason?: string;
     readonly failureClass?: string;
+    readonly attempts?: number;
 }): WorkflowRun;
 /** Move a run to a terminal or blocked status and stamp it. Pure. */
 export declare function setRunStatus(run: WorkflowRun, status: RunStatus, now?: number, reason?: string): WorkflowRun;
+/**
+ * The interrupted replacement for a run whose session ended, or undefined when
+ * the run is unaffected or already interrupted. A stale advance must use this
+ * instead of persisting a non-interrupted state.
+ */
+export declare function interruptEndedRun(run: WorkflowRun, ended: boolean, now?: number): WorkflowRun | undefined;
 /** Append a visible violation; a violation is never a pass. Pure. */
 export declare function resetStepAttempts(run: WorkflowRun, stepId: string): WorkflowRun;
 export declare function addViolation(run: WorkflowRun, detail: string, options?: {
@@ -195,6 +202,8 @@ export declare function runFailure(error: unknown): string;
 /** Run limits: concurrent open runs and the serialized context cap. */
 export declare const DEFAULT_MAX_RUNS = 20;
 export declare const MAX_CONTEXT_BYTES = 4096;
+/** Failed tool dispatches retried before a task-review run becomes terminal. */
+export declare const MAX_TOOL_STEP_ATTEMPTS = 3;
 /** A run is open while it can still be resumed or steered. */
 export declare function isOpenRun(run: WorkflowRun): boolean;
 /** The number of open runs; terminal runs do not consume a slot. */

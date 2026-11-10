@@ -24,6 +24,7 @@ import {
   writeRun,
 } from '../src/host/runs.ts'
 import { renderMainSteer } from '../src/host/steer.ts'
+import { taskIdOf } from '../src/host/tasks.ts'
 
 const TEMP_DIRECTORIES: string[] = []
 
@@ -618,4 +619,215 @@ it('renders the resolved record task id in a main steer', () => {
   })
   expect(text).toContain('task=0123456789abcdef')
   expect(text).not.toContain('{taskId}')
+})
+
+describe('task-review dispatch lifecycle', () => {
+  function taskReviewDefinition(): Definition {
+    const definition = loadShippedDefinitions().find((entry) => entry.id === 'task-review')
+    if (definition === undefined) throw new Error('the task-review definition is missing')
+    return definition
+  }
+
+  interface TaskWorkspace {
+    readonly workspace: string
+    readonly definition: Definition
+    readonly taskId: string
+    readonly run: WorkflowRun
+  }
+
+  async function taskWorkspace(task: string, verdict?: 'PASS' | 'ERROR'): Promise<TaskWorkspace> {
+    const workspace = await tempWorkspace()
+    const definition = taskReviewDefinition()
+    const taskId = taskIdOf(task)
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    const records = join(workspace, '.dsh', 'delegation', 'task-review', 'auth', 'tasks')
+    await mkdir(join(changeDir, 'reviews'), { recursive: true })
+    await mkdir(records, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), `- [x] 1.1 ${task}\n`, 'utf8')
+    const portable = {
+      rule: 'task-review',
+      change: 'auth',
+      scope: 'task',
+      taskId,
+      digest: 'a'.repeat(64),
+      verdict: 'PASS',
+      findings: [],
+      target: { provider: 'codex-subagent' },
+      time: '2026-11-10T00:00:00.000Z',
+    }
+    await writeFile(join(changeDir, 'reviews', `${taskId}.json`), JSON.stringify(portable), 'utf8')
+    if (verdict !== undefined) {
+      await writeFile(
+        join(records, `${taskId}.json`),
+        JSON.stringify({ ...portable, phase: 'task', verdict }),
+        'utf8',
+      )
+    }
+    const run = createRun({
+      definition: { id: definition.id, name: definition.name, version: definition.version },
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth', taskId },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    return { workspace, definition, taskId, run }
+  }
+
+  it('settles start-review from a matching record without dispatching delegate', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task', 'PASS')
+    let calls = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/task-review']),
+      now: 2_000,
+      toolRunner: {
+        async call() {
+          calls += 1
+          return { ok: false, error: 'a matching record must not dispatch delegate' }
+        },
+      },
+    })
+    expect(calls).toBe(0)
+    expect(result.completed).toBe(true)
+    expect(result.run.steps.every((step) => step.state === 'done')).toBe(true)
+  })
+
+  it('cancels a superseded run before dispatching', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task', 'PASS')
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '- [x] 1.1 Edited away\n',
+      'utf8',
+    )
+    let calls = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/task-review']),
+      now: 2_000,
+      toolRunner: {
+        async call() {
+          calls += 1
+          return { ok: false, error: 'a superseded run must not dispatch delegate' }
+        },
+      },
+    })
+    expect(calls).toBe(0)
+    expect(result.completed).toBe(false)
+    expect(result.run.status).toBe('cancelled')
+    expect(result.run.reason).toContain('superseded')
+    expect(result.run.steps.find((step) => step.id === 'start-review')?.state).toBe('cancelled')
+  })
+
+  it('supersedes a run already waiting at await-review', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task', 'PASS')
+    const dispatched = settleStep(run, 'start-review', 'done', { at: 1_100 })
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'tasks.md'),
+      '- [x] 1.1 Edited away\n',
+      'utf8',
+    )
+    let calls = 0
+    const result = await advanceIntake({
+      run: dispatched,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId } },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/task-review']),
+      now: 2_000,
+      toolRunner: {
+        async call() {
+          calls += 1
+          return { ok: false, error: 'a superseded run must not dispatch delegate' }
+        },
+      },
+    })
+    expect(calls).toBe(0)
+    expect(result.run.status).toBe('cancelled')
+    expect(result.run.steps.find((step) => step.id === 'await-review')?.state).toBe('cancelled')
+    expect(result.run.steps.find((step) => step.id === 'start-review')?.state).toBe('done')
+  })
+
+  it('dispatches delegate when no record exists and waits at await-review', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task')
+    const toolCalls: Array<{
+      callId: string
+      name: string
+      arguments: Record<string, unknown>
+      ok: boolean
+    }> = []
+    let calls = 0
+    const result = await advanceIntake({
+      run,
+      definition,
+      values: { name: 'auth', taskId },
+      evidenceContext: { workspace, values: { name: 'auth', taskId }, toolCalls },
+      owned: new OwnedCalls(),
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/task-review']),
+      now: 2_000,
+      toolRunner: {
+        async call(request) {
+          calls += 1
+          toolCalls.push({
+            callId: request.callId,
+            name: request.name,
+            arguments: { ...request.arguments },
+            ok: true,
+          })
+          return { ok: true }
+        },
+      },
+    })
+    expect(calls).toBe(1)
+    expect(result.waiting?.stepId).toBe('await-review')
+    expect(result.run.steps.find((step) => step.id === 'start-review')?.state).toBe('done')
+  })
+
+  it('bounds failed dispatches and then makes the run terminal', async () => {
+    const { workspace, definition, taskId, run } = await taskWorkspace('Task')
+    const advance = (current: WorkflowRun): ReturnType<typeof advanceIntake> =>
+      advanceIntake({
+        run: current,
+        definition,
+        values: { name: 'auth', taskId },
+        evidenceContext: { workspace, values: { name: 'auth', taskId } },
+        owned: new OwnedCalls(),
+        installedLegacy: new Set(['delegation-rules']),
+        enabledLegacy: new Set(['delegation-rules/task-review']),
+        now: 2_000,
+        toolRunner: {
+          async call() {
+            return { ok: false, error: 'tool call aborted' }
+          },
+        },
+      })
+    let current = run
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await advance(current)
+      current = result.run
+      expect(result.completed).toBe(false)
+      expect(current.status).toBe('blocked')
+    }
+    const failedStep = current.steps.find((step) => step.id === 'start-review')
+    expect(failedStep?.state).toBe('failed')
+    expect(failedStep?.attempts).toBe(3)
+    const terminal = await advance(current)
+    expect(terminal.run.status).toBe('failed')
+    expect(terminal.run.steps.find((step) => step.id === 'start-review')?.state).toBe('failed')
+    expect(terminal.run.reason).toContain('resume or cancel')
+  })
 })

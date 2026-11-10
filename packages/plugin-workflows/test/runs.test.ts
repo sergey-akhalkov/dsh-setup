@@ -37,6 +37,7 @@ import {
   createRun,
   DAY_MS,
   hasTamperedRuns,
+  interruptEndedRun,
   listAuthenticatedRuns,
   listRuns,
   openRunCount,
@@ -351,8 +352,41 @@ describe('startup recovery and resume', () => {
     )
     const completed = await writeAndComplete(workspace, 'other', 5_000)
     await expect(resumeRun(workspace, completed.id, auth(), 6_000)).rejects.toThrow(
-      /only an interrupted or blocked run can be resumed/u,
+      /only an interrupted, blocked, or failed run can be resumed/u,
     )
+  })
+
+  it('reopens a failed step when a failed run resumes', async () => {
+    const workspace = await tempWorkspace()
+    let run = intakeRun(workspace, 'auth', 1_000)
+    run = settleStep(run, 'requirements', 'failed', {
+      at: 1_100,
+      reason: 'the step failed',
+      attempts: 2,
+      evidence: { kind: 'tool', callId: 'call-1', detail: 'failed' },
+    })
+    run = setRunStatus(run, 'failed', 1_200)
+    await writeRun(workspace, run, auth())
+    const resumed = await resumeRun(workspace, run.id, auth(), 2_000)
+    expect(resumed.run.status).toBe('running')
+    expect(resumed.stepId).toBe('requirements')
+    const step = resumed.run.steps.find((entry) => entry.id === 'requirements')
+    expect(step?.state).toBe('open')
+    expect(step?.attempts).toBe(0)
+    expect(step?.reason).toBeUndefined()
+    expect(step?.evidence).toBeUndefined()
+    expect((await readAuthenticatedRun(workspace, run.id, auth()))?.status).toBe('running')
+  })
+
+  it('refuses a stale advance after the session ended', () => {
+    const run = intakeRun('/workspace', 'auth', 1_000)
+    const interrupted = interruptEndedRun(run, true, 2_000)
+    expect(interrupted?.status).toBe('interrupted')
+    expect(interrupted?.reason).toContain('session ended')
+    expect(interrupted?.steps).toEqual(run.steps)
+    expect(interruptEndedRun(run, false)).toBeUndefined()
+    const already = setRunStatus(run, 'interrupted', 2_000)
+    expect(interruptEndedRun(already, true, 3_000)).toBeUndefined()
   })
 
   it('clears a failed run so it stops blocking the archive gate', async () => {

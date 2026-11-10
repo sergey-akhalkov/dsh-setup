@@ -19,7 +19,13 @@ import {
   templateHash,
   withVerifySettings,
 } from '../src/host/parity.ts'
-import { createRun, incrementTurnBlocks, settleStep, type WorkflowRun } from '../src/host/runs.ts'
+import {
+  createRun,
+  incrementTurnBlocks,
+  setRunStatus,
+  settleStep,
+  type WorkflowRun,
+} from '../src/host/runs.ts'
 
 /**
  * The retirement load gate, the owned close/archive decisions, and the verify
@@ -1686,6 +1692,73 @@ describe('owned task-review definition', () => {
     expect(outcome.kind).not.toBe('allow')
     expect(steers).toHaveLength(1)
     expect(steers[0]).toContain('failed dispatch')
+    expect(steers[0]).toContain('workflows resume')
+  })
+
+  it('allows a close for a terminal run whose dispatch attempts are exhausted', () => {
+    const definition = shipped('task-review')
+    let run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { name: 'auth', taskId: '0123456789abcdef' },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    run = settleStep(run, 'start-review', 'failed', {
+      at: 1_001,
+      reason: 'the review dispatch failed 3 time(s); resume or cancel the run',
+      attempts: 3,
+    })
+    run = setRunStatus(run, 'failed', 1_002, 'the review dispatch failed 3 time(s)')
+    const steers: string[] = []
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: (text: string) => steers.push(text) },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 1,
+      maxBlocks: 30,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+    })
+    expect(outcome.kind).toBe('allow')
+    expect(steers).toHaveLength(0)
+  })
+
+  it('still refuses a terminal run with incomplete completion coverage', () => {
+    const definition = shipped('task-review')
+    let run = createRun({
+      definition: 'task-review',
+      trigger: 'fs.change',
+      session: 'session-1',
+      workspace: '/workspace',
+      context: { name: 'auth', taskId: '0123456789abcdef' },
+      steps: definition.steps.map((step) => step.id),
+      now: 1_000,
+    })
+    run = settleStep(run, 'start-review', 'failed', {
+      at: 1_001,
+      reason: 'the review dispatch failed 3 time(s)',
+      attempts: 3,
+    })
+    run = setRunStatus(run, 'failed', 1_002, 'the review dispatch failed 3 time(s)')
+    const outcome = evaluateTurnClose({
+      run,
+      definition,
+      agent: { steer: () => undefined },
+      evidenceContext: { workspace: '/workspace', values: {} },
+      turn: 1,
+      maxBlocks: 30,
+      installedLegacy: new Set(),
+      enabledLegacy: enabledOff(),
+      completion: { ok: false, text: 'the completion coverage is incomplete' },
+    })
+    expect(outcome.kind).not.toBe('allow')
+    if (outcome.kind === 'refuse') {
+      expect(outcome.text).toContain('completion coverage')
+    }
   })
 
   it('requires portable PASS coverage for every checked task at completion', async () => {

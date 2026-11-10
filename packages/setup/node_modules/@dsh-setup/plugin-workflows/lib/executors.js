@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CHANGE_NAME } from './command-parse.js';
 import { resultSchemaShapeError, } from './definitions.js';
 import { hostToolName, resolveEvidenceText, toolNameMatches, } from './evidence.js';
-import { requestStep, setRunStatus, settleStep } from './runs.js';
+import { requestStep, setRunStatus, settleStep, } from './runs.js';
 import { renderMainSteer } from './steer.js';
 /**
  * The `main` executor. It steers the root agent and never completes a step
@@ -770,39 +770,35 @@ export function newOwnedCallId(run, step) {
  * registered before dispatch, and a step settled only by the dispatch result.
  */
 export async function runToolStep(input) {
+    const previousAttempts = input.run.steps.find((entry) => entry.id === input.step.id)?.attempts ?? 0;
+    /** One failed dispatch; the task-review retry branch bounds the attempt count. */
+    const failed = (reason, evidence) => setRunStatus(settleStep(input.run, input.step.id, 'failed', {
+        at: input.now,
+        reason,
+        attempts: previousAttempts + 1,
+        ...(evidence === undefined ? {} : { evidence }),
+    }), 'failed', input.now);
     const spec = input.step.tool;
     if (spec === undefined) {
-        return setRunStatus(settleStep(input.run, input.step.id, 'failed', {
-            at: input.now,
-            reason: 'the tool step declares no tool',
-        }), 'failed', input.now);
+        return failed('the tool step declares no tool');
     }
     const allowTools = input.definition.settings.allowTools ?? [];
     const hostName = hostToolName(spec.name);
     if (!allowTools.some((entry) => toolNameMatches(entry, spec.name) || toolNameMatches(entry, hostName))) {
-        return setRunStatus(settleStep(input.run, input.step.id, 'failed', {
-            at: input.now,
-            reason: `tool "${spec.name}" is not on the definition allowlist`,
-        }), 'failed', input.now);
+        return failed(`tool "${spec.name}" is not on the definition allowlist`);
     }
     const rawArguments = {};
     if (spec.command !== undefined) {
         const resolved = resolveToolValue(spec.command, input.evidenceContext);
         if (!resolved.ok) {
-            return setRunStatus(settleStep(input.run, input.step.id, 'failed', {
-                at: input.now,
-                reason: `the fixed command could not be resolved: ${resolved.detail}`,
-            }), 'failed', input.now);
+            return failed(`the fixed command could not be resolved: ${resolved.detail}`);
         }
         rawArguments.command = resolved.value;
     }
     if (spec.args !== undefined) {
         const resolved = interpolateArguments(spec.args, input.evidenceContext);
         if (!resolved.ok) {
-            return setRunStatus(settleStep(input.run, input.step.id, 'failed', {
-                at: input.now,
-                reason: `the tool arguments could not be resolved: ${resolved.detail}`,
-            }), 'failed', input.now);
+            return failed(`the tool arguments could not be resolved: ${resolved.detail}`);
         }
         Object.assign(rawArguments, resolved.args);
     }
@@ -820,18 +816,10 @@ export async function runToolStep(input) {
     }
     catch (error) {
         const reason = `the tool call failed: ${error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200)}`;
-        return setRunStatus(settleStep(input.run, input.step.id, 'failed', {
-            at: input.now,
-            reason,
-            evidence: { kind: 'tool', callId, detail: 'the tool call failed' },
-        }), 'failed', input.now);
+        return failed(reason, { kind: 'tool', callId, detail: 'the tool call failed' });
     }
     if (!outcome.ok) {
-        return setRunStatus(settleStep(input.run, input.step.id, 'failed', {
-            at: input.now,
-            reason: `the tool call failed${outcome.error === undefined ? '' : `: ${outcome.error.slice(0, 200)}`}`,
-            evidence: { kind: 'tool', callId, detail: 'the tool call failed' },
-        }), 'failed', input.now);
+        return failed(`the tool call failed${outcome.error === undefined ? '' : `: ${outcome.error.slice(0, 200)}`}`, { kind: 'tool', callId, detail: 'the tool call failed' });
     }
     return settleStep(input.run, input.step.id, 'done', {
         at: input.now,

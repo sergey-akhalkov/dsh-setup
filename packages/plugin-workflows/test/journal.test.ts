@@ -980,10 +980,10 @@ describe('workflow event recorder', () => {
     }
     await waitFor(async () => {
       const current = await readHealth()
-      return current?.listenerCount === 5 && typeof current.lastCheckAt === 'number'
+      return current?.listenerCount === 6 && typeof current.lastCheckAt === 'number'
     })
     const health = (await readHealth()) ?? {}
-    expect(health.listenerCount).toBe(5)
+    expect(health.listenerCount).toBe(6)
     expect(health.triggerCount).toBe(9)
     expect(health.journalWritable).toBe(true)
     expect(health.lastEventAt).toBeUndefined()
@@ -1007,7 +1007,7 @@ describe('workflow event recorder', () => {
       String((await readHealth())?.lastError ?? '').includes('registration failed'),
     )
     const health = (await readHealth()) ?? {}
-    expect(health.listenerCount).toBeLessThan(5)
+    expect(health.listenerCount).toBeLessThan(6)
     expect(String(health.lastError)).toContain('registration failed')
     host.dispose()
   })
@@ -1027,7 +1027,7 @@ describe('workflow event recorder', () => {
     await waitFor(async () =>
       String((await readHealth())?.lastError ?? '').includes('scoped registration failed'),
     )
-    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
+    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(6)
     host.dispose()
   })
 
@@ -1047,12 +1047,12 @@ describe('workflow event recorder', () => {
     await waitFor(async () => {
       const current = await readHealth()
       return (
-        Number(current?.listenerCount) < 5 &&
+        Number(current?.listenerCount) < 6 &&
         String(current?.lastError ?? '').includes('watch failed')
       )
     })
     expect(String((await readHealth())?.lastError)).toContain('watch failed')
-    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
+    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(6)
     host.dispose()
   })
 
@@ -1074,7 +1074,7 @@ describe('workflow event recorder', () => {
     await waitFor(async () =>
       String((await readHealth())?.lastError ?? '').includes('scoped registration failed'),
     )
-    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(5)
+    expect(Number((await readHealth())?.listenerCount)).toBeLessThan(6)
     host.dispose()
   })
 

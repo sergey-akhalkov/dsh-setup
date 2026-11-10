@@ -322,6 +322,7 @@ export function settleStep(run, stepId, state, patch = {}) {
                 state,
                 at,
                 ...(evidence === undefined ? {} : { evidence }),
+                ...(patch.attempts === undefined ? {} : { attempts: patch.attempts }),
                 ...(reason === undefined ? {} : { reason }),
                 ...(failureClass === undefined ? {} : { failureClass }),
             }))(step)
@@ -336,6 +337,16 @@ export function setRunStatus(run, status, now = Date.now(), reason) {
         updatedAt: now,
         ...(reason === undefined ? {} : { reason }),
     };
+}
+/**
+ * The interrupted replacement for a run whose session ended, or undefined when
+ * the run is unaffected or already interrupted. A stale advance must use this
+ * instead of persisting a non-interrupted state.
+ */
+export function interruptEndedRun(run, ended, now = Date.now()) {
+    if (!ended || run.status === 'interrupted')
+        return undefined;
+    return setRunStatus(run, 'interrupted', now, 'the session ended while this run was unfinished');
 }
 /** Append a visible violation; a violation is never a pass. Pure. */
 export function resetStepAttempts(run, stepId) {
@@ -467,6 +478,8 @@ export function runFailure(error) {
 /** Run limits: concurrent open runs and the serialized context cap. */
 export const DEFAULT_MAX_RUNS = 20;
 export const MAX_CONTEXT_BYTES = 4096;
+/** Failed tool dispatches retried before a task-review run becomes terminal. */
+export const MAX_TOOL_STEP_ATTEMPTS = 3;
 /** A run is open while it can still be resumed or steered. */
 export function isOpenRun(run) {
     return run.status === 'running' || run.status === 'blocked' || run.status === 'interrupted';

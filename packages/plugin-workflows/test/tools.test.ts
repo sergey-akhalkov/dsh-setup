@@ -74,6 +74,7 @@ function host(
   definitions: readonly Definition[],
   runs: WorkflowRun[] = [],
   calls: Calls = { starts: 0, resumes: 0, cancels: 0 },
+  sessionLive: (session: string) => boolean = () => true,
 ): WorkflowsToolHost {
   return {
     workspace: '/workspace',
@@ -81,6 +82,7 @@ function host(
     definitions,
     auth: HostAuth.fromKey('test-tools-host-key-0123456789'),
     maxRuns: 5,
+    sessionLive,
     listRuns: async () => runs,
     readRun: async (runId) => runs.find((run) => run.id === runId),
     startRun: async (entry) => {
@@ -117,6 +119,7 @@ describe('workflows tool', () => {
     const target = host([entry], [], calls)
     const listed = await executeWorkflowsTool({ action: 'list' }, target)
     expect(listed).toContain('model-start')
+    expect(listed).toContain('model-start allowed')
     const started = await executeWorkflowsTool(
       { action: 'start', definitionId: 'model-start' },
       target,
@@ -138,6 +141,9 @@ describe('workflows tool', () => {
     await expect(
       executeWorkflowsTool({ action: 'start', definitionId: 'no-start' }, host([noStart])),
     ).rejects.toThrow(/refuses a model start/u)
+    const listed = await executeWorkflowsTool({ action: 'list' }, host([noStart]))
+    expect(listed).toContain('user-started')
+    expect(listed).not.toContain('refused')
     const high = definition('high-risk', {
       settings: {
         allowModelStart: true,
@@ -179,6 +185,26 @@ describe('workflows tool', () => {
         host([definition('model-start')], []),
       ),
     ).rejects.toThrow(/unsigned, modified, or unreadable/u)
+  })
+
+  it('cancels a dead-session run and still refuses a live foreign one', async () => {
+    const calls: Calls = { starts: 0, resumes: 0, cancels: 0 }
+    const other = runFor('/workspace', 'run-dead', 'session-2')
+    const dead = host([definition('model-start')], [other], calls, () => false)
+    expect(await executeWorkflowsTool({ action: 'cancel', runId: 'run-dead' }, dead)).toContain(
+      'cancelled',
+    )
+    expect(calls.cancels).toBe(1)
+    await expect(
+      executeWorkflowsTool(
+        { action: 'cancel', runId: 'run-dead' },
+        host([definition('model-start')], [other], calls, () => true),
+      ),
+    ).rejects.toThrow(/another session/u)
+    expect(calls.cancels).toBe(1)
+    expect(await executeWorkflowsTool({ action: 'status', runId: 'run-dead' }, dead)).toContain(
+      'run-dead',
+    )
   })
 
   it('bounds status text', async () => {
