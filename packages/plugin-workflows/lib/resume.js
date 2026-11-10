@@ -42,7 +42,7 @@ export function pendingStep(run) {
  * Resume one interrupted, blocked, or failed run at its pending step. A
  * completed, cancelled, or running run is refused.
  */
-export async function resumeRun(workspace, runId, auth, now = Date.now(), session) {
+export async function resumeRun(workspace, runId, auth, now = Date.now(), session, persist = true) {
     const run = await readAuthenticatedRun(workspace, runId, auth);
     if (run !== undefined && session !== undefined && run.session !== session) {
         throw new Error(`run "${runId}" belongs to session "${run.session}"; session "${session}" cannot resume it`);
@@ -65,11 +65,14 @@ export async function resumeRun(workspace, runId, auth, now = Date.now(), sessio
     }
     let resumed = settleStep(reopened, stepId, 'open', { at: now });
     resumed = setRunStatus(resumed, 'running', now);
-    await writeRun(workspace, resumed, auth);
+    // The host writes the resumed run inside its per-run lifecycle lock; only a
+    // direct caller persists here.
+    if (persist)
+        await writeRun(workspace, resumed, auth);
     return { run: resumed, stepId };
 }
 /** Cancel one open run; an open or blocked step is recorded as cancelled. */
-export async function cancelRun(workspace, runId, auth, now = Date.now(), session) {
+export async function cancelRun(workspace, runId, auth, now = Date.now(), session, persist = true) {
     const run = await readAuthenticatedRun(workspace, runId, auth);
     if (run !== undefined && session !== undefined && run.session !== session) {
         throw new Error(`run "${runId}" belongs to session "${run.session}"; session "${session}" cannot cancel it`);
@@ -92,6 +95,8 @@ export async function cancelRun(workspace, runId, auth, now = Date.now(), sessio
         });
     }
     cancelled = setRunStatus(cancelled, 'cancelled', now);
-    await writeRun(workspace, cancelled, auth);
+    // The host writes the cancelled run inside its per-run lifecycle lock.
+    if (persist)
+        await writeRun(workspace, cancelled, auth);
     return cancelled;
 }

@@ -77,6 +77,7 @@ export async function resumeRun(
   auth: HostAuth,
   now = Date.now(),
   session?: string,
+  persist = true,
 ): Promise<ResumeResult> {
   const run = await readAuthenticatedRun(workspace, runId, auth)
   if (run !== undefined && session !== undefined && run.session !== session) {
@@ -106,7 +107,9 @@ export async function resumeRun(
   }
   let resumed = settleStep(reopened, stepId, 'open', { at: now })
   resumed = setRunStatus(resumed, 'running', now)
-  await writeRun(workspace, resumed, auth)
+  // The host writes the resumed run inside its per-run lifecycle lock; only a
+  // direct caller persists here.
+  if (persist) await writeRun(workspace, resumed, auth)
   return { run: resumed, stepId }
 }
 
@@ -117,6 +120,7 @@ export async function cancelRun(
   auth: HostAuth,
   now = Date.now(),
   session?: string,
+  persist = true,
 ): Promise<WorkflowRun> {
   const run = await readAuthenticatedRun(workspace, runId, auth)
   if (run !== undefined && session !== undefined && run.session !== session) {
@@ -142,6 +146,7 @@ export async function cancelRun(
     })
   }
   cancelled = setRunStatus(cancelled, 'cancelled', now)
-  await writeRun(workspace, cancelled, auth)
+  // The host writes the cancelled run inside its per-run lifecycle lock.
+  if (persist) await writeRun(workspace, cancelled, auth)
   return cancelled
 }

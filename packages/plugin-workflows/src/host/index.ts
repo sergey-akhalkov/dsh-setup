@@ -2539,7 +2539,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       return { runId: run.id }
                     },
                     resumeRun: async (runId) => {
-                      const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
+                      const resumed = await resumeRun(
+                        workspace,
+                        runId,
+                        auth,
+                        Date.now(),
+                        sessionId,
+                        false,
+                      )
                       // The intake-gate resume is a lifecycle change too: clear
                       // the ended fence and bump the generation under the lock.
                       await withRunLock(runId, async () => {
@@ -2816,6 +2823,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     ctx.on('agent/turn-stopping', async (payload) => {
       try {
         if (payload.agent.session.header.origin === 'subagent') return
+        // Capture the session lifecycle before any await: a disposal and
+        // recreation during the queue/auth/store waits must abandon this close.
+        const sessionGenerationAtEntry = sessionGeneration(String(payload.agent.session.id))
         const workspace = workspaceFor(services, payload.agent.session)
         if (workspace === undefined) return
         // The journal record that creates an observational run is queued before
@@ -2827,6 +2837,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         if (auth === undefined) return
         const definitions = await definitionsFor(workspace)
         const snapshot = await stableRuns(workspace, auth)
+        if (sessionGenerationAtEntry !== sessionGeneration(String(payload.agent.session.id))) {
+          // The session ended while this close awaited its queue or store; the
+          // new agent owns the next close, not this stale one.
+          await refreshPromptRuns(workspace)
+          return
+        }
         if (!snapshot.stable) {
           // Never dispatch or persist from a listing a cancel/dispose can race.
           // Fail open like an internal error; the next stop retries the read.
@@ -2835,7 +2851,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
         const runs = snapshot.runs
         const runGenerationsAtRead = snapshot.generations
-        const sessionGenerationAtRead = sessionGeneration(String(payload.agent.session.id))
+        const sessionGenerationAtRead = sessionGenerationAtEntry
         const sessionId = String(payload.agent.session.id)
         // A later code write invalidates a completed verification for the same
         // turn; reopen the run so a fresh check is required before the close.
@@ -3279,6 +3295,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           auth,
           Date.now(),
           String(agent.session.id),
+          false,
         )
         // An explicit resume is a new lifecycle generation for the run.
         await withRunLock(runId, async () => {
@@ -3294,7 +3311,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         await recoverIfNeeded(workspace)
         // The tool already refused a live foreign session; dropping the
         // session here lets the host clear a run whose owner is gone.
-        const cancelled = await cancelRun(workspace, runId, auth, Date.now())
+        const cancelled = await cancelRun(workspace, runId, auth, Date.now(), undefined, false)
         // Serialize the cancellation with disposal and invalidate older
         // advances, so a delayed disposal cannot overwrite a terminal cancel.
         await withRunLock(runId, async () => {
@@ -3480,7 +3497,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 },
                 resume: async (runId) => {
                   await recoverIfNeeded(workspace)
-                  const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
+                  const resumed = await resumeRun(
+                    workspace,
+                    runId,
+                    auth,
+                    Date.now(),
+                    sessionId,
+                    false,
+                  )
                   // An explicit resume is a new lifecycle generation for the run.
                   await withRunLock(runId, async () => {
                     endedRunIds.delete(runId)

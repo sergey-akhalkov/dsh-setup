@@ -24,6 +24,6 @@ export interface ResumeResult {
  * Resume one interrupted, blocked, or failed run at its pending step. A
  * completed, cancelled, or running run is refused.
  */
-export declare function resumeRun(workspace: string, runId: string, auth: HostAuth, now?: number, session?: string): Promise<ResumeResult>;
+export declare function resumeRun(workspace: string, runId: string, auth: HostAuth, now?: number, session?: string, persist?: boolean): Promise<ResumeResult>;
 /** Cancel one open run; an open or blocked step is recorded as cancelled. */
-export declare function cancelRun(workspace: string, runId: string, auth: HostAuth, now?: number, session?: string): Promise<WorkflowRun>;
+export declare function cancelRun(workspace: string, runId: string, auth: HostAuth, now?: number, session?: string, persist?: boolean): Promise<WorkflowRun>;
