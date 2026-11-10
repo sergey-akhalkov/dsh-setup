@@ -704,6 +704,7 @@ window.__ModuleLoader__.load({
       "group.complete": "Complete",
       "group.recentlyArchived": "Recently archived",
       "state.loading": "Loading\u2026",
+      "state.refreshing": "Updating\u2026",
       "state.retry": "Retry",
       "specs.emptyTitle": "No accepted specs yet",
       "specs.emptyBody": "Archive a completed change to add one.",
@@ -883,26 +884,30 @@ window.__ModuleLoader__.load({
     }
     function useRead(read) {
       const [state, setState] = (0, import_react.useState)(LOADING);
+      const [refreshing, setRefreshing] = (0, import_react.useState)(false);
       const sequence = (0, import_react.useRef)(0);
       const reload = () => {
         const current = sequence.current + 1;
         sequence.current = current;
-        setState(LOADING);
+        if (state.phase === "ready") setRefreshing(true);
+        else setState(LOADING);
         read().then(
           (value) => {
-            if (sequence.current === current) setState({ phase: "ready", value });
+            if (sequence.current !== current) return;
+            setState({ phase: "ready", value });
+            setRefreshing(false);
           },
           (error) => {
-            if (sequence.current === current) {
-              setState({
-                phase: "error",
-                message: error instanceof Error ? error.message : String(error)
-              });
-            }
+            if (sequence.current !== current) return;
+            setState({
+              phase: "error",
+              message: error instanceof Error ? error.message : String(error)
+            });
+            setRefreshing(false);
           }
         );
       };
-      return { state, reload };
+      return { state, refreshing, reload };
     }
     function useTabRefresh(tab, reload) {
       const latest = (0, import_react.useRef)(reload);
@@ -1100,6 +1105,7 @@ window.__ModuleLoader__.load({
             segment,
             changes: changes.state,
             capabilities: capabilities.state,
+            refreshing: segment === "specs" ? capabilities.refreshing : changes.refreshing,
             specQuery,
             archiveQuery,
             t,
@@ -1159,6 +1165,7 @@ window.__ModuleLoader__.load({
           ChangeView,
           {
             change,
+            refreshing: read.refreshing,
             artifact: artifact ?? initialArtifact(change),
             delta: delta ?? capabilityList(change)[0],
             requirementQuery,
@@ -1202,6 +1209,7 @@ window.__ModuleLoader__.load({
           CapabilityView,
           {
             capability,
+            refreshing: read.refreshing,
             requirementQuery,
             t,
             labels,
@@ -1224,6 +1232,9 @@ window.__ModuleLoader__.load({
     }
     function loadingLine(t) {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", role: "status", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.TextShimmer, { active: true, children: t("state.loading") }) });
+    }
+    function refreshingSpinner(t) {
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-refreshing", role: "status", "aria-label": t("state.refreshing"), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconLoadingOutlineRegular, { size: 12 }) });
     }
     function errorState(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-error", children: [
@@ -1298,9 +1309,13 @@ window.__ModuleLoader__.load({
       if (active.length === 0) return changesEmpty(response, props);
       const inProgress = active.filter((row) => phaseOf(row) !== "complete");
       const complete = active.filter((row) => phaseOf(row) === "complete");
+      const busy = props.refreshing === true;
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
         inProgress.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-openspec-section", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-group-label", children: props.t("group.inProgress") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-group-label", children: [
+            props.t("group.inProgress"),
+            busy ? refreshingSpinner(props.t) : null
+          ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: inProgress.map(
             (row) => ChangeCard({
               row,
@@ -1312,7 +1327,10 @@ window.__ModuleLoader__.load({
           ) })
         ] }) : null,
         complete.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-openspec-section", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-group-label", children: props.t("group.complete") }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-group-label", children: [
+            props.t("group.complete"),
+            busy && inProgress.length === 0 ? refreshingSpinner(props.t) : null
+          ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: complete.map(
             (row) => ChangeCard({
               row,
@@ -1385,7 +1403,8 @@ window.__ModuleLoader__.load({
               icon: nextOrder === "newest" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconChevronDownOutlineRegular, { size: 14 }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconChevronUpOutlineRegular, { size: 14 }),
               onClick: () => props.onSpecOrder(nextOrder)
             }
-          )
+          ),
+          props.refreshing === true ? refreshingSpinner(props.t) : null
         ] }),
         visible.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", children: props.t("specs.noMatch") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: visible.map(
           (row) => CapabilityCard({
@@ -1408,12 +1427,15 @@ window.__ModuleLoader__.load({
         (row) => matchesQuery(props.archiveQuery, row.name, row.summary)
       );
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-section", children: [
-        FilterField({
-          label: props.t("archive.filterLabel"),
-          placeholder: props.t("archive.filterPlaceholder"),
-          value: props.archiveQuery,
-          onChange: props.onArchiveQuery
-        }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-filter-row", children: [
+          FilterField({
+            label: props.t("archive.filterLabel"),
+            placeholder: props.t("archive.filterPlaceholder"),
+            value: props.archiveQuery,
+            onChange: props.onArchiveQuery
+          }),
+          props.refreshing === true ? refreshingSpinner(props.t) : null
+        ] }),
         visible.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-state", children: props.t("archive.noMatch") }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-list", children: visible.map(
           (row) => ChangeCard({
             row,
@@ -1632,7 +1654,8 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-card-head", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "dsh-openspec-detail-title", children: change.name }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(phase), children: t(`phase.${phase}`) }),
-            archivedOn === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: archivedOn })
+            archivedOn === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: archivedOn }),
+            props.refreshing === true ? refreshingSpinner(t) : null
           ] }),
           summaryText(change.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-purpose", children: change.summary }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-progress-row", children: [
@@ -1960,7 +1983,10 @@ window.__ModuleLoader__.load({
       ];
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-panel", children: [
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", { className: "dsh-openspec-detail-header", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "dsh-openspec-detail-title", children: capability.id }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-card-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "dsh-openspec-detail-title", children: capability.id }),
+            props.refreshing === true ? refreshingSpinner(t) : null
+          ] }),
           summaryText(capability.purpose) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-purpose", children: capability.purpose }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-meta", children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: "quiet", children: `${String(requirementCount)} ${t("capability.requirements")}` }),
@@ -2069,10 +2095,24 @@ window.__ModuleLoader__.load({
       min-width: 0;
     }
     .dsh-openspec-group-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font: var(--dsw-font-xxxs-strong-11);
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--dsw-alias-label-tertiary);
+    }
+    .dsh-openspec-refreshing {
+      display: inline-flex;
+      align-items: center;
+      color: var(--dsw-alias-label-tertiary);
+      animation: dsh-openspec-spin 900ms linear infinite;
+    }
+    @keyframes dsh-openspec-spin {
+      to {
+        transform: rotate(360deg);
+      }
     }
     .dsh-openspec-list {
       display: flex;
@@ -2469,6 +2509,9 @@ window.__ModuleLoader__.load({
       .dsh-openspec-action-card,
       .dsh-openspec-history-row {
         transition: none;
+      }
+      .dsh-openspec-refreshing {
+        animation: none;
       }
     }
     `;

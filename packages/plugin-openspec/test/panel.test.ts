@@ -58,6 +58,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     type: 'IconChevronUpOutlineRegular',
     props,
   }),
+  IconLoadingOutlineRegular: (props: Record<string, unknown>) => ({
+    type: 'IconLoadingOutlineRegular',
+    props,
+  }),
   IconPlusOutlineRegular: (props: Record<string, unknown>) => ({
     type: 'IconPlusOutlineRegular',
     props,
@@ -1825,6 +1829,20 @@ describe('OpenSpec root view', () => {
     expect(textOf(tree)).not.toContain('No open changes')
   })
 
+  it('keeps the shown card and marks a background re-read with one spinner', () => {
+    const applying = row('add-auth', 'in-progress', 1, 2)
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([applying]) },
+        refreshing: true,
+        now: NOW,
+      }),
+    )
+    expect(textOf(tree)).toContain('add-auth')
+    expect(textOf(tree)).not.toContain('Loading…')
+    expect(typed(tree, 'IconLoadingOutlineRegular')).toHaveLength(1)
+  })
+
   it('renders the change card decision facts', () => {
     const applying = row(
       'add-auth',
@@ -2978,6 +2996,45 @@ describe('OpenSpec tab bodies', () => {
     interval.mockRestore()
   })
 
+  it('keeps the shown list while a background re-read is in flight', async () => {
+    const list = response({
+      changes: [row('add-auth', 'in-progress', 1, 2)],
+      archived: [],
+      counts: { active: 1, archived: 0, capabilities: 0 },
+    })
+    const pending: Array<() => void> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            pending.push(() => resolve(list))
+          }),
+      ),
+    )
+    const fake = fakeTab(ROOT_ADDRESS)
+    const body = mount(RootBody as never, rootBodyProps({ tab: fake.tab }) as never)
+    body.render()
+    pending[0]?.()
+    await settle()
+    body.render()
+    const view = (): unknown => RootView(viewProps(body.tree, RootView) as never)
+    expect(textOf(view())).toContain('add-auth')
+    fake.commands[0]?.refresh?.()
+    body.render()
+    // In flight: the card and its progress stay, with one spinner beside the group label.
+    expect(textOf(view())).toContain('add-auth')
+    expect(textOf(view())).toContain('In progress')
+    expect(textOf(view())).not.toContain('Loading…')
+    expect(typed(view(), 'IconLoadingOutlineRegular')).toHaveLength(1)
+    pending[1]?.()
+    await settle()
+    body.render()
+    expect(typed(view(), 'IconLoadingOutlineRegular')).toHaveLength(0)
+    expect(textOf(view())).toContain('add-auth')
+    body.destroy()
+  })
+
   it('retries a failed root read after the cause is fixed', async () => {
     const fetchMock = vi
       .fn()
@@ -3198,7 +3255,7 @@ describe('OpenSpec live observation', () => {
     body.destroy()
   })
 
-  it('keeps the observation alive across a list re-read loading render', async () => {
+  it('keeps the observation alive across a list re-read while the shown rows stay', async () => {
     vi.useFakeTimers()
     try {
       const activeRow = row('add-auth', 'in-progress', 1, 2, EMPTY_PRESENCE, {
@@ -3223,7 +3280,7 @@ describe('OpenSpec live observation', () => {
       syncWatches(mounted.tree, watches, liveV1)
       expect(vi.getTimerCount()).toBe(1)
       vi.advanceTimersByTime(300)
-      // The list is now loading; the observation and its retained rows stay mounted.
+      // The list is re-reading; the observation and its shown rows stay mounted.
       body.render()
       expect(observationOf(body.tree).props.rows).toEqual([activeRow])
       expect(watchesOf(mounted.tree)).toHaveLength(4)
@@ -3789,7 +3846,7 @@ describe('OpenSpec live observation', () => {
       expect(vi.getTimerCount()).toBe(1)
       vi.advanceTimersByTime(300)
       body.render()
-      // The re-read's loading state keeps every discovered delta subscribed.
+      // The re-read keeps every discovered delta subscribed.
       expect(
         watchesOf(body.tree).some((candidate) => candidate.props.address === billingAddress),
       ).toBe(true)

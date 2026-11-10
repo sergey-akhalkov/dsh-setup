@@ -221,6 +221,7 @@ const EN: Record<string, string> = {
   'group.complete': 'Complete',
   'group.recentlyArchived': 'Recently archived',
   'state.loading': 'Loading…',
+  'state.refreshing': 'Updating…',
   'state.retry': 'Retry',
   'specs.emptyTitle': 'No accepted specs yet',
   'specs.emptyBody': 'Archive a completed change to add one.',
@@ -506,32 +507,44 @@ export function OpenSpecTab(props: TabBodyProps): ReactNode {
   )
 }
 
-/** A panel read that keeps its latest request when refresh runs repeatedly. */
+/**
+ * A panel read that keeps its latest request when refresh runs repeatedly.
+ *
+ * A re-read leaves the last ready value on screen and flags `refreshing`, so a
+ * file-watch or tab refresh updates the shown content instead of replacing it
+ * with the loading line; only a read with nothing to show renders that line.
+ */
 function useRead<T>(read: () => Promise<T>): {
   state: ReadState<T>
+  refreshing: boolean
   reload: () => void
 } {
   const [state, setState] = useState<ReadState<T>>(LOADING)
+  const [refreshing, setRefreshing] = useState(false)
   const sequence = useRef(0)
   const reload = (): void => {
     const current = sequence.current + 1
     sequence.current = current
-    setState(LOADING)
+    // Nothing shown yet (or a failure to retry): show the loading line again.
+    if (state.phase === 'ready') setRefreshing(true)
+    else setState(LOADING)
     read().then(
       (value) => {
-        if (sequence.current === current) setState({ phase: 'ready', value })
+        if (sequence.current !== current) return
+        setState({ phase: 'ready', value })
+        setRefreshing(false)
       },
       (error: unknown) => {
-        if (sequence.current === current) {
-          setState({
-            phase: 'error',
-            message: error instanceof Error ? error.message : String(error),
-          })
-        }
+        if (sequence.current !== current) return
+        setState({
+          phase: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        })
+        setRefreshing(false)
       },
     )
   }
-  return { state, reload }
+  return { state, refreshing, reload }
 }
 
 /**
@@ -769,8 +782,8 @@ export function RootBody(props: RootBodyProps): ReactNode {
   const [archiveQuery, setArchiveQuery] = useState('')
   const changes = useRead<ChangeListResponse>(() => requestChangeList(sessionId))
   const capabilities = useRead<CapabilitySummary[]>(() => requestCapabilities(sessionId))
-  // A list reload renders the loading state; keep the last ready rows so the
-  // watches stay mounted through it.
+  // An error render drops the ready rows; keep the last ones so the watches
+  // stay mounted through it.
   const knownRows = useRef<readonly ChangeRow[]>([])
   if (changes.state.phase === 'ready') knownRows.current = changes.state.value.changes
   const useResource = props.useResource ?? noResource
@@ -811,6 +824,7 @@ export function RootBody(props: RootBodyProps): ReactNode {
         segment={segment}
         changes={changes.state}
         capabilities={capabilities.state}
+        refreshing={segment === 'specs' ? capabilities.refreshing : changes.refreshing}
         specQuery={specQuery}
         archiveQuery={archiveQuery}
         t={t}
@@ -889,6 +903,7 @@ export function ChangeBody(props: ChangeBodyProps): ReactNode {
       {readContent(read.state, t, read.reload, (change) => (
         <ChangeView
           change={change}
+          refreshing={read.refreshing}
           artifact={artifact ?? initialArtifact(change)}
           delta={delta ?? capabilityList(change)[0]}
           requirementQuery={requirementQuery}
@@ -942,6 +957,7 @@ export function CapabilityBody(props: CapabilityBodyProps): ReactNode {
       {readContent(read.state, t, read.reload, (capability) => (
         <CapabilityView
           capability={capability}
+          refreshing={read.refreshing}
           requirementQuery={requirementQuery}
           t={t}
           labels={labels}
@@ -990,6 +1006,15 @@ function loadingLine(t: Translate): ReactNode {
   )
 }
 
+/** A small activity glyph beside the heading of content a re-read is updating. */
+function refreshingSpinner(t: Translate): ReactNode {
+  return (
+    <span className="dsh-openspec-refreshing" role="status" aria-label={t('state.refreshing')}>
+      <primitives.IconLoadingOutlineRegular size={12} />
+    </span>
+  )
+}
+
 /** Warning icon + cause + Retry, on the same card surface as a row. */
 function errorState(props: {
   readonly message: string
@@ -1011,6 +1036,8 @@ export interface RootViewProps {
   readonly segment: RootSegment
   readonly changes: ReadState<ChangeListResponse>
   readonly capabilities: ReadState<CapabilitySummary[]>
+  /** A background re-read is in flight; the shown rows stay on screen. */
+  readonly refreshing?: boolean
   readonly specQuery: string
   readonly archiveQuery: string
   readonly specOrder: SpecOrder
@@ -1100,11 +1127,15 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
   if (active.length === 0) return changesEmpty(response, props)
   const inProgress = active.filter((row) => phaseOf(row) !== 'complete')
   const complete = active.filter((row) => phaseOf(row) === 'complete')
+  const busy = props.refreshing === true
   return (
     <>
       {inProgress.length > 0 ? (
         <section className="dsh-openspec-section">
-          <span className="dsh-openspec-group-label">{props.t('group.inProgress')}</span>
+          <span className="dsh-openspec-group-label">
+            {props.t('group.inProgress')}
+            {busy ? refreshingSpinner(props.t) : null}
+          </span>
           <div className="dsh-openspec-list">
             {inProgress.map((row) =>
               ChangeCard({
@@ -1120,7 +1151,10 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
       ) : null}
       {complete.length > 0 ? (
         <section className="dsh-openspec-section">
-          <span className="dsh-openspec-group-label">{props.t('group.complete')}</span>
+          <span className="dsh-openspec-group-label">
+            {props.t('group.complete')}
+            {busy && inProgress.length === 0 ? refreshingSpinner(props.t) : null}
+          </span>
           <div className="dsh-openspec-list">
             {complete.map((row) =>
               ChangeCard({
@@ -1235,6 +1269,7 @@ function specsBody(
           }
           onClick={() => props.onSpecOrder(nextOrder)}
         />
+        {props.refreshing === true ? refreshingSpinner(props.t) : null}
       </div>
       {visible.length === 0 ? (
         <p className="dsh-openspec-state">{props.t('specs.noMatch')}</p>
@@ -1269,12 +1304,15 @@ function archiveBody(rows: readonly ChangeRow[], props: RootViewProps): ReactNod
   )
   return (
     <div className="dsh-openspec-section">
-      {FilterField({
-        label: props.t('archive.filterLabel'),
-        placeholder: props.t('archive.filterPlaceholder'),
-        value: props.archiveQuery,
-        onChange: props.onArchiveQuery,
-      })}
+      <div className="dsh-openspec-filter-row">
+        {FilterField({
+          label: props.t('archive.filterLabel'),
+          placeholder: props.t('archive.filterPlaceholder'),
+          value: props.archiveQuery,
+          onChange: props.onArchiveQuery,
+        })}
+        {props.refreshing === true ? refreshingSpinner(props.t) : null}
+      </div>
       {visible.length === 0 ? (
         <p className="dsh-openspec-state">{props.t('archive.noMatch')}</p>
       ) : (
@@ -1586,6 +1624,8 @@ export interface ChangeViewProps {
   readonly requirementQuery: string
   readonly t: Translate
   readonly labels: MarkdownLabels
+  /** A background re-read is in flight; the shown artifact stays on screen. */
+  readonly refreshing?: boolean
   readonly now?: Date
   onArtifact(kind: ArtifactKind): void
   onDelta(capability: string): void
@@ -1620,6 +1660,7 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
           <h2 className="dsh-openspec-detail-title">{change.name}</h2>
           <Tag tone={phaseTone(phase)}>{t(`phase.${phase}`)}</Tag>
           {archivedOn === null ? null : <Tag tone="quiet">{archivedOn}</Tag>}
+          {props.refreshing === true ? refreshingSpinner(t) : null}
         </div>
         {summaryText(change.summary) === null ? null : (
           <p className="dsh-openspec-purpose">{change.summary}</p>
@@ -2098,6 +2139,8 @@ export interface CapabilityViewProps {
   readonly requirementQuery: string
   readonly t: Translate
   readonly labels: MarkdownLabels
+  /** A background re-read is in flight; the shown spec stays on screen. */
+  readonly refreshing?: boolean
   readonly now?: Date
   readonly section?: 'requirements' | 'history'
   onSection(section: 'requirements' | 'history'): void
@@ -2130,7 +2173,10 @@ export function CapabilityView(props: CapabilityViewProps): ReactNode {
   return (
     <div className="dsh-openspec-panel">
       <header className="dsh-openspec-detail-header">
-        <h2 className="dsh-openspec-detail-title">{capability.id}</h2>
+        <div className="dsh-openspec-card-head">
+          <h2 className="dsh-openspec-detail-title">{capability.id}</h2>
+          {props.refreshing === true ? refreshingSpinner(t) : null}
+        </div>
         {summaryText(capability.purpose) === null ? null : (
           <p className="dsh-openspec-purpose">{capability.purpose}</p>
         )}
@@ -2267,10 +2313,24 @@ export const PANEL_CSS = `
   min-width: 0;
 }
 .dsh-openspec-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font: var(--dsw-font-xxxs-strong-11);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--dsw-alias-label-tertiary);
+}
+.dsh-openspec-refreshing {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dsw-alias-label-tertiary);
+  animation: dsh-openspec-spin 900ms linear infinite;
+}
+@keyframes dsh-openspec-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .dsh-openspec-list {
   display: flex;
@@ -2667,6 +2727,9 @@ export const PANEL_CSS = `
   .dsh-openspec-action-card,
   .dsh-openspec-history-row {
     transition: none;
+  }
+  .dsh-openspec-refreshing {
+    animation: none;
   }
 }
 `
