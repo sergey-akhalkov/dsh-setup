@@ -723,6 +723,5 @@ receipts. Host projection gained the recorded trigger, a terminal time derived o
 and titles composed from the definition name and subject; the runs route gained `order=newest` and the
 session-scoped `run=` lookup. The integration passed the full gate (155 files / 2881 tests, gen 411,
 build with no diff, validators, strict validation) with 19 portable task-review PASS records and
-shipped in v0.30.0; the two delta specs are synced into the main specs. The archive move remains
-pending the owner's intake approval for the change. Open owner follow-up: 5.2, the installed-build
-visual check of both surfaces.
+shipped in v0.30.0; the two delta specs are synced into the main specs and the change is archived.
+Open owner follow-up: 5.2, the installed-build visual check of both surfaces.
