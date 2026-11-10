@@ -989,22 +989,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ): Promise<{
     readonly runs: WorkflowRun[]
     readonly generations: Map<string, number>
+    readonly sessionGenerations: Map<string, number>
   }> => {
+    const snapshot = (runs: WorkflowRun[]) => ({
+      runs,
+      generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
+      sessionGenerations: new Map(
+        runs.map((run) => [run.id, sessionGeneration(run.session)] as const),
+      ),
+    })
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const epoch = lifecycleEpoch
       const runs = await listAuthenticatedRuns(workspace, auth)
-      if (lifecycleEpoch === epoch) {
-        return {
-          runs,
-          generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
-        }
-      }
+      if (lifecycleEpoch === epoch) return snapshot(runs)
     }
-    const runs = await listAuthenticatedRuns(workspace, auth)
-    return {
-      runs,
-      generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
-    }
+    return snapshot(await listAuthenticatedRuns(workspace, auth))
   }
   /** The last turn whose user message was classified, one classification per turn. */
   const intentTurns = new Map<string, number>()
@@ -1074,15 +1073,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     const releaseAdmission = await acquireAdmission(workspace)
     try {
-      const knownRuns =
-        storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth)
-      // Bind the not-applicable cleanup below to the generations it read.
-      const knownRunGenerations = new Map(
-        knownRuns.map((run) => [run.id, runGeneration(run.id)] as const),
-      )
-      const knownSessionGenerations = new Map(
-        knownRuns.map((run) => [run.id, sessionGeneration(run.session)] as const),
-      )
+      const stableKnown =
+        storedAuth === undefined
+          ? {
+              runs: [] as WorkflowRun[],
+              generations: new Map<string, number>(),
+              sessionGenerations: new Map<string, number>(),
+            }
+          : await stableRuns(workspace, storedAuth)
+      const knownRuns = stableKnown.runs
+      const knownRunGenerations = stableKnown.generations
+      const knownSessionGenerations = stableKnown.sessionGenerations
       const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns)
       let startedThisEvent = 0
       const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)

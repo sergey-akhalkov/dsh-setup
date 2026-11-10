@@ -761,21 +761,18 @@ export function apply(ctx, config = {}) {
      * before the bump cannot be paired with the post-bump generation.
      */
     const stableRuns = async (workspace, auth) => {
+        const snapshot = (runs) => ({
+            runs,
+            generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)])),
+            sessionGenerations: new Map(runs.map((run) => [run.id, sessionGeneration(run.session)])),
+        });
         for (let attempt = 0; attempt < 3; attempt += 1) {
             const epoch = lifecycleEpoch;
             const runs = await listAuthenticatedRuns(workspace, auth);
-            if (lifecycleEpoch === epoch) {
-                return {
-                    runs,
-                    generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)])),
-                };
-            }
+            if (lifecycleEpoch === epoch)
+                return snapshot(runs);
         }
-        const runs = await listAuthenticatedRuns(workspace, auth);
-        return {
-            runs,
-            generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)])),
-        };
+        return snapshot(await listAuthenticatedRuns(workspace, auth));
     };
     /** The last turn whose user message was classified, one classification per turn. */
     const intentTurns = new Map();
@@ -831,10 +828,16 @@ export function apply(ctx, config = {}) {
         }
         const releaseAdmission = await acquireAdmission(workspace);
         try {
-            const knownRuns = storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth);
-            // Bind the not-applicable cleanup below to the generations it read.
-            const knownRunGenerations = new Map(knownRuns.map((run) => [run.id, runGeneration(run.id)]));
-            const knownSessionGenerations = new Map(knownRuns.map((run) => [run.id, sessionGeneration(run.session)]));
+            const stableKnown = storedAuth === undefined
+                ? {
+                    runs: [],
+                    generations: new Map(),
+                    sessionGenerations: new Map(),
+                }
+                : await stableRuns(workspace, storedAuth);
+            const knownRuns = stableKnown.runs;
+            const knownRunGenerations = stableKnown.generations;
+            const knownSessionGenerations = stableKnown.sessionGenerations;
             const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns);
             let startedThisEvent = 0;
             const records = evaluateEvent(triggers, event, sessionSeen, true, input.at);

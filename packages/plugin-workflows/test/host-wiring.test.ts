@@ -5151,10 +5151,9 @@ describe('session disposal', () => {
     host.fireFs()
     await waitFor(async () => (await reviewRuns()).length === 1)
     const first = (await reviewRuns())[0]
+    // Delete without delivering the watcher notification: only the close-time
+    // supersession can reset the checked-task baseline.
     await rm(join(changeDir, 'tasks.md'), { force: true })
-    host.fireFs()
-    // The deletion event resets the checked-task baseline before the close.
-    await new Promise((resolve) => setTimeout(resolve, 300))
     await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
     await waitFor(
       async () =>
