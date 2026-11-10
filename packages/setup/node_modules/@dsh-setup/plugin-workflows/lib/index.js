@@ -542,6 +542,8 @@ export function apply(ctx, config = {}) {
         reserveStart(workspace);
         try {
             const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event);
+            const session = event.session ?? '';
+            const entryGeneration = sessionGeneration(session);
             const run = createRun({
                 definition: { id: definition.id, name: definition.name, version: definition.version },
                 trigger: definition.trigger.kind,
@@ -555,7 +557,11 @@ export function apply(ctx, config = {}) {
                 now: journal.time(),
                 ...(dedupeKey === undefined ? {} : { dedupeKey }),
             });
-            writeRunSync(workspace, run, auth);
+            // A queued trigger evaluation can run after the session was disposed.
+            const fenced = endedSessionIds.has(session) || entryGeneration !== sessionGeneration(session);
+            writeRunSync(workspace, fenced
+                ? setRunStatus(run, 'interrupted', journal.time(), 'the session ended before the run started')
+                : run, auth);
             storeRevision += 1;
             lifecycleEpoch += 1;
             void refreshPromptRuns(workspace);
@@ -1140,6 +1146,7 @@ export function apply(ctx, config = {}) {
                                             session: sessionId,
                                             turn: payload.turn,
                                         });
+                                        const entryGeneration = sessionGeneration(sessionId);
                                         const run = createRun({
                                             definition: {
                                                 id: definition.id,
@@ -1158,7 +1165,11 @@ export function apply(ctx, config = {}) {
                                             now: journal.time(),
                                             ...(key === undefined ? {} : { dedupeKey: key }),
                                         });
-                                        writeRunSync(activeWorkspace, run, auth);
+                                        const fenced = endedSessionIds.has(sessionId) ||
+                                            entryGeneration !== sessionGeneration(sessionId);
+                                        writeRunSync(activeWorkspace, fenced
+                                            ? setRunStatus(run, 'interrupted', journal.time(), 'the session ended before the run started')
+                                            : run, auth);
                                         storeRevision += 1;
                                         lifecycleEpoch += 1;
                                         intentStarted += 1;
@@ -1980,6 +1991,14 @@ export function apply(ctx, config = {}) {
                 ? setRunStatus(run, 'interrupted', journal.time(), 'the session ended before the run started')
                 : run;
             await writeCommit(workspace, toWrite, auth);
+            // A disposal can finish listing runs before this new file appeared.
+            if (!fenced &&
+                (endedSessionIds.has(sessionId) || entryGeneration !== sessionGeneration(sessionId))) {
+                const interrupted = setRunStatus(toWrite, 'interrupted', journal.time(), 'the session ended during the start');
+                await writeCommit(workspace, interrupted, auth);
+                void refreshPromptRuns(workspace);
+                return interrupted;
+            }
             void refreshPromptRuns(workspace);
             return toWrite;
         }
@@ -2187,10 +2206,21 @@ export function apply(ctx, config = {}) {
                                         const entryGeneration = sessionGeneration(sessionId);
                                         const resumed = await withRunLock(runId, async () => {
                                             try {
+                                                const prior = await readAuthenticatedRun(workspace, runId, auth);
                                                 const result = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
                                                 if (entryGeneration !== sessionGeneration(sessionId))
                                                     return undefined;
                                                 await writeCommit(workspace, result.run, auth);
+                                                if (entryGeneration !== sessionGeneration(sessionId)) {
+                                                    const replacement = prior === undefined
+                                                        ? undefined
+                                                        : interruptEndedRun(prior, true, journal.time());
+                                                    if (replacement !== undefined) {
+                                                        await writeCommit(workspace, replacement, auth);
+                                                    }
+                                                    bumpRunGeneration(runId);
+                                                    return undefined;
+                                                }
                                                 endedRunIds.delete(runId);
                                                 endedSessionIds.delete(sessionId);
                                                 bumpRunGeneration(runId);
@@ -2813,10 +2843,20 @@ export function apply(ctx, config = {}) {
                 // disposal that lands while it waits makes the commit fail.
                 const committed = await withRunLock(runId, async () => {
                     try {
+                        const prior = await readAuthenticatedRun(workspace, runId, auth);
                         const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
                         if (entryGeneration !== sessionGeneration(sessionId))
                             return undefined;
                         await writeCommit(workspace, resumed.run, auth);
+                        // A disposal can land during the write; keep its fence and restore
+                        // the prior pending steps so the run remains resumable.
+                        if (entryGeneration !== sessionGeneration(sessionId)) {
+                            const replacement = prior === undefined ? undefined : interruptEndedRun(prior, true, journal.time());
+                            if (replacement !== undefined)
+                                await writeCommit(workspace, replacement, auth);
+                            bumpRunGeneration(runId);
+                            return undefined;
+                        }
                         endedRunIds.delete(runId);
                         endedSessionIds.delete(sessionId);
                         bumpRunGeneration(runId);
@@ -3015,10 +3055,21 @@ export function apply(ctx, config = {}) {
                             const entryGeneration = sessionGeneration(sessionId);
                             const resumed = await withRunLock(runId, async () => {
                                 try {
+                                    const prior = await readAuthenticatedRun(workspace, runId, auth);
                                     const result = await resumeRun(workspace, runId, auth, Date.now(), sessionId, false);
                                     if (entryGeneration !== sessionGeneration(sessionId))
                                         return undefined;
                                     await writeCommit(workspace, result.run, auth);
+                                    if (entryGeneration !== sessionGeneration(sessionId)) {
+                                        const replacement = prior === undefined
+                                            ? undefined
+                                            : interruptEndedRun(prior, true, journal.time());
+                                        if (replacement !== undefined) {
+                                            await writeCommit(workspace, replacement, auth);
+                                        }
+                                        bumpRunGeneration(runId);
+                                        return undefined;
+                                    }
                                     endedRunIds.delete(runId);
                                     endedSessionIds.delete(sessionId);
                                     bumpRunGeneration(runId);
