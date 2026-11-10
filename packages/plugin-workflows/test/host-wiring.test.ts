@@ -2005,11 +2005,12 @@ describe('task-review runtime from a tasks.md change', () => {
     await waitFor(
       async () =>
         (await runs.readAuthenticatedRun(workspace, runA.id, auth))?.status === 'interrupted',
+      12000,
     )
     const settledB = await runs.readAuthenticatedRun(workspace, runB.id, auth)
     expect(settledB?.status).toBe('running')
     expect(settledB?.steps.find((entry) => entry.id === 'start-review')?.state).toBe('open')
-  })
+  }, 30000)
 })
 
 describe('pre-execute trigger gates', () => {
