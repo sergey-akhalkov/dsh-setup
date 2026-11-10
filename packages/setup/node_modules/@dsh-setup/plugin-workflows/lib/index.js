@@ -1840,14 +1840,23 @@ export function apply(ctx, config = {}) {
         const interruptedFrom = () => interruptEndedRun(current, true, journal.time()) ?? current;
         // A disposal already fenced the session: persist the interrupted state,
         // keeping the prior durable pending steps so resume works.
-        if (ended() || sessionStale()) {
+        if (ended()) {
             const replacement = interruptedFrom();
             if (replacement !== current)
                 await writeCommit(workspace, replacement, auth);
             return replacement;
         }
-        if ((generation !== undefined && generation !== runGeneration(run.id)) ||
-            (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) ||
+        // A resume replaced this snapshot's lifecycle; its stale advance must not
+        // touch the resumed state.
+        if (generation !== undefined && generation !== runGeneration(run.id))
+            return current;
+        if (sessionStale()) {
+            const replacement = interruptedFrom();
+            if (replacement !== current)
+                await writeCommit(workspace, replacement, auth);
+            return replacement;
+        }
+        if ((expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) ||
             current.status === 'cancelled' ||
             (current.status === 'interrupted' &&
                 run.status !== 'interrupted' &&
