@@ -763,6 +763,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       // A queued trigger evaluation can run after the session was disposed.
       creationCounter += 1
       runCreationOrder.set(run.id, creationCounter)
+      knownRunIds.add(run.id)
       const fenced = endedSessionIds.has(session) || entryGeneration !== sessionGeneration(session)
       writeRunSync(
         workspace,
@@ -986,6 +987,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   /** A monotonic creation order, so a disposal batch never touches newer runs. */
   let creationCounter = 0
   const runCreationOrder = new Map<string, number>()
+  /** Run ids known before a disposal; fenced until an explicit resume. */
+  const knownRunIds = new Set<string>()
+  const disposalFenced = new Set<string>()
   /** Global lifecycle epoch, bumped by every generation bump. */
   let lifecycleEpoch = 0
   /** The run-store revision: every committed write bumps it. */
@@ -1016,11 +1020,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       readonly generations: Map<string, number>
     } & { readonly stable: boolean }
   > => {
-    const snapshot = (runs: WorkflowRun[], stable: boolean) => ({
-      runs,
-      generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
-      stable,
-    })
+    const snapshot = (runs: WorkflowRun[], stable: boolean) => {
+      for (const run of runs) knownRunIds.add(run.id)
+      return {
+        runs,
+        generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
+        stable,
+      }
+    }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const epoch = storeRevision
       const runs = await listAuthenticatedRuns(workspace, auth)
@@ -1463,6 +1470,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       })
                       creationCounter += 1
                       runCreationOrder.set(run.id, creationCounter)
+                      knownRunIds.add(run.id)
                       const fenced =
                         endedSessionIds.has(sessionId) ||
                         entryGeneration !== sessionGeneration(sessionId)
@@ -1830,6 +1838,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const expectedGenerations = new Map(runGenerations)
       // Runs created after this event belong to the replacement agent.
       const disposalSeq = creationCounter
+      // Fence the runs known at the event synchronously: a recreated agent
+      // must not complete them while this batch is still listing the store.
+      for (const runId of knownRunIds) disposalFenced.add(runId)
       try {
         const workspace = workspaceFor(services, agent.session)
         if (workspace === undefined) return undefined
@@ -2204,7 +2215,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // The stored state is newer; the stale advance must not be written.
         return current
       }
-      const ended = (): boolean => endedRunIds.has(run.id) || endedSessionIds.has(run.session)
+      const ended = (): boolean =>
+        endedRunIds.has(run.id) || endedSessionIds.has(run.session) || disposalFenced.has(run.id)
       const interruptedFrom = (): WorkflowRun =>
         interruptEndedRun(current, true, journal.time()) ?? current
       // A disposal already fenced the session: never persist the running
@@ -2410,6 +2422,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       })
       creationCounter += 1
       runCreationOrder.set(run.id, creationCounter)
+      knownRunIds.add(run.id)
       // A start that raced a disposal is persisted interrupted: the disposal's
       // listing may have finished before this file appeared.
       const fenced =
@@ -2422,24 +2435,28 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             'the session ended before the run started',
           )
         : run
-      await writeCommit(workspace, toWrite, auth)
-      // A disposal can finish listing runs before this new file appeared.
-      if (
-        !fenced &&
-        (endedSessionIds.has(sessionId) || entryGeneration !== sessionGeneration(sessionId))
-      ) {
-        const interrupted = setRunStatus(
-          toWrite,
-          'interrupted',
-          journal.time(),
-          'the session ended during the start',
-        )
-        await writeCommit(workspace, interrupted, auth)
-        void refreshPromptRuns(workspace)
-        return interrupted
-      }
+      // The initial write and its disposal rollback share the per-run lock
+      // with resume/cancel, so a cancellation always wins or is seen here.
+      const committed = await withRunLock(run.id, async () => {
+        await writeCommit(workspace, toWrite, auth)
+        // A disposal can finish listing runs before this new file appeared.
+        if (
+          !fenced &&
+          (endedSessionIds.has(sessionId) || entryGeneration !== sessionGeneration(sessionId))
+        ) {
+          const interrupted = setRunStatus(
+            toWrite,
+            'interrupted',
+            journal.time(),
+            'the session ended during the start',
+          )
+          await writeCommit(workspace, interrupted, auth)
+          return interrupted
+        }
+        return toWrite
+      })
       void refreshPromptRuns(workspace)
-      return toWrite
+      return committed
     } finally {
       releaseStart(workspace)
     }
@@ -2686,6 +2703,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                             return undefined
                           }
                           endedRunIds.delete(runId)
+                          disposalFenced.delete(runId)
                           endedSessionIds.delete(sessionId)
                           bumpRunGeneration(runId)
                           return result
@@ -3466,6 +3484,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               return undefined
             }
             endedRunIds.delete(runId)
+            disposalFenced.delete(runId)
             endedSessionIds.delete(sessionId)
             bumpRunGeneration(runId)
             return resumed
@@ -3716,6 +3735,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                         return undefined
                       }
                       endedRunIds.delete(runId)
+                      disposalFenced.delete(runId)
                       endedSessionIds.delete(sessionId)
                       bumpRunGeneration(runId)
                       return result
