@@ -145,6 +145,7 @@ export const EN: Record<string, string> = {
   'design.confirmDelete': 'Confirm delete',
   'design.listMode': 'List',
   'design.canvasMode': 'Canvas',
+  'design.more': 'More',
   'design.mode': 'Editor surface',
   'design.properties': 'Properties',
   'design.run': 'Run overlay',

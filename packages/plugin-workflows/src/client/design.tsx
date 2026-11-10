@@ -398,19 +398,23 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   const body = (): ReactNode => {
     if (editor === undefined) {
       return (
-        <section className="dsh-wf-section" data-section="editor-library">
-          <p className="dsh-wf-muted">{t('design.intro')}</p>
-          <ul className="dsh-wf-runs">
+        <section className="dsh-wf-empty" data-section="editor-library">
+          <p className="dsh-wf-empty-title">{t('design.intro')}</p>
+          <ul className="dsh-wf-rows">
             {library.definitions.map((entry) => (
               <li key={entry.id}>
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="toolbar"
                   size="sm"
+                  className="dsh-wf-lib-row"
                   onClick={() => guard(() => void open(entry.id))}
                 >
-                  {entry.name} ({entry.id}) v{entry.version} · {entry.source} ·{' '}
-                  {String(entry.stepCount)} steps
+                  <span className="dsh-wf-subject">{entry.name}</span>
+                  <span className="dsh-wf-muted">
+                    {entry.id} · v{String(entry.version)} · {entry.source} ·{' '}
+                    {String(entry.stepCount)} steps
+                  </span>
                 </Button>
               </li>
             ))}
@@ -577,8 +581,13 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   return (
     <div className="dsh-wf-design" data-state={loading ? 'loading' : 'ready'} ref={root}>
       <style>{FLOW_CSS}</style>
-      <div className="dsh-wf-design-bar">
+      <div className="dsh-wf-design-head">
         <strong>{t('design.title')}</strong>
+        <span className="dsh-wf-muted" data-status={editor?.status ?? 'none'}>
+          {editor === undefined
+            ? ''
+            : `${editor.dirty ? t('design.dirty') : t('design.clean')} · v${String(editor.document.definition.version)}${editor.document.revision === null ? '' : ` · ${editor.document.revision.slice(0, 8)}`}`}
+        </span>
         <Button
           type="button"
           variant="toolbar"
@@ -587,6 +596,8 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         >
           {t('design.close')}
         </Button>
+      </div>
+      <div className="dsh-wf-design-bar" data-group="primary">
         <Button
           type="button"
           variant="toolbar"
@@ -609,50 +620,6 @@ export function DesignMode(props: DesignModeProps): ReactNode {
             </option>
           ))}
         </select>
-        <select
-          aria-label={t('design.template')}
-          value={templateName}
-          onChange={(event) => setTemplateName(event.currentTarget.value)}
-          disabled={loading}
-        >
-          <option value="">{t('design.template')}</option>
-          {library.templates.map((template) => (
-            <option key={template.id} value={template.id}>
-              {template.name} · {String(template.stepCount)} steps
-            </option>
-          ))}
-        </select>
-        <Button
-          type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(takeTemplate)}
-          disabled={templateName === '' || loading}
-        >
-          {t('design.copyTemplate')}
-        </Button>
-        <select
-          aria-label={t('design.draft')}
-          value={draftName}
-          onChange={(event) => setDraftName(event.currentTarget.value)}
-          disabled={loading}
-        >
-          <option value="">{t('design.draft')}</option>
-          {library.drafts.map((draft) => (
-            <option key={draft.name} value={draft.name}>
-              {draft.title} ({draft.name}) · {String(draft.stepCount)} steps
-            </option>
-          ))}
-        </select>
-        <Button
-          type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(() => void startDraft())}
-          disabled={draftName === '' || loading}
-        >
-          {t('design.openDraft')}
-        </Button>
         <Button
           type="button"
           variant="primary"
@@ -662,64 +629,111 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         >
           {t('design.save')}
         </Button>
-        <Button
-          type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(() => void reloadCurrent())}
-          disabled={editor === undefined || loading}
-        >
-          {t('design.reload')}
-        </Button>
-        <Button
-          type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(() => void removeCurrent())}
-          disabled={editor === undefined || editor.document.revision === null || loading}
-        >
-          {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
-        </Button>
-        <SegmentedControl
-          id="dsh-wf-surface"
-          value={surface}
-          options={[
-            { value: 'list', label: t('design.listMode') },
-            { value: 'canvas', label: t('design.canvasMode') },
-          ]}
-          onChange={(next) => {
-            if (editor === undefined) return
-            setEditor(setMode(editor, next))
-          }}
-          label={t('design.mode')}
-        />
-        <PaletteMenu
-          open={paletteOpen}
-          onOpen={() => setPaletteOpen(true)}
-          onClose={() => setPaletteOpen(false)}
-          onAdd={addFromPalette}
-          {...(editor === undefined ? { disabled: true } : {})}
-        />
-        <select
-          aria-label={t('design.run')}
-          value={runId ?? ''}
-          onChange={(event) => setRunId(event.currentTarget.value)}
-          disabled={runs.length === 0}
-        >
-          <option value="">{t('design.noRun')}</option>
-          {runs.map((run) => (
-            <option key={run.id} value={run.id}>
-              {run.id} · {run.status}
-              {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
-            </option>
-          ))}
-        </select>
-        <span className="dsh-wf-muted" data-status={editor?.status ?? 'none'}>
-          {editor === undefined
-            ? ''
-            : `${editor.dirty ? t('design.dirty') : t('design.clean')} · v${String(editor.document.definition.version)}${editor.document.revision === null ? '' : ` · ${editor.document.revision.slice(0, 8)}`}`}
-        </span>
       </div>
+      <details className="dsh-wf-more">
+        <summary>{t('design.more')}</summary>
+        <div className="dsh-wf-design-bar" data-group="secondary">
+          <select
+            aria-label={t('design.template')}
+            value={templateName}
+            onChange={(event) => setTemplateName(event.currentTarget.value)}
+            disabled={loading}
+          >
+            <option value="">{t('design.template')}</option>
+            {library.templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name} · {String(template.stepCount)} steps
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            variant="toolbar"
+            size="sm"
+            onClick={() => guard(takeTemplate)}
+            disabled={templateName === '' || loading}
+          >
+            {t('design.copyTemplate')}
+          </Button>
+          <select
+            aria-label={t('design.draft')}
+            value={draftName}
+            onChange={(event) => setDraftName(event.currentTarget.value)}
+            disabled={loading}
+          >
+            <option value="">{t('design.draft')}</option>
+            {library.drafts.map((draft) => (
+              <option key={draft.name} value={draft.name}>
+                {draft.title} ({draft.name}) · {String(draft.stepCount)} steps
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            variant="toolbar"
+            size="sm"
+            onClick={() => guard(() => void startDraft())}
+            disabled={draftName === '' || loading}
+          >
+            {t('design.openDraft')}
+          </Button>
+          <Button
+            type="button"
+            variant="toolbar"
+            size="sm"
+            onClick={() => guard(() => void reloadCurrent())}
+            disabled={editor === undefined || loading}
+          >
+            {t('design.reload')}
+          </Button>
+          <Button
+            type="button"
+            variant="toolbar"
+            size="sm"
+            onClick={() => guard(() => void removeCurrent())}
+            disabled={editor === undefined || editor.document.revision === null || loading}
+          >
+            {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
+          </Button>
+        </div>
+      </details>
+      {editor === undefined ? null : (
+        <div className="dsh-wf-design-bar" data-group="editor">
+          <SegmentedControl
+            id="dsh-wf-surface"
+            value={surface}
+            options={[
+              { value: 'list', label: t('design.listMode') },
+              { value: 'canvas', label: t('design.canvasMode') },
+            ]}
+            onChange={(next) => {
+              if (editor === undefined) return
+              setEditor(setMode(editor, next))
+            }}
+            label={t('design.mode')}
+          />
+          <PaletteMenu
+            open={paletteOpen}
+            onOpen={() => setPaletteOpen(true)}
+            onClose={() => setPaletteOpen(false)}
+            onAdd={addFromPalette}
+          />
+          <select
+            aria-label={t('design.run')}
+            value={runId ?? ''}
+            onChange={(event) => setRunId(event.currentTarget.value)}
+            disabled={runs.length === 0}
+          >
+            <option value="">{t('design.noRun')}</option>
+            {runs.map((run) => (
+              <option key={run.id} value={run.id}>
+                {run.id} · {run.status}
+                {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {message === undefined ? null : <p className="dsh-wf-issue">{message}</p>}
       {conflict === undefined ? null : (
         <div className="dsh-wf-design-bar" role="alert" data-conflict={conflict.kind}>

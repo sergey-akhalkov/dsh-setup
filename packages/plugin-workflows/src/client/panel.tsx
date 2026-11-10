@@ -346,34 +346,25 @@ export function TriggersTable(props: {
       {triggers.length === 0 ? (
         <p className="dsh-wf-muted">{t('triggers.empty')}</p>
       ) : (
-        <table className="dsh-wf-table dsh-wf-triggers">
-          <thead>
-            <tr>
-              <th>{t('triggers.id')}</th>
-              <th>{t('triggers.event')}</th>
-              <th>{t('triggers.filter')}</th>
-              <th>{t('triggers.mode')}</th>
-              <th>{t('triggers.last')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {triggers.map((trigger) => (
-              <tr key={trigger.id} data-trigger={trigger.id}>
-                <td>{trigger.id}</td>
-                <td>{trigger.event}</td>
-                <td>{filterText(trigger)}</td>
-                <td>
-                  <Tag tone="quiet">{trigger.mode}</Tag>
-                </td>
-                <td>
+        <ul className="dsh-wf-rows">
+          {triggers.map((trigger) => (
+            <li key={trigger.id} className="dsh-wf-trigger-row" data-trigger={trigger.id}>
+              <div className="dsh-wf-row-head">
+                <span className="dsh-wf-subject">{trigger.id}</span>
+                <span className="dsh-wf-chip">{trigger.event}</span>
+                <Tag tone="quiet">{trigger.mode}</Tag>
+                <span className="dsh-wf-time">
                   {trigger.last === undefined
                     ? t('triggers.notEvaluated')
                     : `${reasonLabel(trigger.last.reason, t)} · ${formatTime(trigger.last.at, t)}`}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </span>
+              </div>
+              <div className="dsh-wf-row-meta">
+                <span className="dsh-wf-muted dsh-wf-mono">{filterText(trigger)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   )

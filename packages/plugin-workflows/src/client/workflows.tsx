@@ -1,3 +1,4 @@
+import { Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import type { Translate } from './panel.tsx'
 
@@ -64,36 +65,36 @@ export function DefinitionsTable(props: {
       {definitions.length === 0 ? (
         <p className="dsh-wf-muted">{t('definitions.empty')}</p>
       ) : (
-        <table className="dsh-wf-table dsh-wf-definitions">
-          <thead>
-            <tr>
-              <th>{t('definitions.id')}</th>
-              <th>{t('definitions.trigger')}</th>
-              <th>{t('definitions.mode')}</th>
-              <th>{t('definitions.risk')}</th>
-              <th>{t('definitions.steps')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {definitions.map((definition) => (
-              <tr key={definition.id} data-definition={definition.id}>
-                <td>{definition.id}</td>
-                <td>
-                  {definition.trigger.kind} ({filterSummary(definition.trigger.match)})
-                </td>
-                <td>
+        <ul className="dsh-wf-rows">
+          {definitions.map((definition) => (
+            <li key={definition.id} className="dsh-wf-def-row" data-definition={definition.id}>
+              <div className="dsh-wf-row-head">
+                <span className="dsh-wf-subject">{definition.name}</span>
+                <span className="dsh-wf-muted">
+                  {definition.id} · v{definition.version}
+                </span>
+                <Tag tone="quiet">{definition.trigger.mode}</Tag>
+                <Tag tone="quiet">{`${t('definitions.risk')}: ${definition.risk}`}</Tag>
+              </div>
+              <div className="dsh-wf-row-meta">
+                <span className="dsh-wf-chip">{definition.trigger.kind}</span>
+                <span className="dsh-wf-muted dsh-wf-mono">
+                  {filterSummary(definition.trigger.match)}
+                </span>
+                <span className="dsh-wf-muted">
                   {definition.trigger.mode} / {definition.gateOwnership}
-                </td>
-                <td>{definition.risk}</td>
-                <td>
-                  {definition.steps
-                    .map((step) => `${step.id}:${step.executor}/${step.ownership}`)
-                    .join(', ')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </span>
+              </div>
+              <div className="dsh-wf-chips">
+                {definition.steps.map((step) => (
+                  <span key={step.id} className="dsh-wf-chip">
+                    {step.id}:{step.executor}/{step.ownership}
+                  </span>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   )
@@ -116,8 +117,8 @@ export function ReceiptsList(props: {
             <li key={`${receipt.kind}:${receipt.change}`} data-receipt={receipt.change}>
               <span className="dsh-wf-kind">{receipt.kind}</span>
               <span className="dsh-wf-subject">{receipt.change}</span>
-              <span className="dsh-wf-summary">{receipt.digest.slice(0, 12)}…</span>
-              <span className="dsh-wf-time">{new Date(receipt.issuedAt).toISOString()}</span>
+              <span className="dsh-wf-summary">{receipt.digest.slice(0, 8)}…</span>
+              <span className="dsh-wf-time">{new Date(receipt.issuedAt).toLocaleString()}</span>
             </li>
           ))}
         </ul>

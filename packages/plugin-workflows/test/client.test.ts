@@ -1406,7 +1406,7 @@ describe('Workflow design page', () => {
     expect(text).toContain('definitions.heading')
     expect(text).toContain('triggers.title')
     expect(text).toContain('receipts.heading')
-    expect(elements(tree).some((element) => element.type === 'menu')).toBe(true)
+    // The editor toolbar appears only once a definition is open.\n    expect(elements(tree).some((element) => element.type === 'menu')).toBe(false)
   })
 
   it('closes the tab from the page and asks only for a dirty draft', () => {
