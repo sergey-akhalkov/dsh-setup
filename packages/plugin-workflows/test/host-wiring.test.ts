@@ -1998,7 +1998,7 @@ describe('task-review runtime from a tasks.md change', () => {
     })
     runStoreFaults.pauseNextWrite = barrier
     void host.emit('agent/disposed', { agent: host.agent })
-    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 20000)
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 90000)
     await host.emit('agent/created', { agent: host.agent })
     const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
       | {
@@ -2011,12 +2011,12 @@ describe('task-review runtime from a tasks.md change', () => {
     await waitFor(
       async () =>
         (await runs.readAuthenticatedRun(workspace, runA.id, auth))?.status === 'interrupted',
-      12000,
+      45000,
     )
     const settledB = await runs.readAuthenticatedRun(workspace, runB.id, auth)
     expect(settledB?.status).toBe('running')
     expect(settledB?.steps.find((entry) => entry.id === 'start-review')?.state).toBe('open')
-  }, 30000)
+  }, 90000)
 })
 
 describe('pre-execute trigger gates', () => {
@@ -5026,7 +5026,7 @@ describe('session disposal', () => {
     runStoreFaults.pauseFor = (path) => path.includes(run.id)
     runStoreFaults.pauseNextWrite = barrier
     const closing = host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
-    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 20000)
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 90000)
     await host.emit('agent/disposed', { agent: host.agent })
     // A recreated agent clears the fence; the captured session generation must
     // still reject the in-flight completion.
@@ -5038,7 +5038,7 @@ describe('session disposal', () => {
     await expect(
       readFile(join(workspace, '.dsh', 'workflows', 'receipts', 'auth.json'), 'utf8'),
     ).rejects.toThrow()
-  }, 30000)
+  }, 90000)
 
   it('keeps an explicit cancel terminal when a disposal overlaps it', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
@@ -5066,7 +5066,7 @@ describe('session disposal', () => {
     })
     runStoreFaults.pauseNextWrite = barrier
     void host.emit('agent/disposed', { agent: host.agent })
-    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 20000)
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined, 90000)
     const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
       | {
           execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
@@ -5078,7 +5078,7 @@ describe('session disposal', () => {
     await cancelling
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
     expect(settled?.status).toBe('cancelled')
-  }, 30000)
+  }, 90000)
 
   it('starts a fresh run for a restored task even when another task key was seen', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY

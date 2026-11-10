@@ -832,6 +832,9 @@ export function apply(ctx, config = {}) {
         const releaseAdmission = await acquireAdmission(workspace);
         try {
             const knownRuns = storedAuth === undefined ? [] : await listAuthenticatedRuns(workspace, storedAuth);
+            // Bind the not-applicable cleanup below to the generations it read.
+            const knownRunGenerations = new Map(knownRuns.map((run) => [run.id, runGeneration(run.id)]));
+            const knownSessionGenerations = new Map(knownRuns.map((run) => [run.id, sessionGeneration(run.session)]));
             const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns);
             let startedThisEvent = 0;
             const records = evaluateEvent(triggers, event, sessionSeen, true, input.at);
@@ -954,7 +957,7 @@ export function apply(ctx, config = {}) {
                         (run.status === 'running' || run.status === 'blocked'));
                     if (existing === undefined)
                         continue;
-                    await writeRun(workspace, completeNotApplicable(existing, input.at), storedAuth);
+                    await persistRun(workspace, completeNotApplicable(existing, input.at), storedAuth, knownRunGenerations.get(existing.id), knownSessionGenerations.get(existing.id));
                 }
             }
             const { record: bounded } = journal.record({
@@ -2517,6 +2520,11 @@ export function apply(ctx, config = {}) {
                     if (sessionSeen !== undefined && current.dedupeKey !== undefined) {
                         sessionSeen.delete(current.dedupeKey);
                     }
+                    // Invalidate the cached checked-task baseline for this change too:
+                    // a restore may land before the deletion event flushes.
+                    if (typeof current.context.name === 'string') {
+                        checkedTasksSeen.set(`${current.session}\u0000${current.context.name}`, new Set());
+                    }
                 }
             }
             for (const run of ordered) {
@@ -2527,12 +2535,16 @@ export function apply(ctx, config = {}) {
                 // A prior turn's retro obligation is obsolete: work_checkpoint only
                 // writes the current turn's record, so supersede it (keeping its
                 // violation history) instead of demanding the old record forever.
-                if (run.definition.id === 'retro' &&
-                    (run.status === 'running' || run.status === 'blocked') &&
-                    typeof run.context.checkpoint === 'string' &&
-                    checkpointTurnOf(run.context.checkpoint) !== payload.turn) {
-                    const superseded = { ...run, status: 'cancelled', updatedAt: journal.time() };
-                    await persistRun(workspace, superseded, auth);
+                if (current.definition.id === 'retro' &&
+                    (current.status === 'running' || current.status === 'blocked') &&
+                    typeof current.context.checkpoint === 'string' &&
+                    checkpointTurnOf(current.context.checkpoint) !== payload.turn) {
+                    const superseded = {
+                        ...current,
+                        status: 'cancelled',
+                        updatedAt: journal.time(),
+                    };
+                    await persistRun(workspace, superseded, auth, advancedGenerations.get(current.id), sessionGenerationAtRead);
                     ordered.splice(ordered.indexOf(run), 1, superseded);
                     continue;
                 }
