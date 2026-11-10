@@ -346,7 +346,7 @@ export function TriggersTable(props: {
       {triggers.length === 0 ? (
         <p className="dsh-wf-muted">{t('triggers.empty')}</p>
       ) : (
-        <table className="dsh-wf-table">
+        <table className="dsh-wf-table dsh-wf-triggers">
           <thead>
             <tr>
               <th>{t('triggers.id')}</th>

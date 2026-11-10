@@ -64,7 +64,7 @@ export function DefinitionsTable(props: {
       {definitions.length === 0 ? (
         <p className="dsh-wf-muted">{t('definitions.empty')}</p>
       ) : (
-        <table className="dsh-wf-table">
+        <table className="dsh-wf-table dsh-wf-definitions">
           <thead>
             <tr>
               <th>{t('definitions.id')}</th>
