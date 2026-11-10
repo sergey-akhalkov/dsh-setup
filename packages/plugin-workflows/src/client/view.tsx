@@ -41,7 +41,7 @@ export const VIEW_CSS = `
 .dsh-wf-scroll { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .dsh-wf-rows { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; min-width: 0; }
 .dsh-wf-row { min-width: 0; }
-.dsh-wf-row-button { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: inherit; font: inherit; text-align: left; transition: background-color 120ms ease, border-color 120ms ease; }
+.dsh-wf-row-button { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; width: 100%; min-width: 0; height: auto; min-height: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: inherit; font: inherit; line-height: 1.4; white-space: normal; text-align: left; transition: background-color 120ms ease, border-color 120ms ease; }
 .dsh-wf-row-button:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dsh-wf-run-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--dsw-font-s-strong-14); }
 .dsh-wf-run-status { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
@@ -76,7 +76,7 @@ export const VIEW_CSS = `
 .dsh-wf-overview { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .dsh-wf-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .dsh-wf-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
-.dsh-wf-workflow-row { flex-wrap: wrap; align-items: flex-start; padding: 12px; }
+.dsh-wf-workflow-row { flex-wrap: wrap; align-items: stretch; padding: 12px; }
 .dsh-wf-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; }
 .dsh-wf-card-head .dsh-wf-run-title { flex: 0 1 auto; }
 .dsh-wf-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; width: 100%; min-width: 0; }

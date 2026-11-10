@@ -1,5 +1,4 @@
 import {
-  AnimatedRows,
   Button,
   relativeTime,
   StateDot,
@@ -443,14 +442,7 @@ export function WorkflowOverview(props: {
                 </Tag>
               )}
             </div>
-            <AnimatedRows
-              className="dsh-wf-rows"
-              role="list"
-              label={label}
-              rowKeys={group.workflows.map((bucket) => bucket.definition.id)}
-              ready
-              resetKey={`workflows:${group.kind}:${String(group.workflows.length)}`}
-            >
+            <ul className="dsh-wf-rows" role="list" aria-label={label}>
               {group.workflows.map((bucket) => {
                 const latest =
                   props.latestRuns === undefined
@@ -469,7 +461,7 @@ export function WorkflowOverview(props: {
                   />
                 )
               })}
-            </AnimatedRows>
+            </ul>
           </section>
         )
       })}
