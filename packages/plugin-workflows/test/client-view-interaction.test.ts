@@ -1205,6 +1205,41 @@ describe('Workflows overview isolation and latest runs', () => {
     expect(tracker.violations).toEqual([])
   })
 
+  it('reconciles the open workflow run with the refreshed workflow response', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    let workflowDone = false
+    const runningCopy = { ...run('workflow:run-w', NOW), status: 'running', endedAt: undefined }
+    const tracker = installFetch((url) => {
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/events')) return json(HISTORY)
+      if (url.includes('definition=change-intake')) {
+        return json({ runs: [workflowDone ? run('workflow:run-w', NOW) : runningCopy] })
+      }
+      if (url.includes('/api/workflows/runs')) return json({ runs: [runningCopy] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    ;(workflowButton(tree, 'change-intake')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    ;(runButton(tree, 'workflow:run-w')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    expect(renderText(tree)).toContain('runs.status.running')
+    workflowDone = true
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    expect(renderText(tree)).toContain('runs.status.done')
+    expect(renderText(tree)).not.toContain('runs.status.running')
+    expect(tracker.violations).toEqual([])
+  })
+
   it('keeps the known latest run when the latest lookup fails', async () => {
     const runtime = createRuntime()
     const module = runtime.load() as {

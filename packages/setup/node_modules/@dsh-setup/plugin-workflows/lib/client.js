@@ -13911,6 +13911,19 @@ window.__ModuleLoader__.load({
             workflowRunsPages.current = runPages;
             historyPages.current = eventPages;
             setWorkflow({ phase: "ready", document: document2, runs, events });
+            const openRun2 = selectedRef.current;
+            if (runOrigin.current === "workflow" && openRun2 !== void 0) {
+              const fresh = runs.items.find((run) => run.id === openRun2);
+              if (fresh !== void 0) {
+                knownRun.current = fresh;
+                setDetail(fresh);
+                setMissing(false);
+                setDetailError(void 0);
+              } else {
+                const lookup = ++lookupId.current;
+                resolveSelected(generation, lookup, sessionId, openRun2);
+              }
+            }
           },
           (error) => {
             if (workflowRefreshing.current === token) workflowRefreshing.current = 0;
@@ -13952,7 +13965,9 @@ window.__ModuleLoader__.load({
             const retained = {};
             if (mode === "background" && previousLatest !== void 0) {
               for (const id2 of latestResult.failed) {
-                if (Object.hasOwn(previousLatest, id2)) retained[id2] = previousLatest[id2];
+                if (!Object.hasOwn(previousLatest, id2)) continue;
+                const retainedRun = previousLatest[id2];
+                if (retainedRun !== void 0) retained[id2] = retainedRun;
               }
             }
             const latestRuns = { ...retained, ...latestResult.latest };

@@ -923,6 +923,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       if (previous === undefined) return []
       return ids.filter((id) => !previous.has(id))
     } catch {
+      // A vanished or unreadable tasks.md resets the baseline: restoring the
+      // file must count every checked task as newly checked again.
+      checkedTasksSeen.set(`${session}\u0000${change}`, new Set())
       return []
     }
   }
@@ -2799,6 +2802,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // the read or while the close awaits another dispatch must not be
         // advanced from the stale snapshot.
         const { runs, generations: runGenerationsAtRead } = await stableRuns(workspace, auth)
+        const sessionGenerationAtRead = sessionGeneration(String(payload.agent.session.id))
         const sessionId = String(payload.agent.session.id)
         // A later code write invalidates a completed verification for the same
         // turn; reopen the run so a fresh check is required before the close.
@@ -3069,7 +3073,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               outcome.run,
               auth,
               advancedGenerations.get(run.id),
-              sessionGeneration(sessionId),
+              sessionGenerationAtRead,
             )
           }
           // Keep the session's main-step owner until its step settles; a
@@ -3087,15 +3091,24 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // later in the same turn: re-check the current-turn record on every
         // close and steer when the obligation reappears.
         if (!refusedThisClose && workflowOwnsCheckpoint) {
-          const currentRetro = runs.find(
+          const candidate = runs.find(
             (run) =>
               run.definition.id === 'retro' &&
               typeof run.context.checkpoint === 'string' &&
               checkpointTurnOf(run.context.checkpoint) === payload.turn &&
-              run.session === sessionId &&
-              run.status !== 'cancelled',
+              run.session === sessionId,
           )
-          if (currentRetro !== undefined && typeof currentRetro.context.checkpoint === 'string') {
+          // Use the post-advance state; a retrospective run cancelled by this
+          // close (or ended by a disposal) must not be revived by this cleanup.
+          const currentRetro =
+            candidate === undefined ? undefined : (advanced.get(candidate.id) ?? candidate)
+          if (
+            currentRetro !== undefined &&
+            currentRetro.status !== 'cancelled' &&
+            currentRetro.status !== 'interrupted' &&
+            currentRetro.status !== 'failed' &&
+            typeof currentRetro.context.checkpoint === 'string'
+          ) {
             const issue = checkpointGateIssue(
               workspace,
               currentRetro.context.checkpoint,
@@ -3110,13 +3123,15 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               (violation) => violation.reason?.includes('checkpoint freshness refused') === true,
             )
             if (issue !== undefined && !alreadyUnchecked && blocks < limit) {
-              await writeRun(
+              await persistRun(
                 workspace,
                 {
                   ...incrementTurnBlocks(currentRetro, journal.time()),
                   turnBlocksTurn: payload.turn,
                 },
                 auth,
+                runGenerationsAtRead.get(currentRetro.id),
+                sessionGenerationAtRead,
               )
               payload.agent.steer({
                 id: randomUUID(),
@@ -3131,10 +3146,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 `checkpoint freshness refused ${String(limit)} time(s); the close is allowed once as a VIOLATION`,
                 { at: journal.time() },
               )
-              await writeRun(
+              await persistRun(
                 workspace,
                 { ...violated, turnBlocksTurn: payload.turn, turnBlocks: limit + 1 },
                 auth,
+                runGenerationsAtRead.get(currentRetro.id),
+                sessionGenerationAtRead,
               )
               payload.agent.steer({
                 id: randomUUID(),

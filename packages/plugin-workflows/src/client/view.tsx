@@ -599,6 +599,21 @@ export function WorkflowsView(props: {
         workflowRunsPages.current = runPages
         historyPages.current = eventPages
         setWorkflow({ phase: 'ready', document, runs, events })
+        // Reconcile an open run that came from this workflow page with the
+        // refreshed workflow response, or look it up again when it left the page.
+        const openRun = selectedRef.current
+        if (runOrigin.current === 'workflow' && openRun !== undefined) {
+          const fresh = runs.items.find((run) => run.id === openRun)
+          if (fresh !== undefined) {
+            knownRun.current = fresh
+            setDetail(fresh)
+            setMissing(false)
+            setDetailError(undefined)
+          } else {
+            const lookup = ++lookupId.current
+            resolveSelected(generation, lookup, sessionId, openRun)
+          }
+        }
       },
       (error: unknown) => {
         if (workflowRefreshing.current === token) workflowRefreshing.current = 0
