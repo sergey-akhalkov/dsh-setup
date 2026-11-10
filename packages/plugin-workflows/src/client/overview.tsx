@@ -356,29 +356,47 @@ function WorkflowRow(props: {
         data-workflow={definition.id}
         onClick={props.onOpen}
       >
-        <span className="dsh-wf-run-title">{definition.name}</span>
-        {definition.version === undefined ? null : (
-          <Tag tone="quiet">{`v${String(definition.version)}`}</Tag>
-        )}
-        <span className="dsh-wf-summary">{triggerText(definition.trigger, t)}</span>
-        {definition.risk === undefined ? null : (
-          <span className="dsh-wf-summary">{`${t('definitions.risk')}: ${definition.risk}`}</span>
-        )}
-        <span className="dsh-wf-summary" data-workflow-stats={definition.id}>
-          {runStatsLabel(bucket.stats, t)}
+        <span className="dsh-wf-card-head">
+          <span className="dsh-wf-run-title">{definition.name}</span>
+          {definition.version === undefined ? null : (
+            <Tag tone="quiet">{`v${String(definition.version)}`}</Tag>
+          )}
+          {definition.risk === undefined ? null : (
+            <Tag tone="quiet">{`${t('definitions.risk')}: ${definition.risk}`}</Tag>
+          )}
         </span>
-        {latest === undefined ? (
-          bucket.stats === undefined || bucket.stats.total === 0 ? (
-            <span className="dsh-wf-muted">{t('overview.noRuns')}</span>
-          ) : null
-        ) : (
-          <Tooltip label={`${latest.title} · ${new Date(latest.startedAt).toLocaleString()}`}>
-            <span className="dsh-wf-time" data-latest-run={latest.id}>
-              <StateDot state={runDot(latest.status)} />{' '}
-              {`${t('overview.latestRun')}: ${relativeLabel(relativeTime(latest.startedAt, now), t)} · ${runStatusLabel(latest, t)}`}
+        <span className="dsh-wf-card-meta">
+          <span className="dsh-wf-summary">{triggerText(definition.trigger, t)}</span>
+        </span>
+        <span className="dsh-wf-card-stats">
+          {bucket.stats === undefined || bucket.stats.total === 0 ? null : (
+            <span className="dsh-wf-progress" aria-hidden="true">
+              <span
+                className="dsh-wf-progress-fill"
+                style={{
+                  width: `${String(Math.round((bucket.stats.completed / bucket.stats.total) * 100))}%`,
+                }}
+              />
             </span>
-          </Tooltip>
-        )}
+          )}
+          <span className="dsh-wf-summary" data-workflow-stats={definition.id}>
+            {runStatsLabel(bucket.stats, t)}
+          </span>
+        </span>
+        <span className="dsh-wf-card-foot">
+          {latest === undefined ? (
+            bucket.stats === undefined || bucket.stats.total === 0 ? (
+              <span className="dsh-wf-muted">{t('overview.noRuns')}</span>
+            ) : null
+          ) : (
+            <Tooltip label={`${latest.title} · ${new Date(latest.startedAt).toLocaleString()}`}>
+              <span className="dsh-wf-time" data-latest-run={latest.id}>
+                <StateDot state={runDot(latest.status)} />{' '}
+                {`${t('overview.latestRun')}: ${relativeLabel(relativeTime(latest.startedAt, now), t)} · ${runStatusLabel(latest, t)}`}
+              </span>
+            </Tooltip>
+          )}
+        </span>
       </Button>
     </li>
   )
@@ -405,9 +423,11 @@ export function WorkflowOverview(props: {
   }
   const now = props.now ?? Date.now()
   const groups = groupByTrigger(props.definitions, props.triggers, props.stats)
+  const bound = groups.filter((group) => group.workflows.length > 0)
+  const unbound = groups.filter((group) => group.workflows.length === 0)
   return (
     <div className="dsh-wf-overview" data-section="workflow-overview">
-      {groups.map((group) => {
+      {bound.map((group) => {
         const label = group.kind === '' ? t('overview.unknownKind') : group.kind
         return (
           <section
@@ -423,42 +443,55 @@ export function WorkflowOverview(props: {
                 </Tag>
               )}
             </div>
-            {group.workflows.length === 0 ? (
-              <p className="dsh-wf-muted" data-trigger-empty={group.kind}>
-                {t('overview.noWorkflows')}
-              </p>
-            ) : (
-              <AnimatedRows
-                className="dsh-wf-rows"
-                role="list"
-                label={label}
-                rowKeys={group.workflows.map((bucket) => bucket.definition.id)}
-                ready
-                resetKey={`workflows:${group.kind}:${String(group.workflows.length)}`}
-              >
-                {group.workflows.map((bucket) => {
-                  const latest =
-                    props.latestRuns === undefined
-                      ? latestRunFor(props.runs, bucket.definition.id)
-                      : Object.hasOwn(props.latestRuns, bucket.definition.id)
-                        ? props.latestRuns[bucket.definition.id]
-                        : undefined
-                  return (
-                    <WorkflowRow
-                      key={bucket.definition.id}
-                      bucket={bucket}
-                      {...(latest === undefined ? {} : { latest })}
-                      now={now}
-                      t={t}
-                      onOpen={() => props.onOpen(bucket.definition.id)}
-                    />
-                  )
-                })}
-              </AnimatedRows>
-            )}
+            <AnimatedRows
+              className="dsh-wf-rows"
+              role="list"
+              label={label}
+              rowKeys={group.workflows.map((bucket) => bucket.definition.id)}
+              ready
+              resetKey={`workflows:${group.kind}:${String(group.workflows.length)}`}
+            >
+              {group.workflows.map((bucket) => {
+                const latest =
+                  props.latestRuns === undefined
+                    ? latestRunFor(props.runs, bucket.definition.id)
+                    : Object.hasOwn(props.latestRuns, bucket.definition.id)
+                      ? props.latestRuns[bucket.definition.id]
+                      : undefined
+                return (
+                  <WorkflowRow
+                    key={bucket.definition.id}
+                    bucket={bucket}
+                    {...(latest === undefined ? {} : { latest })}
+                    now={now}
+                    t={t}
+                    onOpen={() => props.onOpen(bucket.definition.id)}
+                  />
+                )
+              })}
+            </AnimatedRows>
           </section>
         )
       })}
+      {unbound.length === 0 ? null : (
+        <section className="dsh-wf-unbound" data-section="unbound-triggers">
+          <h3 className="dsh-wf-group-title">{t('overview.unbound')}</h3>
+          <div className="dsh-wf-unbound-list">
+            {unbound.map((group) => (
+              <span
+                className="dsh-wf-unbound-row"
+                key={group.kind === '' ? '__unknown' : group.kind}
+                data-trigger-empty={group.kind}
+              >
+                <span className="dsh-wf-summary">
+                  {group.kind === '' ? t('overview.unknownKind') : group.kind}
+                </span>
+                <span className="dsh-wf-muted">{t('overview.noWorkflows')}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
@@ -512,7 +545,7 @@ export function WorkflowPage(props: {
         <ErrorLine message={props.message ?? ''} t={t} onRetry={props.onRetry} />
       ) : (
         <>
-          <p className="dsh-wf-summary" data-section="workflow-description">
+          <p className="dsh-wf-description" data-section="workflow-description">
             {document.description === undefined || document.description.trim() === ''
               ? t('workflow.noDescription')
               : document.description}
@@ -557,10 +590,10 @@ export function WorkflowPage(props: {
                 <tbody>
                   {chain.map((row) => (
                     <tr key={row.step.id} data-step={row.step.id}>
+                      <td>{row.step.title}</td>
                       <td>
-                        {row.step.title} <span className="dsh-wf-muted">{row.step.id}</span>
+                        <span className="dsh-wf-chip">{row.step.executor}</span>
                       </td>
-                      <td>{row.step.executor}</td>
                       <td className="dsh-wf-summary">{chainTargetsText(row, t)}</td>
                     </tr>
                   ))}

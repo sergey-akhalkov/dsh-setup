@@ -59,6 +59,7 @@ export const EN: Record<string, string> = {
   'overview.unknownKind': 'unknown trigger',
   'overview.empty': 'No workflow definition is installed in this workspace yet.',
   'overview.noWorkflows': 'No workflow is bound to this trigger.',
+  'overview.unbound': 'unbound triggers',
   'overview.firings': 'firings',
   'overview.runs': 'runs',
   'overview.failed': 'failed',

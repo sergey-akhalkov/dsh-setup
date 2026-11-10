@@ -12532,6 +12532,7 @@ window.__ModuleLoader__.load({
       "overview.unknownKind": "unknown trigger",
       "overview.empty": "No workflow definition is installed in this workspace yet.",
       "overview.noWorkflows": "No workflow is bound to this trigger.",
+      "overview.unbound": "unbound triggers",
       "overview.firings": "firings",
       "overview.runs": "runs",
       "overview.failed": "failed",
@@ -13234,16 +13235,29 @@ window.__ModuleLoader__.load({
           "data-workflow": definition.id,
           onClick: props.onOpen,
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
-            definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }),
-            definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: `${t("definitions.risk")}: ${definition.risk}` }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) }),
-            latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-card-head", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
+              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
+              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-card-meta", children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-card-stats", children: [
+              bucket.stats === void 0 || bucket.stats.total === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-progress", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                "span",
+                {
+                  className: "dsh-wf-progress-fill",
+                  style: {
+                    width: `${String(Math.round(bucket.stats.completed / bucket.stats.total * 100))}%`
+                  }
+                }
+              ) }),
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
               /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.StateDot, { state: runDot(latest.status) }),
               " ",
               `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives7.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
-            ] }) })
+            ] }) }) })
           ]
         }
       ) });
@@ -13255,48 +13269,67 @@ window.__ModuleLoader__.load({
       }
       const now2 = props.now ?? Date.now();
       const groups = groupByTrigger(props.definitions, props.triggers, props.stats);
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "dsh-wf-overview", "data-section": "workflow-overview", children: groups.map((group) => {
-        const label = group.kind === "" ? t("overview.unknownKind") : group.kind;
-        return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
-          "section",
-          {
-            className: "dsh-wf-group",
-            "data-trigger-kind": group.kind,
-            children: [
-              /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-group-head", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
-                group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
-              ] }),
-              group.workflows.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", "data-trigger-empty": group.kind, children: t("overview.noWorkflows") }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-                import_dsh_client_ui_primitives7.AnimatedRows,
-                {
-                  className: "dsh-wf-rows",
-                  role: "list",
-                  label,
-                  rowKeys: group.workflows.map((bucket) => bucket.definition.id),
-                  ready: true,
-                  resetKey: `workflows:${group.kind}:${String(group.workflows.length)}`,
-                  children: group.workflows.map((bucket) => {
-                    const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
-                    return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-                      WorkflowRow,
-                      {
-                        bucket,
-                        ...latest === void 0 ? {} : { latest },
-                        now: now2,
-                        t,
-                        onOpen: () => props.onOpen(bucket.definition.id)
-                      },
-                      bucket.definition.id
-                    );
-                  })
-                }
-              )
-            ]
-          },
-          group.kind === "" ? "__unknown" : group.kind
-        );
-      }) });
+      const bound = groups.filter((group) => group.workflows.length > 0);
+      const unbound = groups.filter((group) => group.workflows.length === 0);
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-overview", "data-section": "workflow-overview", children: [
+        bound.map((group) => {
+          const label = group.kind === "" ? t("overview.unknownKind") : group.kind;
+          return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+            "section",
+            {
+              className: "dsh-wf-group",
+              "data-trigger-kind": group.kind,
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-group-head", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
+                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                  import_dsh_client_ui_primitives7.AnimatedRows,
+                  {
+                    className: "dsh-wf-rows",
+                    role: "list",
+                    label,
+                    rowKeys: group.workflows.map((bucket) => bucket.definition.id),
+                    ready: true,
+                    resetKey: `workflows:${group.kind}:${String(group.workflows.length)}`,
+                    children: group.workflows.map((bucket) => {
+                      const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
+                      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
+                        WorkflowRow,
+                        {
+                          bucket,
+                          ...latest === void 0 ? {} : { latest },
+                          now: now2,
+                          t,
+                          onOpen: () => props.onOpen(bucket.definition.id)
+                        },
+                        bucket.definition.id
+                      );
+                    })
+                  }
+                )
+              ]
+            },
+            group.kind === "" ? "__unknown" : group.kind
+          );
+        }),
+        unbound.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-unbound", "data-section": "unbound-triggers", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("h3", { className: "dsh-wf-group-title", children: t("overview.unbound") }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("div", { className: "dsh-wf-unbound-list", children: unbound.map((group) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+            "span",
+            {
+              className: "dsh-wf-unbound-row",
+              "data-trigger-empty": group.kind,
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: group.kind === "" ? t("overview.unknownKind") : group.kind }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noWorkflows") })
+              ]
+            },
+            group.kind === "" ? "__unknown" : group.kind
+          )) })
+        ] })
+      ] });
     }
     function Fact(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(import_jsx_runtime11.Fragment, { children: [
@@ -13317,7 +13350,7 @@ window.__ModuleLoader__.load({
           document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
         ] }),
         props.phase === "loading" ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(LoadingLine, { t }) : props.phase === "error" || document2 === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(ErrorLine, { message: props.message ?? "", t, onRetry: props.onRetry }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(import_jsx_runtime11.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-summary", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
+          /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-description", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
           /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("dl", { className: "dsh-wf-facts", children: [
             /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
               Fact,
@@ -13352,12 +13385,8 @@ window.__ModuleLoader__.load({
                 /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("th", { children: t("workflow.next") })
               ] }) }),
               /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("tbody", { children: chain.map((row) => /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("tr", { "data-step": row.step.id, children: [
-                /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("td", { children: [
-                  row.step.title,
-                  " ",
-                  /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: row.step.id })
-                ] }),
-                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: row.step.executor }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: row.step.title }),
+                /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-chip", children: row.step.executor }) }),
                 /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("td", { className: "dsh-wf-summary", children: chainTargetsText(row, t) })
               ] }, row.step.id)) })
             ] })
@@ -13536,46 +13565,65 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/view.tsx
     var import_jsx_runtime13 = require("react/jsx-runtime");
     var VIEW_CSS = `
-    .dsh-wf { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; height: 100%; min-height: 0; padding: 12px; overflow: hidden; color: var(--dsw-alias-label-primary); }
-    .dsh-wf-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
-    .dsh-wf-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .dsh-wf-status-text { font-weight: 600; }
+    .dsh-wf { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; height: 100%; min-height: 0; padding: 12px; overflow: hidden; color: var(--dsw-alias-label-primary); }
+    .dsh-wf-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1; }
+    .dsh-wf-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-status-text { font: var(--dsw-font-s-strong-14); }
     .dsh-wf-segments { flex: none; }
-    .dsh-wf-scroll { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; overflow: auto; }
-    .dsh-wf-rows { display: flex; flex-direction: column; gap: 4px; list-style: none; margin: 0; padding: 0; }
-    .dsh-wf-row-button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
-    .dsh-wf-run-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-    .dsh-wf-run-status { color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-time { color: var(--dsw-alias-label-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .dsh-wf-subject { font-weight: 600; }
-    .dsh-wf-summary { color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-    .dsh-wf-event-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-    .dsh-wf-evaluations { list-style: none; margin: 4px 0 0; padding: 0 0 0 12px; display: flex; flex-direction: column; gap: 2px; }
-    .dsh-wf-evaluations li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-trigger { color: var(--dsw-alias-label-primary); }
-    .dsh-wf-detail { display: flex; flex-direction: column; gap: 12px; }
-    .dsh-wf-detail-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .dsh-wf-detail-title { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-    .dsh-wf-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 12px; }
-    .dsh-wf-facts dt { color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-scroll { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+    .dsh-wf-rows { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+    .dsh-wf-row { min-width: 0; }
+    .dsh-wf-row-button { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: inherit; font: inherit; text-align: left; transition: background-color 120ms ease, border-color 120ms ease; }
+    .dsh-wf-row-button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dsh-wf-run-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--dsw-font-s-strong-14); }
+    .dsh-wf-run-status { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
+    .dsh-wf-time { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .dsh-wf-subject { font: var(--dsw-font-xs-13); }
+    .dsh-wf-summary { color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-detail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .dsh-wf-detail-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+    .dsh-wf-detail-title { margin: 0; font: var(--dsw-font-m-18); font-weight: 600; overflow-wrap: anywhere; }
+    .dsh-wf-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; box-sizing: border-box; margin: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); font: var(--dsw-font-xs-13); }
+    .dsh-wf-facts dt { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
     .dsh-wf-facts dd { margin: 0; overflow-wrap: anywhere; }
-    .dsh-wf-evidence-kind { color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-section { display: flex; flex-direction: column; gap: 6px; }
-    .dsh-wf-heading { margin: 8px 0 2px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-table { width: 100%; border-collapse: collapse; }
-    .dsh-wf-table th, .dsh-wf-table td { padding: 4px 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); text-align: left; vertical-align: top; }
-    .dsh-wf-table th { color: var(--dsw-alias-label-caption); font-size: 11px; font-weight: 600; }
-    .dsh-wf-violations { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
-    .dsh-wf-empty-title { margin: 0; font-weight: 600; }
-    .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-error { color: var(--dsw-alias-state-error-primary); }
+    .dsh-wf-description { box-sizing: border-box; margin: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xs-13); }
+    .dsh-wf-section { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-section .dsh-wf-rows { gap: 0; }
+    .dsh-wf-section .dsh-wf-rows .dsh-wf-row-button { padding: 8px 0; border: none; border-bottom: 1px solid var(--dsw-alias-border-l2); border-radius: 0; background: transparent; }
+    .dsh-wf-section .dsh-wf-rows .dsh-wf-row-button:hover { background: transparent; }
+    .dsh-wf-section .dsh-wf-rows .dsh-wf-row:last-child .dsh-wf-row-button { border-bottom: none; }
+    .dsh-wf-heading, .dsh-wf-group-title { margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-table { width: 100%; border-collapse: collapse; font: var(--dsw-font-xs-13); }
+    .dsh-wf-table th { padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
+    .dsh-wf-table td { padding: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); text-align: left; vertical-align: top; }
+    .dsh-wf-table tr:last-child td { border-bottom: none; }
+    .dsh-wf-table td:first-child { font-weight: 600; }
+    .dsh-wf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
+    .dsh-wf-evidence-kind { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-empty-title { margin: 0; font: var(--dsw-font-s-strong-14); }
+    .dsh-wf-error { margin: 0; color: var(--dsw-alias-state-error-primary); font: var(--dsw-font-xs-13); }
     .dsh-wf-error-block { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-    .dsh-wf-overview { display: flex; flex-direction: column; gap: 12px; }
-    .dsh-wf-group { display: flex; flex-direction: column; gap: 6px; }
-    .dsh-wf-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
-    .dsh-wf-group-title { margin: 8px 0 2px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-    .dsh-wf-workflow-row { flex-wrap: wrap; align-items: baseline; }
+    .dsh-wf-violations { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-overview { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .dsh-wf-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .dsh-wf-group-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
+    .dsh-wf-workflow-row { flex-wrap: wrap; align-items: flex-start; padding: 12px; }
+    .dsh-wf-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; }
+    .dsh-wf-card-head .dsh-wf-run-title { flex: 0 1 auto; }
+    .dsh-wf-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; width: 100%; min-width: 0; }
+    .dsh-wf-card-stats { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+    .dsh-wf-progress { display: block; width: 96px; height: 4px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-module-platform); overflow: hidden; flex: none; }
+    .dsh-wf-progress-fill { display: block; height: 100%; background: var(--dsw-alias-state-business-primary); }
+    .dsh-wf-card-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; }
+    .dsh-wf-unbound { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
+    .dsh-wf-unbound-list { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; }
+    .dsh-wf-unbound-row { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .dsh-wf-event-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
+    .dsh-wf-evaluations { list-style: none; margin: 2px 0 0; padding: 0 0 0 12px; display: flex; flex-direction: column; gap: 2px; }
+    .dsh-wf-evaluations li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-trigger { color: var(--dsw-alias-label-primary); }
     `;
     function isStaleGeneration(requested, current) {
       return requested !== current;
