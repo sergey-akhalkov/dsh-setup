@@ -19,6 +19,7 @@ import {
 } from '../src/host/api.ts'
 import { WorkflowHealth } from '../src/host/health.ts'
 import { Journal, type JournalInput } from '../src/host/journal.ts'
+import { hashSession } from '../src/host/projection.ts'
 import { loadCatalog } from '../src/host/triggers.ts'
 
 interface Setup {
@@ -40,7 +41,7 @@ afterEach(async () => {
   )
 })
 
-async function setup(): Promise<Setup> {
+async function setup(options: { definitions?: readonly unknown[] } = {}): Promise<Setup> {
   const root = await mkdtemp(join(tmpdir(), 'workflows-api-'))
   TEMP_DIRECTORIES.push(root)
   const workspaceOne = join(root, 'one')
@@ -86,6 +87,9 @@ async function setup(): Promise<Setup> {
     healthFor: (workspace) => (workspace === workspaceTwo ? healthTwo : health),
     lastEventAtFor: (session) => lastEvents.get(session),
     triggers: loadCatalog(),
+    ...(options.definitions === undefined
+      ? {}
+      : { definitionsFor: () => options.definitions as never }),
   }
   return {
     routes: createWorkflowRoutes(services),
@@ -663,9 +667,172 @@ describe('workflow statistics', () => {
     })
     const paged = await request(value, RUNS_ROUTE, { session: 's1' })
     const runs = (paged.body as { runs: Array<{ status: string; lifecycle?: string }> }).runs
-    expect(runs.some((run) => run.status === 'running' && run.lifecycle === 'interrupted')).toBe(
-      true,
+    const pairs: Record<string, string> = {
+      completed: 'done',
+      failed: 'failed',
+      cancelled: 'failed',
+      interrupted: 'running',
+      running: 'running',
+      blocked: 'running',
+    }
+    for (const [lifecycle, status] of Object.entries(pairs)) {
+      expect(runs.find((run) => run.lifecycle === lifecycle)?.status).toBe(status)
+    }
+  })
+
+  it('groups buckets per definition and ignores paging parameters', async () => {
+    const value = await setup()
+    await recordRun(value.workspaceOne, 'run-a1', 'completed', 'flow-a')
+    await recordRun(value.workspaceOne, 'run-a2', 'failed', 'flow-a')
+    await recordRun(value.workspaceOne, 'run-b1', 'completed', 'flow-b')
+    await recordRun(value.workspaceOne, 'run-b2', 'running', 'flow-b')
+    await recordRun(value.workspaceOne, 'run-b3', 'blocked', 'flow-b')
+    const stats = await request(value, RUNS_ROUTE, {
+      session: 's1',
+      query: 'stats=1&limit=1&cursor=5',
+    })
+    const definitions = (
+      stats.body as { stats: { definitions: Record<string, Record<string, number>> } }
+    ).stats.definitions
+    expect(definitions['flow-a']).toMatchObject({ completed: 1, failed: 1, total: 2 })
+    expect(definitions['flow-b']).toMatchObject({
+      completed: 1,
+      running: 1,
+      blocked: 1,
+      total: 3,
+    })
+    const empty = await request(value, RUNS_ROUTE, { session: 's2', query: 'stats=1' })
+    expect(
+      (empty.body as { stats: { definitions: Record<string, unknown> } }).stats.definitions,
+    ).toEqual({})
+  })
+
+  it('keeps a definition named constructor as its own bucket', async () => {
+    const value = await setup()
+    await recordRun(value.workspaceOne, 'run-ctor', 'completed', 'constructor')
+    const stats = await request(value, RUNS_ROUTE, { session: 's1', query: 'stats=1' })
+    const definitions = (
+      stats.body as { stats: { definitions: Record<string, Record<string, number>> } }
+    ).stats.definitions
+    expect(definitions.constructor).toMatchObject({ completed: 1, total: 1 })
+    expect(Object.hasOwn(definitions, 'constructor')).toBe(true)
+  })
+
+  it('counts each definition entry independently for a shared trigger kind', async () => {
+    const definitions = [
+      {
+        id: 'flow-a',
+        name: 'Flow A',
+        version: 1,
+        trigger: { kind: 'fs.change', mode: 'shadow', dedupe: 'session' },
+        settings: {},
+        steps: [],
+      },
+      {
+        id: 'flow-b',
+        name: 'Flow B',
+        version: 1,
+        trigger: { kind: 'fs.change', mode: 'active', dedupe: 'session' },
+        settings: {},
+        steps: [],
+      },
+    ]
+    const value = await setup({ definitions })
+    const records = [
+      [{ id: 'definition:flow-a', matched: true, reason: 'run-created' }],
+      [{ id: 'definition:flow-a', matched: true, reason: 'run-created' }],
+      [{ id: 'definition:flow-a', matched: false, reason: 'filter-mismatch' }],
+      [{ id: 'definition:flow-b', matched: true, reason: 'run-created' }],
+    ]
+    for (const [index, triggers] of records.entries()) {
+      const { record } = value.journal.record(input({ at: 2000 + index, triggers }))
+      await value.journal.append(value.workspaceOne, record)
+    }
+    const response = await request(value, TRIGGERS_ROUTE, { session: 's1' })
+    const triggers = (
+      response.body as {
+        triggers: Array<{
+          id: string
+          source?: string
+          event: string
+          counts: { matched: number; total: number }
+        }>
+      }
+    ).triggers
+    const definitionEntries = triggers.filter((entry) => entry.source === 'workflow-definition')
+    expect(definitionEntries.map((entry) => entry.id)).toEqual([
+      'definition:flow-a',
+      'definition:flow-b',
+    ])
+    expect(definitionEntries.every((entry) => entry.event === 'fs.change')).toBe(true)
+    expect(definitionEntries.find((entry) => entry.id === 'definition:flow-a')?.counts).toEqual({
+      matched: 2,
+      total: 3,
+    })
+    expect(definitionEntries.find((entry) => entry.id === 'definition:flow-b')?.counts).toEqual({
+      matched: 1,
+      total: 1,
+    })
+    const empty = await request(value, TRIGGERS_ROUTE, { session: 's2' })
+    expect(
+      (
+        empty.body as { triggers: Array<{ counts: { matched: number; total: number } }> }
+      ).triggers.every((entry) => entry.counts.matched === 0 && entry.counts.total === 0),
+    ).toBe(true)
+    expect((await request(value, TRIGGERS_ROUTE, { session: 'nope' })).status).toBe(400)
+  })
+
+  it('derives the lifecycle for checkpoint and delegation rows', async () => {
+    const value = await setup()
+    const checkpointDirectory = join(
+      value.workspaceOne,
+      '.dsh',
+      'work-checkpoints',
+      hashSession('s1'),
     )
-    expect(runs.some((run) => run.status === 'failed' && run.lifecycle === 'cancelled')).toBe(true)
+    await mkdir(checkpointDirectory, { recursive: true })
+    await writeFile(
+      join(checkpointDirectory, '1.json'),
+      JSON.stringify({
+        version: 1,
+        turn: 1,
+        session: 's1',
+        time: new Date(1_762_500_000_000).toISOString(),
+        outcome: 'done',
+        lanes: [],
+        next: 'done',
+      }),
+      'utf8',
+    )
+    const delegationDirectory = join(value.workspaceOne, '.dsh', 'delegation', 'runs')
+    await mkdir(delegationDirectory, { recursive: true })
+    await writeFile(
+      join(delegationDirectory, 'run-mw6abcde-12345678.json'),
+      JSON.stringify({
+        id: 'run-mw6abcde-12345678',
+        rule: 'task-review',
+        change: 'add-x',
+        state: 'completed',
+        identity: 'i',
+        key: 'k',
+        record: '.dsh/delegation/task-review/add-x/tasks/12345678.json',
+        startedAt: new Date(1_762_500_000_000).toISOString(),
+      }),
+      'utf8',
+    )
+    const { record } = value.journal.record(
+      input({
+        at: 3000,
+        subject: 'delegate',
+        summary: 'delegate review started; run: run-mw6abcde-12345678',
+      }),
+    )
+    await value.journal.append(value.workspaceOne, record)
+    const paged = await request(value, RUNS_ROUTE, { session: 's1' })
+    const runs = (
+      paged.body as { runs: Array<{ source: string; status: string; lifecycle?: string }> }
+    ).runs
+    expect(runs.find((run) => run.source === 'checkpoint')?.lifecycle).toBe('completed')
+    expect(runs.find((run) => run.source === 'delegation')?.lifecycle).toBe('completed')
   })
 })

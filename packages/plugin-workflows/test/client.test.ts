@@ -1142,7 +1142,7 @@ describe('Workflows loaded view', () => {
     expect(text).toContain('next: spec-review')
     expect(text).toContain('then: verify')
     expect(text).toContain('else: requirements')
-    expect(text).toContain('loop: requirements (3 iterations, cap blocked, list checks)')
+    expect(text).toContain('(3 overview.iterations, overview.cap blocked, overview.list checks)')
     expect(text).toContain('workflow.history')
     expect(text).toContain('run-created')
     // Another trigger id on the same event never reaches the definition history.

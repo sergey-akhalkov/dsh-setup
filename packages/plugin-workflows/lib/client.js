@@ -12542,6 +12542,9 @@ window.__ModuleLoader__.load({
       "overview.statsUnavailable": "run statistics are unavailable",
       "overview.latestRun": "last run",
       "overview.noRuns": "no run yet",
+      "overview.iterations": "iterations",
+      "overview.cap": "cap",
+      "overview.list": "list",
       "workflow.back": "Back to workflows",
       "workflow.noDescription": "No description is recorded for this definition.",
       "workflow.version": "Version",
@@ -13068,7 +13071,15 @@ window.__ModuleLoader__.load({
       const buckets = /* @__PURE__ */ new Map();
       for (const definition of definitions) {
         const kind = definition.trigger?.kind ?? "";
-        const statsEntry = stats?.definitions[definition.id];
+        const statsEntry = stats === void 0 ? void 0 : Object.hasOwn(stats.definitions, definition.id) ? stats.definitions[definition.id] : {
+          completed: 0,
+          failed: 0,
+          cancelled: 0,
+          interrupted: 0,
+          running: 0,
+          blocked: 0,
+          total: 0
+        };
         const firings = triggerCountsFor(triggers, definition.id);
         const bucket = {
           definition,
@@ -13112,7 +13123,7 @@ window.__ModuleLoader__.load({
       const id2 = definitionEvaluationId(definitionId);
       return (event.triggers ?? []).filter((evaluation) => evaluation.id === id2);
     }
-    function architectureChain(steps) {
+    function architectureChain(steps, t) {
       return (steps ?? []).map((step) => {
         const targets = [];
         if (step.branch !== void 0) {
@@ -13122,10 +13133,10 @@ window.__ModuleLoader__.load({
         if (step.loop !== void 0) {
           const details = [];
           if (step.loop.maxIterations !== void 0) {
-            details.push(`${String(step.loop.maxIterations)} iterations`);
+            details.push(`${String(step.loop.maxIterations)} ${t("overview.iterations")}`);
           }
-          if (step.loop.cap !== void 0) details.push(`cap ${step.loop.cap}`);
-          if (step.loop.list !== void 0) details.push(`list ${step.loop.list}`);
+          if (step.loop.cap !== void 0) details.push(`${t("overview.cap")} ${step.loop.cap}`);
+          if (step.loop.list !== void 0) details.push(`${t("overview.list")} ${step.loop.list}`);
           targets.push({
             kind: "loop",
             target: step.loop.next ?? "\u2014",
@@ -13227,7 +13238,7 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }),
             definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", children: `${t("definitions.risk")}: ${definition.risk}` }),
             /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) }),
-            latest === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
+            latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
               /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.StateDot, { state: runDot(latest.status) }),
               " ",
               `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives7.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
@@ -13265,7 +13276,7 @@ window.__ModuleLoader__.load({
                   ready: true,
                   resetKey: `workflows:${group.kind}:${String(group.workflows.length)}`,
                   children: group.workflows.map((bucket) => {
-                    const latest = latestRunFor(props.runs, bucket.definition.id);
+                    const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
                     return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
                       WorkflowRow,
                       {
@@ -13297,7 +13308,7 @@ window.__ModuleLoader__.load({
       const counts = props.trigger?.counts;
       const risk = document2?.risk ?? document2?.settings?.risk;
       const gateOwnership = document2?.gateOwnership ?? document2?.settings?.gateOwnership;
-      const chain = architectureChain(document2?.steps);
+      const chain = architectureChain(document2?.steps, t);
       return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("section", { className: "dsh-wf-detail", "data-workflow-page": definitionId, children: [
         /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
           /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
@@ -13632,6 +13643,24 @@ window.__ModuleLoader__.load({
       }
       return { definitions };
     }
+    async function readLatestRuns(session, definitionIds) {
+      const entries = await Promise.all(
+        definitionIds.map(async (id2) => {
+          try {
+            const body = await requestJson(
+              runsUrl(session, void 0, void 0, { definition: id2, order: "newest" })
+            );
+            const run = body.runs?.find((entry) => entry.definition?.id === id2);
+            return run === void 0 ? void 0 : [id2, run];
+          } catch {
+            return void 0;
+          }
+        })
+      );
+      return Object.fromEntries(
+        entries.filter((entry) => entry !== void 0)
+      );
+    }
     async function readDefinitionDocument(session, definitionId) {
       const body = await requestJson(
         definitionsUrl(session, definitionId)
@@ -13733,6 +13762,7 @@ window.__ModuleLoader__.load({
             definitions: loaded.definitions,
             triggers: loaded.triggers,
             ...loaded.stats === void 0 ? {} : { stats: loaded.stats },
+            ...props.latestRuns === void 0 ? {} : { latestRuns: props.latestRuns },
             runs: loaded.runs.items,
             t,
             ...props.now === void 0 ? {} : { now: props.now },
@@ -13812,6 +13842,7 @@ window.__ModuleLoader__.load({
       const loadId = (0, import_react8.useRef)(0);
       const lookupId = (0, import_react8.useRef)(0);
       const workflowToken = (0, import_react8.useRef)(0);
+      const workflowRefreshing = (0, import_react8.useRef)(false);
       const runsPages = (0, import_react8.useRef)(1);
       const workflowRunsPages = (0, import_react8.useRef)(1);
       const historyPages = (0, import_react8.useRef)(1);
@@ -13859,6 +13890,7 @@ window.__ModuleLoader__.load({
       const loadWorkflowPage = (generation, token, id2, mode) => {
         if (sessionId === void 0) return;
         if (mode === "initial") setWorkflow({ phase: "loading" });
+        workflowRefreshing.current = mode === "background";
         const runPages = Math.max(1, workflowRunsPages.current);
         const eventPages = Math.max(1, historyPages.current);
         const current = () => !isStaleGeneration(generation, loadId.current) && token === workflowToken.current && definitionRef.current === id2;
@@ -13869,12 +13901,14 @@ window.__ModuleLoader__.load({
         ]).then(
           ([document2, runs, events]) => {
             if (!current()) return;
+            workflowRefreshing.current = false;
             workflowRunsPages.current = runPages;
             historyPages.current = eventPages;
             setWorkflow({ phase: "ready", document: document2, runs, events });
           },
           (error) => {
             if (!current()) return;
+            workflowRefreshing.current = false;
             const message = messageOf(error);
             const loadedPage = workflowRef.current;
             if (mode === "background" && loadedPage.phase === "ready") {
@@ -13901,7 +13935,12 @@ window.__ModuleLoader__.load({
           readTriggers(sessionId),
           readRunStats(sessionId)
         ]).then(
-          ([health, runs, definitions, triggers, stats]) => {
+          async ([health, runs, definitions, triggers, stats]) => {
+            if (isStaleGeneration(generation, loadId.current)) return;
+            const latestRuns = await readLatestRuns(
+              sessionId,
+              definitions.map((definition) => definition.id)
+            );
             if (isStaleGeneration(generation, loadId.current)) return;
             runsPages.current = runPages;
             setState({
@@ -13911,7 +13950,8 @@ window.__ModuleLoader__.load({
                 runs,
                 definitions,
                 triggers,
-                ...stats === void 0 ? {} : { stats }
+                ...stats === void 0 ? {} : { stats },
+                ...Object.keys(latestRuns).length === 0 ? {} : { latestRuns }
               }
             });
             const open = selectedRef.current;
@@ -13945,6 +13985,20 @@ window.__ModuleLoader__.load({
       const loadRef = (0, import_react8.useRef)(load);
       loadRef.current = load;
       (0, import_react8.useEffect)(() => {
+        definitionRef.current = void 0;
+        setDefinitionId(void 0);
+        setWorkflow({ phase: "loading" });
+        setSelected(void 0);
+        setDetail(void 0);
+        setMissing(false);
+        setDetailError(void 0);
+        setPageStates(emptyPageStates());
+        pendingPages.current.clear();
+        runsPages.current = 1;
+        workflowRunsPages.current = 1;
+        historyPages.current = 1;
+        workflowRefreshing.current = false;
+        knownRun.current = void 0;
         load("initial");
         return () => {
           loadId.current += 1;
@@ -13997,6 +14051,12 @@ window.__ModuleLoader__.load({
         }
         workflowRunsPages.current = 1;
         historyPages.current = 1;
+        workflowRefreshing.current = false;
+        pendingPages.current.forEach((key) => {
+          if (key.startsWith("workflowRuns:") || key.startsWith("history:"))
+            pendingPages.current.delete(key);
+        });
+        setPageStates((current) => ({ ...current, workflowRuns: void 0, history: void 0 }));
         setDefinitionId(id2);
         setWorkflow({ phase: "loading" });
         setSelected(void 0);
@@ -14009,6 +14069,12 @@ window.__ModuleLoader__.load({
       };
       const backFromWorkflow = () => {
         workflowToken.current += 1;
+        workflowRefreshing.current = false;
+        pendingPages.current.forEach((key) => {
+          if (key.startsWith("workflowRuns:") || key.startsWith("history:"))
+            pendingPages.current.delete(key);
+        });
+        setPageStates((current) => ({ ...current, workflowRuns: void 0, history: void 0 }));
         setDefinitionId(void 0);
         setWorkflow({ phase: "loading" });
         setSelected(void 0);
@@ -14123,7 +14189,7 @@ window.__ModuleLoader__.load({
         );
       };
       const mergeWorkflowRuns = () => {
-        if (stateRef.current.refreshing === true) return;
+        if (stateRef.current.refreshing === true || workflowRefreshing.current) return;
         const id2 = definitionRef.current;
         const next = workflowRef.current.runs?.next;
         if (id2 === void 0 || next === void 0) return;
@@ -14166,7 +14232,7 @@ window.__ModuleLoader__.load({
         );
       };
       const mergeHistory = () => {
-        if (stateRef.current.refreshing === true) return;
+        if (stateRef.current.refreshing === true || workflowRefreshing.current) return;
         const id2 = definitionRef.current;
         const next = workflowRef.current.events?.next;
         if (id2 === void 0 || next === void 0) return;
@@ -14211,6 +14277,7 @@ window.__ModuleLoader__.load({
             loaded: state.loaded,
             t,
             sessionId,
+            ...state.loaded.latestRuns === void 0 ? {} : { latestRuns: state.loaded.latestRuns },
             segment,
             ...definitionId === void 0 ? {} : { definition: definitionId },
             workflow,

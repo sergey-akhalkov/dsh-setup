@@ -33,6 +33,17 @@ const RUN_LIFECYCLES = new Set<RunLifecycle>([
   'blocked',
 ])
 
+/** The lifecycle a non-engine projection implies from its displayed status. */
+function displayLifecycle(status: RunStatus): RunLifecycle | undefined {
+  return status === 'done'
+    ? 'completed'
+    : status === 'failed'
+      ? 'failed'
+      : status === 'running'
+        ? 'running'
+        : undefined
+}
+
 /** One step of a projected run; evidence is the file, call id, or target. */
 export interface RunStep {
   readonly id: string
@@ -285,6 +296,7 @@ export async function checkpointRuns(workspace: string, sessionId: string): Prom
         evidence: safeText(record.next as string),
       })
     }
+    const lifecycle = displayLifecycle(record.outcome === 'done' ? 'done' : 'running')
     runs.push({
       id: `checkpoint:${String(recordedTurn)}`,
       source: 'checkpoint',
@@ -293,6 +305,7 @@ export async function checkpointRuns(workspace: string, sessionId: string): Prom
       title: `Checkpoint turn ${String(recordedTurn)}`,
       startedAt,
       status: record.outcome === 'done' ? 'done' : 'running',
+      ...(lifecycle === undefined ? {} : { lifecycle }),
       steps,
       record: displayPath(workspace, file),
     })
@@ -668,6 +681,7 @@ export async function delegationRuns(
       }
     }
     const status = runStatus(record.state)
+    const lifecycle = displayLifecycle(status)
     runs.push({
       id: `delegation:${runId}`,
       source: 'delegation',
@@ -676,6 +690,7 @@ export async function delegationRuns(
       title: `${record.rule} ${record.change}`,
       startedAt: parseTime(record.startedAt),
       status,
+      ...(lifecycle === undefined ? {} : { lifecycle }),
       steps,
       ...(typeof record.detail === 'string' && (status === 'failed' || status === 'unknown')
         ? { error: safeError(record.detail) }
@@ -757,6 +772,9 @@ export async function portableReviewRuns(
       const stableTask = record.taskId as string
       const verdict = record.verdict as string
       const digest = record.digest as string
+      const status: RunStatus =
+        verdict === 'PASS' ? 'done' : verdict === 'ERROR' ? 'failed' : 'unknown'
+      const lifecycle = displayLifecycle(status)
       runs.push({
         id: `review:${changeName}/${stableTask}`,
         source: 'review',
@@ -764,7 +782,8 @@ export async function portableReviewRuns(
         attribution: session === undefined ? 'unattributed' : 'portable',
         title: `Review ${changeName} ${stableTask}`,
         startedAt,
-        status: verdict === 'PASS' ? 'done' : verdict === 'ERROR' ? 'failed' : 'unknown',
+        status,
+        ...(lifecycle === undefined ? {} : { lifecycle }),
         steps: [
           { id: 'verdict', title: 'Verdict', state: verdict, at: startedAt },
           {

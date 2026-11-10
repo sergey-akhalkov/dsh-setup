@@ -83,6 +83,8 @@ export interface Loaded {
   readonly triggers: readonly TriggerView[]
   /** Present only when the host serves the additive `stats=1` response. */
   readonly stats?: RunStatsView
+  /** The newest run per definition, fetched independently of the run pages. */
+  readonly latestRuns?: Readonly<Record<string, RunView>>
 }
 
 export type Segment = 'workflows' | 'runs'
@@ -213,6 +215,29 @@ export async function readRunStats(session: string): Promise<RunStatsView | unde
   return { definitions: definitions as RunStatsView['definitions'] }
 }
 
+/** The newest run per installed definition, independent of the run pages. */
+export async function readLatestRuns(
+  session: string,
+  definitionIds: readonly string[],
+): Promise<Readonly<Record<string, RunView>>> {
+  const entries = await Promise.all(
+    definitionIds.map(async (id) => {
+      try {
+        const body = await requestJson<{ runs?: RunView[] }>(
+          runsUrl(session, undefined, undefined, { definition: id, order: 'newest' }),
+        )
+        const run = body.runs?.find((entry) => entry.definition?.id === id)
+        return run === undefined ? undefined : ([id, run] as const)
+      } catch {
+        return undefined
+      }
+    }),
+  )
+  return Object.fromEntries(
+    entries.filter((entry): entry is readonly [string, RunView] => entry !== undefined),
+  )
+}
+
 /** One full definition document, including its description and step targets. */
 export async function readDefinitionDocument(
   session: string,
@@ -266,6 +291,8 @@ export interface WorkflowsLoadedProps {
   readonly loaded: Loaded
   readonly t: Translate
   readonly sessionId?: string
+  /** The newest run per definition, independent of the loaded run pages. */
+  readonly latestRuns?: Readonly<Record<string, RunView>>
   readonly segment?: Segment
   /** The selected workflow definition id; its page replaces the segment body. */
   readonly definition?: string
@@ -366,6 +393,7 @@ export function WorkflowsLoaded(props: WorkflowsLoadedProps): ReactNode {
         definitions={loaded.definitions}
         triggers={loaded.triggers}
         {...(loaded.stats === undefined ? {} : { stats: loaded.stats })}
+        {...(props.latestRuns === undefined ? {} : { latestRuns: props.latestRuns })}
         runs={loaded.runs.items}
         t={t}
         {...(props.now === undefined ? {} : { now: props.now })}
@@ -474,6 +502,8 @@ export function WorkflowsView(props: {
   const loadId = useRef(0)
   const lookupId = useRef(0)
   const workflowToken = useRef(0)
+  /** A pending workflow-page background refresh blocks its pagination. */
+  const workflowRefreshing = useRef(false)
   const runsPages = useRef(1)
   const workflowRunsPages = useRef(1)
   const historyPages = useRef(1)
@@ -546,6 +576,7 @@ export function WorkflowsView(props: {
   ): void => {
     if (sessionId === undefined) return
     if (mode === 'initial') setWorkflow({ phase: 'loading' })
+    workflowRefreshing.current = mode === 'background'
     const runPages = Math.max(1, workflowRunsPages.current)
     const eventPages = Math.max(1, historyPages.current)
     const current = (): boolean =>
@@ -559,12 +590,14 @@ export function WorkflowsView(props: {
     ]).then(
       ([document, runs, events]) => {
         if (!current()) return
+        workflowRefreshing.current = false
         workflowRunsPages.current = runPages
         historyPages.current = eventPages
         setWorkflow({ phase: 'ready', document, runs, events })
       },
       (error: unknown) => {
         if (!current()) return
+        workflowRefreshing.current = false
         const message = messageOf(error)
         const loadedPage = workflowRef.current
         // A failed background refresh keeps the loaded page; only a first
@@ -595,7 +628,12 @@ export function WorkflowsView(props: {
       readTriggers(sessionId),
       readRunStats(sessionId),
     ]).then(
-      ([health, runs, definitions, triggers, stats]) => {
+      async ([health, runs, definitions, triggers, stats]) => {
+        if (isStaleGeneration(generation, loadId.current)) return
+        const latestRuns = await readLatestRuns(
+          sessionId,
+          definitions.map((definition) => definition.id),
+        )
         if (isStaleGeneration(generation, loadId.current)) return
         runsPages.current = runPages
         setState({
@@ -606,6 +644,7 @@ export function WorkflowsView(props: {
             definitions,
             triggers,
             ...(stats === undefined ? {} : { stats }),
+            ...(Object.keys(latestRuns).length === 0 ? {} : { latestRuns }),
           },
         })
         const open = selectedRef.current
@@ -645,6 +684,20 @@ export function WorkflowsView(props: {
   loadRef.current = load
 
   useEffect(() => {
+    definitionRef.current = undefined
+    setDefinitionId(undefined)
+    setWorkflow({ phase: 'loading' })
+    setSelected(undefined)
+    setDetail(undefined)
+    setMissing(false)
+    setDetailError(undefined)
+    setPageStates(emptyPageStates())
+    pendingPages.current.clear()
+    runsPages.current = 1
+    workflowRunsPages.current = 1
+    historyPages.current = 1
+    workflowRefreshing.current = false
+    knownRun.current = undefined
     load('initial')
     return () => {
       loadId.current += 1
@@ -711,6 +764,12 @@ export function WorkflowsView(props: {
     }
     workflowRunsPages.current = 1
     historyPages.current = 1
+    workflowRefreshing.current = false
+    pendingPages.current.forEach((key) => {
+      if (key.startsWith('workflowRuns:') || key.startsWith('history:'))
+        pendingPages.current.delete(key)
+    })
+    setPageStates((current) => ({ ...current, workflowRuns: undefined, history: undefined }))
     setDefinitionId(id)
     setWorkflow({ phase: 'loading' })
     setSelected(undefined)
@@ -724,6 +783,12 @@ export function WorkflowsView(props: {
 
   const backFromWorkflow = (): void => {
     workflowToken.current += 1
+    workflowRefreshing.current = false
+    pendingPages.current.forEach((key) => {
+      if (key.startsWith('workflowRuns:') || key.startsWith('history:'))
+        pendingPages.current.delete(key)
+    })
+    setPageStates((current) => ({ ...current, workflowRuns: undefined, history: undefined }))
     setDefinitionId(undefined)
     setWorkflow({ phase: 'loading' })
     setSelected(undefined)
@@ -851,7 +916,7 @@ export function WorkflowsView(props: {
   }
 
   const mergeWorkflowRuns = (): void => {
-    if (stateRef.current.refreshing === true) return
+    if (stateRef.current.refreshing === true || workflowRefreshing.current) return
     const id = definitionRef.current
     const next = workflowRef.current.runs?.next
     if (id === undefined || next === undefined) return
@@ -895,7 +960,7 @@ export function WorkflowsView(props: {
   }
 
   const mergeHistory = (): void => {
-    if (stateRef.current.refreshing === true) return
+    if (stateRef.current.refreshing === true || workflowRefreshing.current) return
     const id = definitionRef.current
     const next = workflowRef.current.events?.next
     if (id === undefined || next === undefined) return
@@ -940,6 +1005,9 @@ export function WorkflowsView(props: {
         loaded={state.loaded as Loaded}
         t={t}
         sessionId={sessionId}
+        {...((state.loaded as Loaded).latestRuns === undefined
+          ? {}
+          : { latestRuns: (state.loaded as Loaded).latestRuns })}
         segment={segment}
         {...(definitionId === undefined ? {} : { definition: definitionId })}
         workflow={workflow}

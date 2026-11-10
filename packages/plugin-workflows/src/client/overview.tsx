@@ -107,7 +107,20 @@ export function groupByTrigger(
   const buckets = new Map<string, WorkflowBucket[]>()
   for (const definition of definitions) {
     const kind = definition.trigger?.kind ?? ''
-    const statsEntry = stats?.definitions[definition.id]
+    const statsEntry =
+      stats === undefined
+        ? undefined
+        : Object.hasOwn(stats.definitions, definition.id)
+          ? stats.definitions[definition.id]
+          : {
+              completed: 0,
+              failed: 0,
+              cancelled: 0,
+              interrupted: 0,
+              running: 0,
+              blocked: 0,
+              total: 0,
+            }
     const firings = triggerCountsFor(triggers, definition.id)
     const bucket: WorkflowBucket = {
       definition,
@@ -190,7 +203,10 @@ export interface ChainRow {
 }
 
 /** The ordered step chain with each step's next, branch, and loop targets. */
-export function architectureChain(steps: readonly DefinitionStepView[] | undefined): ChainRow[] {
+export function architectureChain(
+  steps: readonly DefinitionStepView[] | undefined,
+  t: Translate,
+): ChainRow[] {
   return (steps ?? []).map((step) => {
     const targets: ChainTarget[] = []
     if (step.branch !== undefined) {
@@ -200,10 +216,10 @@ export function architectureChain(steps: readonly DefinitionStepView[] | undefin
     if (step.loop !== undefined) {
       const details: string[] = []
       if (step.loop.maxIterations !== undefined) {
-        details.push(`${String(step.loop.maxIterations)} iterations`)
+        details.push(`${String(step.loop.maxIterations)} ${t('overview.iterations')}`)
       }
-      if (step.loop.cap !== undefined) details.push(`cap ${step.loop.cap}`)
-      if (step.loop.list !== undefined) details.push(`list ${step.loop.list}`)
+      if (step.loop.cap !== undefined) details.push(`${t('overview.cap')} ${step.loop.cap}`)
+      if (step.loop.list !== undefined) details.push(`${t('overview.list')} ${step.loop.list}`)
       targets.push({
         kind: 'loop',
         target: step.loop.next ?? '—',
@@ -352,7 +368,9 @@ function WorkflowRow(props: {
           {runStatsLabel(bucket.stats, t)}
         </span>
         {latest === undefined ? (
-          <span className="dsh-wf-muted">{t('overview.noRuns')}</span>
+          bucket.stats === undefined || bucket.stats.total === 0 ? (
+            <span className="dsh-wf-muted">{t('overview.noRuns')}</span>
+          ) : null
         ) : (
           <Tooltip label={`${latest.title} · ${new Date(latest.startedAt).toLocaleString()}`}>
             <span className="dsh-wf-time" data-latest-run={latest.id}>
@@ -371,6 +389,7 @@ export function WorkflowOverview(props: {
   readonly definitions: readonly DefinitionView[]
   readonly triggers: readonly TriggerView[]
   readonly stats?: RunStatsView
+  readonly latestRuns?: Readonly<Record<string, RunView>>
   readonly runs: readonly RunView[]
   readonly t: Translate
   readonly now?: number
@@ -418,7 +437,12 @@ export function WorkflowOverview(props: {
                 resetKey={`workflows:${group.kind}:${String(group.workflows.length)}`}
               >
                 {group.workflows.map((bucket) => {
-                  const latest = latestRunFor(props.runs, bucket.definition.id)
+                  const latest =
+                    props.latestRuns === undefined
+                      ? latestRunFor(props.runs, bucket.definition.id)
+                      : Object.hasOwn(props.latestRuns, bucket.definition.id)
+                        ? props.latestRuns[bucket.definition.id]
+                        : undefined
                   return (
                     <WorkflowRow
                       key={bucket.definition.id}
@@ -470,7 +494,7 @@ export function WorkflowPage(props: {
   const counts = props.trigger?.counts
   const risk = document?.risk ?? document?.settings?.risk
   const gateOwnership = document?.gateOwnership ?? document?.settings?.gateOwnership
-  const chain = architectureChain(document?.steps)
+  const chain = architectureChain(document?.steps, t)
   return (
     <section className="dsh-wf-detail" data-workflow-page={definitionId}>
       <div className="dsh-wf-detail-bar">

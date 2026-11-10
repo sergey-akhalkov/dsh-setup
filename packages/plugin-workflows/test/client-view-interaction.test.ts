@@ -502,6 +502,7 @@ describe('Workflows session view interaction', () => {
       const overview = overviewResponse(url)
       if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('definition=')) return json({ runs: [] })
       runCalls += 1
       if (fail) return json({ error: 'the refresh failed' }, 500)
       return json({ runs: RUNS })
@@ -549,6 +550,7 @@ describe('Workflows session view interaction', () => {
       const overview = overviewResponse(url)
       if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('definition=')) return json({ runs: [] })
       runCalls += 1
       return json({ runs: RUNS })
     })
@@ -694,6 +696,7 @@ describe('Workflows session view interaction', () => {
       const overview = overviewResponse(url)
       if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('definition=')) return json({ runs: [] })
       runCalls += 1
       if (runCalls === 1) return json({ runs: RUNS, next: '2' })
       if (url.includes('cursor=2')) {

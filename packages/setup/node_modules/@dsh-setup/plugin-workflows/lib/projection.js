@@ -12,6 +12,16 @@ const RUN_LIFECYCLES = new Set([
     'running',
     'blocked',
 ]);
+/** The lifecycle a non-engine projection implies from its displayed status. */
+function displayLifecycle(status) {
+    return status === 'done'
+        ? 'completed'
+        : status === 'failed'
+            ? 'failed'
+            : status === 'running'
+                ? 'running'
+                : undefined;
+}
 export const KNOWN_STEP_STATES = new Set(['open', 'done', 'blocked', 'failed', 'cancelled']);
 const WORK_CHECKPOINT_DIR = join('.dsh', 'work-checkpoints');
 export const DELEGATION_DIR = join('.dsh', 'delegation');
@@ -174,6 +184,7 @@ export async function checkpointRuns(workspace, sessionId) {
                 evidence: safeText(record.next),
             });
         }
+        const lifecycle = displayLifecycle(record.outcome === 'done' ? 'done' : 'running');
         runs.push({
             id: `checkpoint:${String(recordedTurn)}`,
             source: 'checkpoint',
@@ -182,6 +193,7 @@ export async function checkpointRuns(workspace, sessionId) {
             title: `Checkpoint turn ${String(recordedTurn)}`,
             startedAt,
             status: record.outcome === 'done' ? 'done' : 'running',
+            ...(lifecycle === undefined ? {} : { lifecycle }),
             steps,
             record: displayPath(workspace, file),
         });
@@ -487,6 +499,7 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
             }
         }
         const status = runStatus(record.state);
+        const lifecycle = displayLifecycle(status);
         runs.push({
             id: `delegation:${runId}`,
             source: 'delegation',
@@ -495,6 +508,7 @@ export async function delegationRuns(workspace, observedSessions, localRecords) 
             title: `${record.rule} ${record.change}`,
             startedAt: parseTime(record.startedAt),
             status,
+            ...(lifecycle === undefined ? {} : { lifecycle }),
             steps,
             ...(typeof record.detail === 'string' && (status === 'failed' || status === 'unknown')
                 ? { error: safeError(record.detail) }
@@ -540,6 +554,8 @@ export async function portableReviewRuns(workspace, localRecords) {
             const stableTask = record.taskId;
             const verdict = record.verdict;
             const digest = record.digest;
+            const status = verdict === 'PASS' ? 'done' : verdict === 'ERROR' ? 'failed' : 'unknown';
+            const lifecycle = displayLifecycle(status);
             runs.push({
                 id: `review:${changeName}/${stableTask}`,
                 source: 'review',
@@ -547,7 +563,8 @@ export async function portableReviewRuns(workspace, localRecords) {
                 attribution: session === undefined ? 'unattributed' : 'portable',
                 title: `Review ${changeName} ${stableTask}`,
                 startedAt,
-                status: verdict === 'PASS' ? 'done' : verdict === 'ERROR' ? 'failed' : 'unknown',
+                status,
+                ...(lifecycle === undefined ? {} : { lifecycle }),
                 steps: [
                     { id: 'verdict', title: 'Verdict', state: verdict, at: startedAt },
                     {

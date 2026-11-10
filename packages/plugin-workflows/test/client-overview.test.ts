@@ -382,18 +382,22 @@ describe('architecture chain', () => {
     const module = loadModule()
     const architectureChain = module.architectureChain as (
       steps: readonly Record<string, unknown>[],
+      t: (key: string) => string,
     ) => Array<{ step: Record<string, unknown>; targets: Array<Record<string, unknown>> }>
-    const chain = architectureChain([
-      { id: 'one', title: 'One', executor: 'main', next: 'two' },
-      // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
-      { id: 'two', title: 'Two', executor: 'branch', branch: { then: 'three', else: 'one' } },
-      {
-        id: 'three',
-        title: 'Three',
-        executor: 'loop',
-        loop: { maxIterations: 3, next: 'one', cap: 'blocked' },
-      },
-    ])
+    const chain = architectureChain(
+      [
+        { id: 'one', title: 'One', executor: 'main', next: 'two' },
+        // biome-ignore lint/suspicious/noThenProperty: a branch target, not a thenable
+        { id: 'two', title: 'Two', executor: 'branch', branch: { then: 'three', else: 'one' } },
+        {
+          id: 'three',
+          title: 'Three',
+          executor: 'loop',
+          loop: { maxIterations: 3, next: 'one', cap: 'blocked' },
+        },
+      ],
+      translate,
+    )
     expect(chain.map((row) => row.step.id)).toEqual(['one', 'two', 'three'])
     const chainTargetsText = module.chainTargetsText as (
       row: Record<string, unknown>,
@@ -406,7 +410,7 @@ describe('architecture chain', () => {
       'workflow.then: three · workflow.else: one',
     )
     expect(chainTargetsText(chain[2] as Record<string, unknown>, translate)).toBe(
-      'workflow.loop: one (3 iterations, cap blocked)',
+      'workflow.loop: one (3 overview.iterations, overview.cap blocked)',
     )
   })
 })

@@ -279,7 +279,7 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       // Resolved after attribution, so another session's run is never returned.
       if (run !== null && run !== '') runs = runs.filter((entry) => entry.id === run)
       if (url.searchParams.get('stats') === '1') {
-        const definitions: Record<string, Record<string, number>> = {}
+        const buckets = new Map<string, Record<string, number>>()
         for (const entry of runs) {
           if (entry.definition === undefined) continue
           const bucket =
@@ -289,7 +289,7 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
               : entry.status === 'failed'
                 ? 'failed'
                 : 'running')
-          const counts = definitions[entry.definition.id] ?? {
+          const counts = buckets.get(entry.definition.id) ?? {
             completed: 0,
             failed: 0,
             cancelled: 0,
@@ -298,11 +298,14 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
             blocked: 0,
             total: 0,
           }
-          definitions[entry.definition.id] = counts
           counts[bucket] = (counts[bucket] ?? 0) + 1
           counts.total = (counts.total ?? 0) + 1
+          buckets.set(entry.definition.id, counts)
         }
-        return json(200, { session: resolved.session, stats: { definitions } })
+        return json(200, {
+          session: resolved.session,
+          stats: { definitions: Object.fromEntries(buckets) },
+        })
       }
       // A definition-filtered request is the editor overlay: newest first.
       if ((definition ?? '') !== '' || order === 'newest') runs = [...runs].reverse()
