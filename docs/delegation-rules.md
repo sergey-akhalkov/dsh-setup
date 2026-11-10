@@ -359,7 +359,9 @@ whole-spec `spec-review` rule, and the task-progress and lane-assignment/lane-bo
 Only two signals stop: the task-review rule that refuses a close for a checked task without a
 `PASS`/`ERROR` record (including the completion-coverage branch for a freshly completed list), and
 the archive guard that refuses `openspec archive`/`mv`/`Move-Item`/`git mv` without a portable
-`PASS`. A `defer` `task-review` definition beside `gates.workflowOwned: false` is refused at load; the
+`PASS`. The goal-complete guard below is not part of the flip: no workflow definition owns goal
+completion. A `defer` `task-review` definition beside `gates.workflowOwned: false` is refused at
+load; the
 `spec-review` signal stays enabled, so `change-intake` keeps its deferred spec-review step and a
 missing spec review still steers. The default is `true`. Rollback is one config flip: set
 `gates.workflowOwned: true` and return the definition to `defer`; records, queue state, and notes are
@@ -422,6 +424,17 @@ Audit commands:
   pre-cutoff historical baseline without enforcing either;
 - `pnpm reviews:check --push` — the archived changes a push adds or modifies (read from stdin; the
   pre-push hook runs this and fails closed on an unknown range).
+
+### Goal-complete gate
+
+`update_goal` with `action: "complete"` is refused while any active change has a checked task without
+its portable task-review `PASS`; the refusal is the same coverage report, with each missing task's
+record path and exact `delegate` call, and the goal stays active. It needs no
+`openspec/review-approval.json` marker and is independent of `gates.workflowOwned`: no workflow
+definition owns goal completion, so a session that never started a run cannot complete its goal
+unreviewed. A profile that declares no strict `spec-task-ready` task-scope review rule has no
+obligation, and a change without a checked task is not part of the check; an unreadable `tasks.md`
+fails closed. The way out is the review itself, or archiving the change, which keeps its own gate.
 
 ### Review learning
 

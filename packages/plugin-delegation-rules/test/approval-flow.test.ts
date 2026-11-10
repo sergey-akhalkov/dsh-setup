@@ -659,3 +659,88 @@ describe('archive gate', () => {
     expect(fromTerminal.kind).toBe('deny')
   })
 })
+
+describe('goal-complete gate', () => {
+  const GOAL_TASK = 'Goal task'
+  const taskId = taskIdFor(GOAL_TASK)
+
+  async function goalFixture(
+    options: { checked?: boolean; config?: ReturnType<typeof defaultTestConfig> } = {},
+  ) {
+    const workspace = await makeWorkspace()
+    cleanups.push(workspace.cleanup)
+    const dir = await writeChange(workspace.root, 'change-a', [
+      { number: '1.1', text: GOAL_TASK, checked: options.checked ?? true },
+    ])
+    const agents = new FakeSubagents()
+    agents.addProvider('codex-subagent')
+    // The shipped setup retires the legacy turn/archive closes, not this guard.
+    const harness = new Harness({
+      cwd: workspace.root,
+      config: options.config ?? defaultTestConfig({ gates: { workflowOwned: false } }),
+      agents,
+      git: new FakeGit(),
+    })
+    return { dir, harness }
+  }
+
+  it('denies completion of a checked task without a portable PASS', async () => {
+    const { harness } = await goalFixture()
+    const result = await harness.preExecute('update_goal', { action: 'complete' })
+    expect(result.kind).toBe('deny')
+    expect(result.nextCalled).toBe(false)
+    expect(result.reason).toContain(
+      'goal completion refused: change "change-a" is not approval-complete',
+    )
+    expect(result.reason).toContain(
+      `missing 1.1 "${GOAL_TASK}" -> delegate(rule: "task-review", change: "change-a", task: "${taskId}")`,
+    )
+    expect(result.reason).toContain(`record: openspec/changes/change-a/reviews/${taskId}.json`)
+    expect(result.reason).toContain('The goal stays active')
+  })
+
+  it('allows completion once every checked task has a portable PASS, with no marker', async () => {
+    const { dir, harness } = await goalFixture()
+    await writePortablePass(dir, 'change-a', GOAL_TASK)
+    const result = await harness.preExecute('update_goal', { action: 'complete' })
+    expect(result.kind).toBe('allow')
+    expect(result.nextCalled).toBe(true)
+  })
+
+  it('leaves other goal actions, other tools and an unchecked plan alone', async () => {
+    const { harness } = await goalFixture()
+    expect((await harness.preExecute('update_goal', { action: 'blocked' })).kind).toBe('allow')
+    expect((await harness.preExecute('create_goal', { objective: 'Ship it' })).kind).toBe('allow')
+    const unchecked = await goalFixture({ checked: false })
+    expect((await unchecked.harness.preExecute('update_goal', { action: 'complete' })).kind).toBe(
+      'allow',
+    )
+  })
+
+  it('fails closed on an unreadable task list and leaves a soft-only profile alone', async () => {
+    const { dir, harness } = await goalFixture()
+    await rm(join(dir, 'tasks.md'))
+    const result = await harness.preExecute('update_goal', { action: 'complete' })
+    expect(result.kind).toBe('deny')
+    expect(result.reason).toContain('no readable tasks.md')
+
+    const optional = await goalFixture({
+      config: defaultTestConfig({
+        rules: [
+          {
+            id: 'task-review',
+            when: 'spec-task-ready',
+            to: 'codex',
+            contract: 'review',
+            scope: 'task',
+            gate: 'soft',
+            instruction: 'bundled:review-task',
+          },
+        ],
+      }),
+    })
+    expect((await optional.harness.preExecute('update_goal', { action: 'complete' })).kind).toBe(
+      'allow',
+    )
+  })
+})

@@ -5467,6 +5467,60 @@ async function archiveGateDecision(deps, exec) {
     gaps.push('Nothing was archived: the change remains active. Fix the lines above, run the exact delegate calls, then archive again.', 'Full audit: pnpm reviews:check --all');
     return archiveDenial(gaps.join('\n'));
 }
+/**
+ * The goal-complete gate: a goal must not complete while an active change has a
+ * checked task without its portable task-review PASS. Archive is already gated;
+ * goal completion was the last boundary an agent could reach with no review
+ * record at all. It is not part of the gate-only retirement: no workflow
+ * definition owns goal completion, so this guard stays on either way.
+ */
+async function goalCompleteGateDecision(deps, exec) {
+    if (exec.agent === undefined || exec.name !== 'update_goal')
+        return undefined;
+    const args = isRecord(exec.arguments) ? exec.arguments : {};
+    if (args.action !== 'complete')
+        return undefined;
+    const declared = deps.config.rules.some((rule) => rule.when === 'spec-task-ready' &&
+        rule.contract === 'review' &&
+        rule.scope === 'task' &&
+        rule.gate === 'strict');
+    // A profile that declares no strict task review has no review obligation.
+    if (!declared)
+        return undefined;
+    const cwd = deps.services.workingDirectory.get(exec.agent.session);
+    const openspecRoot = findOpenSpecRootSync(cwd);
+    if (openspecRoot === undefined)
+        return undefined;
+    const gaps = [];
+    for (const change of await listActiveChanges(openspecRoot)) {
+        let tasks;
+        try {
+            tasks = await readTasks(change.dir);
+        }
+        catch (error) {
+            return {
+                kind: 'deny',
+                reason: `goal completion refused: change "${change.name}" has no readable tasks.md (${errorMessage(error)}); repair it or archive the change. The goal stays active.`,
+            };
+        }
+        if (!tasks.some((task) => task.checked))
+            continue;
+        const approval = await changeApproval(deps.config, change, openspecRoot, tasks);
+        if ('error' in approval) {
+            return {
+                kind: 'deny',
+                reason: `goal completion refused: change "${change.name}": ${approval.error}; the goal stays active.`,
+            };
+        }
+        if (approval.coverage.archiveReady)
+            continue;
+        gaps.push(`goal completion refused: change "${change.name}" is not approval-complete (${approvalSummaryLine(approval.coverage)}).`, ...formatApprovalGapLines(approval.coverage).map((line) => `  ${line}`));
+    }
+    if (gaps.length === 0)
+        return undefined;
+    gaps.push('The goal stays active. Run the delegate calls above and complete the goal again; to close the work instead, archive the change (that gate is unchanged).');
+    return { kind: 'deny', reason: gaps.join('\n') };
+}
 function attachGate({ ctx, deps }) {
     ctx.on('agent/pre-step', async (payload, next) => {
         const decision = await next();
@@ -5522,16 +5576,16 @@ function attachGate({ ctx, deps }) {
             }
         }
     });
-    // Archive guard: deny the documented archive forms before any effect. It
-    // applies to subagents too, unlike the turn-stopping gate.
+    // Archive and goal-complete guards deny the call before any effect. They
+    // apply to subagents too, unlike the turn-stopping gate.
     ctx.on('tools/pre-execute', async (exec, next) => {
         try {
-            const decision = await archiveGateDecision(deps, exec);
+            const decision = (await goalCompleteGateDecision(deps, exec)) ?? (await archiveGateDecision(deps, exec));
             if (decision !== undefined)
                 return decision;
         }
         catch (error) {
-            return archiveDenial(`archive refused: the delegation-rules archive gate could not evaluate this command (${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}); nothing was archived.`);
+            return archiveDenial(`refused: the delegation-rules gate could not evaluate this call (${sanitizeText(errorMessage(error), MAX_ERROR_CHARS)}); nothing was done.`);
         }
         return await next();
     });
