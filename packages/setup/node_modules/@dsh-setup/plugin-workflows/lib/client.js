@@ -11814,7 +11814,38 @@ window.__ModuleLoader__.load({
     .dsh-wf-canvas .react-flow__selection { background: var(--xy-selection-background-color, var(--xy-selection-background-color-default)); border: var(--xy-selection-border, var(--xy-selection-border-default)); }
     .dsh-wf-canvas .react-flow__attribution { position: absolute; bottom: 2px; right: 4px; font-size: 10px; color: var(--dsw-alias-label-caption); background: transparent; }
     .dsh-wf-canvas .react-flow__attribution a { color: inherit; }
-    `;
+    .dsh-wf-section { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-heading { margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-table { width: 100%; border-collapse: collapse; table-layout: fixed; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-table th { padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
+    .dsh-wf-table td { padding: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    .dsh-wf-table tr:last-child td { border-bottom: none; }
+    .dsh-wf-triggers th:nth-child(1) { width: 20%; }
+    .dsh-wf-triggers th:nth-child(2) { width: 13%; }
+    .dsh-wf-triggers th:nth-child(3) { width: 27%; }
+    .dsh-wf-triggers th:nth-child(4) { width: 10%; }
+    .dsh-wf-triggers th:nth-child(5) { width: 30%; }
+    .dsh-wf-definitions th:nth-child(1) { width: 18%; }
+    .dsh-wf-definitions th:nth-child(2) { width: 28%; }
+    .dsh-wf-definitions th:nth-child(3) { width: 14%; }
+    .dsh-wf-definitions th:nth-child(4) { width: 8%; }
+    .dsh-wf-definitions th:nth-child(5) { width: 32%; }
+    .dsh-wf-runs { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+    .dsh-wf-runs li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-kind { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
+    .dsh-wf-subject { font: var(--dsw-font-xs-13); overflow-wrap: anywhere; }
+    .dsh-wf-time { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .dsh-wf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
+    .dsh-wf-list-wrap { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .dsh-wf-list-trigger { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 12px; box-sizing: border-box; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-list-trigger h4 { grid-column: 1 / -1; margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-list-trigger label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-list-trigger input, .dsh-wf-list-trigger select, .dsh-wf-list-trigger textarea { box-sizing: border-box; width: 100%; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
+    .dsh-wf-list { width: 100%; table-layout: fixed; border-collapse: collapse; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-list th { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
+    .dsh-wf-list td { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); vertical-align: top; }
+    .dsh-wf-list input, .dsh-wf-list select, .dsh-wf-list textarea { box-sizing: border-box; width: 100%; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }`;
 
     // packages/plugin-workflows/src/client/design.tsx
     var import_jsx_runtime6 = require("react/jsx-runtime");
@@ -12722,7 +12753,7 @@ window.__ModuleLoader__.load({
       const { triggers, t } = props;
       return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("section", { className: "dsh-wf-section", "data-section": "triggers", children: [
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { className: "dsh-wf-heading", children: t("triggers.title") }),
-        triggers.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("triggers.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("table", { className: "dsh-wf-table", children: [
+        triggers.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("triggers.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("table", { className: "dsh-wf-table dsh-wf-triggers", children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("th", { children: t("triggers.id") }),
             /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("th", { children: t("triggers.event") }),
@@ -12785,7 +12816,7 @@ window.__ModuleLoader__.load({
       const { definitions, t } = props;
       return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("section", { className: "dsh-wf-section", "data-section": "definitions", children: [
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h3", { className: "dsh-wf-heading", children: t("definitions.heading") }),
-        definitions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-muted", children: t("definitions.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("table", { className: "dsh-wf-table", children: [
+        definitions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-muted", children: t("definitions.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("table", { className: "dsh-wf-table dsh-wf-definitions", children: [
           /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("th", { children: t("definitions.id") }),
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("th", { children: t("definitions.trigger") }),
