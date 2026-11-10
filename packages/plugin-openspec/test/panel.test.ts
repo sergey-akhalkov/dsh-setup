@@ -2966,6 +2966,22 @@ describe('OpenSpec tab bodies', () => {
     expect(nodes(root).some((node) => node.type === RootBody)).toBe(true)
   })
 
+  it('waits for the session to open before rendering a body', () => {
+    const base = {
+      useTabInfo: () => ({ tab: fakeTab(ROOT_ADDRESS).tab }),
+      sessionId: 's1',
+      t,
+      handoff: { draft: () => {}, open: () => {} },
+    }
+    const useStateOf = (openState: string) => (select: (snapshot: unknown) => unknown) =>
+      select({ openState })
+    const waiting = OpenSpecTab({ ...base, useSession: useStateOf('loading') } as never)
+    expect(nodes(waiting).some((node) => node.type === RootBody)).toBe(false)
+    expect(textOf(waiting)).toContain('Loading…')
+    const opened = OpenSpecTab({ ...base, useSession: useStateOf('open') } as never)
+    expect(nodes(opened).some((node) => node.type === RootBody)).toBe(true)
+  })
+
   it('registers one refresh command, re-reads once per refresh and on show, then disposes', async () => {
     const fetchMock = vi.fn(async () => response({ change: FULL }))
     vi.stubGlobal('fetch', fetchMock)

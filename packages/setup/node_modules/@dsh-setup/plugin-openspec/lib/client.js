@@ -767,6 +767,7 @@ window.__ModuleLoader__.load({
       "markdown.footnotes": "Footnotes"
     };
     var fallbackTranslate = (key) => EN[key] ?? key;
+    var alwaysOpenSession = (select) => select({ openState: "open" });
     var noResource = () => ({ status: "none" });
     function registerPanel(ctx) {
       const tabs = ctx.get("sidebarRightTabs");
@@ -825,7 +826,16 @@ window.__ModuleLoader__.load({
       const { tab } = props.useTabInfo();
       const target = openSpecTarget(tab.navigation.address);
       const t = props.t ?? fallbackTranslate;
+      const sessionOpen = (props.useSession ?? alwaysOpenSession)(
+        (snapshot) => snapshot.openState === "open"
+      );
       if (target === void 0) return null;
+      if (!sessionOpen) {
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("style", { children: PANEL_CSS }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-panel", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "dsh-openspec-scroll", children: loadingLine(t) }) })
+        ] });
+      }
       const draft = (text) => {
         props.handoff?.draft(props.sessionId, text);
       };

@@ -298,6 +298,17 @@ export interface TabFace {
   }
 }
 
+/** The session fact the panel waits on: a read before the session opens is refused. */
+export interface SessionSnapshotLike {
+  readonly openState: 'cold' | 'loading' | 'open' | 'error'
+}
+
+/** The framework's session selector hook; a host without it cannot be waited on. */
+export type UseSession = <T>(select: (snapshot: SessionSnapshotLike) => T) => T
+
+/** Fallback for a host without the selector: read immediately, as before. */
+const alwaysOpenSession: UseSession = (select) => select({ openState: 'open' })
+
 /** Framework props a session-scoped tab body receives. */
 export interface TabBodyProps {
   readonly useTabInfo: () => { readonly tab: TabFace }
@@ -306,6 +317,7 @@ export interface TabBodyProps {
   readonly handoff?: PanelHandoff
   readonly useResource?: UseResource
   readonly storage?: SegmentStorage
+  readonly useSession?: UseSession
 }
 
 /** One observation of a resource address, as the shipped hook reports it. */
@@ -450,7 +462,22 @@ export function OpenSpecTab(props: TabBodyProps): ReactNode {
   const { tab } = props.useTabInfo()
   const target = openSpecTarget(tab.navigation.address)
   const t = props.t ?? fallbackTranslate
+  // At startup the tab mounts before the session finishes opening, and a read
+  // then reaches a Host that does not know the session yet: wait for it.
+  const sessionOpen = (props.useSession ?? alwaysOpenSession)(
+    (snapshot) => snapshot.openState === 'open',
+  )
   if (target === undefined) return null
+  if (!sessionOpen) {
+    return (
+      <>
+        <style>{PANEL_CSS}</style>
+        <div className="dsh-openspec-panel">
+          <div className="dsh-openspec-scroll">{loadingLine(t)}</div>
+        </div>
+      </>
+    )
+  }
   const draft = (text: string): void => {
     props.handoff?.draft(props.sessionId, text)
   }
