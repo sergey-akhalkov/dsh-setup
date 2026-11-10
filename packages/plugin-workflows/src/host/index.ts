@@ -1678,19 +1678,21 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     for (const run of await listAuthenticatedRuns(workspace, auth)) {
       if (run.session !== sessionId) continue
       if (run.status !== 'running' && run.status !== 'blocked') continue
-      endedRunIds.add(run.id)
-      // Invalidate any advance that was in flight when the session ended.
-      bumpRunGeneration(run.id)
-      await writeRun(
-        workspace,
-        setRunStatus(
-          run,
-          'interrupted',
-          journal.time(),
-          'the session ended while this run was unfinished',
-        ),
-        auth,
-      )
+      await withRunLock(run.id, async () => {
+        endedRunIds.add(run.id)
+        // Invalidate any advance that was in flight when the session ended.
+        bumpRunGeneration(run.id)
+        await writeRun(
+          workspace,
+          setRunStatus(
+            run,
+            'interrupted',
+            journal.time(),
+            'the session ended while this run was unfinished',
+          ),
+          auth,
+        )
+      })
     }
     await refreshPromptRuns(workspace)
   }
@@ -2014,30 +2016,49 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       },
     }
   }
-  /** Persist an advance unless the run's session ended meanwhile. */
+  /** Serialize lifecycle commits per run so a stale advance cannot win a race. */
+  const runWriteLocks = new Map<string, Promise<void>>()
+  const withRunLock = async <T>(runId: string, action: () => Promise<T>): Promise<T> => {
+    const previous = runWriteLocks.get(runId) ?? Promise.resolve()
+    let release: () => void = () => undefined
+    const current = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const tail = previous.then(() => current)
+    runWriteLocks.set(runId, tail)
+    await previous.catch(() => undefined)
+    try {
+      return await action()
+    } finally {
+      release()
+      if (runWriteLocks.get(runId) === tail) runWriteLocks.delete(runId)
+    }
+  }
+  /** Persist an advance unless the run's session ended or a newer lifecycle began. */
   const persistRun = async (
     workspace: string,
     run: WorkflowRun,
     auth: HostAuth,
     generation?: number,
-  ): Promise<WorkflowRun> => {
-    if (generation !== undefined && generation !== runGeneration(run.id)) {
-      // A disposal or resume happened while this advance was in flight; the
-      // stored state is newer, so the stale advance must not be written.
-      return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
-    }
-    const ended = (): boolean => endedRunIds.has(run.id) || endedSessionIds.has(run.session)
-    const written = interruptEndedRun(run, ended(), journal.time()) ?? run
-    await writeRun(workspace, written, auth)
-    // A disposal can land between the check and the write; re-check after it so
-    // a stale advance never leaves the run running or blocked.
-    const late = ended() ? interruptEndedRun(written, true, journal.time()) : undefined
-    if (late !== undefined) {
-      await writeRun(workspace, late, auth)
-      return late
-    }
-    return written
-  }
+  ): Promise<WorkflowRun> =>
+    withRunLock(run.id, async () => {
+      if (generation !== undefined && generation !== runGeneration(run.id)) {
+        // A disposal or resume happened while this advance was in flight; the
+        // stored state is newer, so the stale advance must not be written.
+        return (await readAuthenticatedRun(workspace, run.id, auth)) ?? run
+      }
+      const ended = (): boolean => endedRunIds.has(run.id) || endedSessionIds.has(run.session)
+      const written = interruptEndedRun(run, ended(), journal.time()) ?? run
+      await writeRun(workspace, written, auth)
+      // A disposal can fence the session during the write; re-check after it so
+      // a stale advance never leaves the run running or blocked.
+      const late = ended() ? interruptEndedRun(written, true, journal.time()) : undefined
+      if (late !== undefined) {
+        await writeRun(workspace, late, auth)
+        return late
+      }
+      return written
+    })
   /** Advance one run through its verified evidence; a deferred step never steers. */
   const advanceRun = async (
     workspace: string,
@@ -2791,10 +2812,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         // Advance every run first: an owned tool step (the review start) must
         // dispatch for every newly checked task before one close is refused.
         const advanced = new Map<string, WorkflowRun>()
+        const advancedGenerations = new Map<string, number>()
         const definitionOf = new Map<string, Definition>()
         for (const run of ordered) {
           const definition = definitions.find((entry) => entry.id === run.definition.id)
           if (definition === undefined) continue
+          const generation = runGeneration(run.id)
           // A retro run must not complete on the record alone: while the host
           // checkpoint remedy/age rule fails, keep the run open and steer.
           if (
@@ -2812,6 +2835,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             )
             if (DEBUG_ISSUE !== undefined) {
               advanced.set(run.id, run)
+              advancedGenerations.set(run.id, generation)
               definitionOf.set(run.id, definition)
               continue
             }
@@ -2820,6 +2844,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           // still evaluates its change's completion coverage.
           if (run.definition.id === 'task-review' && run.status === 'failed') {
             advanced.set(run.id, run)
+            advancedGenerations.set(run.id, generation)
             definitionOf.set(run.id, definition)
             continue
           }
@@ -2834,6 +2859,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             payload.turn,
           )
           advanced.set(run.id, current)
+          advancedGenerations.set(run.id, generation)
           definitionOf.set(run.id, definition)
           // A superseded run no longer suppresses a restored identical event;
           // this pass always visits every run, unlike the gate loop that breaks
@@ -2926,7 +2952,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
             onError: (error) => publishListenerError(workspace, error),
           })
-          if (outcome.run !== current) await persistRun(workspace, outcome.run, auth)
+          if (outcome.run !== current) {
+            await persistRun(workspace, outcome.run, auth, advancedGenerations.get(run.id))
+          }
           // Keep the session's main-step owner until its step settles; a
           // second run may take over only after that.
           if (outcome.kind !== 'allow') {
@@ -3070,10 +3098,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           String(agent.session.id),
         )
         // An explicit resume is a new lifecycle generation for the run.
-        endedRunIds.delete(runId)
-        endedSessionIds.delete(String(agent.session.id))
-        bumpRunGeneration(runId)
-        await writeRun(workspace, resumed.run, auth)
+        await withRunLock(runId, async () => {
+          endedRunIds.delete(runId)
+          endedSessionIds.delete(String(agent.session.id))
+          bumpRunGeneration(runId)
+          await writeRun(workspace, resumed.run, auth)
+        })
         void refreshPromptRuns(workspace)
         return { run: resumed.run, stepId: resumed.stepId }
       },
@@ -3264,10 +3294,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   await recoverIfNeeded(workspace)
                   const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
                   // An explicit resume is a new lifecycle generation for the run.
-                  endedRunIds.delete(runId)
-                  endedSessionIds.delete(sessionId)
-                  bumpRunGeneration(runId)
-                  await writeRun(workspace, resumed.run, auth)
+                  await withRunLock(runId, async () => {
+                    endedRunIds.delete(runId)
+                    endedSessionIds.delete(sessionId)
+                    bumpRunGeneration(runId)
+                    await writeRun(workspace, resumed.run, auth)
+                  })
                   void refreshPromptRuns(workspace)
                   await steerPending(invocation.agent, runId)
                   return { stepId: resumed.stepId }

@@ -1384,10 +1384,12 @@ export function apply(ctx, config = {}) {
                 continue;
             if (run.status !== 'running' && run.status !== 'blocked')
                 continue;
-            endedRunIds.add(run.id);
-            // Invalidate any advance that was in flight when the session ended.
-            bumpRunGeneration(run.id);
-            await writeRun(workspace, setRunStatus(run, 'interrupted', journal.time(), 'the session ended while this run was unfinished'), auth);
+            await withRunLock(run.id, async () => {
+                endedRunIds.add(run.id);
+                // Invalidate any advance that was in flight when the session ended.
+                bumpRunGeneration(run.id);
+                await writeRun(workspace, setRunStatus(run, 'interrupted', journal.time(), 'the session ended while this run was unfinished'), auth);
+            });
         }
         await refreshPromptRuns(workspace);
     };
@@ -1685,8 +1687,28 @@ export function apply(ctx, config = {}) {
             },
         };
     };
-    /** Persist an advance unless the run's session ended meanwhile. */
-    const persistRun = async (workspace, run, auth, generation) => {
+    /** Serialize lifecycle commits per run so a stale advance cannot win a race. */
+    const runWriteLocks = new Map();
+    const withRunLock = async (runId, action) => {
+        const previous = runWriteLocks.get(runId) ?? Promise.resolve();
+        let release = () => undefined;
+        const current = new Promise((resolve) => {
+            release = resolve;
+        });
+        const tail = previous.then(() => current);
+        runWriteLocks.set(runId, tail);
+        await previous.catch(() => undefined);
+        try {
+            return await action();
+        }
+        finally {
+            release();
+            if (runWriteLocks.get(runId) === tail)
+                runWriteLocks.delete(runId);
+        }
+    };
+    /** Persist an advance unless the run's session ended or a newer lifecycle began. */
+    const persistRun = async (workspace, run, auth, generation) => withRunLock(run.id, async () => {
         if (generation !== undefined && generation !== runGeneration(run.id)) {
             // A disposal or resume happened while this advance was in flight; the
             // stored state is newer, so the stale advance must not be written.
@@ -1695,7 +1717,7 @@ export function apply(ctx, config = {}) {
         const ended = () => endedRunIds.has(run.id) || endedSessionIds.has(run.session);
         const written = interruptEndedRun(run, ended(), journal.time()) ?? run;
         await writeRun(workspace, written, auth);
-        // A disposal can land between the check and the write; re-check after it so
+        // A disposal can fence the session during the write; re-check after it so
         // a stale advance never leaves the run running or blocked.
         const late = ended() ? interruptEndedRun(written, true, journal.time()) : undefined;
         if (late !== undefined) {
@@ -1703,7 +1725,7 @@ export function apply(ctx, config = {}) {
             return late;
         }
         return written;
-    };
+    });
     /** Advance one run through its verified evidence; a deferred step never steers. */
     const advanceRun = async (workspace, run, definition, agent, auth, installedLegacy, enabledLegacy, turn) => {
         const generation = runGeneration(run.id);
@@ -2358,11 +2380,13 @@ export function apply(ctx, config = {}) {
             // Advance every run first: an owned tool step (the review start) must
             // dispatch for every newly checked task before one close is refused.
             const advanced = new Map();
+            const advancedGenerations = new Map();
             const definitionOf = new Map();
             for (const run of ordered) {
                 const definition = definitions.find((entry) => entry.id === run.definition.id);
                 if (definition === undefined)
                     continue;
+                const generation = runGeneration(run.id);
                 // A retro run must not complete on the record alone: while the host
                 // checkpoint remedy/age rule fails, keep the run open and steer.
                 if (workflowOwnsCheckpoint &&
@@ -2372,6 +2396,7 @@ export function apply(ctx, config = {}) {
                     const DEBUG_ISSUE = checkpointGateIssue(workspace, run.context.checkpoint, checkpointObservations(sessionId), checkpointApplicability.bottleneckAge, checkpointOptions(payload.turn));
                     if (DEBUG_ISSUE !== undefined) {
                         advanced.set(run.id, run);
+                        advancedGenerations.set(run.id, generation);
                         definitionOf.set(run.id, definition);
                         continue;
                     }
@@ -2380,11 +2405,13 @@ export function apply(ctx, config = {}) {
                 // still evaluates its change's completion coverage.
                 if (run.definition.id === 'task-review' && run.status === 'failed') {
                     advanced.set(run.id, run);
+                    advancedGenerations.set(run.id, generation);
                     definitionOf.set(run.id, definition);
                     continue;
                 }
                 const current = await advanceRun(workspace, run, definition, payload.agent, auth, legacy.installed, legacy.enabled, payload.turn);
                 advanced.set(run.id, current);
+                advancedGenerations.set(run.id, generation);
                 definitionOf.set(run.id, definition);
                 // A superseded run no longer suppresses a restored identical event;
                 // this pass always visits every run, unlike the gate loop that breaks
@@ -2467,8 +2494,9 @@ export function apply(ctx, config = {}) {
                     ...(checkpointIssue === undefined ? {} : { checkpointIssue }),
                     onError: (error) => publishListenerError(workspace, error),
                 });
-                if (outcome.run !== current)
-                    await persistRun(workspace, outcome.run, auth);
+                if (outcome.run !== current) {
+                    await persistRun(workspace, outcome.run, auth, advancedGenerations.get(run.id));
+                }
                 // Keep the session's main-step owner until its step settles; a
                 // second run may take over only after that.
                 if (outcome.kind !== 'allow') {
@@ -2577,10 +2605,12 @@ export function apply(ctx, config = {}) {
                 await recoverIfNeeded(workspace);
                 const resumed = await resumeRun(workspace, runId, auth, Date.now(), String(agent.session.id));
                 // An explicit resume is a new lifecycle generation for the run.
-                endedRunIds.delete(runId);
-                endedSessionIds.delete(String(agent.session.id));
-                bumpRunGeneration(runId);
-                await writeRun(workspace, resumed.run, auth);
+                await withRunLock(runId, async () => {
+                    endedRunIds.delete(runId);
+                    endedSessionIds.delete(String(agent.session.id));
+                    bumpRunGeneration(runId);
+                    await writeRun(workspace, resumed.run, auth);
+                });
                 void refreshPromptRuns(workspace);
                 return { run: resumed.run, stepId: resumed.stepId };
             },
@@ -2751,10 +2781,12 @@ export function apply(ctx, config = {}) {
                             await recoverIfNeeded(workspace);
                             const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId);
                             // An explicit resume is a new lifecycle generation for the run.
-                            endedRunIds.delete(runId);
-                            endedSessionIds.delete(sessionId);
-                            bumpRunGeneration(runId);
-                            await writeRun(workspace, resumed.run, auth);
+                            await withRunLock(runId, async () => {
+                                endedRunIds.delete(runId);
+                                endedSessionIds.delete(sessionId);
+                                bumpRunGeneration(runId);
+                                await writeRun(workspace, resumed.run, auth);
+                            });
                             void refreshPromptRuns(workspace);
                             await steerPending(invocation.agent, runId);
                             return { stepId: resumed.stepId };

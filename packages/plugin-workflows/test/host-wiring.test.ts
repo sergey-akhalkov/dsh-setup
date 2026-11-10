@@ -1785,6 +1785,68 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(settled?.status).toBe('running')
     expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
   })
+
+  it('keeps a resumed earlier run when a later dispatch is pending', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const changeDir = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(changeDir, { recursive: true })
+    await writeFile(join(changeDir, 'tasks.md'), '- [x] 1.1 A\n- [x] 1.2 B\n', 'utf8')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const runs = await import('../src/host/runs.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    let release: () => void = () => undefined
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const host = fakeHost(workspace, { toolExecute: true, delegateBarrier: barrier })
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const makeRun = (
+      taskId: string,
+      now: number,
+      started: boolean,
+    ): ReturnType<typeof runs.createRun> => {
+      let entry = runs.createRun({
+        definition: 'task-review',
+        trigger: 'fs.change',
+        session: 'session-1',
+        workspace,
+        context: { name: 'auth', taskId },
+        steps: ['start-review', 'await-review', 'complete-review'],
+        now,
+      })
+      if (started) entry = runs.settleStep(entry, 'start-review', 'done', { at: now + 1 })
+      return entry
+    }
+    const runA = makeRun(taskIdOf('A'), 1_000, true)
+    const runB = makeRun(taskIdOf('B'), 1_100, false)
+    await runs.writeRun(workspace, runA, auth)
+    await runs.writeRun(workspace, runB, auth)
+    const closing = host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => host.toolExecutions.some((entry) => entry.name === 'delegate'))
+    await host.emit('agent/disposed', { agent: host.agent })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, runA.id, auth))?.status === 'interrupted',
+    )
+    await host.emit('agent/created', { agent: host.agent })
+    const tool = host.toolDefinitions.find((entry) => entry.name === 'workflows') as
+      | {
+          execute: (args: unknown, exec: { agent: unknown }) => Promise<{ text: string }>
+        }
+      | undefined
+    expect(tool).toBeDefined()
+    await tool?.execute({ action: 'resume', runId: runA.id }, { agent: host.agent })
+    release()
+    await closing
+    const settledA = await runs.readAuthenticatedRun(workspace, runA.id, auth)
+    expect(settledA?.status).toBe('running')
+    expect(settledA?.steps.find((step) => step.id === 'await-review')?.state).toBe('open')
+    // The gate's cached write for the earlier run must not land after the resume.
+    expect(settledA?.turnBlocks).toBeUndefined()
+  })
 })
 
 describe('pre-execute trigger gates', () => {
