@@ -51,6 +51,15 @@ export interface IntakeAdvanceInput {
   readonly enabledLegacy?: ReadonlySet<string>
   /** When present, a completed intake writes its host-authenticated receipt. */
   readonly auth?: HostAuth
+  /**
+   * The host's lifecycle-guarded completion commit. The engine uses it instead
+   * of writing the completed run itself, so a disposal that races the
+   * completion cannot be overwritten by a stale write or a receipt.
+   */
+  readonly completeRun?: (
+    run: WorkflowRun,
+    digest: string,
+  ) => Promise<{ readonly run: WorkflowRun; readonly receiptError?: string }>
   readonly now?: number
   readonly signal?: AbortSignal
 }
@@ -119,6 +128,10 @@ export async function advanceIntake(input: IntakeAdvanceInput): Promise<IntakeAd
         const name = run.context.name
         const digest = run.steps.find((entry) => entry.id === 'spec-review')?.evidence?.digest
         if (typeof name === 'string' && CHANGE_NAME.test(name) && typeof digest === 'string') {
+          if (input.completeRun !== undefined) {
+            const settled = await input.completeRun(completedRun, digest)
+            return { ...settled, completed: settled.run.status === 'completed' }
+          }
           try {
             if (completedRun !== run) {
               await writeRun(input.evidenceContext.workspace, completedRun, input.auth)

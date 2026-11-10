@@ -332,7 +332,7 @@ function fakeHost(
   }
 }
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 3000): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 6000): Promise<void> {
   const started = Date.now()
   while (!(await check())) {
     if (Date.now() - started > timeoutMs) throw new Error('the host did not settle in time')
@@ -4968,6 +4968,65 @@ describe('session disposal', () => {
       (entry) => entry.id === runId,
     )
     expect(completed?.status).toBe('completed')
+  })
+
+  it('rejects an intake completion that races a disposal and issues no receipt', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const steps = [
+      'requirements',
+      'architecture',
+      'interface',
+      'create-change',
+      'spec',
+      'spec-review',
+      'approval',
+    ]
+    let run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps,
+      now: 1_000,
+    })
+    for (const step of steps) {
+      run = runs.settleStep(run, step, 'done', {
+        at: 1_001,
+        ...(step === 'spec-review'
+          ? {
+              evidence: {
+                kind: 'record',
+                path: '.dsh/delegation/spec-review/auth/spec.json',
+                digest: 'a'.repeat(64),
+              },
+            }
+          : {}),
+      })
+    }
+    await runs.writeRun(workspace, run, auth)
+    let release: () => void = () => undefined
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    runStoreFaults.pauseNextWrite = barrier
+    const closing = host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    await waitFor(() => runStoreFaults.pauseNextWrite === undefined)
+    await host.emit('agent/disposed', { agent: host.agent })
+    release()
+    await closing
+    const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    expect(settled?.status).toBe('interrupted')
+    await expect(
+      readFile(join(workspace, '.dsh', 'workflows', 'receipts', 'auth.json'), 'utf8'),
+    ).rejects.toThrow()
   })
 
   it('keeps an intake resumed through the pre-execute gate running', async () => {

@@ -20,7 +20,7 @@ import { advanceIntake } from './intake.js';
 import { Journal, MAX_RECORD_BYTES, toolResultText, workflowsDirectory, } from './journal.js';
 import { checkpointGateIssue, parityLoadIssues, readParityReport, resolveVerifySettings, shippedParityReportPath, taskReviewCompletion, taskReviewCoverage, withVerifySettings, } from './parity.js';
 import { registerActiveRunsContext } from './prompt.js';
-import { listReceipts } from './receipts.js';
+import { issueCompletionReceipt, listReceipts } from './receipts.js';
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js';
 import { addViolation, completeNotApplicable, createRun, DEFAULT_MAX_RUNS, hasTamperedRuns, incrementTurnBlocks, interruptEndedRun, isOpenRun, listAuthenticatedRuns, openRunCount, pruneRuns, readAuthenticatedRun, runFailure, setRunStatus, storedRuns, writeRun, writeRunSync, } from './runs.js';
 import { checkedTaskIds } from './tasks.js';
@@ -1847,6 +1847,24 @@ export function apply(ctx, config = {}) {
             installedLegacy,
             enabledLegacy,
             auth,
+            // The completion commit and its receipt go through the same lifecycle
+            // guard as every other advance: a run interrupted by a disposal before
+            // this write must not be revived as completed or receipted.
+            completeRun: async (completedRun, digest) => {
+                const persisted = await persistRun(workspace, completedRun, auth, generation);
+                if (persisted.status !== 'completed')
+                    return { run: persisted };
+                try {
+                    await issueCompletionReceipt(workspace, persisted.id, digest, auth, journal.time());
+                    return { run: persisted };
+                }
+                catch (error) {
+                    return {
+                        run: persisted,
+                        receiptError: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+                    };
+                }
+            },
             now: journal.time(),
         });
         if (result.run !== run)

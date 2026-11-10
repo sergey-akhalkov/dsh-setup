@@ -25,6 +25,15 @@ export interface IntakeAdvanceInput {
     readonly enabledLegacy?: ReadonlySet<string>;
     /** When present, a completed intake writes its host-authenticated receipt. */
     readonly auth?: HostAuth;
+    /**
+     * The host's lifecycle-guarded completion commit. The engine uses it instead
+     * of writing the completed run itself, so a disposal that races the
+     * completion cannot be overwritten by a stale write or a receipt.
+     */
+    readonly completeRun?: (run: WorkflowRun, digest: string) => Promise<{
+        readonly run: WorkflowRun;
+        readonly receiptError?: string;
+    }>;
     readonly now?: number;
     readonly signal?: AbortSignal;
 }

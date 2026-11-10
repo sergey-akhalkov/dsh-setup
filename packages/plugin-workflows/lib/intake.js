@@ -48,6 +48,10 @@ export async function advanceIntake(input) {
                 const name = run.context.name;
                 const digest = run.steps.find((entry) => entry.id === 'spec-review')?.evidence?.digest;
                 if (typeof name === 'string' && CHANGE_NAME.test(name) && typeof digest === 'string') {
+                    if (input.completeRun !== undefined) {
+                        const settled = await input.completeRun(completedRun, digest);
+                        return { ...settled, completed: settled.run.status === 'completed' };
+                    }
                     try {
                         if (completedRun !== run) {
                             await writeRun(input.evidenceContext.workspace, completedRun, input.auth);

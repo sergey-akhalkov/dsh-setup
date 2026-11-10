@@ -76,7 +76,7 @@ import {
   withVerifySettings,
 } from './parity.js'
 import { registerActiveRunsContext } from './prompt.js'
-import { listReceipts } from './receipts.js'
+import { issueCompletionReceipt, listReceipts } from './receipts.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
   addViolation,
@@ -2209,6 +2209,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       installedLegacy,
       enabledLegacy,
       auth,
+      // The completion commit and its receipt go through the same lifecycle
+      // guard as every other advance: a run interrupted by a disposal before
+      // this write must not be revived as completed or receipted.
+      completeRun: async (completedRun, digest) => {
+        const persisted = await persistRun(workspace, completedRun, auth, generation)
+        if (persisted.status !== 'completed') return { run: persisted }
+        try {
+          await issueCompletionReceipt(workspace, persisted.id, digest, auth, journal.time())
+          return { run: persisted }
+        } catch (error) {
+          return {
+            run: persisted,
+            receiptError:
+              error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+          }
+        }
+      },
       now: journal.time(),
     })
     if (result.run !== run) return await persistRun(workspace, result.run, auth, generation)
