@@ -219,8 +219,8 @@ export async function readRunStats(session: string): Promise<RunStatsView | unde
 export async function readLatestRuns(
   session: string,
   definitionIds: readonly string[],
-): Promise<{ latest: Readonly<Record<string, RunView>>; failed: boolean }> {
-  let failed = false
+): Promise<{ latest: Readonly<Record<string, RunView>>; failed: readonly string[] }> {
+  const failed: string[] = []
   const entries = await Promise.all(
     definitionIds.map(async (id) => {
       try {
@@ -230,7 +230,7 @@ export async function readLatestRuns(
         const run = body.runs?.find((entry) => entry.definition?.id === id)
         return run === undefined ? undefined : ([id, run] as const)
       } catch {
-        failed = true
+        failed.push(id)
         return undefined
       }
     }),
@@ -641,10 +641,13 @@ export function WorkflowsView(props: {
         )
         if (isStaleGeneration(generation, loadId.current)) return
         const previousLatest = stateRef.current.loaded?.latestRuns
-        const latestRuns =
-          mode === 'background' && previousLatest !== undefined
-            ? { ...previousLatest, ...latestResult.latest }
-            : latestResult.latest
+        const retained: Record<string, RunView> = {}
+        if (mode === 'background' && previousLatest !== undefined) {
+          for (const id of latestResult.failed) {
+            if (Object.hasOwn(previousLatest, id)) retained[id] = previousLatest[id]
+          }
+        }
+        const latestRuns = { ...retained, ...latestResult.latest }
         runsPages.current = runPages
         setState({
           phase: 'ready',
@@ -656,14 +659,20 @@ export function WorkflowsView(props: {
             latestRuns,
             ...(stats === undefined ? {} : { stats }),
           },
-          ...(latestResult.failed ? { refreshError: t('overview.latestUnavailable') } : {}),
+          ...(latestResult.failed.length === 0
+            ? {}
+            : { refreshError: t('overview.latestUnavailable') }),
         })
         const open = selectedRef.current
         if (open !== undefined) {
-          if (runs.items.some((run) => run.id === open)) {
+          const feed = runs.items.find((run) => run.id === open)
+          const workflowCopy = workflowRef.current.runs?.items.find((run) => run.id === open)
+          const preferred =
+            runOrigin.current === 'workflow' ? (workflowCopy ?? feed) : (feed ?? workflowCopy)
+          if (preferred !== undefined) {
             lookupId.current += 1
-            knownRun.current = runs.items.find((run) => run.id === open)
-            setDetail(undefined)
+            knownRun.current = preferred
+            setDetail(preferred)
             setMissing(false)
             setDetailError(undefined)
           } else {
@@ -693,6 +702,13 @@ export function WorkflowsView(props: {
         if (openDefinition !== undefined && workflowRef.current.phase !== 'ready') {
           const token = ++workflowToken.current
           loadWorkflowPage(generation, token, openDefinition, 'initial')
+        }
+        // The refresh invalidated the selected-run lookup; restart it so a
+        // failed refresh cannot strand the open run page on loading.
+        const openRun = selectedRef.current
+        if (openRun !== undefined) {
+          const token = ++lookupId.current
+          resolveSelected(generation, token, sessionId, openRun)
         }
       },
     )

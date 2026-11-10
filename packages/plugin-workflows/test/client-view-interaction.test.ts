@@ -1198,6 +1198,10 @@ describe('Workflows overview isolation and latest runs', () => {
     tree = runtime.commit(render)
     expect(renderText(tree)).toContain('runs.status.done')
     expect(renderText(tree)).not.toContain('runs.status.running')
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    expect(renderText(tree)).toContain('runs.status.done')
+    expect(renderText(tree)).not.toContain('runs.status.running')
     expect(tracker.violations).toEqual([])
   })
 
@@ -1208,12 +1212,15 @@ describe('Workflows overview isolation and latest runs', () => {
     }
     const newest = run('workflow:run-new', NOW)
     let failLatest = false
+    let emptyLatest = false
     const tracker = installFetch((url) => {
       const overview = overviewResponse(url)
       if (overview !== undefined) return overview
       if (url.includes('/api/workflows/health')) return json(HEALTH)
       if (url.includes('definition=change-intake')) {
-        return failLatest ? json({ error: 'latest failed' }, 500) : json({ runs: [newest] })
+        return failLatest
+          ? json({ error: 'latest failed' }, 500)
+          : json({ runs: emptyLatest ? [] : [newest] })
       }
       if (url.includes('/api/workflows/runs')) {
         return json({ runs: [run('workflow:run-a', NOW - 120_000)] })
@@ -1238,6 +1245,68 @@ describe('Workflows overview isolation and latest runs', () => {
       ),
     ).toBe(true)
     expect(renderText(tree)).toContain('overview.latestUnavailable')
+    failLatest = false
+    emptyLatest = true
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    expect(
+      renderElements(tree).some(
+        (element) => element.props['data-latest-run'] === 'workflow:run-new',
+      ),
+    ).toBe(false)
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('restarts a pending run lookup after a failed refresh', async () => {
+    const runtime = createRuntime()
+    const module = runtime.load() as {
+      WorkflowsView?: (props: Record<string, unknown>) => unknown
+    }
+    let failOverview = false
+    const pendingLookups: Array<(value: Response) => void> = []
+    const tracker = installFetch((url) => {
+      if (decodeURIComponent(url).includes('run=workflow:run-w')) {
+        return new Promise<Response>((resolve) => pendingLookups.push(resolve))
+      }
+      if (url.includes('/api/workflows/definitions') && url.includes('id=')) {
+        return json({ definition: DEFINITION, revision: null, source: 'shipped' })
+      }
+      if (url.includes('/api/workflows/events')) return json(HISTORY)
+      if (url.includes('definition=change-intake')) {
+        return json({ runs: [run('workflow:run-w-old', NOW - 5_000)] })
+      }
+      if (
+        failOverview &&
+        (url.includes('/api/workflows/definitions') ||
+          url.includes('/api/workflows/triggers') ||
+          url.includes('/api/workflows/health') ||
+          url.includes('stats=1') ||
+          url.includes('/api/workflows/runs'))
+      ) {
+        return json({ error: 'the overview refresh failed' }, 500)
+      }
+      const overview = overviewResponse(url)
+      if (overview !== undefined) return overview
+      if (url.includes('/api/workflows/health')) return json(HEALTH)
+      if (url.includes('/api/workflows/runs')) return json({ runs: RUNS })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const view = module.WorkflowsView
+    if (view === undefined) throw new Error('WorkflowsView is not exported')
+    const render = (): unknown => view({ sessionId: 'session-1', t: (key: string) => key })
+    let tree = await runtime.settle(render)
+    ;(workflowButton(tree, 'change-intake')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    // The history link resolves to a run outside the workflow's run page.
+    ;(runButton(tree, 'workflow:run-w')?.props.onClick as (() => void) | undefined)?.()
+    tree = runtime.commit(render)
+    failOverview = true
+    ;(button(tree, 'state.refresh')?.props.onClick as (() => void) | undefined)?.()
+    tree = await runtime.settle(render)
+    for (const resolve of pendingLookups) resolve(json({ runs: [run('workflow:run-w', NOW)] }))
+    tree = await runtime.settle(render)
+    expect(renderText(tree)).toContain('OpenSpec change intake · workflow:run-w')
+    expect(renderText(tree)).not.toContain('state.loading')
     expect(tracker.violations).toEqual([])
   })
 
