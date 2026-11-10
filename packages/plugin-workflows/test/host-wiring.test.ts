@@ -4937,6 +4937,56 @@ describe('session disposal', () => {
     )
     expect(completed?.status).toBe('completed')
   })
+
+  it('keeps an intake resumed through the pre-execute gate running', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const runs = await import('../src/host/runs.ts')
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const run = runs.createRun({
+      definition: 'change-intake',
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: [
+        'requirements',
+        'architecture',
+        'interface',
+        'create-change',
+        'spec',
+        'spec-review',
+        'approval',
+      ],
+      now: 1_000,
+    })
+    await runs.writeRun(workspace, run, auth)
+    await host.emit('agent/disposed', { agent: host.agent })
+    await waitFor(
+      async () =>
+        (await runs.readAuthenticatedRun(workspace, run.id, auth))?.status === 'interrupted',
+    )
+    await host.emit('agent/created', { agent: host.agent })
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'call-intake',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const resumed = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    expect(resumed?.status).toBe('running')
+    await host.emit('agent/turn-stopping', { agent: host.agent, turn: 1 })
+    const advanced = await runs.readAuthenticatedRun(workspace, run.id, auth)
+    expect(advanced?.status).toBe('running')
+  })
 })
 
 describe('workflows tool live wiring', () => {

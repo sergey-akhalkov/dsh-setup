@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "fix-workflow-run-lifecycle",
+  "scope": "task",
+  "taskId": "72db00291f719468",
+  "digest": "8ec837ca2ebba45c048b35cf98097288e5c7d0bf14e2cbcd2f24061a94638b48",
+  "worktreeDigest": "5dee956fa421b213669205263634679e23adefd50fc91379f9581962cd9b73b1",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-10T14:11:00.143Z"
+}

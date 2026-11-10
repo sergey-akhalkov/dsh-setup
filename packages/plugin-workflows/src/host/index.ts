@@ -961,9 +961,40 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const endedSessionIds = new Set<string>()
   /** Per-run lifecycle generations; a disposal or resume invalidates in-flight advances. */
   const runGenerations = new Map<string, number>()
+  /** Global lifecycle epoch, bumped by every generation bump. */
+  let lifecycleEpoch = 0
   const runGeneration = (runId: string): number => runGenerations.get(runId) ?? 0
   const bumpRunGeneration = (runId: string): void => {
+    lifecycleEpoch += 1
     runGenerations.set(runId, runGeneration(runId) + 1)
+  }
+  /**
+   * Read the runs together with the generation snapshot, retrying when a
+   * resume/disposal lands during the asynchronous read so a snapshot read
+   * before the bump cannot be paired with the post-bump generation.
+   */
+  const stableRuns = async (
+    workspace: string,
+    auth: HostAuth,
+  ): Promise<{
+    readonly runs: WorkflowRun[]
+    readonly generations: Map<string, number>
+  }> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const epoch = lifecycleEpoch
+      const runs = await listAuthenticatedRuns(workspace, auth)
+      if (lifecycleEpoch === epoch) {
+        return {
+          runs,
+          generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
+        }
+      }
+    }
+    const runs = await listAuthenticatedRuns(workspace, auth)
+    return {
+      runs,
+      generations: new Map(runs.map((run) => [run.id, runGeneration(run.id)] as const)),
+    }
   }
   /** The last turn whose user message was classified, one classification per turn. */
   const intentTurns = new Map<string, number>()
@@ -1675,11 +1706,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   ): Promise<void> => {
     const auth = storedAuth ?? (await ensureAuth())
     if (auth === undefined) return
-    const observed = await listAuthenticatedRuns(workspace, auth)
-    // An epoch captured at the event: a run resumed while this loop waits must
-    // not be interrupted from the stale batch.
-    const epochs = new Map(observed.map((run) => [run.id, runGeneration(run.id)]))
-    for (const run of observed) {
+    const observed = await stableRuns(workspace, auth)
+    const epochs = observed.generations
+    for (const run of observed.runs) {
       if (run.session !== sessionId) continue
       if (run.status !== 'running' && run.status !== 'blocked') continue
       await withRunLock(run.id, async () => {
@@ -2423,7 +2452,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     },
                     resumeRun: async (runId) => {
                       const resumed = await resumeRun(workspace, runId, auth, Date.now(), sessionId)
-                      await writeRun(workspace, resumed.run, auth)
+                      // The intake-gate resume is a lifecycle change too: clear
+                      // the ended fence and bump the generation under the lock.
+                      await withRunLock(runId, async () => {
+                        endedRunIds.delete(runId)
+                        endedSessionIds.delete(sessionId)
+                        bumpRunGeneration(runId)
+                        await writeRun(workspace, resumed.run, auth)
+                      })
                       return { stepId: resumed.stepId }
                     },
                   })
@@ -2702,12 +2738,10 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const auth = storedAuth
         if (auth === undefined) return
         const definitions = await definitionsFor(workspace)
-        const runs = await listAuthenticatedRuns(workspace, auth)
-        // Bind the expected generation to this read; a run resumed while the
-        // close awaits another dispatch must not be advanced from this snapshot.
-        const runGenerationsAtRead = new Map(
-          runs.map((run) => [run.id, runGeneration(run.id)] as const),
-        )
+        // Bind the expected generation to a stable read; a run resumed during
+        // the read or while the close awaits another dispatch must not be
+        // advanced from the stale snapshot.
+        const { runs, generations: runGenerationsAtRead } = await stableRuns(workspace, auth)
         const sessionId = String(payload.agent.session.id)
         // A later code write invalidates a completed verification for the same
         // turn; reopen the run so a fresh check is required before the close.
