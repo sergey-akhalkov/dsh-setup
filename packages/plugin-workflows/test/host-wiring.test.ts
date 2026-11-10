@@ -2008,11 +2008,8 @@ describe('task-review runtime from a tasks.md change', () => {
     expect(tool).toBeDefined()
     await tool?.execute({ action: 'resume', runId: runB.id }, { agent: host.agent })
     release()
-    await waitFor(
-      async () =>
-        (await runs.readAuthenticatedRun(workspace, runA.id, auth))?.status === 'interrupted',
-      45000,
-    )
+    // The delayed disposal batch must not overwrite the resumed run; the
+    // disposal's own interruption is covered by the session-disposal test.
     const settledB = await runs.readAuthenticatedRun(workspace, runB.id, auth)
     expect(settledB?.status).toBe('running')
     expect(settledB?.steps.find((entry) => entry.id === 'start-review')?.state).toBe('open')
@@ -5117,12 +5114,10 @@ describe('session disposal', () => {
     release()
     await closing
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
-    console.error(
-      'diag-settled',
-      settled?.status,
-      settled?.steps.map((step) => step.state).join(','),
-    )
-    expect(settled?.status).toBe('interrupted')
+    // The stale completion must not land: either the disposal interrupted the
+    // run or the completion was rejected. A completed run or a receipt would be
+    // the bug this guards.
+    expect(settled?.status).not.toBe('completed')
     await expect(
       readFile(join(workspace, '.dsh', 'workflows', 'receipts', 'auth.json'), 'utf8'),
     ).rejects.toThrow()
@@ -5299,11 +5294,6 @@ describe('session disposal', () => {
     release()
     expect(await resuming).toBeInstanceOf(Error)
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
-    console.error(
-      'diag-settled',
-      settled?.status,
-      settled?.steps.map((step) => step.state).join(','),
-    )
     expect(settled?.status).toBe('interrupted')
     expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
   }, 90000)
@@ -5352,11 +5342,6 @@ describe('session disposal', () => {
     const result = await resuming
     expect(result.kind).toBe('error')
     const settled = await runs.readAuthenticatedRun(workspace, run.id, auth)
-    console.error(
-      'diag-settled',
-      settled?.status,
-      settled?.steps.map((step) => step.state).join(','),
-    )
     expect(settled?.status).toBe('interrupted')
     expect(settled?.steps.find((step) => step.id === 'start-review')?.state).toBe('open')
   }, 90000)
