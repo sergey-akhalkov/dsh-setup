@@ -91,7 +91,7 @@ export interface GitLogEntry {
 export type GitRunner = (args: readonly string[], cwd: string) => Promise<string>
 
 /** Time one `openspec list` call may take before its process tree is killed. */
-export const LIST_TIMEOUT_MS = 10_000
+export const LIST_TIMEOUT_MS = 60_000
 
 /** Time one `git log` call may take before it is killed. */
 export const GIT_TIMEOUT_MS = 5_000

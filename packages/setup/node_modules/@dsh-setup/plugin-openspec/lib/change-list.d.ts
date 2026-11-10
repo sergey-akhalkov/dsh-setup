@@ -74,7 +74,7 @@ export interface GitLogEntry {
 /** The injected `git` executor; tests replace it and it never sees a shell. */
 export type GitRunner = (args: readonly string[], cwd: string) => Promise<string>;
 /** Time one `openspec list` call may take before its process tree is killed. */
-export declare const LIST_TIMEOUT_MS = 10000;
+export declare const LIST_TIMEOUT_MS = 60000;
 /** Time one `git log` call may take before it is killed. */
 export declare const GIT_TIMEOUT_MS = 5000;
 /** Largest `git log` output a read accepts. */

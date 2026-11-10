@@ -3,7 +3,7 @@ import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
 /** Time one `openspec list` call may take before its process tree is killed. */
-export const LIST_TIMEOUT_MS = 10_000;
+export const LIST_TIMEOUT_MS = 60_000;
 /** Time one `git log` call may take before it is killed. */
 export const GIT_TIMEOUT_MS = 5_000;
 /** Largest `git log` output a read accepts. */

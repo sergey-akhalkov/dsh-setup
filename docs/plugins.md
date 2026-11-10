@@ -569,7 +569,7 @@ changes are omitted, so a root whose changes are all closed shows the shell's em
 come from `GET /api/plugins/dsh-setup-openspec/changes?session=<id>`: a read-only, session-scoped Host
 fetch route registered on the carrier-neutral `connection.fetch` registry, so the Web `/api` bridge
 and the desktop shell carrier both serve it. It runs the documented `openspec list --json` CLI in the
-session's workspace under a 10-second process-tree timeout. A workspace without its own `openspec/`
+session's workspace under a 60-second process-tree timeout. A workspace without its own `openspec/`
 root, or one whose CLI resolution returns an ancestor root or a store, reports the no-root error
 instead of another root's changes; an absent CLI, a timeout, and unreadable output report their own
 readable errors. The shell owns the search field, keyboard handling, empty state, error strip, and
