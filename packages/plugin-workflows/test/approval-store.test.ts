@@ -588,6 +588,27 @@ describe('gate-preserving intake override', () => {
       retiredLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
     ).toBe('OpenSpec change intake')
 
+    for (const applicability of ['code-write', 'checkpoint-required'] as const) {
+      const gated = contributedIntake()
+      gated.name = `Applicability ${applicability}`
+      ;(gated.trigger as { applicability?: string }).applicability = applicability
+      const applicabilityDraft = await writeDefinitionFile(
+        workspace,
+        workspaceDraftsDirectory(workspace),
+        `applicability-${applicability}.json`,
+        gated,
+      )
+      await installDefinition(workspace, applicabilityDraft, auth())
+      const applicabilityLoad = await loadApprovedDefinitions(workspace, {
+        auth: auth(),
+        shipped: [...loadShippedDefinitions(), intake],
+      })
+      expect(applicabilityLoad.errors.join('\n')).toMatch(/drops or weakens.*"intake" gate/u)
+      expect(
+        applicabilityLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
+      ).toBe('OpenSpec change intake')
+    }
+
     // The installed gate still refuses the create command with no completed run.
     const decision = await evaluateIntakeGate({
       name: 'auth',

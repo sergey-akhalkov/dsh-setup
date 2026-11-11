@@ -9,6 +9,8 @@ export declare const name = "@dsh-setup/plugin-workflows";
  * registering half a surface; the Client half independently checks its own.
  */
 export declare const inject: string[];
+/** Whether a finished workspace load may publish into the definition cache. */
+export declare function mayPublishDefinitionLoad(loadId: number, revision: number, currentLoadId: number | undefined, publishedRevision: number | undefined): boolean;
 /** Normalize one observed plugin event into definition trigger events. */
 export declare function definitionEventsOf(input: JournalInput, event: ObservedEvent, workspace: string): DefinitionEvent[];
 /** The row-level retro applicability settings; they mirror the goal-continuity row. */

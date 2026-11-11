@@ -351,6 +351,10 @@ function preservesGate(installed, local) {
         return false;
     if (local.trigger.mode !== 'active')
         return false;
+    // An applicability gate would skip the definition on most events and thereby
+    // disable enforcement; the installed gate has none.
+    if (installed.trigger.applicability !== local.trigger.applicability)
+        return false;
     const keys = [
         'workspace',
         'session',

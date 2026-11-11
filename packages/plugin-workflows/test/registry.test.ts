@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HostAuth } from '../src/host/host-auth.ts'
+import { mayPublishDefinitionLoad } from '../src/host/index.ts'
 import { definitionsRegistry } from '../src/host/registry.ts'
 import { createRun, readAuthenticatedRun, writeRun } from '../src/host/runs.ts'
 
@@ -167,6 +168,16 @@ describe('workflow definitions registry', () => {
     ]) {
       expect(definitionsRegistry.installedTrigger(id)?.plugin).toBe('@dsh-setup/plugin-openspec')
     }
+  })
+
+  it('fences a load that finishes after a newer registry revision', () => {
+    // The newer load (id 2, revision 2) published first; the older load (id 1)
+    // must not overwrite the cache even if it resolves later.
+    expect(mayPublishDefinitionLoad(1, 1, 2, 2)).toBe(false)
+    expect(mayPublishDefinitionLoad(2, 2, 2, 1)).toBe(true)
+    expect(mayPublishDefinitionLoad(1, 1, 2, undefined)).toBe(false)
+    expect(mayPublishDefinitionLoad(1, 1, 1, undefined)).toBe(true)
+    expect(mayPublishDefinitionLoad(1, 1, 1, 1)).toBe(true)
   })
 
   it('seeds the engine shipped definitions and the generic trigger catalog', () => {

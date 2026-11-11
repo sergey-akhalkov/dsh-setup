@@ -408,7 +408,6 @@ describe('revision contract', () => {
       definition,
       revision: null,
       source: 'plugin',
-      plugin: '@acme/plugin',
     })
     const result = await save(state, { api, taken: TAKEN })
     expect(result.status).toBe('error')

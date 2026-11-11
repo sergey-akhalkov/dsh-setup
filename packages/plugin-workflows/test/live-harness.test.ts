@@ -261,7 +261,6 @@ describe('obligation engine live proxy', () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const definition = contributedIntake()
     const listeners = new Map<string, Listener[]>()
     const routes: Route[] = []
     const commands: Array<{

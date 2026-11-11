@@ -415,13 +415,12 @@ describe('workflows read API', () => {
     })
     const listed = await request(value, DEFINITIONS_ROUTE, { session: 's1' })
     expect(listed.status).toBe(200)
-    const row = (listed.body.definitions as Array<Record<string, unknown>>).find(
-      (entry) => entry.id === 'acme-deploy',
-    )
+    const listedBody = listed.body as { definitions?: Array<Record<string, unknown>> }
+    const row = (listedBody.definitions ?? []).find((entry) => entry.id === 'acme-deploy')
     expect(row).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
     const templates = await request(value, TEMPLATES_ROUTE, { session: 's1' })
     expect(
-      (templates.body.templates as Array<Record<string, unknown>>).find(
+      ((templates.body as { templates?: Array<Record<string, unknown>> }).templates ?? []).find(
         (entry) => entry.id === 'acme-deploy',
       ),
     ).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
@@ -430,7 +429,7 @@ describe('workflows read API', () => {
     const disposed = await setup({ definitions: [definition], installed: [] })
     const after = await request(disposed, DEFINITIONS_ROUTE, { session: 's1' })
     expect(
-      (after.body.definitions as Array<Record<string, unknown>>).some(
+      ((after.body as { definitions?: Array<Record<string, unknown>> }).definitions ?? []).some(
         (entry) => entry.id === 'acme-deploy',
       ),
     ).toBe(false)

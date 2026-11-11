@@ -142,6 +142,17 @@ async function hasLocalDefinitionFiles(workspace: string): Promise<boolean> {
   }
 }
 
+/** Whether a finished workspace load may publish into the definition cache. */
+export function mayPublishDefinitionLoad(
+  loadId: number,
+  revision: number,
+  currentLoadId: number | undefined,
+  publishedRevision: number | undefined,
+): boolean {
+  if (currentLoadId !== undefined && loadId !== currentLoadId) return false
+  return publishedRevision === undefined || revision >= publishedRevision
+}
+
 /** The verdict a review record carries, read for the review trigger filter. */
 function reviewVerdict(workspace: string, path: string): string | undefined {
   try {
@@ -676,16 +687,32 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     return { installed, enabled }
   }
   /** Load the installed registry set plus the approved local overrides. */
-  const definitionLoads = new Map<string, Promise<void>>()
+  const definitionLoads = new Map<string, { revision: number; promise: Promise<void> }>()
   /** The registry revision each cached workspace load was built from. */
   const definitionLoadRevisions = new Map<string, number>()
+  /** The load sequence per workspace; a superseded load may not publish. */
+  const definitionLoadIds = new Map<string, number>()
   const loadDefinitions = (workspace: string): Promise<void> => {
     const revision = definitionsRegistry.revision
     const existing = definitionLoads.get(workspace)
-    if (existing !== undefined && definitionLoadRevisions.get(workspace) === revision) {
-      return existing
-    }
+    if (existing !== undefined && existing.revision === revision) return existing.promise
     if (pluginDisposed) return Promise.resolve()
+    const loadId = (definitionLoadIds.get(workspace) ?? 0) + 1
+    definitionLoadIds.set(workspace, loadId)
+    const publish = (definitions: readonly Definition[]): void => {
+      if (
+        !mayPublishDefinitionLoad(
+          loadId,
+          revision,
+          definitionLoadIds.get(workspace),
+          definitionLoadRevisions.get(workspace),
+        )
+      ) {
+        return
+      }
+      definitionsByWorkspace.set(workspace, definitions)
+      definitionLoadRevisions.set(workspace, revision)
+    }
     const promise = (async () => {
       try {
         if (await hasLocalDefinitionFiles(workspace)) await ensureAuth()
@@ -710,7 +737,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           .filter((definition) => !parityCheck.refused.has(definition.id))
           .map((definition) => withVerifySettings(definition, verifySettings))
         if (pluginDisposed) return
-        definitionsByWorkspace.set(workspace, accepted)
+        publish(accepted)
         // A run is authoritative only when signed, so an active definition
         // needs the host key ready before its first event.
         if (accepted.some((definition) => definition.trigger.mode === 'active')) {
@@ -723,15 +750,14 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         }
       } catch (error) {
         if (!pluginDisposed) {
-          definitionsByWorkspace.set(workspace, [])
+          publish([])
           console.error(
             `workflows: the definitions could not be loaded (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
           )
         }
       }
     })()
-    definitionLoads.set(workspace, promise)
-    definitionLoadRevisions.set(workspace, revision)
+    definitionLoads.set(workspace, { revision, promise })
     return promise
   }
   /** The approved definitions of one workspace, loaded on first use. */

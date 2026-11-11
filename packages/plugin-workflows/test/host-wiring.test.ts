@@ -2220,7 +2220,7 @@ describe('pre-execute trigger gates', () => {
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
-    const service = host.ctx.get('workflowsDefinitions') as
+    const service = (host.ctx.get as (name: string) => unknown)('workflowsDefinitions') as
       | { register(contribution: unknown): () => void }
       | undefined
     expect(service).toBeDefined()
@@ -2284,7 +2284,7 @@ describe('pre-execute trigger gates', () => {
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
-    const service = host.ctx.get('workflowsDefinitions') as
+    const service = (host.ctx.get as (name: string) => unknown)('workflowsDefinitions') as
       | { register(contribution: unknown): () => void }
       | undefined
     expect(service).toBeDefined()
