@@ -768,3 +768,14 @@ including one that becomes a link while the question is open — is refused, bec
 reader follows an in-workspace link while the spec digest skips it. It released in 0.31.6/0.31.7
 with 7/8 tasks, and the delta spec is synced into `workflows` (the archive reported it already in
 sync). Open owner follow-up: 2.4, the end-to-end adopt check in a live installed profile.
+
+On 2026-11-11 `plugin-owned-workflow-definitions` was archived from the OpenSpec panel. v0.32.0
+shipped the state-based `Apply change`/`Archive` action on change cards and the detail page: a
+complete change offers Archive, the click is the user's confirmation, and the host verifies the
+change artifacts and the current whole-spec `PASS`, writes the host-signed adoption receipt, and
+runs `openspec archive`; the agent's chat command keeps the full pre-execute gate (v0.32.1 made
+the click the final authorization, so an open review run or a pending portable approval no longer
+blocks the user). The same release fixed the `/workflows` command's missing `input.hint` so the
+composer keeps the line open for `adopt <name>` instead of executing on Tab. The change archived
+19/19 tasks. Open follow-up: `add-change-card-actions` records its shipped panel work with 10 of
+14 tasks checked; its four remaining tasks are the archive-gate shell-parsing hardening.
