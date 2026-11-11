@@ -402,6 +402,19 @@ describe('revision contract', () => {
     expect(result.dirty).toBe(true)
   })
 
+  it('refuses to save a read-only plugin definition', async () => {
+    const { api } = fakeApi()
+    const state = openDocument({
+      definition,
+      revision: null,
+      source: 'plugin',
+      plugin: '@acme/plugin',
+    })
+    const result = await save(state, { api, taken: TAKEN })
+    expect(result.status).toBe('error')
+    expect(result.message).toContain('read-only')
+  })
+
   it('keeps the draft when a transport failure rejects the save', async () => {
     const { api, store } = fakeApi({
       save: () => {

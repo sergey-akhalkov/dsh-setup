@@ -62,11 +62,11 @@ export function validateCatalog(raw) {
             fail(undefined, `triggers[${String(index)}]`, 'must be an object');
         }
         const value = entry;
+        const id = typeof value.id === 'string' && value.id.trim() !== '' ? value.id : undefined;
         for (const key of Object.keys(value)) {
             if (!TRIGGER_KEYS.has(key))
-                fail(undefined, key, 'is not a known field');
+                fail(id, key, 'is not a known field');
         }
-        const id = typeof value.id === 'string' && value.id.trim() !== '' ? value.id : undefined;
         if (id === undefined)
             fail(undefined, `triggers[${String(index)}].id`, 'must be a non-empty string');
         if (ids.has(id))
