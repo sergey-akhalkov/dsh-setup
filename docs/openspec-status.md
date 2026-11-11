@@ -739,3 +739,19 @@ buckets. The integration passed the full gate (156 files / 2941 tests, gen 411, 
 validators) with 9 portable task-review PASS records and released in v0.31.0, archived 9/11 (the
 archive and release steps were completed after the tick). Open owner follow-up: the installed-build
 visual check of both segments and the workflow page.
+
+On 2026-11-11 `redesign-workflow-design-surface` turned the `Workflow design` page into a workbench:
+a left rail listing the installed workflows (name, description, trigger, step count, source, last
+run) and the building blocks (trigger kinds and step executors), a center canvas opening on the
+selected or first installed workflow (a blank canvas beside the rail when none is installed), and an
+inspector. The read-only definitions table is gone and the trigger catalog and receipts moved into a
+secondary `Diagnostics` disclosure; the narrow-width list fallback and the dirty-document guard stay.
+The definition schema gained an optional 500-character `description` that the editor, the workflow
+list, the inspector and the session workflow page show, the four shipped definitions carry one, and
+the parity report was regenerated. The session workflow page renders the ordered steps as the same
+node canvas in read-only mode with a selected-run overlay (latest by default, an older run changes
+only the overlay) and keeps the ordered step table as the fallback. The change shipped in v0.31.5
+(`c2b291b6` fixed each workflow's trigger in the design rail) with 15 portable task-review PASS
+records, the delta specs are synced into the main specs (the archive reported them already in sync),
+and it archived 15/16. Open owner follow-up: 4.5, the live-session visual check of the workbench at
+wide and narrow sidebar widths.
