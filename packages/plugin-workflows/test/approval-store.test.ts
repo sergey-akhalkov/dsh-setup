@@ -624,6 +624,32 @@ describe('gate-preserving intake override', () => {
     })
     expect(decision.kind).toBe('deny')
 
+    const conflicted = contributedIntake()
+    conflicted.name = 'Conflicting ownership copy'
+    ;(conflicted.settings as Record<string, unknown>).legacy = {
+      plugin: 'delegation-rules',
+      signal: 'spec-review',
+    }
+    const conflictDraft = await writeDefinitionFile(
+      workspace,
+      workspaceDraftsDirectory(workspace),
+      'conflict-intake.json',
+      conflicted,
+    )
+    await installDefinition(workspace, conflictDraft, auth())
+    const conflictLoad = await loadApprovedDefinitions(workspace, {
+      auth: auth(),
+      shipped: [...loadShippedDefinitions(), intake],
+      installedLegacy: new Set(['delegation-rules']),
+      enabledLegacy: new Set(['delegation-rules/spec-review']),
+    })
+    // The override would be filtered by the ownership rules; the installed
+    // definition and its gate must stay effective instead.
+    expect(conflictLoad.errors.join('\n')).toMatch(/ownership rules/u)
+    expect(
+      conflictLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
+    ).toBe('OpenSpec change intake')
+
     // A copy saved from the installed template keeps the gate and loads.
     const reapproved = contributedIntake()
     reapproved.name = 'Reapproved local intake'

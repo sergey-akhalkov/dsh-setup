@@ -258,7 +258,7 @@ export function createWorkflowRoutes(services) {
             if ('response' in resolved)
                 return resolved.response;
             const evaluations = await lastEvaluations(services, resolved.workspace, resolved.session);
-            const definitions = services.definitionsFor?.(resolved.workspace) ?? [];
+            const cached = services.definitionsFor?.(resolved.workspace) ?? [];
             const lastOf = (id) => {
                 const evaluation = evaluations.get(id);
                 return evaluation === undefined
@@ -269,6 +269,14 @@ export function createWorkflowRoutes(services) {
                 const evaluation = evaluations.get(id);
                 return { matched: evaluation?.matchedCount ?? 0, total: evaluation?.total ?? 0 };
             };
+            const installed = new Map((services.installedDefinitionsFor?.() ?? []).map((entry) => [entry.definition.id, entry]));
+            const visible = new Set((await services.definitionEntriesFor?.(resolved.workspace))?.definitions.map((entry) => entry.id) ?? []);
+            // A disposed contribution is absent from the installed registry and the
+            // editor list; its cached runtime row must not stay listed as a trigger.
+            const definitions = services.installedDefinitionsFor === undefined
+                ? cached
+                : cached.filter((definition) => installed.has(definition.id) || visible.has(definition.id));
+            const fresh = (definition) => installed.get(definition.id)?.definition ?? definition;
             return json(200, {
                 session: resolved.session,
                 triggers: [
@@ -287,7 +295,8 @@ export function createWorkflowRoutes(services) {
                             counts: countsOf(trigger.id),
                         };
                     }),
-                    ...definitions.map((definition) => {
+                    ...definitions.map((cachedDefinition) => {
+                        const definition = fresh(cachedDefinition);
                         const id = `definition:${definition.id}`;
                         const last = lastOf(id);
                         return {
@@ -347,12 +356,16 @@ export function createWorkflowRoutes(services) {
             });
             const rows = [];
             const covered = new Set();
+            const installed = new Map((services.installedDefinitionsFor?.() ?? []).map((entry) => [entry.definition.id, entry]));
             // The editor store is authoritative for the list: a local definition
             // created after the runtime cache loaded must still appear.
             for (const entry of entries?.definitions ?? []) {
                 covered.add(entry.id);
-                let definition = byId.get(entry.id);
-                if (definition === undefined && services.definitionDocumentFor !== undefined) {
+                // The installed registry snapshot is fresher than the runtime cache for
+                // a contributed definition; a local entry is read from its file.
+                let definition = installed.get(entry.id)?.definition ?? byId.get(entry.id);
+                if ((entry.source === 'local' || definition === undefined) &&
+                    services.definitionDocumentFor !== undefined) {
                     const document = await services
                         .definitionDocumentFor(resolved.workspace, entry.id)
                         .catch(() => undefined);
@@ -372,7 +385,6 @@ export function createWorkflowRoutes(services) {
                     revision: entry.revision,
                 });
             }
-            const installed = new Map((services.installedDefinitionsFor?.() ?? []).map((entry) => [entry.definition.id, entry]));
             for (const definition of definitions) {
                 if (covered.has(definition.id))
                     continue;
@@ -383,7 +395,7 @@ export function createWorkflowRoutes(services) {
                 }
                 const source = installed.get(definition.id);
                 rows.push({
-                    ...summary(definition),
+                    ...summary(source?.definition ?? definition),
                     ...(source === undefined
                         ? {}
                         : {

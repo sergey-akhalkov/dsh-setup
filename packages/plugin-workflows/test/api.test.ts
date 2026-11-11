@@ -433,6 +433,39 @@ describe('workflows read API', () => {
         (entry) => entry.id === 'acme-deploy',
       ),
     ).toBe(false)
+    const afterTriggers = await request(disposed, TRIGGERS_ROUTE, { session: 's1' })
+    expect(
+      ((afterTriggers.body as { triggers?: Array<Record<string, unknown>> }).triggers ?? []).some(
+        (entry) => entry.id === 'definition:acme-deploy',
+      ),
+    ).toBe(false)
+
+    // A re-registered id at a newer version is served from the registry, not
+    // the stale cached runtime definition.
+    const upgraded = {
+      ...definition,
+      version: 2,
+      trigger: {
+        ...definition.trigger,
+        match: { ...definition.trigger.match, command: 'acme deploy2 {name}' },
+      },
+    }
+    const replaced = await setup({
+      definitions: [definition],
+      installed: [{ definition: upgraded, source: 'plugin', plugin: '@acme/plugin' }],
+    })
+    const upgradedList = await request(replaced, DEFINITIONS_ROUTE, { session: 's1' })
+    expect(
+      (
+        (upgradedList.body as { definitions?: Array<Record<string, unknown>> }).definitions ?? []
+      ).find((entry) => entry.id === 'acme-deploy'),
+    ).toMatchObject({ version: 2 })
+    const upgradedTriggers = await request(replaced, TRIGGERS_ROUTE, { session: 's1' })
+    expect(
+      (
+        (upgradedTriggers.body as { triggers?: Array<Record<string, unknown>> }).triggers ?? []
+      ).find((entry) => entry.id === 'definition:acme-deploy'),
+    ).toMatchObject({ filter: expect.objectContaining({ command: 'acme deploy2 {name}' }) })
   })
 
   it('serves runs, triggers, and health with the session selector', async () => {

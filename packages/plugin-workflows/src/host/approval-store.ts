@@ -584,14 +584,28 @@ export async function loadApprovedDefinitions(
       // the declaration; the installed definition stays effective and the user
       // re-saves a copy from the installed template.
       const installed = shipped.find((entry) => entry.id === id)
-      if (
-        installed?.settings.gate !== undefined &&
-        (parsed.settings.gate !== installed.settings.gate || !preservesGate(installed, parsed))
-      ) {
-        errors.push(
-          `definition "${id}" is refused: the approved local copy drops or weakens the installed definition's declared "${installed.settings.gate}" gate (it must keep the active trigger, its exact match, settings.gate, and the {name} capture), so the installed definition remains effective; re-save a copy from the installed template and approve it (the retired <name> token cannot be used)`,
-        )
-        continue
+      if (installed?.settings.gate !== undefined) {
+        if (parsed.settings.gate !== installed.settings.gate || !preservesGate(installed, parsed)) {
+          errors.push(
+            `definition "${id}" is refused: the approved local copy drops or weakens the installed definition's declared "${installed.settings.gate}" gate (it must keep the active trigger, its exact match, settings.gate, and the {name} capture), so the installed definition remains effective; re-save a copy from the installed template and approve it (the retired <name> token cannot be used)`,
+          )
+          continue
+        }
+        // The override must itself load under the profile's ownership rules;
+        // otherwise applyLoadRules would drop both it and the installed gate.
+        if (options.installedLegacy !== undefined) {
+          const resolution = resolveOwnership(
+            parsed,
+            options.installedLegacy,
+            options.enabledLegacy,
+          )
+          if (resolution.issues.length > 0) {
+            errors.push(
+              `definition "${id}" is refused: the approved local copy would not load under the profile's ownership rules (${resolution.issues[0]?.slice(0, 200)}), so the installed definition with its "${installed.settings.gate}" gate remains effective; re-save a copy from the installed template and approve it`,
+            )
+            continue
+          }
+        }
       }
       local.set(id, parsed)
     } catch (error) {
