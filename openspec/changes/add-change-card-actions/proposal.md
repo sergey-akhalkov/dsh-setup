@@ -5,10 +5,11 @@
 A completed change in the OpenSpec right-sidebar panel still offers `Apply change`, which only fills a
 composer draft the user must then send to archive it through a chat command. The panel can read
 everything it needs to decide that the archive step is next — the task counts — yet it sends the user
-to the conversation for the one action that finishes the change. Archiving also depends on
-host-authenticated evidence (a completed intake run or adoption receipt, and a current whole-spec
-PASS), so the click cannot simply run `openspec archive`: without the same gate checks the button
-would become an authorization bypass.
+to the conversation for the one action that finishes the change. The click is the user's final
+authorization: the host verifies the change artifacts and the current whole-spec `PASS`, records the
+click as a host-signed receipt, and archives. Internal review state (an open run step, a pending
+portable approval, a review marker) delays the agent command path but must not block the user's
+explicit click.
 
 A second, independent defect is in the engine's pre-execute archive gate: `openspec archive` after a
 shell separator (`cd x; openspec archive y`, `cd x && openspec archive y`) is not parsed, and the
@@ -27,11 +28,11 @@ the gate unexamined.
   propagation, and a successful archive re-reads the list and opens the archived change.
 - The Host route validates the live session, the CLI-reported active change, and complete task
   counts; the engine service verifies the change artifacts and the current whole-spec PASS, writes
-  the host-signed adoption receipt that the click authorizes, and repeats the archive gate decision
-  (authenticated completed run or receipt, current whole-spec PASS, no open required run step,
-  portable task-review coverage when the shipped rule owns that behavior). A refusal is shown inline
-  and leaves the change active. A host without the engine skips only the engine checks; the OpenSpec
-  plugin still requires complete tasks.
+  the host-signed adoption receipt that the click authorizes, and reports success. The click is the
+  final authorization, so the clicked path does not apply the agent path's evidence checks (an open
+  run step, portable task approvals, the legacy marker); a missing/stale whole-spec PASS or missing
+  artifacts is refused inline and leaves the change active. A host without the engine skips only the
+  engine checks; the OpenSpec plugin still requires complete tasks.
 - The pre-execute archive gate refuses a compound shell command that contains an archive invocation
   or archive move it cannot parse safely, closing the separator bypass. A benign compound command
   that names no archive stays allowed.
@@ -54,7 +55,8 @@ None.
   is an authorized write; the Actions are state-dependent on the change card and detail header.
 - `workflows`: the pre-execute archive gate refuses an unparseable archive invocation after a shell
   separator; a new `workflowsArchiveGate` host service authorizes a user-clicked archive with a
-  host-signed adoption receipt and the same gate checks as the agent path.
+  host-signed adoption receipt, and the click is the final authorization while the agent command
+  path keeps the full archive gate.
 
 ## Impact
 

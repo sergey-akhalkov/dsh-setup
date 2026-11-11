@@ -60,7 +60,7 @@ The engine SHALL refuse `openspec archive <change>` while a required review or s
 
 ### Requirement: User-clicked archive authorization
 
-The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(workspace, change)`. It SHALL ensure the host key, verify the change artifacts and the current whole-spec `PASS`, and write the host-signed adoption receipt for the click. The click is the final authorization: the service MUST NOT apply the pre-execute archive gate's evidence checks (open run steps, portable task approvals, the legacy review marker) to the clicked path, and MUST NOT run the archive or accept a text claim. The agent command path keeps the full pre-execute archive gate.
+The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(workspace, change)`. It SHALL ensure the host key, verify the change artifacts and the current whole-spec `PASS`, and write the host-signed adoption receipt. The click is the final authorization: it MUST NOT apply the agent path's run/approval/marker checks, run the archive, or accept a text claim; the agent path keeps the full gate.
 
 #### Scenario: Verified click is authorized
 

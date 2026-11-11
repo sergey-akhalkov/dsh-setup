@@ -60,8 +60,13 @@ A change card in the `Changes` list and the change detail header SHALL offer one
 
 #### Scenario: A refusal keeps the change active
 
-- **WHEN** the archive request is refused because the whole-spec `PASS` record is missing or stale, the portable task-review coverage is incomplete, or a related run has an open required step
+- **WHEN** the archive request is refused because the change artifacts or the current whole-spec `PASS` record are missing or stale
 - **THEN** the bounded reason is shown inline, the change stays active, and the list is not told that it was archived
+
+#### Scenario: An open run or missing approvals does not refuse the click
+
+- **WHEN** a related run has an open required step, or a checked task has no portable task-review PASS, and the whole-spec `PASS` is current
+- **THEN** the click is authorized, the Host records it, and the archive proceeds
 
 #### Scenario: The click is the authorization
 
