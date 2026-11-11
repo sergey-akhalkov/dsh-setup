@@ -1,3 +1,4 @@
+import { DisclosureRow } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { DesignMode } from './design.tsx'
@@ -10,19 +11,12 @@ import {
   triggersUrl,
 } from './panel.tsx'
 import { FLOW_CSS } from './styles.ts'
-import {
-  DefinitionsTable,
-  type DefinitionView,
-  definitionsUrl,
-  ReceiptsList,
-  type ReceiptView,
-  receiptsUrl,
-} from './workflows.tsx'
+import { ReceiptsList, type ReceiptView, receiptsUrl } from './workflows.tsx'
 
 /**
- * The `Workflow design` right-sidebar page: the editor, then the workspace's
- * definitions, trigger catalog, and receipts. Read-only sections never write;
- * the editor keeps its existing save contract.
+ * The `Workflow design` right-sidebar page: the workbench first, then the
+ * workspace's trigger catalog and receipts behind a `Diagnostics` disclosure.
+ * Read-only sections never write; the editor keeps its existing save contract.
  */
 
 const fallbackTranslate: Translate = (key) => EN[key] ?? key
@@ -94,23 +88,19 @@ export function closeDesignOnTabClose(t: Translate, key: string): void {
 }
 
 interface Sections {
-  readonly definitions: readonly DefinitionView[]
   readonly triggers: readonly TriggerView[]
   readonly receipts: readonly ReceiptView[]
 }
 
 /**
- * The page body: measure the panel (narrow opens the list), load the read-only
- * workspace state, and hand the editor its close and dirty callbacks.
+ * The page body: measure the panel (narrow opens the list), load the
+ * diagnostics state, and hand the editor its close and dirty callbacks.
  */
 export function DesignPageBody(props: DesignPageBodyProps): ReactNode {
   const { sessionId, t } = props
   const [width, setWidth] = useState(1024)
-  const [sections, setSections] = useState<Sections>({
-    definitions: [],
-    triggers: [],
-    receipts: [],
-  })
+  const [sections, setSections] = useState<Sections>({ triggers: [], receipts: [] })
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
   const [error, setError] = useState<string>()
   const root = useRef<HTMLDivElement | null>(null)
 
@@ -128,17 +118,12 @@ export function DesignPageBody(props: DesignPageBodyProps): ReactNode {
     let current = true
     setError(undefined)
     void Promise.all([
-      requestJson<{ definitions: DefinitionView[] }>(definitionsUrl(sessionId)),
       requestJson<{ triggers: TriggerView[] }>(triggersUrl(sessionId)),
       requestJson<{ receipts: ReceiptView[] }>(receiptsUrl(sessionId)),
     ]).then(
-      ([definitions, triggers, receipts]) => {
+      ([triggers, receipts]) => {
         if (!current) return
-        setSections({
-          definitions: definitions.definitions,
-          triggers: triggers.triggers,
-          receipts: receipts.receipts,
-        })
+        setSections({ triggers: triggers.triggers, receipts: receipts.receipts })
       },
       (failure: unknown) => {
         if (!current) return
@@ -167,9 +152,17 @@ export function DesignPageBody(props: DesignPageBodyProps): ReactNode {
           {error}
         </p>
       )}
-      <DefinitionsTable definitions={sections.definitions} t={t} />
-      <TriggersTable triggers={sections.triggers} t={t} />
-      <ReceiptsList receipts={sections.receipts} t={t} />
+      <DisclosureRow
+        icon={null}
+        title={t('design.diagnostics')}
+        open={diagnosticsOpen}
+        expandable
+        expandOnRowClick
+        onToggle={() => setDiagnosticsOpen((current) => !current)}
+      >
+        <TriggersTable triggers={sections.triggers} t={t} />
+        <ReceiptsList receipts={sections.receipts} t={t} />
+      </DisclosureRow>
     </div>
   )
 }

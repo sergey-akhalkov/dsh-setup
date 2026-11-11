@@ -270,8 +270,10 @@ export interface DesignCanvasProps {
   readonly selected?: string
   readonly focusKey: string
   readonly onSelect: (nodeId: string | undefined) => void
-  readonly onMove: (nodeId: string, position: { readonly x: number; readonly y: number }) => void
-  readonly onConnectNode: (source: string, target: string, kind: EdgeKind) => void
+  /** No drag or connect and no layout write; selection stays available. */
+  readonly readOnly?: boolean
+  readonly onMove?: (nodeId: string, position: { readonly x: number; readonly y: number }) => void
+  readonly onConnectNode?: (source: string, target: string, kind: EdgeKind) => void
 }
 
 const KNOWN_KINDS = new Set<string>(['start', 'next', 'true', 'false', 'body', 'exit'])
@@ -280,6 +282,7 @@ const KNOWN_KINDS = new Set<string>(['start', 'next', 'true', 'false', 'body', '
 export function DesignCanvas(props: DesignCanvasProps): ReactNode {
   const flowNodes = toFlowNodes(props.nodes, props.selected) as unknown as Node[]
   const flowEdges = toFlowEdges(props.edges, props.nodes) as unknown as Edge[]
+  const readOnly = props.readOnly === true
   return (
     <ReactFlow
       key={props.focusKey}
@@ -290,6 +293,8 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
       fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
       nodesFocusable
       edgesFocusable
+      nodesDraggable={!readOnly}
+      nodesConnectable={!readOnly}
       onNodeClick={(_event, node) => props.onSelect(node.id)}
       onPaneClick={() => props.onSelect(undefined)}
       // Controlled nodes only change selection through onNodesChange; the
@@ -310,16 +315,22 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
         const first = selection.nodes?.[0]
         props.onSelect(first?.id)
       }}
-      onNodeDragStop={(_event, node) => props.onMove(node.id, node.position)}
-      onConnect={(connection: Connection) => {
-        if (connection.source === null || connection.target === null) return
-        const handle = connection.sourceHandle
-        props.onConnectNode(
-          connection.source,
-          connection.target,
-          handle !== null && KNOWN_KINDS.has(handle) ? (handle as EdgeKind) : 'next',
-        )
-      }}
+      onNodeDragStop={
+        readOnly ? undefined : (_event, node) => props.onMove?.(node.id, node.position)
+      }
+      onConnect={
+        readOnly
+          ? undefined
+          : (connection: Connection) => {
+              if (connection.source === null || connection.target === null) return
+              const handle = connection.sourceHandle
+              props.onConnectNode?.(
+                connection.source,
+                connection.target,
+                handle !== null && KNOWN_KINDS.has(handle) ? (handle as EdgeKind) : 'next',
+              )
+            }
+      }
     />
   )
 }

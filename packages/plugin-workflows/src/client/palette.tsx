@@ -1,10 +1,7 @@
 import { Button, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { paletteLabel } from './a11y.ts'
-import type { NodeKind } from './graph.ts'
-
-/** The trigger-first palette: add a step, a branch, a loop, or a human step. */
-export const PALETTE_KINDS: readonly NodeKind[] = ['step', 'branch', 'loop', 'human']
+import { EXECUTOR_BLOCKS } from './rail.tsx'
 
 export interface PaletteMenuProps {
   /** Owner-controlled disclosure state; the page keeps the menu closed by default. */
@@ -12,15 +9,19 @@ export interface PaletteMenuProps {
   readonly disabled?: boolean
   onOpen(): void
   onClose(): void
-  onAdd(kind: NodeKind): void
+  onAdd(executor: string): void
 }
 
 /**
  * The narrow-panel palette: one `Add step` menu instead of a column, so the
- * editor keeps its width in the right-sidebar page.
+ * editor keeps its width in the right-sidebar page. It offers the same
+ * executor blocks as the wide rail.
  */
 export function PaletteMenu(props: PaletteMenuProps): ReactNode {
-  const items: MenuEntry[] = PALETTE_KINDS.map((kind) => ({ id: kind, label: paletteLabel(kind) }))
+  const items: MenuEntry[] = EXECUTOR_BLOCKS.map((executor) => ({
+    id: executor,
+    label: paletteLabel(executor),
+  }))
   return (
     <Menu
       open={props.open}
@@ -28,7 +29,7 @@ export function PaletteMenu(props: PaletteMenuProps): ReactNode {
       items={items}
       onSelect={(id) => {
         props.onClose()
-        props.onAdd(id as NodeKind)
+        props.onAdd(id)
       }}
       anchor={
         <Button

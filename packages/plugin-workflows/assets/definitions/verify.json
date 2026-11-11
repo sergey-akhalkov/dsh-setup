@@ -2,6 +2,7 @@
   "v": 1,
   "id": "verify",
   "name": "Verification check",
+  "description": "Run the configured verification command after the turn wrote code.",
   "version": 1,
   "trigger": {
     "kind": "turn.stopping",

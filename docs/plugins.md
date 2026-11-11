@@ -466,11 +466,13 @@ has two segments, `Workflows` and `Runs`. `Workflows` groups the installed defin
 with each definition's own mode and filter, the group's firing count (`matched/total` summed over the
 bound definitions' own evaluations) and each workflow's `completed / total` runs with separate
 `failed`, `running`, `cancelled` and `interrupted` counts; selecting a workflow opens its page with the
-definition's description, ordered step chain, trigger binding, its runs and its evaluation history.
-`Runs` is the session's all-runs feed with one run's detail page. The design page holds the definition
-list, the editor, the trigger catalog with its last evaluation, and the receipts. Neither surface
-steers, injects, blocks, or runs a workflow. **Breaking:** the `Journal` segment is removed; its
-content moved to the workflow page's evaluation history.
+definition's description, a read-only node canvas of its ordered steps and a run-overlay selector, the
+ordered step table as the fallback, its trigger binding, its runs and its evaluation history. `Runs` is
+the session's all-runs feed with one run's detail page. The design page is a workbench: a left rail
+with the workflow list and the engine's building blocks, the editor canvas, the inspector, and a
+secondary `Diagnostics` disclosure for the trigger catalog and the receipts. Neither surface steers,
+injects, blocks, or runs a workflow. **Breaking:** the `Journal` segment is removed; its content moved
+to the workflow page's evaluation history.
 
 The Host records `agent/pre-step`, `agent/turn-stopping`, `tools/result`, `subagent/start` and
 `subagent/end` events as one bounded JSONL record per event under
@@ -556,18 +558,25 @@ intake/adoption flow and migration are documented in [workflows](workflows.md).
 ### Editor and Workflow design page
 
 The editor lives in the right-sidebar **Workflow design** page, opened from its Start guide-card entry:
-a React Flow canvas bundled into the single client artifact, an equivalent List form editor (the narrow
-panel's default surface, below the shipped 720 px threshold), templates and local definitions opened
-through the revision-checked host write API, a layout sidecar, and the run overlay (the latest run per
-definition with step state, structured evidence references, failure class, violations, and an orphan
-badge; the recorded definition name/version, evidence, failure class and violations stay readable after
-the definition changes or is deleted). The palette is one `Add step` menu and the property panel is a
-collapsible section under the editor. The tab type is kept mounted, so hiding the sidebar or
-switching tabs does not discard a draft; an explicit tab close with unsaved edits asks first through the
-sidebar's close-handler seam, and a declined prompt keeps the tab open. The graph stays a
-projection of the definition: create is create-only, updates and deletes send the revision from the
-last read, a mismatch returns 409 and leaves the file unchanged (reload or save-as-copy), and every
-save goes through the host-signed install/approve path, so an editor save is an authorized install.
+a workbench with a left rail (the installed workflows and the trigger/executor blocks), a React Flow
+canvas bundled into the single client artifact, an equivalent List form editor (the narrow panel's
+default surface, below the shipped 720 px threshold, with the rail stacked above it), templates and
+local definitions opened through the revision-checked host write API, a layout sidecar, and the run
+overlay (the latest run per definition with step state, structured evidence references, failure class,
+violations, and an orphan badge; the recorded definition name/version, evidence, failure class and
+violations stay readable after the definition changes or is deleted). The page opens the selected or
+first installed workflow, and shows a blank start surface with the rail when none is installed. The
+inspector is a collapsible section under the editor and edits the workflow-level name and description
+plus the selected node's fields; the rail's `More` menu holds the lifecycle actions. The trigger
+catalog and receipts are behind a closed-by-default `Diagnostics` disclosure, not on the default
+surface. The tab type is kept mounted, so hiding the sidebar or switching tabs does not discard a
+draft; an explicit tab close with unsaved edits asks first through the sidebar's close-handler seam,
+and a declined prompt keeps the tab open. The graph stays a projection of the definition: create is
+create-only, updates and deletes send the revision from the last read, a mismatch returns 409 and
+leaves the file unchanged (reload or save-as-copy), and every save goes through the host-signed
+install/approve path, so an editor save is an authorized install. The session workflow page renders
+the same canvas read-only with the deterministic auto-layout and the selected run's overlay, while the
+ordered step table remains the accessible fallback; opening that page writes no definition or layout.
 Keyboard editing, focus order, a screen-reader summary, and the List fallback cover the canvas; the
 editor is inert without the host write API, and the page is not registered when the right-sidebar
 services are absent.

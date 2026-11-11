@@ -547,6 +547,7 @@ function triggerFields(props: PropertiesProps): ReactNode {
 
 export function PropertyPanel(props: PropertiesProps): ReactNode {
   const node = props.state.diagram.nodes.find((entry) => entry.id === props.selected)
+  const description = props.state.document.definition.description
   return (
     <aside className="dsh-wf-properties" data-tab-group="properties" aria-label="Properties">
       <h4>Properties</h4>
@@ -556,6 +557,20 @@ export function PropertyPanel(props: PropertiesProps): ReactNode {
           value={props.state.document.definition.name}
           aria-label="Definition name"
           onChange={(event) => props.onDefinitionPatch({ name: event.currentTarget.value })}
+        />
+      </label>
+      <label>
+        Description
+        <textarea
+          value={typeof description === 'string' ? description : ''}
+          aria-label="Definition description"
+          rows={2}
+          onChange={(event) =>
+            props.onDefinitionPatch({
+              // Empty sends undefined so a definition without one stays unchanged.
+              description: event.currentTarget.value === '' ? undefined : event.currentTarget.value,
+            })
+          }
         />
       </label>
       {settingsFields(props)}

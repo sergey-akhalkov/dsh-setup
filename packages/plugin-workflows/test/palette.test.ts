@@ -6,6 +6,7 @@ import { TAB_ORDER } from '../src/client/a11y.ts'
 import { connectChoices, currentTarget, EDGE_LABELS, outputKinds } from '../src/client/edges.ts'
 import {
   addStep,
+  addStepForExecutor,
   blankDefinition,
   connectSteps,
   deleteStep,
@@ -17,6 +18,7 @@ import {
   renameStepId,
   save,
   setMode,
+  setTriggerKind,
 } from '../src/client/editor.ts'
 import {
   autoPositions,
@@ -41,7 +43,13 @@ import {
   text,
 } from './client-harness.ts'
 
-const ui = loadClientModules(['palette.tsx', 'properties.tsx', 'list.tsx', 'canvas.tsx'])
+const ui = loadClientModules([
+  'palette.tsx',
+  'properties.tsx',
+  'list.tsx',
+  'canvas.tsx',
+  'rail.tsx',
+])
 
 /** Walk elements without rendering function components, keeping their keys. */
 function rawElements(node: unknown, found: Element[] = []): Element[] {
@@ -312,12 +320,21 @@ describe('palette and property panel', () => {
     const menu = elements(tree).find((element) => element.type === 'menu')
     expect(menu).toBeDefined()
     const items = menu?.props.items as Array<{ id: string; label: string }>
-    expect(items.map((item) => item.id)).toEqual(['step', 'branch', 'loop', 'human'])
+    expect(items.map((item) => item.id)).toEqual([
+      'main',
+      'tool',
+      'subagent',
+      'human',
+      'branch',
+      'loop',
+    ])
     expect(items.map((item) => item.label)).toEqual([
       'Add step',
+      'Add tool',
+      'Add subagent',
+      'Add human',
       'Add branch',
       'Add loop',
-      'Add human',
     ])
     ;(menu?.props.onSelect as (id: string) => void)?.('branch')
     expect(kinds).toEqual(['branch'])
@@ -335,6 +352,162 @@ describe('palette and property panel', () => {
       onAdd: () => {},
     })
     expect(elements(closedTree).find((element) => element.type === 'menu')?.props.open).toBe(false)
+  })
+
+  it('edits the definition description and sends undefined when cleared', () => {
+    let state = editor()
+    const patches: Record<string, unknown>[] = []
+    const render = (): unknown =>
+      call(ui, 'PropertyPanel', {
+        state,
+        selected: nodeIdOf('requirements'),
+        onDefinitionPatch: (patch: Record<string, unknown>) => {
+          patches.push(patch)
+          state = patchDefinition(state, patch)
+        },
+        onPatch: () => {},
+        onConnect: () => {},
+        onDelete: () => {},
+        onRename: () => {},
+      })
+    const field = (): Element | undefined =>
+      elements(render()).find(
+        (element) =>
+          element.type === 'textarea' && element.props['aria-label'] === 'Definition description',
+      )
+    expect(field()?.props.value).toBe(DEFINITION.description)
+    fire(field(), 'onChange', 'A revised summary.')
+    expect(state.document.definition.description).toBe('A revised summary.')
+    fire(field(), 'onChange', '')
+    expect(state.document.definition.description).toBeUndefined()
+    expect(patches).toEqual([{ description: 'A revised summary.' }, { description: undefined }])
+  })
+
+  it('renders the workflow rail with the workflow list and both block groups', () => {
+    const entries = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        description: 'First flow.',
+        version: 1,
+        stepCount: 2,
+        source: 'shipped' as const,
+        revision: null,
+      },
+      {
+        id: 'beta',
+        name: 'Beta',
+        version: 2,
+        stepCount: 1,
+        source: 'local' as const,
+        revision: 'rev-1',
+      },
+    ]
+    const opened: string[] = []
+    const triggers: string[] = []
+    const executors: string[] = []
+    const tree = call(ui, 'WorkflowRail', {
+      definitions: entries,
+      currentId: 'alpha',
+      latestRun: { id: 'workflow:run-1', status: 'running' },
+      t: (key: string) => key,
+      onOpen: (id: string) => opened.push(id),
+      onTrigger: (kind: string) => triggers.push(kind),
+      onExecutor: (executor: string) => executors.push(executor),
+    })
+    const found = elements(tree)
+    const rows = found.filter(
+      (element) => element.type === 'button' && element.props['data-definition'] !== undefined,
+    )
+    expect(rows).toHaveLength(2)
+    expect(text(tree)).toContain('Alpha')
+    expect(text(tree)).toContain('First flow.')
+    expect(text(tree)).toContain('design.noDescription')
+    expect(text(tree)).toContain('overview.latestRun')
+    expect(text(tree)).toContain('design.blocksTriggers')
+    expect(text(tree)).toContain('design.blocksSteps')
+    expect(
+      found.filter(
+        (element) => element.type === 'button' && element.props['data-block'] !== undefined,
+      ),
+    ).toHaveLength(12)
+    fire(
+      rows.find((row) => row.props['data-definition'] === 'beta'),
+      'onClick',
+    )
+    expect(opened).toEqual(['beta'])
+    fire(
+      found.find((element) => element.props['data-block'] === 'tool'),
+      'onClick',
+    )
+    expect(executors).toEqual(['tool'])
+    fire(
+      found.find((element) => element.props['data-block'] === 'fs.change'),
+      'onClick',
+    )
+    expect(triggers).toEqual(['fs.change'])
+    expect((ui.defaultDefinitionId as (list: unknown[]) => string | undefined)(entries)).toBe(
+      'alpha',
+    )
+    expect((ui.defaultDefinitionId as (list: unknown[]) => string | undefined)([])).toBeUndefined()
+  })
+
+  it('adds every executor block as a definition the host validator accepts', async () => {
+    for (const executor of ['main', 'tool', 'subagent', 'human', 'branch', 'loop']) {
+      const taken = new Set([`block-${executor}`])
+      let state = openNew(blankDefinition(taken))
+      state = addStepForExecutor(state, executor)
+      const added = state.diagram.nodes.at(-1)
+      if (added === undefined) throw new Error(`missing added node for ${executor}`)
+      if (added.kind === 'branch') {
+        state = connectSteps(state, added.id, END_NODE, 'true')
+        state = connectSteps(state, added.id, END_NODE, 'false')
+      } else if (added.kind === 'loop') {
+        state = connectSteps(state, added.id, END_NODE, 'exit')
+      } else {
+        state = connectSteps(state, added.id, END_NODE, 'next')
+      }
+      expect(state.issues, executor).toEqual([])
+      const validated = validateDefinition(state.document.definition)
+      expect(validated.steps.at(-1)?.executor, executor).toBe(executor)
+      if (executor === 'tool') {
+        expect(validated.settings.allowTools).toContain('shell')
+        expect(validated.steps.at(-1)?.tool).toMatchObject({ name: 'shell' })
+        expect(validated.steps.at(-1)?.evidence).toEqual({ kind: 'declaration' })
+        expect(validated.steps.at(-1)?.nonCritical).toBe(true)
+      }
+      const saved = await save(
+        { ...state, document: { ...state.document, revision: 'rev-1' } },
+        {
+          api: stubApi({ saveDefinition: async () => ({ ok: true, revision: 'rev-2' }) }),
+          taken,
+        },
+      )
+      expect(saved.status, executor).toBe('saved')
+    }
+  })
+
+  it('sets the trigger kind from a block and repairs an unsupported dedupe policy', () => {
+    let state = openNew(blankDefinition(new Set(['trigger-block'])))
+    state = setTriggerKind(state, 'tool.pre-execute')
+    expect(state.document.definition.trigger).toMatchObject({
+      kind: 'tool.pre-execute',
+      dedupe: 'turn',
+    })
+    expect(state.diagram.nodes.find((node) => node.kind === 'trigger')?.title).toBe(
+      'tool.pre-execute',
+    )
+    expect(validateDefinition(state.document.definition).trigger.kind).toBe('tool.pre-execute')
+    // `name` is valid for tool.pre-execute but not for turn.stopping.
+    state = patchDefinition(state, {
+      trigger: { ...state.document.definition.trigger, dedupe: 'name' },
+    })
+    state = setTriggerKind(state, 'turn.stopping')
+    expect(state.document.definition.trigger.dedupe).toBe('none')
+    expect(validateDefinition(state.document.definition).trigger).toMatchObject({
+      kind: 'turn.stopping',
+      dedupe: 'none',
+    })
   })
 
   it('edits a field, a connection, and deletes from the property panel', () => {

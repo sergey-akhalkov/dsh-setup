@@ -2,6 +2,7 @@
   "v": 1,
   "id": "task-review",
   "name": "Task review",
+  "description": "Review a checked task when the change's tasks.md changes and confirm its portable approval coverage.",
   "version": 1,
   "trigger": {
     "kind": "fs.change",

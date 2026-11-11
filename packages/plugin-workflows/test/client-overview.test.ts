@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { buildSync } from 'esbuild'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 /**
  * Pure checks for the session overview's joins and renders: the trigger groups,
@@ -16,6 +16,20 @@ function jsx(type: unknown, props: Record<string, unknown> | null, key?: string)
   return { type, props: props ?? {}, ...(key === undefined ? {} : { key }) }
 }
 
+/** Render one element type: a class component through `new`, a function by call. */
+function renderComponent(type: unknown, props: Record<string, unknown>): unknown {
+  const prototype = (type as { prototype?: { render?: unknown } }).prototype
+  if (prototype !== undefined && typeof prototype.render === 'function') {
+    const instance = new (
+      type as new (
+        props: Record<string, unknown>,
+      ) => { render: () => unknown }
+    )(props)
+    return instance.render()
+  }
+  return (type as (props: Record<string, unknown>) => unknown)(props)
+}
+
 function elements(node: unknown, found: Element[] = []): Element[] {
   if (node === null || typeof node !== 'object') return found
   if (Array.isArray(node)) {
@@ -24,7 +38,7 @@ function elements(node: unknown, found: Element[] = []): Element[] {
   }
   const element = node as Element
   if (typeof element.type === 'function') {
-    elements((element.type as (props: Record<string, unknown>) => unknown)(element.props), found)
+    elements(renderComponent(element.type, element.props), found)
     return found
   }
   if (element.type !== undefined && element.props !== undefined) {
@@ -41,7 +55,7 @@ function text(node: unknown): string {
   if (Array.isArray(node)) return node.map(text).join('')
   const element = node as Element
   if (typeof element.type === 'function') {
-    return text((element.type as (props: Record<string, unknown>) => unknown)(element.props))
+    return text(renderComponent(element.type, element.props))
   }
   return text(element.props?.children)
 }
@@ -65,6 +79,7 @@ function loadModule(): Record<string, unknown> {
       'react/jsx-runtime',
       'react/jsx-dev-runtime',
       '@deepseek-ai/dsh-client-ui-primitives',
+      '@xyflow/react',
     ],
     logLevel: 'silent',
   })
@@ -76,7 +91,26 @@ function loadModule(): Record<string, unknown> {
     module.exports,
     (id: string) => {
       if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment }
-      if (id === 'react') return {}
+      if (id === 'react') {
+        return {
+          Component: class {
+            constructor(props: Record<string, unknown>) {
+              ;(this as { props?: Record<string, unknown> }).props = props
+            }
+          },
+          useState: (initial: unknown) => [
+            typeof initial === 'function' ? (initial as () => unknown)() : initial,
+            () => {},
+          ],
+        }
+      }
+      if (id === '@xyflow/react') {
+        return {
+          ReactFlow: (props: Record<string, unknown>) => jsx('reactflow', props),
+          Handle: (props: Record<string, unknown>) => jsx('handle', props),
+          Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+        }
+      }
       return {
         Button: (props: Record<string, unknown>) => jsx('button', props),
         Tag: (props: Record<string, unknown>) => jsx('span', props),
@@ -589,5 +623,112 @@ describe('overview and workflow page render', () => {
     )
     ;(link?.props.onClick as (() => void) | undefined)?.()
     expect(opened).toEqual(['workflow:run-1'])
+  })
+
+  it('renders the read-only canvas with the selected run overlay and no write', () => {
+    const module = loadModule()
+    const WorkflowPage = module.WorkflowPage as (props: Record<string, unknown>) => unknown
+    const overlayRun = {
+      ...run,
+      id: 'workflow:run-2',
+      status: 'running',
+      steps: [
+        { id: 'one', title: 'One', state: 'running' },
+        { id: 'two', title: 'Two', state: 'done' },
+      ],
+    }
+    const opened: string[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      const tree = WorkflowPage({
+        definitionId: 'change-intake',
+        phase: 'ready',
+        document: {
+          ...DEFINITIONS[0],
+          description: 'Intake a new OpenSpec change.',
+          steps: [
+            { id: 'one', title: 'One', executor: 'main', next: 'two' },
+            { id: 'two', title: 'Two', executor: 'tool' },
+          ],
+        },
+        runs: { items: [overlayRun] },
+        events: { items: [] },
+        t: translate,
+        onBack: () => {},
+        onOpenRun: (runId: string) => opened.push(runId),
+        onLoadRuns: () => {},
+        onLoadHistory: () => {},
+        onRetry: () => {},
+      })
+      const rendered = elements(tree)
+      const flow = rendered.find((element) => element.type === 'reactflow')
+      expect(flow).toBeDefined()
+      // Read-only: no drag, no connect, no layout write.
+      expect(flow?.props.nodesDraggable).toBe(false)
+      expect(flow?.props.nodesConnectable).toBe(false)
+      expect(flow?.props.onConnect).toBeUndefined()
+      expect(flow?.props.onNodeDragStop).toBeUndefined()
+      const nodes = flow?.props.nodes as { id: string; data: { runState?: string } }[]
+      expect(nodes.find((node) => node.id === 'step:one')?.data.runState).toBe('running')
+      expect(nodes.find((node) => node.id === 'step:two')?.data.runState).toBe('done')
+      // The ordered step table stays below the canvas as the fallback.
+      expect(text(tree)).toContain('next: two')
+      // A node click selects for inspection and starts nothing.
+      const click = flow?.props.onNodeClick as
+        | ((event: unknown, node: { id: string }) => void)
+        | undefined
+      if (click === undefined) throw new Error('no node click handler')
+      click({}, { id: 'step:one' })
+      expect(opened).toEqual([])
+      // Choosing an overlay run never opens the run detail page.
+      const select = rendered.find(
+        (element) =>
+          element.type === 'select' && element.props['aria-label'] === 'workflow.overlayRun',
+      )
+      expect(select?.props.value).toBe('')
+      const change = select?.props.onChange as ((event: unknown) => void) | undefined
+      if (change === undefined) throw new Error('no overlay run selector')
+      change({ currentTarget: { value: 'workflow:run-2' } })
+      expect(opened).toEqual([])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('builds the canvas model from the deterministic layout and the selected run', () => {
+    const module = loadModule()
+    const workflowCanvasModel = module.workflowCanvasModel as (
+      document: Record<string, unknown>,
+      runs: readonly Record<string, unknown>[],
+      selectedRunId?: string,
+    ) =>
+      | {
+          graph: { nodes: { id: string; position: { x: number; y: number } }[] }
+          overlay: { run?: { id: string } }
+          run?: { id: string }
+        }
+      | undefined
+    const document = {
+      ...DEFINITIONS[0],
+      steps: [{ id: 'one', title: 'One', executor: 'main', next: 'end' }],
+    }
+    const runs = [
+      { ...run, id: 'workflow:run-new', steps: [{ id: 'one', state: 'running' }] },
+      { ...run, id: 'workflow:run-old', steps: [{ id: 'one', state: 'done' }] },
+    ]
+    const latest = workflowCanvasModel(document, runs)
+    expect(latest?.run?.id).toBe('workflow:run-new')
+    const older = workflowCanvasModel(document, runs, 'workflow:run-old')
+    expect(older?.run?.id).toBe('workflow:run-old')
+    expect(older?.overlay.run?.id).toBe('workflow:run-old')
+    // Only the overlay changes: the laid-out nodes and positions stay identical.
+    expect(older?.graph.nodes.map((node) => node.id)).toEqual(
+      latest?.graph.nodes.map((node) => node.id),
+    )
+    expect(older?.graph.nodes.map((node) => node.position)).toEqual(
+      latest?.graph.nodes.map((node) => node.position),
+    )
+    expect(workflowCanvasModel({ ...document, trigger: undefined }, runs)).toBeUndefined()
   })
 })

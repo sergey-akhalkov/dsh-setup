@@ -275,6 +275,21 @@ describe('draft, dirty tracking, and save', () => {
     expect(saved.layoutRevision).toBe('layout-3')
   })
 
+  it('carries the description into the save payload and drops it when cleared', async () => {
+    const withText = fakeApi()
+    const described = patchDefinition(opened(), { description: 'A visible summary.' })
+    expect(described.document.definition.description).toBe('A visible summary.')
+    await save(described, { api: withText.api, taken: TAKEN })
+    expect(withText.calls.saveDefinition[0]?.definition.description).toBe('A visible summary.')
+
+    const clearedApi = fakeApi()
+    const cleared = patchDefinition(opened(), { description: undefined })
+    expect(cleared.document.definition.description).toBeUndefined()
+    await save(cleared, { api: clearedApi.api, taken: TAKEN })
+    const sent = clearedApi.calls.saveDefinition[0]?.definition
+    expect(sent === undefined || 'description' in sent).toBe(false)
+  })
+
   it('leaves the file unchanged when the editor is reloaded instead of saved', async () => {
     const { api, store, calls } = fakeApi()
     const dirty = patchStep(opened(), nodeIdOf('one'), { title: 'Changed' })

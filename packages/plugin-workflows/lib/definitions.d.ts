@@ -168,10 +168,14 @@ export interface Step {
     readonly branch?: BranchSpec;
     readonly loop?: LoopSpec;
 }
+/** The longest human-readable description a definition may carry. */
+export declare const MAX_DEFINITION_DESCRIPTION = 500;
 export interface Definition {
     readonly v: typeof DEFINITION_SCHEMA_VERSION;
     readonly id: string;
     readonly name: string;
+    /** Optional human-readable summary; never used by the engine. */
+    readonly description?: string;
     readonly version: number;
     readonly trigger: DefinitionTrigger;
     readonly settings: DefinitionSettings;

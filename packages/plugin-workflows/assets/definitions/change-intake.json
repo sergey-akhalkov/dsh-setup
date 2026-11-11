@@ -2,6 +2,7 @@
   "v": 1,
   "id": "change-intake",
   "name": "OpenSpec change intake",
+  "description": "Collect the requirements, architecture, and interface, then create and review an OpenSpec change.",
   "version": 1,
   "trigger": {
     "kind": "tool.pre-execute",

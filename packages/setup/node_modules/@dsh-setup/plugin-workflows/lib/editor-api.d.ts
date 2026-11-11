@@ -32,6 +32,8 @@ export type DefinitionSource = 'shipped' | 'local';
 export interface EditorDefinitionEntry {
     readonly id: string;
     readonly name: string;
+    /** The optional human-readable definition summary the editor list shows. */
+    readonly description?: string;
     readonly version: number;
     readonly stepCount: number;
     readonly source: DefinitionSource;

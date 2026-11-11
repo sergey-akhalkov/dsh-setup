@@ -55,7 +55,18 @@ export const EVIDENCE_KINDS = [
     'declaration',
 ];
 export const MAX_LOOP_ITERATIONS = 50;
-const DEFINITION_KEYS = new Set(['v', 'id', 'name', 'version', 'trigger', 'settings', 'steps']);
+/** The longest human-readable description a definition may carry. */
+export const MAX_DEFINITION_DESCRIPTION = 500;
+const DEFINITION_KEYS = new Set([
+    'v',
+    'id',
+    'name',
+    'description',
+    'version',
+    'trigger',
+    'settings',
+    'steps',
+]);
 const SETTINGS_KEYS = new Set([
     'allowModelStart',
     'risk',
@@ -136,6 +147,16 @@ function nonEmptyString(value, definition, field) {
         fail(definition, field, 'must be a non-empty string');
     }
     return value;
+}
+/** The optional description: display text, validated but never interpreted. */
+function optionalDescription(value, definition) {
+    if (value === undefined)
+        return undefined;
+    const text = nonEmptyString(value, definition, 'description');
+    if (text.length > MAX_DEFINITION_DESCRIPTION) {
+        fail(definition, 'description', `must be at most ${String(MAX_DEFINITION_DESCRIPTION)} characters`);
+    }
+    return text;
 }
 function positiveInteger(value, definition, field) {
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
@@ -761,6 +782,7 @@ export function validateDefinition(raw, source = 'definition') {
         fail(definition, 'v', `must be ${String(DEFINITION_SCHEMA_VERSION)}`);
     }
     const name = nonEmptyString(raw.name, definition, 'name');
+    const description = optionalDescription(raw.description, definition);
     const version = positiveInteger(raw.version, definition, 'version');
     const triggerValue = trigger(raw.trigger, definition);
     const settingsValue = settings(raw.settings, definition);
@@ -788,6 +810,7 @@ export function validateDefinition(raw, source = 'definition') {
         v: DEFINITION_SCHEMA_VERSION,
         id: definition,
         name,
+        ...(description === undefined ? {} : { description }),
         version,
         trigger: triggerValue,
         settings: settingsValue,

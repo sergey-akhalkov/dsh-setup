@@ -243,17 +243,31 @@ export interface Step {
   readonly loop?: LoopSpec
 }
 
+/** The longest human-readable description a definition may carry. */
+export const MAX_DEFINITION_DESCRIPTION = 500
+
 export interface Definition {
   readonly v: typeof DEFINITION_SCHEMA_VERSION
   readonly id: string
   readonly name: string
+  /** Optional human-readable summary; never used by the engine. */
+  readonly description?: string
   readonly version: number
   readonly trigger: DefinitionTrigger
   readonly settings: DefinitionSettings
   readonly steps: readonly Step[]
 }
 
-const DEFINITION_KEYS = new Set(['v', 'id', 'name', 'version', 'trigger', 'settings', 'steps'])
+const DEFINITION_KEYS = new Set([
+  'v',
+  'id',
+  'name',
+  'description',
+  'version',
+  'trigger',
+  'settings',
+  'steps',
+])
 const SETTINGS_KEYS = new Set([
   'allowModelStart',
   'risk',
@@ -343,6 +357,20 @@ function nonEmptyString(value: unknown, definition: string, field: string): stri
     fail(definition, field, 'must be a non-empty string')
   }
   return value
+}
+
+/** The optional description: display text, validated but never interpreted. */
+function optionalDescription(value: unknown, definition: string): string | undefined {
+  if (value === undefined) return undefined
+  const text = nonEmptyString(value, definition, 'description')
+  if (text.length > MAX_DEFINITION_DESCRIPTION) {
+    fail(
+      definition,
+      'description',
+      `must be at most ${String(MAX_DEFINITION_DESCRIPTION)} characters`,
+    )
+  }
+  return text
 }
 
 function positiveInteger(value: unknown, definition: string, field: string): number {
@@ -1038,6 +1066,7 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
     fail(definition, 'v', `must be ${String(DEFINITION_SCHEMA_VERSION)}`)
   }
   const name = nonEmptyString(raw.name, definition, 'name')
+  const description = optionalDescription(raw.description, definition)
   const version = positiveInteger(raw.version, definition, 'version')
   const triggerValue = trigger(raw.trigger, definition)
   const settingsValue = settings(raw.settings, definition)
@@ -1070,6 +1099,7 @@ export function validateDefinition(raw: unknown, source = 'definition'): Definit
     v: DEFINITION_SCHEMA_VERSION,
     id: definition,
     name,
+    ...(description === undefined ? {} : { description }),
     version,
     trigger: triggerValue,
     settings: settingsValue,

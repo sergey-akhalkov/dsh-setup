@@ -43,6 +43,7 @@ const DEFINITION = {
   v: 1,
   id: 'editor-demo',
   name: 'Editor demo',
+  description: 'A definition edited in the design page.',
   version: 1,
   trigger: { kind: 'turn.stopping', match: {}, mode: 'shadow', dedupe: 'turn' },
   settings: {
@@ -143,7 +144,11 @@ describe('editor read API', () => {
     const local = (
       after.body.definitions as { id: string; revision: string; source: string }[]
     ).find((entry) => entry.id === 'editor-demo')
-    expect(local).toMatchObject({ source: 'local', revision: installedRevision })
+    expect(local).toMatchObject({
+      source: 'local',
+      revision: installedRevision,
+      description: 'A definition edited in the design page.',
+    })
 
     const templates = await call(routes, EDITOR_TEMPLATES_ROUTE)
     expect(templates.status).toBe(200)
@@ -219,16 +224,27 @@ describe('literal read routes', () => {
             source: 'local',
             revision: 'rev-2',
           },
+          {
+            id: 'entry-only',
+            name: 'Entry only',
+            description: 'Listed without a document.',
+            version: 1,
+            source: 'local',
+            revision: 'rev-3',
+          },
         ],
       }),
-      definitionDocumentFor: async (_workspace, id) => ({
-        definition:
-          id === 'fresh-local'
-            ? validateDefinition({ ...DEFINITION, id: 'fresh-local', name: 'Fresh local' })
-            : validateDefinition(DEFINITION),
-        revision: id === 'fresh-local' ? 'rev-2' : 'rev-1',
-        source: 'local',
-      }),
+      definitionDocumentFor: async (_workspace, id) => {
+        if (id === 'entry-only') return undefined
+        return {
+          definition:
+            id === 'fresh-local'
+              ? validateDefinition({ ...DEFINITION, id: 'fresh-local', name: 'Fresh local' })
+              : validateDefinition(DEFINITION),
+          revision: id === 'fresh-local' ? 'rev-2' : 'rev-1',
+          source: 'local',
+        }
+      },
     })
     const fetchRoute = async (
       path: string,
@@ -250,9 +266,23 @@ describe('literal read routes', () => {
     const listed = await fetchRoute(DEFINITIONS_ROUTE)
     expect(listed.status).toBe(200)
     const listedLocal = (
-      listed.body.definitions as { id: string; revision: string; source: string }[]
+      listed.body.definitions as {
+        id: string
+        revision: string
+        source: string
+        description?: string
+      }[]
     ).find((entry) => entry.id === 'editor-demo')
-    expect(listedLocal).toMatchObject({ revision: 'rev-1', source: 'local' })
+    expect(listedLocal).toMatchObject({
+      revision: 'rev-1',
+      source: 'local',
+      description: 'A definition edited in the design page.',
+    })
+    // An entry with no readable document still carries its list description.
+    const entryOnly = (listed.body.definitions as { id: string; description?: string }[]).find(
+      (entry) => entry.id === 'entry-only',
+    )
+    expect(entryOnly).toMatchObject({ description: 'Listed without a document.' })
     // A local definition newer than the runtime cache is still listed.
     const fresh = (
       listed.body.definitions as { id: string; revision: string; source: string; name: string }[]
@@ -262,6 +292,9 @@ describe('literal read routes', () => {
     expect(one.status).toBe(200)
     expect(one.body).toMatchObject({ revision: 'rev-1', source: 'local' })
     expect((one.body.definition as { id: string }).id).toBe('editor-demo')
+    expect((one.body.definition as { description?: string }).description).toBe(
+      'A definition edited in the design page.',
+    )
   })
 })
 

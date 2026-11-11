@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "redesign-workflow-design-surface",
+  "scope": "task",
+  "taskId": "8db4e399a087c49c",
+  "digest": "b1c90698148611e95170169193838aad912a458ef84ccbdd754b53a1f9cf0f7e",
+  "worktreeDigest": "3157642e3c75643423b90ee35e739287fd1365e7447cf6337ad4c2d6a12d0918",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-11T11:23:09.805Z"
+}

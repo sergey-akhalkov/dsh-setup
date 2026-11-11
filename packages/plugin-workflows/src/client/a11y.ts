@@ -88,9 +88,9 @@ export function isConnectKey(key: string): boolean {
   return key === 'c' || key === 'C'
 }
 
-/** The palette label the keyboard user hears for one step kind. */
+/** The palette label the keyboard user hears for one step kind or executor. */
 export function paletteLabel(kind: string): string {
-  return kind === 'step' ? 'Add step' : `Add ${kind}`
+  return kind === 'step' || kind === 'main' ? 'Add step' : `Add ${kind}`
 }
 
 /** The canvas fallback must not touch the host: it is a client-only state. */

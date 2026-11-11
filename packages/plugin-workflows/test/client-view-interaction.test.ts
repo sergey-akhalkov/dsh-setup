@@ -34,6 +34,7 @@ const BASE_EXTERNAL = [
   'react/jsx-runtime',
   'react/jsx-dev-runtime',
   '@deepseek-ai/dsh-client-ui-primitives',
+  '@xyflow/react',
 ]
 
 interface Runtime {
@@ -61,7 +62,11 @@ function createRuntime(
   let dirty = false
 
   const React = {
-    Component: class {},
+    Component: class {
+      constructor(props: Record<string, unknown>) {
+        ;(this as { props?: Record<string, unknown> }).props = props
+      }
+    },
     createContext: (value: unknown) => ({
       Provider: (props: unknown) => props,
       Consumer: () => null,
@@ -121,6 +126,8 @@ function createRuntime(
     }),
     SegmentedControl: (props: Record<string, unknown>) => ({ type: 'div', props }),
     AnimatedRows: (props: Record<string, unknown>) => ({ type: 'div', props }),
+    DisclosureRow: (props: Record<string, unknown>) => ({ type: 'disclosure', props }),
+    Menu: (props: Record<string, unknown>) => ({ type: 'menu', props }),
     relativeTime: (at: number, now: number) => {
       const minutes = Math.floor(Math.max(0, now - at) / 60_000)
       return minutes > 0 ? { unit: 'minutes', n: minutes } : { unit: 'now', n: 0 }
@@ -154,6 +161,13 @@ function createRuntime(
         if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment }
         if (id === 'react') return React
         if (id === '@deepseek-ai/dsh-client-ui-primitives') return primitives
+        if (id === '@xyflow/react') {
+          return {
+            ReactFlow: (props: Record<string, unknown>) => ({ type: 'reactflow', props }),
+            Handle: (props: Record<string, unknown>) => ({ type: 'handle', props }),
+            Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+          }
+        }
         return requireFallback(id)
       },
     )
@@ -189,6 +203,20 @@ function createRuntime(
   }
 }
 
+/** Render one element type: a class component through `new`, a function by call. */
+function renderComponent(type: unknown, props: Record<string, unknown>): unknown {
+  const prototype = (type as { prototype?: { render?: unknown } }).prototype
+  if (prototype !== undefined && typeof prototype.render === 'function') {
+    const instance = new (
+      type as new (
+        props: Record<string, unknown>,
+      ) => { render: () => unknown }
+    )(props)
+    return instance.render()
+  }
+  return (type as (props: Record<string, unknown>) => unknown)(props)
+}
+
 function renderElements(node: unknown, found: Element[] = []): Element[] {
   if (node === null || typeof node !== 'object') return found
   if (Array.isArray(node)) {
@@ -197,10 +225,7 @@ function renderElements(node: unknown, found: Element[] = []): Element[] {
   }
   const element = node as Element
   if (typeof element.type === 'function') {
-    renderElements(
-      (element.type as (props: Record<string, unknown>) => unknown)(element.props),
-      found,
-    )
+    renderElements(renderComponent(element.type, element.props), found)
     return found
   }
   if (element.type !== undefined && element.props !== undefined) {
@@ -217,7 +242,7 @@ function renderText(node: unknown): string {
   if (Array.isArray(node)) return node.map(renderText).join('')
   const element = node as Element
   if (typeof element.type === 'function') {
-    return renderText((element.type as (props: Record<string, unknown>) => unknown)(element.props))
+    return renderText(renderComponent(element.type, element.props))
   }
   return renderText(element.props?.children)
 }
@@ -929,36 +954,12 @@ describe('Workflows session view interaction', () => {
     expect(tracker.violations).toEqual([])
   })
 
-  it('loads the definition, trigger, and receipt sections from the read-only endpoints', async () => {
+  it('loads the diagnostics trigger and receipt sections from the read-only endpoints', async () => {
     const runtime = createRuntime('./src/client/design-page.tsx')
     const module = runtime.load() as {
       DesignPageBody?: (props: Record<string, unknown>) => unknown
     }
     const tracker = installFetch((url) => {
-      if (url.includes('/api/workflows/definitions')) {
-        return json({
-          definitions: [
-            {
-              id: 'change-intake',
-              name: 'OpenSpec change intake',
-              version: 1,
-              trigger: { kind: 'tool.pre-execute', mode: 'active', dedupe: 'name' },
-              risk: 'low',
-              allowModelStart: false,
-              gateOwnership: 'own',
-              steps: [
-                {
-                  id: 'requirements',
-                  title: 'Requirements',
-                  executor: 'main',
-                  ownership: 'own',
-                  blockTurnClose: true,
-                },
-              ],
-            },
-          ],
-        })
-      }
       if (url.includes('/api/workflows/triggers')) {
         return json({
           triggers: [
@@ -990,18 +991,125 @@ describe('Workflows session view interaction', () => {
         close: () => {},
       })
     const tree = await runtime.settle(render)
-    expect(tracker.urls).toHaveLength(3)
+    expect(tracker.urls).toHaveLength(2)
+    expect(tracker.urls.some((url) => url.includes('/api/workflows/definitions'))).toBe(false)
     const text = renderText(tree)
-    expect(text).toContain('change-intake')
+    expect(text).toContain('design.intro')
+    expect(renderElements(tree).find((element) => element.type === 'disclosure')?.props.title).toBe(
+      'design.diagnostics',
+    )
+    // With no installed workflow the workbench still shows the blank canvas surface.
+    expect(
+      renderElements(tree).some(
+        (element) => element.props.className === 'dsh-wf-canvas dsh-wf-blank-canvas',
+      ),
+    ).toBe(true)
     expect(text).toContain('tool.pre-execute')
     expect(text).toContain('run-created')
     expect(text).toContain('auth')
     expect(text).toContain('adoption')
-    expect(text).toContain('design.intro')
-    expect(tracker.urls).toHaveLength(3)
-    expect(tracker.urls.some((url) => url.includes('/api/workflows/definitions'))).toBe(true)
     expect(tracker.urls.some((url) => url.includes('/api/workflows/triggers'))).toBe(true)
     expect(tracker.urls.some((url) => url.includes('/api/workflows/receipts'))).toBe(true)
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('opens the first installed workflow on the canvas with the rail and no write', async () => {
+    const runtime = createRuntime('./src/client/design.tsx')
+    const definition = {
+      v: 1,
+      id: 'change-intake',
+      name: 'OpenSpec change intake',
+      description: 'Intake a new change.',
+      version: 1,
+      trigger: { kind: 'tool.pre-execute', match: {}, mode: 'active', dedupe: 'name' },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'one',
+          title: 'One',
+          executor: 'main',
+          prompt: 'One.',
+          evidence: { kind: 'declaration' },
+          nonCritical: true,
+          next: 'end',
+        },
+      ],
+    }
+    const tracker = installFetch((url) => {
+      if (url.includes('/api/workflows/editor/definitions')) {
+        return json({
+          definitions: [
+            {
+              id: 'change-intake',
+              name: 'OpenSpec change intake',
+              description: 'Intake a new change.',
+              version: 1,
+              stepCount: 1,
+              source: 'shipped',
+              revision: null,
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/editor/templates')) return json({ templates: [] })
+      if (url.includes('/api/workflows/editor/drafts')) return json({ drafts: [] })
+      if (url.includes('/api/workflows/editor/definition')) {
+        return json({ definition, revision: null, source: 'shipped' })
+      }
+      if (url.includes('/api/workflows/editor/layout'))
+        return json({ layout: null, revision: null })
+      if (url.includes('/api/workflows/runs')) return json({ runs: [] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const module = runtime.load() as { DesignMode?: (props: Record<string, unknown>) => unknown }
+    const mode = module.DesignMode
+    if (mode === undefined) throw new Error('DesignMode is not exported')
+    const tree = await runtime.settle(() =>
+      mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 }),
+    )
+    const walk = (node: unknown, predicate: (element: Element) => boolean): Element | undefined => {
+      if (node === null || typeof node !== 'object') return undefined
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          const found = walk(child, predicate)
+          if (found !== undefined) return found
+        }
+        return undefined
+      }
+      const element = node as Element
+      if (element.props === undefined || element.props === null) return undefined
+      if (predicate(element)) return element
+      for (const value of Object.values(element.props)) {
+        const found = walk(value, predicate)
+        if (found !== undefined) return found
+      }
+      return undefined
+    }
+    // The rail is the first installed workflow's code path.
+    expect(
+      walk(
+        tree,
+        (element) =>
+          Array.isArray(element.props.definitions) &&
+          (element.props.definitions as { id: string }[]).some(
+            (entry) => entry.id === 'change-intake',
+          ),
+      ),
+    ).toBeDefined()
+    // The page opened the definition on the read-only canvas, not a list.
+    const boundary = walk(
+      tree,
+      (element) => element.props.fallback !== undefined && element.props.onError !== undefined,
+    )
+    const canvas = boundary?.props.children as Element | undefined
+    const nodes = canvas?.props.nodes as { kind: string }[] | undefined
+    expect(nodes?.map((node) => node.kind)).toEqual(['trigger', 'step', 'end'])
     expect(tracker.violations).toEqual([])
   })
 

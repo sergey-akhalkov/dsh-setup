@@ -2,6 +2,7 @@
   "v": 1,
   "id": "retro",
   "name": "Work checkpoint",
+  "description": "Require a fresh work checkpoint before a turn closes after the turn made progress.",
   "version": 1,
   "trigger": {
     "kind": "turn.stopping",

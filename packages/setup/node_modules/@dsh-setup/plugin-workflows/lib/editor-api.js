@@ -174,6 +174,18 @@ async function readLocal(workspace, id) {
     }
     return { definition: validateDefinition(raw, id), revision: revisionOf(bytes), bytes };
 }
+/** The editor's list entry for one definition; the description stays optional. */
+function editorEntry(definition, source, revision) {
+    return {
+        id: definition.id,
+        name: definition.name,
+        ...(definition.description === undefined ? {} : { description: definition.description }),
+        version: definition.version,
+        stepCount: definition.steps.length,
+        source,
+        revision,
+    };
+}
 /** Local definitions plus the shipped set; a local file shadows its shipped id. */
 async function listDefinitions(workspace) {
     const errors = [];
@@ -181,14 +193,7 @@ async function listDefinitions(workspace) {
     const local = new Map();
     if (await hasLinkedAncestor(workspace)) {
         return {
-            definitions: shipped.map((definition) => ({
-                id: definition.id,
-                name: definition.name,
-                version: definition.version,
-                stepCount: definition.steps.length,
-                source: 'shipped',
-                revision: null,
-            })),
+            definitions: shipped.map((definition) => editorEntry(definition, 'shipped', null)),
             errors: ['a workflow directory is a link; local definitions are refused'],
         };
     }
@@ -213,14 +218,7 @@ async function listDefinitions(workspace) {
             const read = await readLocal(workspace, id);
             if (read === undefined)
                 continue;
-            local.set(id, {
-                id: read.definition.id,
-                name: read.definition.name,
-                version: read.definition.version,
-                stepCount: read.definition.steps.length,
-                source: 'local',
-                revision: read.revision,
-            });
+            local.set(id, editorEntry(read.definition, 'local', read.revision));
         }
         catch (error) {
             errors.push(bounded(error));
@@ -232,14 +230,7 @@ async function listDefinitions(workspace) {
             local.delete(definition.id);
             return override;
         }
-        return {
-            id: definition.id,
-            name: definition.name,
-            version: definition.version,
-            stepCount: definition.steps.length,
-            source: 'shipped',
-            revision: null,
-        };
+        return editorEntry(definition, 'shipped', null);
     });
     for (const entry of [...local.values()].sort((left, right) => left.id.localeCompare(right.id))) {
         definitions.push(entry);
@@ -582,12 +573,7 @@ export function createEditorRoutes(services) {
             if ('response' in resolved)
                 return resolved.response;
             const templates = loadShippedDefinitions().map((definition) => ({
-                id: definition.id,
-                name: definition.name,
-                version: definition.version,
-                stepCount: definition.steps.length,
-                source: 'shipped',
-                revision: null,
+                ...editorEntry(definition, 'shipped', null),
                 definition,
             }));
             return json(200, { templates });

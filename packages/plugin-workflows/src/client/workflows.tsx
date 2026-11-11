@@ -1,36 +1,10 @@
-import { Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import type { Translate } from './panel.tsx'
 
 /**
- * The obligation-engine sections of the Workflows view: the installed
- * definitions, their triggers and steps, and the authenticated receipts. They
+ * The authenticated receipts of the design page's Diagnostics disclosure. They
  * are read-only; a display action never starts a run or writes a record.
  */
-
-export interface DefinitionStepView {
-  readonly id: string
-  readonly title: string
-  readonly executor: string
-  readonly ownership: string
-  readonly blockTurnClose: boolean
-}
-
-export interface DefinitionView {
-  readonly id: string
-  readonly name: string
-  readonly version: number
-  readonly trigger: {
-    readonly kind: string
-    readonly mode: string
-    readonly dedupe: string
-    readonly match?: Readonly<Record<string, string>>
-  }
-  readonly risk: string
-  readonly allowModelStart: boolean
-  readonly gateOwnership: string
-  readonly steps: readonly DefinitionStepView[]
-}
 
 export interface ReceiptView {
   readonly change: string
@@ -39,65 +13,8 @@ export interface ReceiptView {
   readonly issuedAt: number
 }
 
-export function definitionsUrl(sessionId: string): string {
-  return `/api/workflows/definitions?session=${encodeURIComponent(sessionId)}`
-}
-
 export function receiptsUrl(sessionId: string): string {
   return `/api/workflows/receipts?session=${encodeURIComponent(sessionId)}`
-}
-
-function filterSummary(match: Readonly<Record<string, string>> | undefined): string {
-  if (match === undefined) return 'any'
-  const entries = Object.entries(match)
-  return entries.length === 0 ? 'any' : entries.map(([key, value]) => `${key}: ${value}`).join(', ')
-}
-
-/** The Definitions section: trigger, mode, risk, and the owned/deferred steps. */
-export function DefinitionsTable(props: {
-  readonly definitions: readonly DefinitionView[]
-  readonly t: Translate
-}): ReactNode {
-  const { definitions, t } = props
-  return (
-    <section className="dsh-wf-section" data-section="definitions">
-      <h3 className="dsh-wf-heading">{t('definitions.heading')}</h3>
-      {definitions.length === 0 ? (
-        <p className="dsh-wf-muted">{t('definitions.empty')}</p>
-      ) : (
-        <ul className="dsh-wf-rows">
-          {definitions.map((definition) => (
-            <li key={definition.id} className="dsh-wf-def-row" data-definition={definition.id}>
-              <div className="dsh-wf-row-head">
-                <span className="dsh-wf-subject">{definition.name}</span>
-                <span className="dsh-wf-muted">
-                  {definition.id} · v{definition.version}
-                </span>
-                <Tag tone="quiet">{definition.trigger.mode}</Tag>
-                <Tag tone="quiet">{`${t('definitions.risk')}: ${definition.risk}`}</Tag>
-              </div>
-              <div className="dsh-wf-row-meta">
-                <span className="dsh-wf-chip">{definition.trigger.kind}</span>
-                <span className="dsh-wf-muted dsh-wf-mono">
-                  {filterSummary(definition.trigger.match)}
-                </span>
-                <span className="dsh-wf-muted">
-                  {definition.trigger.mode} / {definition.gateOwnership}
-                </span>
-              </div>
-              <div className="dsh-wf-chips">
-                {definition.steps.map((step) => (
-                  <span key={step.id} className="dsh-wf-chip">
-                    {step.id}:{step.executor}/{step.ownership}
-                  </span>
-                ))}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
 }
 
 /** The Receipts section: one row per authenticated completion/adoption receipt. */

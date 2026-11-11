@@ -60,6 +60,7 @@ export interface WorkflowApiServices {
     readonly definitions: readonly {
       readonly id: string
       readonly name: string
+      readonly description?: string
       readonly version: number
       readonly source: 'shipped' | 'local'
       readonly revision: string | null
@@ -395,6 +396,7 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       const summary = (definition: Definition): Record<string, unknown> => ({
         id: definition.id,
         name: definition.name,
+        ...(definition.description === undefined ? {} : { description: definition.description }),
         version: definition.version,
         trigger: definition.trigger,
         risk: definition.settings.risk,
@@ -423,7 +425,12 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
         }
         rows.push({
           ...(definition === undefined
-            ? { id: entry.id, name: entry.name, version: entry.version }
+            ? {
+                id: entry.id,
+                name: entry.name,
+                version: entry.version,
+                ...(entry.description === undefined ? {} : { description: entry.description }),
+              }
             : summary(definition)),
           source: entry.source,
           revision: entry.revision,

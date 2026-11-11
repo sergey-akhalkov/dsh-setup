@@ -35,6 +35,7 @@ export interface DefinitionDocument {
 export interface EditorListEntry {
   readonly id: string
   readonly name: string
+  readonly description?: string
   readonly version: number
   readonly stepCount: number
   readonly source: 'shipped' | 'local'
@@ -338,6 +339,17 @@ function executorOf(kind: NodeKind): string {
   return kind
 }
 
+/** The dedupe identities each trigger kind accepts; a kind change repairs it. */
+const DEDUPE_BY_TRIGGER: Readonly<Record<string, readonly string[]>> = {
+  'turn.stopping': ['none', 'turn'],
+  'tool.pre-execute': ['none', 'turn', 'callId', 'name'],
+  'tool.result': ['none', 'turn', 'callId'],
+  'fs.change': ['none', 'turn', 'path+content-hash'],
+  'subagent.end': ['none', 'turn'],
+  'review.record': ['none', 'turn', 'path+content-hash'],
+  intent: ['none', 'turn'],
+}
+
 /** The executor-specific fields a step must not keep when its executor changes. */
 const EXECUTOR_FIELDS = ['next', 'branch', 'loop', 'human', 'tool', 'subagent'] as const
 
@@ -368,7 +380,12 @@ function normalizeExecutor(step: GraphStep, executor: string): GraphStep {
       }
       if (executor === 'subagent') next.subagent = { provider: 'spawn', schema: { type: 'object' } }
     } else if (executor === 'tool') {
-      next.tool = { name: 'shell' }
+      // The host requires a declared tool call and a saveable evidence contract.
+      next.tool = { name: 'shell', command: 'echo ok' }
+      if (next.evidence === undefined) {
+        next.evidence = { kind: 'declaration' }
+        next.nonCritical = true
+      }
     }
   }
   return next as GraphStep
@@ -386,30 +403,68 @@ function rebuildDiagram(state: EditorState, definition: GraphDefinition): Editor
   return updateGraph({ ...state, document: { ...state.document, definition } }, nodes, graph.edges)
 }
 
-/** Add one unconnected step of the chosen kind; the pre-check names the gap. */
-export function addStep(state: EditorState, kind: NodeKind): EditorState {
+/**
+ * Add one unconnected step with a chosen executor. The step is built through
+ * `normalizeExecutor`, so every executor (including a tool step with its tool
+ * name allowlisted) starts from a shape the host validator accepts once the
+ * graph is connected. The pre-check still names the missing connection.
+ */
+export function addStepForExecutor(state: EditorState, executor: string): EditorState {
   const definition = state.document.definition
   const id = freeStepId(definition)
-  const step: GraphStep = {
-    id,
-    title: `Step ${String(definition.steps.length + 1)}`,
-    executor: executorOf(kind),
-    ...(kind === 'branch' ? { branch: { predicate: { '==': [1, 1] } } } : {}),
-    ...(kind === 'loop' ? { loop: { maxIterations: 3, stop: { '==': [1, 1] } } } : {}),
-    ...(kind === 'human' ? { human: { timeoutAction: 'block' } } : {}),
-  }
+  const step = normalizeExecutor(
+    { id, title: `Step ${String(definition.steps.length + 1)}`, executor: 'main' },
+    executor,
+  )
   const nodes: DiagramNode[] = [
     ...state.diagram.nodes,
     {
       id: nodeIdOf(id),
-      kind,
+      kind: nodeKindOf(step.executor),
       title: step.title,
       step,
       index: definition.steps.length,
       position: { x: 240, y: (definition.steps.length + 1) * 120 },
     },
   ]
-  return updateGraph(state, nodes, state.diagram.edges)
+  const next = updateGraph(state, nodes, state.diagram.edges)
+  const tool = step.tool as { readonly name: string } | undefined
+  if (tool === undefined) return next
+  const settings = next.document.definition.settings
+  const allowTools = Array.isArray(settings.allowTools) ? settings.allowTools.map(String) : []
+  if (allowTools.includes(tool.name)) return next
+  // The host refuses a tool step whose name is not allowlisted; a block action
+  // must leave a saveable definition, not one the user has to repair first.
+  return patchDefinition(next, {
+    settings: { ...settings, allowTools: [...allowTools, tool.name] },
+  })
+}
+
+/** Add one unconnected step of the chosen kind; the pre-check names the gap. */
+export function addStep(state: EditorState, kind: NodeKind): EditorState {
+  return addStepForExecutor(state, executorOf(kind))
+}
+
+/**
+ * Set the workflow trigger from a trigger block. A dedupe policy the new kind
+ * does not support would fail the host schema, so it falls back to the kind's
+ * first allowed policy; the trigger node title follows the change.
+ */
+export function setTriggerKind(state: EditorState, kind: string): EditorState {
+  const trigger = state.document.definition.trigger
+  const allowed = DEDUPE_BY_TRIGGER[kind] ?? ['none']
+  const current = typeof trigger.dedupe === 'string' ? trigger.dedupe : 'turn'
+  const dedupe = allowed.includes(current) ? current : (allowed[0] ?? 'none')
+  const next = patchDefinition(state, { trigger: { ...trigger, kind, dedupe } })
+  return {
+    ...next,
+    diagram: {
+      ...next.diagram,
+      nodes: next.diagram.nodes.map((node) =>
+        node.kind === 'trigger' ? { ...node, title: kind } : node,
+      ),
+    },
+  }
 }
 
 /** Connect one output. The target is a step id or the synthetic end node. */

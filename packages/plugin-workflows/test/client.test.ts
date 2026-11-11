@@ -12,12 +12,26 @@ function jsx(type: unknown, props: Record<string, unknown> | null): Element {
   return { type, props: props ?? {} }
 }
 
+/** Render one element type: a class component through `new`, a function by call. */
+function renderComponent(type: unknown, props: Record<string, unknown>): unknown {
+  const prototype = (type as { prototype?: { render?: unknown } }).prototype
+  if (prototype !== undefined && typeof prototype.render === 'function') {
+    const instance = new (
+      type as new (
+        props: Record<string, unknown>,
+      ) => { render: () => unknown }
+    )(props)
+    return instance.render()
+  }
+  return (type as (props: Record<string, unknown>) => unknown)(props)
+}
+
 function renderTree(node: unknown): unknown {
   if (node === null || typeof node !== 'object') return node
   if (Array.isArray(node)) return node.map(renderTree)
   const element = node as Element
   if (typeof element.type === 'function') {
-    return renderTree((element.type as (props: Record<string, unknown>) => unknown)(element.props))
+    return renderTree(renderComponent(element.type, element.props))
   }
   const props: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(element.props)) {
@@ -33,6 +47,10 @@ function elements(node: unknown, found: Element[] = []): Element[] {
     return found
   }
   const element = node as Element
+  if (typeof element.type === 'function') {
+    elements(renderComponent(element.type, element.props), found)
+    return found
+  }
   if (element.type !== undefined && element.props !== undefined) {
     found.push(element)
     for (const value of Object.values(element.props)) elements(value, found)
@@ -45,7 +63,11 @@ function childText(node: unknown): string {
   if (typeof node === 'number' || typeof node === 'boolean') return String(node)
   if (node === null || typeof node !== 'object') return ''
   if (Array.isArray(node)) return node.map(childText).join('')
-  return childText((node as Element).props?.children)
+  const element = node as Element
+  if (typeof element.type === 'function') {
+    return childText(renderComponent(element.type, element.props))
+  }
+  return childText(element.props?.children)
 }
 
 interface LoadedModule {
@@ -155,6 +177,7 @@ export * from './src/client/design-page.tsx'
       'react/jsx-runtime',
       'react/jsx-dev-runtime',
       '@deepseek-ai/dsh-client-ui-primitives',
+      '@xyflow/react',
     ],
     logLevel: 'silent',
   })
@@ -189,7 +212,11 @@ ${output.text}
     if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment }
     if (id === 'react') {
       return {
-        Component: class {},
+        Component: class {
+          constructor(props: Record<string, unknown>) {
+            ;(this as { props?: Record<string, unknown> }).props = props
+          }
+        },
         createContext: (value: unknown) => ({
           Provider: (props: unknown) => props,
           Consumer: () => null,
@@ -213,6 +240,13 @@ ${output.text}
           () => {},
         ],
         useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+      }
+    }
+    if (id === '@xyflow/react') {
+      return {
+        ReactFlow: (props: Record<string, unknown>) => ({ type: 'reactflow', props }),
+        Handle: (props: Record<string, unknown>) => ({ type: 'handle', props }),
+        Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
       }
     }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
@@ -1391,7 +1425,7 @@ describe('Workflow design page', () => {
     errors.mockRestore()
   })
 
-  it('renders the editor and the read-only workspace sections on the page', () => {
+  it('renders the workbench and the secondary diagnostics on the page', () => {
     const module = loadModule()
     const tree = renderTree(
       module.DesignPageBody?.({
@@ -1403,9 +1437,14 @@ describe('Workflow design page', () => {
     )
     const text = childText(tree)
     expect(text).toContain('design.intro')
-    expect(text).toContain('definitions.heading')
     expect(text).toContain('triggers.title')
     expect(text).toContain('receipts.heading')
+    // The removed definitions table must not return on the default surface.
+    expect(text).not.toContain('definitions.heading')
+    // The diagnostics are behind a closed disclosure, not on the default surface.
+    const disclosure = elements(tree).find((element) => element.type === 'disclosure')
+    expect(disclosure?.props.title).toBe('design.diagnostics')
+    expect(disclosure?.props.open).toBe(false)
     // The editor toolbar appears only once a definition is open.\n    expect(elements(tree).some((element) => element.type === 'menu')).toBe(false)
   })
 

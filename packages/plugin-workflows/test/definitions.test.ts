@@ -9,6 +9,7 @@ import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import {
   type Definition,
   loadShippedDefinitions,
+  MAX_DEFINITION_DESCRIPTION,
   resolveOwnership,
   validateDefinition,
 } from '../src/host/definitions.ts'
@@ -87,6 +88,9 @@ describe('workflow definition schema', () => {
     expect(intake).toBeDefined()
     const definition = intake as Definition
     expect(definition.name).toBe('OpenSpec change intake')
+    expect(definition.description).toBe(
+      'Collect the requirements, architecture, and interface, then create and review an OpenSpec change.',
+    )
     expect(definition.trigger).toMatchObject({
       kind: 'tool.pre-execute',
       mode: 'active',
@@ -130,11 +134,40 @@ describe('workflow definition schema', () => {
     expect(definition.steps.at(-1)?.evidence).toEqual({ kind: 'human', answer: 'yes' })
   })
 
+  it('gives every shipped definition a human description', () => {
+    for (const definition of loadShippedDefinitions()) {
+      expect(typeof definition.description, definition.id).toBe('string')
+      expect(definition.description?.trim(), definition.id).not.toBe('')
+    }
+  })
+
   it('loads a valid definition and keeps its normalized step by id', () => {
     const definition = validateDefinition(valid())
     expect(definition.id).toBe('auth-draft')
     expect(definition.steps[0]?.id).toBe('requirements')
     expect(definition.steps[0]?.next).toBe('end')
+  })
+
+  it('accepts an optional bounded description and keeps it out when absent', () => {
+    const withText = valid()
+    withText.description = 'Intake a new OpenSpec change.'
+    expect(validateDefinition(withText).description).toBe('Intake a new OpenSpec change.')
+    expect('description' in validateDefinition(valid())).toBe(false)
+    const longest = valid()
+    longest.description = 'x'.repeat(MAX_DEFINITION_DESCRIPTION)
+    expect(validateDefinition(longest).description).toHaveLength(MAX_DEFINITION_DESCRIPTION)
+    for (const bad of [1, '', '   ']) {
+      const definition = valid()
+      definition.description = bad
+      expect(() => validateDefinition(definition)).toThrow(
+        /definition "auth-draft" field "description"/u,
+      )
+    }
+    const tooLong = valid()
+    tooLong.description = 'x'.repeat(MAX_DEFINITION_DESCRIPTION + 1)
+    expect(() => validateDefinition(tooLong)).toThrow(
+      /field "description" must be at most 500 characters/u,
+    )
   })
 
   it('refuses an unknown field at every level with the definition and field', () => {

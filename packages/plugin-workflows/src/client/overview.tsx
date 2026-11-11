@@ -1,5 +1,10 @@
 import { Button, relativeTime, StateDot, Tag, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
+import { useState } from 'react'
+import { CanvasBoundary, DesignCanvas } from './canvas.tsx'
+import { type Diagram, definitionToGraph, type GraphDefinition } from './graph.ts'
+import { withLayout } from './layout.ts'
+import { type Overlay, overlayFor, withOverlay } from './overlay.ts'
 import {
   type DefinitionStatView,
   type DefinitionStepView,
@@ -23,6 +28,7 @@ import {
   type TriggerView,
 } from './panel.tsx'
 import { RunList, relativeLabel, runDot } from './run-history.tsx'
+import { FLOW_CSS } from './styles.ts'
 
 /**
  * The session overview grouped by trigger kind, the per-workflow page, and the
@@ -491,7 +497,31 @@ function Fact(props: { readonly label: string; readonly value: ReactNode }): Rea
   )
 }
 
-/** The workflow page: document facts, ordered chain, runs, and its history. */
+export interface WorkflowCanvasModel {
+  readonly graph: Diagram
+  readonly overlay: Overlay
+  readonly run?: RunView
+}
+
+/**
+ * The workflow page's read-only canvas model: the definition graph in the
+ * deterministic auto-layout with the selected run's overlay. The latest loaded
+ * run is the default; the layout sidecar is never read or written here.
+ */
+export function workflowCanvasModel(
+  document: DefinitionView,
+  runs: readonly RunView[],
+  selectedRunId?: string,
+): WorkflowCanvasModel | undefined {
+  if (document.trigger === undefined || document.steps === undefined) return undefined
+  const definition = document as unknown as GraphDefinition
+  const graph = withLayout(definitionToGraph(definition))
+  const run =
+    selectedRunId === undefined ? runs[0] : runs.find((entry) => entry.id === selectedRunId)
+  return { graph, overlay: overlayFor(run, definition), ...(run === undefined ? {} : { run }) }
+}
+
+/** The workflow page: document facts, read-only canvas and chain, runs, history. */
 export function WorkflowPage(props: {
   readonly definitionId: string
   readonly phase: 'loading' | 'ready' | 'error'
@@ -510,10 +540,15 @@ export function WorkflowPage(props: {
   onRetry(): void
 }): ReactNode {
   const { definitionId, document, t } = props
+  const [overlayRunId, setOverlayRunId] = useState<string>()
+  const [canvasSelection, setCanvasSelection] = useState<string>()
   const counts = props.trigger?.counts
   const risk = document?.risk ?? document?.settings?.risk
   const gateOwnership = document?.gateOwnership ?? document?.settings?.gateOwnership
   const chain = architectureChain(document?.steps, t)
+  const pageRuns = props.runs?.items ?? []
+  const canvas =
+    document === undefined ? undefined : workflowCanvasModel(document, pageRuns, overlayRunId)
   return (
     <section className="dsh-wf-detail" data-workflow-page={definitionId}>
       <div className="dsh-wf-detail-bar">
@@ -562,6 +597,59 @@ export function WorkflowPage(props: {
           </dl>
           <section className="dsh-wf-section" data-section="workflow-architecture">
             <h3 className="dsh-wf-heading">{t('workflow.architecture')}</h3>
+            {canvas === undefined ? null : (
+              <>
+                <style>{FLOW_CSS}</style>
+                <div className="dsh-wf-canvas-toolbar">
+                  <label>
+                    {t('workflow.overlayRun')}
+                    <select
+                      aria-label={t('workflow.overlayRun')}
+                      value={overlayRunId ?? ''}
+                      onChange={(event) =>
+                        setOverlayRunId(
+                          event.currentTarget.value === '' ? undefined : event.currentTarget.value,
+                        )
+                      }
+                      disabled={pageRuns.length === 0}
+                    >
+                      <option value="">{t('workflow.overlayLatest')}</option>
+                      {pageRuns.map((run) => (
+                        <option key={run.id} value={run.id}>
+                          {`${run.id} · ${run.status}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {canvas.overlay.versionsDiffer ? (
+                    <span className="dsh-wf-muted">{t('workflow.overlayDiffers')}</span>
+                  ) : null}
+                </div>
+                {canvas.overlay.notices.length === 0 ? null : (
+                  <p className="dsh-wf-issue" role="status">
+                    {canvas.overlay.notices.join(' ')}
+                  </p>
+                )}
+                <div
+                  className="dsh-wf-canvas dsh-wf-session-canvas"
+                  data-readonly="true"
+                  data-tab-group="workflow-canvas"
+                >
+                  <CanvasBoundary
+                    fallback={<p className="dsh-wf-muted">{t('workflow.canvasFallback')}</p>}
+                  >
+                    <DesignCanvas
+                      nodes={withOverlay(canvas.graph.nodes, canvas.overlay)}
+                      edges={canvas.graph.edges}
+                      {...(canvasSelection === undefined ? {} : { selected: canvasSelection })}
+                      focusKey={`${document?.id ?? definitionId}:${String(document?.version ?? 0)}:${canvas.run?.id ?? 'none'}`}
+                      readOnly
+                      onSelect={setCanvasSelection}
+                    />
+                  </CanvasBoundary>
+                </div>
+              </>
+            )}
             {chain.length === 0 ? (
               <p className="dsh-wf-muted">{t('workflow.noSteps')}</p>
             ) : (

@@ -11,7 +11,7 @@ import {
 import { CanvasBoundary, DesignCanvas } from './canvas.tsx'
 import { connectChoices, EDGE_LABELS } from './edges.ts'
 import {
-  addStep,
+  addStepForExecutor,
   blankDefinition,
   connectSteps,
   copyDefinition,
@@ -37,15 +37,17 @@ import {
   save,
   saveAsCopy,
   setMode,
+  setTriggerKind,
   type TemplateEntry,
 } from './editor.ts'
 import { fetchEditorApi } from './editor-client.ts'
-import type { EdgeKind, NodeKind } from './graph.ts'
+import { type EdgeKind, TRIGGER_NODE } from './graph.ts'
 import { ListEditor } from './list.tsx'
 import { overlayFor, withOverlay } from './overlay.ts'
 import { PaletteMenu } from './palette.tsx'
 import type { RunView, Translate } from './panel.tsx'
 import { PropertyPanel } from './properties.tsx'
+import { defaultDefinitionId, WorkflowRail } from './rail.tsx'
 import { activeRun, createRunSelection } from './run-selection.ts'
 import { FLOW_CSS } from './styles.ts'
 
@@ -238,6 +240,17 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     }
   }
 
+  // The page opens on the first installed workflow. A failed open is reported
+  // and never retried automatically; the rail stays the explicit picker.
+  const autoOpenTried = useRef(false)
+  useEffect(() => {
+    if (autoOpenTried.current || editor !== undefined || loading) return
+    const first = defaultDefinitionId(library.definitions)
+    if (first === undefined) return
+    autoOpenTried.current = true
+    void open(first)
+  }, [library, editor, loading])
+
   const reloadCurrent = async (): Promise<void> => {
     if (editor === undefined) return
     setLoading(true)
@@ -359,12 +372,19 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     action()
   }
 
-  /** Add one step from the page's `Add step` menu. */
-  const addFromPalette = (kind: NodeKind): void => {
+  /** Add one step from the block palette; the editor builds its executor shape. */
+  const addExecutor = (executor: string): void => {
     if (editor === undefined) return
-    const next = addStep(editor, kind)
+    const next = addStepForExecutor(editor, executor)
     apply(next)
     setSelected(next.diagram.nodes.at(-1)?.id)
+  }
+
+  /** A trigger block patches `trigger.kind` and selects the trigger node. */
+  const chooseTrigger = (kind: string): void => {
+    if (editor === undefined) return
+    apply(setTriggerKind(editor, kind))
+    setSelected(TRIGGER_NODE)
   }
 
   if (sessionId === undefined) {
@@ -395,30 +415,22 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   const issues = editor?.issues ?? []
   const conflict = editor?.conflict
 
-  const body = (): ReactNode => {
+  const editorBody = (): ReactNode => {
     if (editor === undefined) {
       return (
-        <section className="dsh-wf-empty" data-section="editor-library">
-          <p className="dsh-wf-empty-title">{t('design.intro')}</p>
-          <ul className="dsh-wf-rows">
-            {library.definitions.map((entry) => (
-              <li key={entry.id}>
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="sm"
-                  className="dsh-wf-lib-row"
-                  onClick={() => guard(() => void open(entry.id))}
-                >
-                  <span className="dsh-wf-subject">{entry.name}</span>
-                  <span className="dsh-wf-muted">
-                    {entry.id} · v{String(entry.version)} · {entry.source} ·{' '}
-                    {String(entry.stepCount)} steps
-                  </span>
-                </Button>
-              </li>
-            ))}
-          </ul>
+        <section className="dsh-wf-canvas dsh-wf-blank-canvas" data-section="editor-start">
+          <div className="dsh-wf-empty">
+            <p className="dsh-wf-empty-title">{t('design.intro')}</p>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => guard(startBlank)}
+              disabled={loading}
+            >
+              {t('design.new')}
+            </Button>
+          </div>
         </section>
       )
     }
@@ -590,38 +602,6 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         </span>
         <Button
           type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(() => props.onClose?.())}
-        >
-          {t('design.close')}
-        </Button>
-      </div>
-      <div className="dsh-wf-design-bar" data-group="primary">
-        <Button
-          type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(startBlank)}
-          disabled={loading}
-        >
-          {t('design.new')}
-        </Button>
-        <select
-          aria-label={t('design.open')}
-          value={editor?.document.definition.id ?? ''}
-          onChange={(event) => guard(() => void open(event.currentTarget.value))}
-          disabled={loading}
-        >
-          <option value="">{t('design.open')}</option>
-          {library.definitions.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.name} ({entry.id}) · {entry.source}
-            </option>
-          ))}
-        </select>
-        <Button
-          type="button"
           variant="primary"
           size="sm"
           onClick={() => void saveCurrent()}
@@ -629,143 +609,178 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         >
           {t('design.save')}
         </Button>
+        <Button
+          type="button"
+          variant="toolbar"
+          size="sm"
+          onClick={() => guard(() => props.onClose?.())}
+        >
+          {t('design.close')}
+        </Button>
       </div>
-      <details className="dsh-wf-more">
-        <summary>{t('design.more')}</summary>
-        <div className="dsh-wf-design-bar" data-group="secondary">
-          <select
-            aria-label={t('design.template')}
-            value={templateName}
-            onChange={(event) => setTemplateName(event.currentTarget.value)}
-            disabled={loading}
-          >
-            <option value="">{t('design.template')}</option>
-            {library.templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.name} · {String(template.stepCount)} steps
-              </option>
-            ))}
-          </select>
-          <Button
-            type="button"
-            variant="toolbar"
-            size="sm"
-            onClick={() => guard(takeTemplate)}
-            disabled={templateName === '' || loading}
-          >
-            {t('design.copyTemplate')}
-          </Button>
-          <select
-            aria-label={t('design.draft')}
-            value={draftName}
-            onChange={(event) => setDraftName(event.currentTarget.value)}
-            disabled={loading}
-          >
-            <option value="">{t('design.draft')}</option>
-            {library.drafts.map((draft) => (
-              <option key={draft.name} value={draft.name}>
-                {draft.title} ({draft.name}) · {String(draft.stepCount)} steps
-              </option>
-            ))}
-          </select>
-          <Button
-            type="button"
-            variant="toolbar"
-            size="sm"
-            onClick={() => guard(() => void startDraft())}
-            disabled={draftName === '' || loading}
-          >
-            {t('design.openDraft')}
-          </Button>
-          <Button
-            type="button"
-            variant="toolbar"
-            size="sm"
-            onClick={() => guard(() => void reloadCurrent())}
-            disabled={editor === undefined || loading}
-          >
-            {t('design.reload')}
-          </Button>
-          <Button
-            type="button"
-            variant="toolbar"
-            size="sm"
-            onClick={() => guard(() => void removeCurrent())}
-            disabled={editor === undefined || editor.document.revision === null || loading}
-          >
-            {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
-          </Button>
-        </div>
-      </details>
-      {editor === undefined ? null : (
-        <div className="dsh-wf-design-bar" data-group="editor">
-          <SegmentedControl
-            id="dsh-wf-surface"
-            value={surface}
-            options={[
-              { value: 'list', label: t('design.listMode') },
-              { value: 'canvas', label: t('design.canvasMode') },
-            ]}
-            onChange={(next) => {
-              if (editor === undefined) return
-              setEditor(setMode(editor, next))
-            }}
-            label={t('design.mode')}
-          />
-          <PaletteMenu
-            open={paletteOpen}
-            onOpen={() => setPaletteOpen(true)}
-            onClose={() => setPaletteOpen(false)}
-            onAdd={addFromPalette}
-          />
-          <select
-            aria-label={t('design.run')}
-            value={runId ?? ''}
-            onChange={(event) => setRunId(event.currentTarget.value)}
-            disabled={runs.length === 0}
-          >
-            <option value="">{t('design.noRun')}</option>
-            {runs.map((run) => (
-              <option key={run.id} value={run.id}>
-                {run.id} · {run.status}
-                {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-      {message === undefined ? null : <p className="dsh-wf-issue">{message}</p>}
-      {conflict === undefined ? null : (
-        <div className="dsh-wf-design-bar" role="alert" data-conflict={conflict.kind}>
-          <span>{editor?.message ?? t('design.conflict')}</span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => guard(() => void reloadCurrent())}
-          >
-            {t('design.reload')}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void copyCurrent()}
-            disabled={loading}
-          >
-            {t('design.saveCopy')}
-          </Button>
-          {conflict.nextId === undefined ? null : (
-            <Button type="button" variant="outline" size="sm" onClick={useNextId}>
-              {t('design.useId')} {conflict.nextId}
-            </Button>
+      <div className="dsh-wf-workbench" data-mode={editor === undefined ? 'blank' : surface}>
+        <WorkflowRail
+          definitions={library.definitions}
+          {...(editor === undefined ? {} : { currentId: editor.document.definition.id })}
+          {...(editor === undefined || runs[0] === undefined ? {} : { latestRun: runs[0] })}
+          disabled={loading}
+          t={t}
+          onOpen={(id) => guard(() => void open(id))}
+          onTrigger={chooseTrigger}
+          onExecutor={addExecutor}
+          actions={
+            <details className="dsh-wf-more">
+              <summary>{t('design.more')}</summary>
+              <div className="dsh-wf-design-bar" data-group="secondary">
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  onClick={() => guard(startBlank)}
+                  disabled={loading}
+                >
+                  {t('design.new')}
+                </Button>
+                <select
+                  aria-label={t('design.template')}
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.currentTarget.value)}
+                  disabled={loading}
+                >
+                  <option value="">{t('design.template')}</option>
+                  {library.templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name} · {String(template.stepCount)} steps
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  onClick={() => guard(takeTemplate)}
+                  disabled={templateName === '' || loading}
+                >
+                  {t('design.copyTemplate')}
+                </Button>
+                <select
+                  aria-label={t('design.draft')}
+                  value={draftName}
+                  onChange={(event) => setDraftName(event.currentTarget.value)}
+                  disabled={loading}
+                >
+                  <option value="">{t('design.draft')}</option>
+                  {library.drafts.map((draft) => (
+                    <option key={draft.name} value={draft.name}>
+                      {draft.title} ({draft.name}) · {String(draft.stepCount)} steps
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  onClick={() => guard(() => void startDraft())}
+                  disabled={draftName === '' || loading}
+                >
+                  {t('design.openDraft')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  onClick={() => guard(() => void reloadCurrent())}
+                  disabled={editor === undefined || loading}
+                >
+                  {t('design.reload')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  onClick={() => guard(() => void removeCurrent())}
+                  disabled={editor === undefined || editor.document.revision === null || loading}
+                >
+                  {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
+                </Button>
+              </div>
+            </details>
+          }
+        />
+        <div className="dsh-wf-workbench-main">
+          {editor === undefined ? null : (
+            <div className="dsh-wf-design-bar" data-group="editor">
+              <SegmentedControl
+                id="dsh-wf-surface"
+                value={surface}
+                options={[
+                  { value: 'list', label: t('design.listMode') },
+                  { value: 'canvas', label: t('design.canvasMode') },
+                ]}
+                onChange={(next) => {
+                  if (editor === undefined) return
+                  setEditor(setMode(editor, next))
+                }}
+                label={t('design.mode')}
+              />
+              {surface === 'list' ? (
+                <PaletteMenu
+                  open={paletteOpen}
+                  onOpen={() => setPaletteOpen(true)}
+                  onClose={() => setPaletteOpen(false)}
+                  onAdd={addExecutor}
+                />
+              ) : null}
+              <select
+                aria-label={t('design.run')}
+                value={runId ?? ''}
+                onChange={(event) => setRunId(event.currentTarget.value)}
+                disabled={runs.length === 0}
+              >
+                <option value="">{t('design.noRun')}</option>
+                {runs.map((run) => (
+                  <option key={run.id} value={run.id}>
+                    {run.id} · {run.status}
+                    {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
+          {message === undefined ? null : <p className="dsh-wf-issue">{message}</p>}
+          {conflict === undefined ? null : (
+            <div className="dsh-wf-design-bar" role="alert" data-conflict={conflict.kind}>
+              <span>{editor?.message ?? t('design.conflict')}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => guard(() => void reloadCurrent())}
+              >
+                {t('design.reload')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void copyCurrent()}
+                disabled={loading}
+              >
+                {t('design.saveCopy')}
+              </Button>
+              {conflict.nextId === undefined ? null : (
+                <Button type="button" variant="outline" size="sm" onClick={useNextId}>
+                  {t('design.useId')} {conflict.nextId}
+                </Button>
+              )}
+            </div>
+          )}
+          {editor?.message === undefined || conflict !== undefined ? null : (
+            <p className="dsh-wf-issue">{editor.message}</p>
+          )}
+          {editorBody()}
         </div>
-      )}
-      {editor?.message === undefined || conflict !== undefined ? null : (
-        <p className="dsh-wf-issue">{editor.message}</p>
-      )}
-      {body()}
+      </div>
     </div>
   )
 }

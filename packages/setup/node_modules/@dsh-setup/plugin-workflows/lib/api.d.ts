@@ -53,6 +53,7 @@ export interface WorkflowApiServices {
         readonly definitions: readonly {
             readonly id: string;
             readonly name: string;
+            readonly description?: string;
             readonly version: number;
             readonly source: 'shipped' | 'local';
             readonly revision: string | null;

@@ -41,6 +41,21 @@ describe('locale dictionary guard', () => {
     expect(missing).toEqual([])
   })
 
+  it('names the definition description and the workbench copy', () => {
+    for (const key of [
+      'design.description',
+      'design.noDescription',
+      'design.railWorkflows',
+      'design.railBlocks',
+      'design.blocksTriggers',
+      'design.blocksSteps',
+      'design.diagnostics',
+      'workflow.noDescription',
+    ]) {
+      expect(EN[key], key).toBeTypeOf('string')
+    }
+  })
+
   it('fails on a planted missing key and passes a present one', () => {
     expect(literalKeys("t('planted.missing')")).toEqual(['planted.missing'])
     expect(EN['planted.missing']).toBeUndefined()
