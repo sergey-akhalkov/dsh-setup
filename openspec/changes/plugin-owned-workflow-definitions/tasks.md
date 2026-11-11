@@ -21,11 +21,11 @@
 
 ## 3. Serial tail: content switch, generated output, and full gate (serial, owns `packages/plugin-workflows/assets/definitions/**`, `packages/plugin-workflows/assets/triggers/**`, `packages/plugin-workflows/package.json`, `packages/plugin-openspec/package.json`, `packages/plugin-workflows/lib/**`, `packages/plugin-openspec/lib/**`, `packages/setup/**`, `packages/plugin-workflows/cordis.patch.yml`, `packages/plugin-openspec/cordis.patch.yml`)
 
-- [ ] 3.1 Remove the copied `change-intake` definition and OpenSpec catalog entries from the engine assets, update both packages' `files` lists, and verify the engine no longer ships them while the plugin registers the same ids.
-- [ ] 3.2 Run `pnpm build`, commit the regenerated `lib/**`, regenerate the parity report with `pnpm workflows:parity` because the task-review path changed its template hash, run `pnpm workflows:parity --check`, and commit the report.
-- [ ] 3.3 Run `pnpm gen` after the build and parity report, commit the regenerated setup vendored tree and patch, and verify `pnpm gen:check`.
-- [ ] 3.4 Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm workflows:parity --check`; verify all pass.
-- [ ] 3.5 Run `pnpm validate` and record the result; fix any failure before the change is proposed for archive.
+- [x] 3.1 Remove the copied `change-intake` definition and OpenSpec catalog entries from the engine assets, update both packages' `files` lists, and verify the engine no longer ships them while the plugin registers the same ids.
+- [x] 3.2 Run `pnpm build`, commit the regenerated `lib/**`, regenerate the parity report with `pnpm workflows:parity` because the task-review path changed its template hash, run `pnpm workflows:parity --check`, and commit the report.
+- [x] 3.3 Run `pnpm gen` after the build and parity report, commit the regenerated setup vendored tree and patch, and verify `pnpm gen:check`.
+- [x] 3.4 Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm workflows:parity --check`; verify all pass.
+- [x] 3.5 Run `pnpm validate` and record the result; fix any failure before the change is proposed for archive.
 
 ## Workflow follow-up
 
