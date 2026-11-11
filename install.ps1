@@ -766,6 +766,13 @@ function Export-WindowsCertBundle([string]$Path) {
   Restrict-File $Path
 }
 
+function Select-HindsightListener($Connections, [int]$Port) {
+  # Windows 11 build 26300 reports a listening socket with a null State, so the
+  # port owner is the socket without a remote endpoint; listeners always have
+  # RemotePort 0, while established connections do not.
+  return @($Connections | Where-Object { $_.LocalPort -eq $Port -and $_.RemotePort -eq 0 })
+}
+
 function Get-HindsightListeners([int]$Port) {
   try {
     $connections = @(Get-NetTCPConnection -ErrorAction Stop)
@@ -773,7 +780,7 @@ function Get-HindsightListeners([int]$Port) {
   catch {
     throw "Could not inspect listeners on port ${Port}: $($_.Exception.Message). See $DaemonLogPath."
   }
-  return @($connections | Where-Object { $_.LocalPort -eq $Port -and $_.State -eq 'Listen' })
+  return @(Select-HindsightListener $connections $Port)
 }
 
 function Get-ListenerPid([int]$Port) {
@@ -1542,6 +1549,16 @@ function Invoke-HindsightSelfTest {
     throw 'Listener identity self-test accepted the current shell as a Hindsight daemon.'
   }
   Write-Ok 'Listener identity self-test passed'
+  $listenerRows = @(
+    [pscustomobject]@{ LocalPort = 8888; RemotePort = 0; State = $null },
+    [pscustomobject]@{ LocalPort = 8888; RemotePort = 53000; State = 'Established' },
+    [pscustomobject]@{ LocalPort = 9999; RemotePort = 0; State = 'Listen' }
+  )
+  $selected = @(Select-HindsightListener $listenerRows 8888)
+  if ($selected.Count -ne 1 -or $null -ne $selected[0].State) {
+    throw 'Listener selection self-test did not select the state-less listening socket.'
+  }
+  Write-Ok 'Listener selection self-test passed'
   $portCases = @(
     @{ Healthy = $true; Owned = $true; Expected = 'reuse' },
     @{ Healthy = $false; Owned = $true; Expected = 'recover' },
