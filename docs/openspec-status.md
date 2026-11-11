@@ -755,3 +755,16 @@ only the overlay) and keeps the ordered step table as the fallback. The change s
 records, the delta specs are synced into the main specs (the archive reported them already in sync),
 and it archived 15/16. Open owner follow-up: 4.5, the live-session visual check of the workbench at
 wide and narrow sidebar widths.
+
+On 2026-11-11 `add-agent-requested-adoption` added the user-confirmed `adopt` action to the
+`workflows` tool: one `change` argument reaching the same `adoptChange` path as the
+`/workflows adopt <name>` command, which keeps the four-artifact and current whole-spec `PASS`
+verification, the host question, the post-answer re-verification with the same digest, and the
+host-signed receipt, so the model may request adoption but cannot supply the confirmation answer
+and cannot write a receipt without the user's yes. The `userStarted` flag is gone because the
+user's host-UI answer is the authorization; the command's behavior, the receipt format, and the
+archive gate are unchanged. A change whose directory, or any path beneath it, is a symbolic link —
+including one that becomes a link while the question is open — is refused, because the evidence
+reader follows an in-workspace link while the spec digest skips it. It released in 0.31.6/0.31.7
+with 7/8 tasks, and the delta spec is synced into `workflows` (the archive reported it already in
+sync). Open owner follow-up: 2.4, the end-to-end adopt check in a live installed profile.
