@@ -16,6 +16,13 @@ export const CHANGE_PATH = 'api/plugins/dsh-setup-openspec/change'
 /** Document-relative Host route for the capability inventory and one spec. */
 export const SPECS_PATH = 'api/plugins/dsh-setup-openspec/specs'
 
+/**
+ * Document-relative Host route that archives one completed change. The click
+ * that calls it is the authorization; the route runs the CLI after the engine's
+ * archive gate, if the engine is installed.
+ */
+export const ARCHIVE_PATH = 'api/plugins/dsh-setup-openspec/archive'
+
 /** Tab-type registry identity; also the key the body slot registers under. */
 export const OPENSPEC_ID = '@dsh-setup/plugin-openspec/panel'
 
@@ -369,6 +376,16 @@ export function derivePhase(row: {
 /** The phase a row renders: the host's field when present, otherwise derived. */
 export function phaseOf(row: ChangeRow | ChangeDetail): Phase {
   return row.phase ?? derivePhase(row)
+}
+
+/** Every task done; a task-less change is not complete. */
+export function isComplete(change: {
+  readonly completedTasks: number
+  readonly totalTasks: number
+  readonly phase?: Phase
+}): boolean {
+  if (change.totalTasks > 0) return change.completedTasks >= change.totalTasks
+  return change.phase === 'complete'
 }
 
 /** The semantic tag tone for one phase; the same status always gets the same tone. */
@@ -1007,4 +1024,33 @@ export async function requestCapability(sessionId: string, id: string): Promise<
     'The OpenSpec capability response was not understood.',
     (body) => decodeCapabilityDetail(body.capability),
   )
+}
+
+/**
+ * Archive one completed change. The preceding click is the user's
+ * authorization; the Host verifies it and runs the CLI. Returns the archived
+ * name the CLI reports when the Host could identify the new row; undefined means
+ * the archive succeeded but no address should be opened (the list refresh shows
+ * it in Archive instead).
+ */
+export async function requestArchive(sessionId: string, name: string): Promise<string | undefined> {
+  const response = await fetch(ARCHIVE_PATH, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ session: sessionId, name }),
+  })
+  const body: unknown = await response.json().catch(() => undefined)
+  if (!response.ok) {
+    const error = isRecord(body) && typeof body.error === 'string' ? body.error : undefined
+    throw new Error(error ?? `The OpenSpec archive request failed (${String(response.status)}).`)
+  }
+  if (!isRecord(body) || body.ok !== true) {
+    throw new Error('The OpenSpec archive response was not understood.')
+  }
+  if (body.name === undefined) return undefined
+  if (typeof body.name !== 'string' || body.name === '') {
+    throw new Error('The OpenSpec archive response was not understood.')
+  }
+  return body.name
 }

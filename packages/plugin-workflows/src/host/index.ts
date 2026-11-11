@@ -14,6 +14,12 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { adoptChange } from './adoption.js'
 import { registerWorkflowRoutes } from './api.js'
 import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
+import {
+  type ArchiveAuthorizationResult,
+  authorizeUserArchive,
+  decideArchiveAuthorization,
+  type WorkflowsArchiveGateService,
+} from './archive-authorization.js'
 import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js'
 import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
 import {
@@ -46,12 +52,7 @@ import {
   type ToolRunner,
 } from './executors.js'
 import { type FsChangeWatcher, startFsChangeWatcher } from './fs-change.js'
-import {
-  authorizationWriteDecision,
-  evaluateArchiveGate,
-  evaluateIntakeGate,
-  evaluateTurnClose,
-} from './gates.js'
+import { authorizationWriteDecision, evaluateIntakeGate, evaluateTurnClose } from './gates.js'
 import { WorkflowHealth } from './health.js'
 import { HostAuth } from './host-auth.js'
 import { advanceIntake } from './intake.js'
@@ -71,7 +72,6 @@ import {
   resolveVerifySettings,
   shippedParityReportPath,
   taskReviewCompletion,
-  taskReviewCoverage,
   withVerifySettings,
 } from './parity.js'
 import { registerActiveRunsContext } from './prompt.js'
@@ -83,7 +83,6 @@ import {
   completeNotApplicable,
   createRun,
   DEFAULT_MAX_RUNS,
-  hasTamperedRuns,
   incrementTurnBlocks,
   interruptEndedRun,
   isOpenRun,
@@ -361,6 +360,208 @@ const SAFE_NAME = /[^A-Za-z0-9._-]+/gu
 /** The handle `delegate` mints: `run-<base36>-<8 hex>`. */
 const RUN_ID = /^run-[a-z0-9]+-[a-f0-9]{8}$/u
 
+/** Split a shell line on separators outside quotes. */
+function shellSegments(command: string): string[] {
+  const segments: string[] = []
+  let current = ''
+  let quote: '"' | "'" | undefined
+  for (let index = 0; index < command.length; index += 1) {
+    const ch = command[index] ?? ''
+    if (quote !== undefined) {
+      current += ch
+      if (ch === quote) quote = undefined
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      current += ch
+      continue
+    }
+    const next = command[index + 1]
+    if (ch === ';' || ch === '\n' || ch === '\r') {
+      segments.push(current)
+      current = ''
+      if (ch === '\r' && next === '\n') index += 1
+      continue
+    }
+    if (ch === '&' || ch === '|') {
+      if (ch === '&' && (current.endsWith('>') || current.endsWith('<'))) {
+        current += ch
+        continue
+      }
+      segments.push(current)
+      current = ''
+      if (next === ch) index += 1
+      continue
+    }
+    current += ch
+  }
+  segments.push(current)
+  return segments
+}
+
+/** One shell segment as unquoted tokens; quotes group text and are removed. */
+function shellTokens(segment: string): string[] {
+  const tokens: string[] = []
+  let token = ''
+  let quoting: '"' | "'" | undefined
+  let open = false
+  for (const ch of segment) {
+    if (quoting !== undefined) {
+      if (ch === quoting) quoting = undefined
+      else token += ch
+      open = true
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quoting = ch
+      open = true
+      continue
+    }
+    if (ch === ' ' || ch === '\t' || ch === '\r') {
+      if (open) {
+        tokens.push(token)
+        token = ''
+        open = false
+      }
+      continue
+    }
+    token += ch
+    open = true
+  }
+  if (open) tokens.push(token)
+  return tokens
+}
+
+/** One command word (after an optional `rtk`) and its arguments. */
+function segmentCommand(segment: string): { word: string; args: string[] } | undefined {
+  let tokens = shellTokens(segment)
+  while (tokens.length > 0 && ['&', '(', '{', '$', '$('].includes(tokens[0] ?? '')) {
+    tokens = tokens.slice(1)
+  }
+  let index = tokens[0]?.toLowerCase() === 'rtk' ? 1 : 0
+  if (tokens[index]?.toLowerCase() === 'pnpm' && tokens[index + 1]?.toLowerCase() === 'exec') {
+    index += 2
+    if (tokens[index]?.toLowerCase() === 'rtk') index += 1
+  }
+  const word = (tokens[index] ?? '').toLowerCase()
+  if (word === '') return undefined
+  return { word, args: tokens.slice(index + 1) }
+}
+
+/** Strip grouping wrappers and output redirection so the move operands stay readable. */
+function cleanSegment(raw: string): string {
+  let segment = raw.trim().replaceAll('\t', ' ')
+  let previous = ''
+  while (segment !== previous) {
+    previous = segment
+    segment = segment
+      .replace(/^[&({$]+/u, '')
+      .replace(/[)}]+$/u, '')
+      .trim()
+      .replace(/\s+\d?>>?\s*\S+\s*$/u, '')
+      .replace(/\s+2>&1\s*$/u, '')
+      .trim()
+  }
+  return segment
+}
+
+/** The destination of a move command, honoring `-Destination` and named parameters. */
+function moveDestination(word: string, args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index] ?? ''
+    const named = /^-(?:destination|dest)(?::(.*))?$/iu.exec(token)
+    if (named !== null) return named[1] ?? args[index + 1]
+    const target = /^--target-directory=(.*)$/iu.exec(token)
+    if (target !== null) return target[1]
+    if (token === '-t' || token.toLowerCase() === '--target-directory') return args[index + 1]
+  }
+  const positional: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index] ?? ''
+    if (token.startsWith('-')) {
+      if (
+        !token.includes(':') &&
+        !/^-(?:f|force|i|interactive|n|no-clobber|v|verbose|k|backup|u|update)$/iu.test(token)
+      ) {
+        index += 1
+      }
+      continue
+    }
+    positional.push(token)
+  }
+  if (word === 'git') positional.shift()
+  return positional.at(-1)
+}
+
+/** The `cd` target, from `-Path`/`-LiteralPath` or the last positional token. */
+function cdTarget(args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const named = /^-(?:literal)?path(?::(.*))?$/iu.exec(args[index] ?? '')
+    if (named !== null) return named[1] ?? args[index + 1]
+  }
+  const positional = args.filter((token) => !token.startsWith('-') && token.toLowerCase() !== '/d')
+  return positional.at(-1)
+}
+
+/** Whether an `openspec archive` command token sits in a command position. */
+function archiveInvocation(command: string): boolean {
+  for (const raw of shellSegments(command)) {
+    const parsed = segmentCommand(cleanSegment(raw))
+    if (parsed?.word === 'openspec' && parsed.args[0]?.toLowerCase() === 'archive') return true
+  }
+  return false
+}
+
+/**
+ * Whether a compound command tries to move a change into the archive directory.
+ * The ordinary parser handles one plain move; when the command is compound it
+ * cannot parse, so this fallback tokenizes each shell segment, tracks `cd` into
+ * every plausible virtual workdir (a failed `cd` leaves the previous one in
+ * effect, so earlier workdirs stay candidates), recognizes move commands by
+ * their command word (quoted or not), reads the destination (including
+ * `-Destination:` and named parameters), and resolves it against every
+ * candidate workdir. A move into the archive from any candidate is refused.
+ */
+function archiveMoveAttempt(command: string, workspace: string, workdir: string): boolean {
+  const workdirs = new Set<string>([normalize(workdir)])
+  for (const raw of shellSegments(command)) {
+    const parsed = segmentCommand(cleanSegment(raw))
+    if (parsed === undefined) continue
+    if (parsed.word === 'cd') {
+      const target = cdTarget(parsed.args)
+      if (target !== undefined && target !== '' && target !== '-') {
+        // A relative cd is resolved against every workdir that may still be
+        // current (a failed cd leaves its predecessor in effect).
+        const additions: string[] = []
+        for (const candidate of workdirs) {
+          additions.push(normalize(isAbsolute(target) ? target : resolve(candidate, target)))
+        }
+        for (const entry of additions) workdirs.add(entry)
+      }
+      continue
+    }
+    const gitMove = parsed.word === 'git' && parsed.args[0]?.toLowerCase() === 'mv'
+    if (!gitMove && parsed.word !== 'mv' && parsed.word !== 'move-item') continue
+    const destination = moveDestination(parsed.word, parsed.args)
+    if (destination === undefined) continue
+    for (const candidate of workdirs) {
+      const resolved = normalize(
+        isAbsolute(destination) ? destination : resolve(candidate, destination),
+      )
+      const relativePath = relative(workspace, resolved).replaceAll('\\', '/')
+      const compared = process.platform === 'win32' ? relativePath.toLowerCase() : relativePath
+      if (
+        compared === 'openspec/changes/archive' ||
+        compared.startsWith('openspec/changes/archive/')
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 /**
  * The journal stores an index, never the tool's output text. Only fixed,
  * validated identity fields are kept; the raw payload stays in the session log,
@@ -537,6 +738,38 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     console.error(
       `workflows: the definitions registry service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
     )
+  }
+  // A user-clicked archive is authorized by the click itself: the service writes
+  // the host-signed receipt for the click and repeats the archive gate checks.
+  // The feature plugin reads it at request time, so providing it here covers a
+  // host that loads the engine after the OpenSpec plugin.
+  try {
+    const archiveGateService: WorkflowsArchiveGateService = {
+      authorizeAndCheck: (workspace, change) => authorizeArchiveFromClick(workspace, change),
+    }
+    ctx.provide('workflowsArchiveGate', archiveGateService)
+  } catch (error) {
+    console.error(
+      `workflows: the archive gate service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
+    )
+  }
+  /**
+   * The clicked-archive path the OpenSpec host route calls. The carrier admits
+   * the request and the route resolves the live session's workspace, so a call
+   * exists only when a user clicked the button.
+   */
+  async function authorizeArchiveFromClick(
+    workspace: string,
+    change: string,
+  ): Promise<ArchiveAuthorizationResult> {
+    const auth = storedAuth ?? (await ensureAuth())
+    if (auth === undefined) {
+      return {
+        ok: false,
+        reason: 'the host key is unavailable, so the archive click could not be authorized',
+      }
+    }
+    return authorizeUserArchive(workspace, change, auth, await definitionsFor(workspace))
   }
   const journal = new Journal()
   /** Latest turn per session, so a tool result belongs to a turn. */
@@ -2937,19 +3170,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             workspace,
             inside ? resolvedWorkdir : undefined,
           )
-          const normalizedCommand = command.replaceAll('\\', '/')
-          const relativeArchiveWorkdir =
-            relativeWorkdir.replaceAll('\\', '/') === 'openspec/changes'
-          const mentionsOpenSpecArchive =
-            /openspec\/changes\/archive(?:\/|$)/iu.test(normalizedCommand) ||
-            (relativeArchiveWorkdir &&
-              /(?:^|\s)["']?archive\/?["']?(?:\s|$)/iu.test(normalizedCommand))
-          const looksLikeMove =
-            /(?:^|\s)(?:git\s+mv|mv|move-item)\s/iu.test(command) && mentionsOpenSpecArchive
-          if (
-            archive === undefined &&
-            /^\s*(?:rtk\s+|pnpm\s+exec\s+)?openspec\s+archive\b/iu.test(command)
-          ) {
+          const looksLikeMove = archiveMoveAttempt(command, workspace, resolvedWorkdir)
+          if (archive === undefined && archiveInvocation(command)) {
             return {
               kind: 'deny',
               reason:
@@ -3006,39 +3228,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 reason: `the archive command runs in "${resolvedWorkdir}", outside the session workspace "${normalize(workspace)}"; its evidence cannot authorize this archive`,
               }
             }
-            const specRecord = await verifyEvidence(
-              {
-                kind: 'record',
-                rule: 'spec-review',
-                change: archive.change,
-                phase: 'spec',
-                scope: 'whole',
-                verdict: 'PASS',
-                digest: 'current',
-              },
-              { workspace, values: { name: archive.change } },
-            )
-            const taskReviewOwned = definitions.some(
-              (definition) =>
-                definition.id === 'task-review' && definition.settings.gateOwnership === 'own',
-            )
-            const coverage = taskReviewOwned
-              ? taskReviewCoverage(workspace, archive.change)
-              : undefined
-            const decision = evaluateArchiveGate({
-              change: archive.change,
-              tamperedRuns: auth === undefined ? false : await hasTamperedRuns(workspace, auth),
-              runs: auth === undefined ? [] : await listAuthenticatedRuns(workspace, auth),
-              receipts: auth === undefined ? [] : await listReceipts(workspace, auth),
-              specRecord,
-              ...(coverage === undefined
-                ? {}
-                : {
-                    taskReview: {
-                      ok: coverage.ok,
-                      ...(coverage.gaps.length === 0 ? {} : { text: coverage.gaps.join('; ') }),
-                    },
-                  }),
+            const decision = await decideArchiveAuthorization(workspace, archive.change, {
+              ...(auth === undefined ? {} : { auth }),
+              definitions,
             })
             if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
           }
@@ -3684,6 +3876,11 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           name: 'workflows',
           description:
             'Open the Workflows view, run/resume a workflow, install a definition after confirmation, adopt an existing change, or print a bounded status.',
+          // A command without an input descriptor counts as complete in the
+          // composer, so Tab/Enter would run it before the user types arguments.
+          input: {
+            hint: 'run <definitionId> | resume <runId> | install <path> | adopt <name> | status',
+          },
           handler: async (invocation: {
             agent: Agent
             rawInput?: unknown

@@ -631,9 +631,23 @@ Choosing an active change opens its own tab at `dsh-resource://openspec/change/<
 address per change, so reopening focuses the existing tab and two changes can sit side by side. An
 archived change opens at `dsh-resource://openspec/archive-change/<name>`, so an active and an archived
 change with the same name keep separate tabs and separate content. The change view header states the
-derived status, purpose, overall task progress, last-updated time and last commit, with `Apply change`
-for active changes only; `Apply change` writes `/openspec-apply-change <name>` into the composer draft
-without submitting. Its `Why | Design | Specs (N) | Tasks` tabs follow the shipped keyboard model:
+derived status, purpose, overall task progress, last-updated time and last commit, with one
+state-dependent action: `Apply change` while the change is not complete, and `Archive` once every
+task is done. `Apply change` writes `/openspec-apply-change <name>` into the composer draft without
+submitting. `Archive` is the click-as-authorization write: the panel POSTs one request for that
+change, the Host refuses a change that is not complete, and the workflows engine's
+`workflowsArchiveGate` service (when the engine is installed) verifies the change artifacts and the
+current whole-spec `PASS`, writes the host-signed adoption receipt for the click, and applies the same
+archive gate checks as the chat command — authenticated completed intake run or receipt, current
+whole-spec `PASS`, no open required run step, and portable task-review coverage while the shipped
+rule owns that behavior (when the shipped rule is deferred, the portable rule the workspace's
+`openspec/review-approval.json` enables is enforced instead). A refusal is shown inline, the action
+stays available for a retry, and the change stays active; a success clears the busy state, opens the
+CLI-reported archived tab when the Host can identify the new row, and otherwise refreshes the list
+without opening a fabricated address. The same action appears on each active change card in the
+`Changes` list (the card's click still opens the change), and a successful archive re-reads the list
+so the change leaves `Changes` and appears in `Archive`. Its
+`Why | Design | Specs (N) | Tasks` tabs follow the shipped keyboard model:
 proposal and design render through the shared Markdown renderer, a missing artifact states that it is
 not written yet, delta specs render one card per requirement with `ADDED`/`MODIFIED`/`REMOVED`/
 `RENAMED` operation tags, a `RENAMED` from/to pair, capability pills when several are carried, and an
@@ -648,15 +662,24 @@ show the accepted requirements as structured cards — normative `SHALL`/`MUST`/
 scenario `WHEN`/`THEN`/`AND`/`BUT` steps labelled, backticked code preserved — with a text filter when
 a spec has more than twelve requirements, and a newest-first history of the archived changes whose
 delta specs touched that capability. A history row opens its archived change tab. The panel is
-read-only: it never archives, syncs, validates, ticks a task, or edits a file.
+read-only except for the `Archive` action: it never syncs, validates, ticks a task, edits a file, or
+archives a change that is not complete.
 
 The three read routes are `GET /api/plugins/dsh-setup-openspec/changes?session=<id>` (active
 `changes`, additive `archived`, and `counts`),
 `GET /api/plugins/dsh-setup-openspec/change?session=<id>&name=<change>` (add `&archived=1` for the
 archive family), and `GET /api/plugins/dsh-setup-openspec/specs?session=<id>` (add `&id=<capability>`
-for one spec). All stay additive: the `changes` array keeps its active-only legacy contract and
-`status` values, so the `/openspec-apply` picker and an already-loaded older client keep working. Like
-the change list they resolve the workspace from the session, refuse a workspace without its own
+for one spec). The one write route is `POST /api/plugins/dsh-setup-openspec/archive` with
+`{ session, name }`: it resolves the workspace from the live session, requires a CLI-reported active
+change whose tasks are all done, asks the engine gate when present, and runs the bounded
+`openspec archive <name> --yes` CLI (no shell built from the name) before returning the CLI-reported
+archived name. A CLI-reported name that a Windows `cmd.exe` could re-parse (`%VAR%`, quotes, other
+punctuation outside the slug grammar) is refused before the CLI runs, with or without the engine.
+After the CLI succeeds the route names only a row that was not in the pre-archive archive list and
+whose date-stripped name matches; when it cannot identify one, the response is a success without an
+address. All routes stay additive: the `changes` array keeps its active-only legacy contract
+and `status` values, so the `/openspec-apply` picker and an already-loaded older client keep working.
+Like the change list they resolve the workspace from the session, refuse a workspace without its own
 `openspec/` root, and read artifact bodies only for items the CLI reports. Commit facts come from a
 bounded read-only `git log` in the Host; when the workspace is not a git repository or git is
 unavailable, rows and details render without commit facts and no error is shown. The DSH component

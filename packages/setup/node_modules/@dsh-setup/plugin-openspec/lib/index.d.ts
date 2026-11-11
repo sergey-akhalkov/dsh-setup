@@ -34,7 +34,13 @@ export declare const CHANGE_DETAIL_ROUTE = "/api/plugins/dsh-setup-openspec/chan
 /** The capability inventory, or one capability's spec body when `id` is given. */
 export declare const SPECS_ROUTE = "/api/plugins/dsh-setup-openspec/specs";
 /**
- * Register the OpenSpec read routes when the Host services exist.
+ * The one authorized write: archive a completed change after the user clicked
+ * `Archive`. The click is the confirmation; the body names the live session and
+ * the change, never a path.
+ */
+export declare const ARCHIVE_ROUTE = "/api/plugins/dsh-setup-openspec/archive";
+/**
+ * Register the OpenSpec routes when the Host services exist.
  *
  * The plain Web profile provides `connection`, `agents`, and
  * `workingDirectory` after this row mounts, so an absent probe waits through

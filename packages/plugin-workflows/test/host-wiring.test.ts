@@ -425,6 +425,20 @@ describe('engine host wiring', () => {
     expect(decision?.kind).toBe('deny')
     expect(decision?.reason).toContain('requirements')
   })
+
+  it('advertises free-form arguments so the composer keeps the command open', async () => {
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    const command = host.commands.find((entry) => entry.name === 'workflows') as
+      | { description?: string; input?: { hint?: string } }
+      | undefined
+    expect(command).toBeDefined()
+    expect(command?.description).toContain('adopt')
+    const hint = command?.input?.hint
+    expect(typeof hint).toBe('string')
+    expect(hint).toContain('adopt <name>')
+  })
 })
 
 describe('definition event normalization', () => {
@@ -5956,6 +5970,175 @@ describe('archive gate on an unreadable run store', () => {
   })
 })
 
+describe('user-clicked archive authorization', () => {
+  /** Write a complete change with a current whole-spec PASS and optional portable coverage. */
+  async function completeChange(
+    workspace: string,
+    options: { readonly portable?: boolean } = {},
+  ): Promise<void> {
+    const change = join(workspace, 'openspec', 'changes', 'auth')
+    await mkdir(join(change, 'specs', 'auth'), { recursive: true })
+    for (const file of ['proposal.md', 'design.md']) {
+      await writeFile(join(change, file), '# artifact\n', 'utf8')
+    }
+    await writeFile(join(change, 'tasks.md'), '- [x] 1.1 Complete work\n', 'utf8')
+    await writeFile(join(change, 'specs', 'auth', 'spec.md'), '# spec\n', 'utf8')
+    const { currentSpecDigest } = await import('../src/host/evidence.ts')
+    const digest = await currentSpecDigest(workspace, 'auth')
+    const record = join(workspace, '.dsh', 'delegation', 'spec-review', 'auth')
+    await mkdir(record, { recursive: true })
+    await writeFile(
+      join(record, 'spec.json'),
+      `${JSON.stringify({ rule: 'spec-review', change: 'auth', phase: 'spec', scope: 'whole', verdict: 'PASS', digest, findings: [], time: '2026-11-08T00:00:00.000Z', target: { provider: 'codex-subagent' } })}\n`,
+      'utf8',
+    )
+    if (options.portable !== true) return
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const id = taskIdOf('Complete work')
+    await mkdir(join(change, 'reviews'), { recursive: true })
+    await writeFile(
+      join(change, 'reviews', `${id}.json`),
+      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId: id, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], target: { provider: 'codex-subagent' }, time: '2026-11-08T00:00:00.000Z' })}\n`,
+      'utf8',
+    )
+  }
+
+  type Gate = {
+    authorizeAndCheck(
+      workspace: string,
+      change: string,
+    ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>
+  }
+
+  function serviceOf(host: ReturnType<typeof fakeHost>): Gate {
+    const service = (host.ctx.get as (name: string) => unknown)('workflowsArchiveGate') as
+      | Gate
+      | undefined
+    if (service === undefined) throw new Error('the archive gate service was not provided')
+    return service
+  }
+
+  it('writes the host-signed receipt for a verified click and returns ok', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await completeChange(workspace, { portable: true })
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    const result = await serviceOf(host).authorizeAndCheck(workspace, 'auth')
+    expect(result).toEqual({ ok: true })
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    expect(await receipts.readReceipt(workspace, 'auth', auth)).toMatchObject({
+      kind: 'adoption',
+      change: 'auth',
+    })
+  })
+
+  it('refuses a click without the current PASS record or with an open run step', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+
+    const missing = await tempWorkspace()
+    await completeChange(missing)
+    await rm(join(missing, '.dsh', 'delegation', 'spec-review', 'auth', 'spec.json'))
+    const missingHost = fakeHost(missing)
+    apply(missingHost.ctx as never)
+    const missingResult = await serviceOf(missingHost).authorizeAndCheck(missing, 'auth')
+    expect(missingResult.ok).toBe(false)
+    if (missingResult.ok) return
+    expect(missingResult.reason).toMatch(/cannot be adopted|whole-spec/u)
+    expect(await receipts.readReceipt(missing, 'auth', auth)).toBeUndefined()
+
+    const blocked = await tempWorkspace()
+    await completeChange(blocked, { portable: true })
+    const runs = await import('../src/host/runs.ts')
+    await runs.writeRun(
+      blocked,
+      runs.createRun({
+        definition: 'change-intake',
+        trigger: 'tool.pre-execute',
+        session: 'session-1',
+        workspace: blocked,
+        context: { name: 'auth' },
+        steps: ['requirements', 'spec'],
+        id: 'run-open-click',
+        now: 2_000,
+      }),
+      auth,
+    )
+    const blockedHost = fakeHost(blocked)
+    apply(blockedHost.ctx as never)
+    const blockedResult = await serviceOf(blockedHost).authorizeAndCheck(blocked, 'auth')
+    expect(blockedResult.ok).toBe(false)
+    if (blockedResult.ok) return
+    expect(blockedResult.reason).toMatch(/run "run-open-click" step "requirements" is open/u)
+    // The click receipt is written before the gate refuses; it binds the digest.
+    expect(await receipts.readReceipt(blocked, 'auth', auth)).toMatchObject({ kind: 'adoption' })
+  })
+
+  it('refuses a click when a checked task has no portable PASS', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    await completeChange(workspace)
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    const result = await serviceOf(host).authorizeAndCheck(workspace, 'auth')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/portable task-review PASS/u)
+  })
+
+  it('enforces the marker rule on a clicked archive while the shipped rule is deferred', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const { authorizeUserArchive } = await import('../src/host/archive-authorization.ts')
+    const { taskIdOf } = await import('../src/host/tasks.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
+    const marker = `${JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' })}\n`
+
+    // No definitions are passed: the shipped rule is treated as deferred and
+    // the marker alone turns the portable check on.
+    const workspace = await tempWorkspace()
+    await completeChange(workspace)
+    await writeFile(join(workspace, 'openspec', 'review-approval.json'), marker, 'utf8')
+    const refused = await authorizeUserArchive(workspace, 'auth', auth, [])
+    expect(refused.ok).toBe(false)
+    if (refused.ok) return
+    expect(refused.reason).toMatch(/portable task-review PASS/u)
+
+    const id = taskIdOf('Complete work')
+    await mkdir(join(workspace, 'openspec', 'changes', 'auth', 'reviews'), { recursive: true })
+    await writeFile(
+      join(workspace, 'openspec', 'changes', 'auth', 'reviews', `${id}.json`),
+      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId: id, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], target: { provider: 'codex-subagent' }, time: '2026-11-08T00:00:00.000Z' })}\n`,
+      'utf8',
+    )
+    expect(await authorizeUserArchive(workspace, 'auth', auth, [])).toEqual({ ok: true })
+
+    // A marker with the archive gate off does not add the check.
+    const off = await tempWorkspace()
+    await completeChange(off)
+    await writeFile(
+      join(off, 'openspec', 'review-approval.json'),
+      `${JSON.stringify({ version: 1, archiveGate: false, taskRule: 'task-review' })}\n`,
+      'utf8',
+    )
+    expect(await authorizeUserArchive(off, 'auth', auth, [])).toEqual({ ok: true })
+
+    // A malformed marker refuses instead of silently skipping the check.
+    const malformed = await tempWorkspace()
+    await completeChange(malformed)
+    await writeFile(join(malformed, 'openspec', 'review-approval.json'), '{ not json', 'utf8')
+    const invalid = await authorizeUserArchive(malformed, 'auth', auth, [])
+    expect(invalid.ok).toBe(false)
+    if (invalid.ok) return
+    expect(invalid.reason).toMatch(/review-approval\.json/u)
+  })
+})
+
 describe('archive target root', () => {
   it('denies a nested OpenSpec project and an explicit store', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
@@ -6024,6 +6207,207 @@ describe('unrelated moves', () => {
     expect(nextCalled).toBe(true)
   })
 })
+
+describe('archive separator bypass', () => {
+  it('refuses an archive invocation behind a shell separator or a cd compound', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const command of [
+      'cd foo; openspec archive auth',
+      'git status && openspec archive auth',
+      'cd foo || openspec archive auth',
+      'cd foo\nopenspec archive auth',
+      'cd foo;rtk openspec archive auth',
+      'git status; openspec "archive" auth',
+      'git status; & "openspec" archive auth',
+      'Write-Output "it\'s ready"; openspec archive auth',
+      'git status; pnpm exec openspec archive auth',
+      'pnpm exec openspec archive auth; git status',
+    ]) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: 'archive-separator',
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+  })
+
+  it('allows a benign compound command without an archive invocation', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const command of [
+      'cd foo && git status',
+      'cd .; mv docs/a.md docs/b.md',
+      'cd openspec/changes; mv auth auth-copy',
+      'git status; git mv docs/archive docs/history',
+      'Write-Output archive; mv docs/a.md docs/b.md',
+      'git status -- openspec/changes/archive; git mv docs/a.md docs/b.md',
+      'git status; Write-Output "Run openspec archive auth after review"',
+      'git status; Write-Output "Run; openspec archive auth after review"',
+    ]) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: 'benign-compound',
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string } | undefined
+      expect(decision?.kind, command).toBe('continue')
+      expect(nextCalled, command).toBe(true)
+    }
+  })
+
+  it('refuses an unparseable archive move with a quoted or compound destination', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const [index, command] of [
+      'cd .; mv openspec/changes/y openspec/changes/archive; pwd',
+      'git status; git mv openspec/changes/auth "openspec/changes/archive"',
+      'git status; mv openspec/changes/auth openspec/changes/archive; git status',
+      'git status; Move-Item openspec/changes/auth "openspec/changes/archive"',
+    ].entries()) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: `archive-move-bypass-${String(index)}`,
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/the archive move could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+    // From a shell workdir of openspec/changes, a move into a relative
+    // `archive/<name>` descendant is still an archive move.
+    for (const [index, command] of [
+      'git status; mv auth archive/2026-11-11-auth',
+      'git status; mv auth "archive/2026-11-11-auth"',
+      'git status; mv auth ./archive/2026-11-11-auth',
+      'git status; Move-Item auth ".\\archive\\2026-11-11-auth"',
+    ].entries()) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: `archive-relative-bypass-${String(index)}`,
+          name: 'pwsh',
+          arguments: { command, workdir: 'openspec/changes' },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/the archive move could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+    // A destination that reaches the archive directory through a different
+    // workdir (or a `..` step) is still an archive move.
+    for (const [index, [command, workdir]] of [
+      ['git status; mv changes/auth changes/archive/2026-11-11-auth', 'openspec'],
+      ['git status; mv auth ../changes/archive/2026-11-11-auth', 'openspec/changes'],
+    ].entries()) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: `archive-updir-bypass-${String(index)}`,
+          name: 'pwsh',
+          arguments: { command, workdir },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/the archive move could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+    // A `cd` inside the compound command, and a `.` segment in the destination,
+    // are normalized to the same archive directory.
+    for (const [index, command] of [
+      'cd openspec/changes; mv auth archive/',
+      'git status; mv openspec/changes/auth openspec/changes/./archive/',
+      'git status; Move-Item openspec/changes/auth openspec/changes/ARCHIVE',
+      'cd missing-directory || mv openspec/changes/auth openspec/changes/archive',
+      'git status; Move-Item -Destination:openspec/changes/archive -Path openspec/changes/auth',
+      'cd missing-directory; cd openspec/changes; mv auth archive/',
+      'git status; Move-Item\topenspec/changes/auth openspec/changes/archive',
+      'cd openspec/changes; (Move-Item -Path auth -Destination:archive)',
+      'git status; Move-Item openspec/changes/auth openspec/changes/archive > $null',
+      'git status; ( Move-Item openspec/changes/auth openspec/changes/archive )',
+      'git status; Move-Item openspec/changes/auth openspec/changes/archive > $null 2>&1',
+      'git status; ( Move-Item openspec/changes/auth openspec/changes/archive ) > $null',
+      'git status; & Move-Item openspec\\changes\\auth "openspec\\changes\\archive"',
+      'cd -Path openspec/changes; Move-Item auth archive',
+      'git status; & "Move-Item" openspec/changes/auth "openspec/changes/archive"',
+      'cd -LiteralPath:openspec/changes; Move-Item auth archive',
+      'git status; git "mv" openspec/changes/auth "openspec/changes/archive"',
+      'git status; Move-Item -LiteralPath openspec/changes/auth -Destination "openspec/changes/archive" -InformationVariable moveLog',
+      'git status; mv -t openspec/changes/archive/ openspec/changes/auth',
+      'git status; mv --target-directory=openspec/changes/archive/ openspec/changes/auth',
+      'git status; git mv openspec/changes/auth -f openspec/changes/archive/',
+    ].entries()) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: `archive-cd-bypass-${String(index)}`,
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/the archive move could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+  })
+})
+
 it.skipIf(process.platform !== 'win32')(
   'denies an uppercase archive name without evidence',
   async () => {

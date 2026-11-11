@@ -75,6 +75,10 @@ export interface GitLogEntry {
 export type GitRunner = (args: readonly string[], cwd: string) => Promise<string>;
 /** Time one `openspec list` call may take before its process tree is killed. */
 export declare const LIST_TIMEOUT_MS = 60000;
+/** Time one `openspec archive` call may take before its process tree is killed. */
+export declare const ARCHIVE_TIMEOUT_MS = 120000;
+/** The archive CLI call exceeded its bound. */
+export declare const ARCHIVE_TIMEOUT_MESSAGE: string;
 /** Time one `git log` call may take before it is killed. */
 export declare const GIT_TIMEOUT_MS = 5000;
 /** Largest `git log` output a read accepts. */
@@ -126,6 +130,15 @@ export declare function planningRoot(parsed: Record<string, unknown>): string | 
  * @throws a readable error for a missing CLI, no local root, a timeout, or malformed output.
  */
 export declare function runOpenSpecJson(workspace: string, args: readonly string[], label: string, rootOf?: (body: Record<string, unknown>) => string | null): Promise<Record<string, unknown>>;
+/**
+ * Archive one completed change through the documented CLI. The name is a
+ * validated CLI-reported change name and travels as one quoted argument; no
+ * shell command is built from request text.
+ * @param workspace - absolute session working directory.
+ * @param name - a change name the CLI reported for this workspace.
+ * @throws a readable error for a missing CLI, no local root, a timeout, or a failed archive.
+ */
+export declare function archiveWorkspaceChange(workspace: string, name: string): Promise<void>;
 /** The workspace's accepted-capability root, resolved once per read. */
 export declare function specsRoot(workspace: string): string;
 /** Whether a resolved path is strictly under a directory; case-insensitive on Windows. */

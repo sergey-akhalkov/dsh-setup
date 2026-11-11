@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
     var CHANGES_PATH = "api/plugins/dsh-setup-openspec/changes";
     var CHANGE_PATH = "api/plugins/dsh-setup-openspec/change";
     var SPECS_PATH = "api/plugins/dsh-setup-openspec/specs";
+    var ARCHIVE_PATH = "api/plugins/dsh-setup-openspec/archive";
     var OPENSPEC_ID = "@dsh-setup/plugin-openspec/panel";
     var OPENSPEC_KIND = "openspec";
     var ROOT_ADDRESS = "sidebar://openspec";
@@ -193,6 +194,10 @@ window.__ModuleLoader__.load({
     }
     function phaseOf(row) {
       return row.phase ?? derivePhase(row);
+    }
+    function isComplete(change) {
+      if (change.totalTasks > 0) return change.completedTasks >= change.totalTasks;
+      return change.phase === "complete";
     }
     function phaseTone(phase) {
       if (phase === "planning") return "warning";
@@ -647,6 +652,27 @@ window.__ModuleLoader__.load({
         (body) => decodeCapabilityDetail(body.capability)
       );
     }
+    async function requestArchive(sessionId, name) {
+      const response = await fetch(ARCHIVE_PATH, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ session: sessionId, name })
+      });
+      const body = await response.json().catch(() => void 0);
+      if (!response.ok) {
+        const error = isRecord(body) && typeof body.error === "string" ? body.error : void 0;
+        throw new Error(error ?? `The OpenSpec archive request failed (${String(response.status)}).`);
+      }
+      if (!isRecord(body) || body.ok !== true) {
+        throw new Error("The OpenSpec archive response was not understood.");
+      }
+      if (body.name === void 0) return void 0;
+      if (typeof body.name !== "string" || body.name === "") {
+        throw new Error("The OpenSpec archive response was not understood.");
+      }
+      return body.name;
+    }
 
     // packages/plugin-openspec/src/client/index.tsx
     var import_jsx_runtime = require("react/jsx-runtime");
@@ -732,6 +758,9 @@ window.__ModuleLoader__.load({
       "phase.complete": "complete",
       "phase.archived": "archived",
       "change.apply": "Apply change",
+      "change.archive": "Archive",
+      "change.archiving": "Archiving\u2026",
+      "change.archiveRefused": "Archive refused",
       "change.tasks": "tasks",
       "change.artifactLabel": "Change artifacts",
       "change.deltas": "delta specs",
@@ -821,6 +850,10 @@ window.__ModuleLoader__.load({
           sidebarRight.openResource(address);
         }
       };
+    }
+    async function archiveChange(sessionId, name, open) {
+      const archived = await requestArchive(sessionId, name);
+      if (archived !== void 0) open(archivedChangeAddress(archived));
     }
     function OpenSpecTab(props) {
       const { tab } = props.useTabInfo();
@@ -1099,6 +1132,22 @@ window.__ModuleLoader__.load({
         writeSegment(storage, sessionId, next);
         if (next === "specs" && !started.current.specs) loadSpecs();
       };
+      const [archiveState, setArchiveState] = (0, import_react.useState)({ busy: false });
+      const archive = (name) => {
+        if (archiveState.busy) return;
+        setArchiveState({ name, busy: true });
+        archiveChange(sessionId, name, open).then(
+          () => {
+            setArchiveState({ busy: false });
+            changes.reload();
+          },
+          (error) => setArchiveState({
+            name,
+            busy: false,
+            reason: error instanceof Error ? error.message : String(error)
+          })
+        );
+      };
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
         segment === "changes" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           ChangeListObservation,
@@ -1133,7 +1182,10 @@ window.__ModuleLoader__.load({
             onOpenCapability: (id) => open(capabilityAddress(id)),
             onExplore: () => draft(EXPLORE_DRAFT),
             onPropose: () => draft(PROPOSE_DRAFT),
-            onSeeArchive: () => choose("archive")
+            onSeeArchive: () => choose("archive"),
+            onApply: (name) => draft(applyDraft(name)),
+            onArchiveChange: archive,
+            archiveState
           }
         )
       ] });
@@ -1145,6 +1197,21 @@ window.__ModuleLoader__.load({
       const [artifact, setArtifact] = (0, import_react.useState)(props.initialArtifact);
       const [delta, setDelta] = (0, import_react.useState)(void 0);
       const [requirementQuery, setRequirementQuery] = (0, import_react.useState)("");
+      const [archiveState, setArchiveState] = (0, import_react.useState)({
+        busy: false
+      });
+      const archive = () => {
+        if (archiveState.busy) return;
+        setArchiveState({ busy: true });
+        archiveChange(sessionId, name, props.open).then(
+          // Clear busy after success or refusal so the action stays usable.
+          () => setArchiveState({ busy: false }),
+          (error) => setArchiveState({
+            busy: false,
+            reason: error instanceof Error ? error.message : String(error)
+          })
+        );
+      };
       (0, import_react.useEffect)(() => {
         read.reload();
       }, []);
@@ -1185,6 +1252,9 @@ window.__ModuleLoader__.load({
             onDelta: setDelta,
             onRequirementQuery: setRequirementQuery,
             onApply: () => draft(applyDraft(change.name)),
+            onArchive: archive,
+            archiving: archiveState.busy,
+            ...archiveState.reason === void 0 ? {} : { archiveReason: archiveState.reason },
             onOpenCapability: (id) => props.open(capabilityAddress(id))
           }
         ))
@@ -1320,6 +1390,14 @@ window.__ModuleLoader__.load({
       const inProgress = active.filter((row) => phaseOf(row) !== "complete");
       const complete = active.filter((row) => phaseOf(row) === "complete");
       const busy = props.refreshing === true;
+      const archiveFacts = (name) => {
+        const state = props.archiveState;
+        const mine = state?.name === name;
+        return {
+          archiving: mine && state.busy === true,
+          ...mine && state.reason !== void 0 ? { archiveReason: state.reason } : {}
+        };
+      };
       return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
         inProgress.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "dsh-openspec-section", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-group-label", children: [
@@ -1332,7 +1410,8 @@ window.__ModuleLoader__.load({
               t: props.t,
               now: props.now,
               onOpen: (name) => props.onOpenChange(name, false),
-              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind)
+              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
+              onApply: () => props.onApply(row.name)
             })
           ) })
         ] }) : null,
@@ -1347,7 +1426,9 @@ window.__ModuleLoader__.load({
               t: props.t,
               now: props.now,
               onOpen: (name) => props.onOpenChange(name, false),
-              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind)
+              onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
+              onArchive: () => props.onArchiveChange(row.name),
+              ...archiveFacts(row.name)
             })
           ) })
         ] }) : null
@@ -1493,41 +1574,80 @@ window.__ModuleLoader__.load({
       const archived = props.archived === true || props.row.archived === true;
       const phase = archived ? "archived" : phaseOf(props.row);
       const updated = relativeLabel(props.row.modified, props.now);
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
-        "button",
-        {
-          type: "button",
-          className: `dsh-openspec-card${archived ? " dsh-openspec-card-archived" : ""}`,
-          onClick: () => props.onOpen(props.row.name),
-          children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
-              archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : null,
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(phase), children: props.t(`phase.${phase}`) }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
-              updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
-            ] }),
-            summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.why ?? props.row.summary }) }),
-            props.row.totalTasks > 0 ? ProgressBar({
-              done: props.row.completedTasks,
-              total: props.row.totalTasks,
-              t: props.t,
-              showLabel: false
-            }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
-                props.row.presence,
-                props.t,
+      return (
+        // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+          "div",
+          {
+            role: "button",
+            tabIndex: 0,
+            className: `dsh-openspec-card${archived ? " dsh-openspec-card-archived" : ""}`,
+            onClick: () => props.onOpen(props.row.name),
+            onKeyDown: (event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              props.onOpen(props.row.name);
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-head", children: [
+                archived ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.IconCheckCircleOutlineRegular, { size: 14 }) : null,
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Tag, { tone: phaseTone(phase), children: props.t(`phase.${phase}`) }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-title", children: props.row.name }),
+                updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-count", children: `${props.t("change.updated")} ${updated}` })
+              ] }),
+              summaryText(props.row.why ?? props.row.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(primitives2.Tooltip, { label: props.row.why ?? props.row.summary ?? "", portal: true, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-purpose dsh-openspec-purpose-clamp", children: props.row.why ?? props.row.summary }) }),
+              props.row.totalTasks > 0 ? ProgressBar({
+                done: props.row.completedTasks,
+                total: props.row.totalTasks,
+                t: props.t,
+                showLabel: false
+              }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: props.t("change.tasksNotWritten") }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-meta", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-tags", children: presenceFacts(
+                  props.row.presence,
+                  props.t,
+                  {
+                    requirements: props.row.requirementCount ?? 0,
+                    done: props.row.completedTasks,
+                    total: props.row.totalTasks
+                  },
+                  props.onOpenArtifact
+                ) }),
+                props.row.commit === void 0 || props.row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: props.row.commit }) })
+              ] }),
+              archived ? null : props.onArchive !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "dsh-openspec-card-actions", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                  import_dsh_client_ui_primitives.Button,
+                  {
+                    type: "button",
+                    variant: "outline",
+                    size: "sm",
+                    disabled: props.archiving === true,
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      props.onArchive?.();
+                    },
+                    children: props.archiving === true ? props.t("change.archiving") : props.t("change.archive")
+                  }
+                ),
+                props.archiveReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-action-refusal", role: "alert", children: `${props.t("change.archiveRefused")}: ${props.archiveReason}` })
+              ] }) : props.onApply !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-actions", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                import_dsh_client_ui_primitives.Button,
                 {
-                  requirements: props.row.requirementCount ?? 0,
-                  done: props.row.completedTasks,
-                  total: props.row.totalTasks
-                },
-                props.onOpenArtifact
-              ) }),
-              props.row.commit === void 0 || props.row.commit === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-card-tail", children: CommitFactView({ commit: props.row.commit }) })
-            ] })
-          ]
-        }
+                  type: "button",
+                  variant: "outline",
+                  size: "sm",
+                  onClick: (event) => {
+                    event.stopPropagation();
+                    props.onApply?.();
+                  },
+                  children: props.t("change.apply")
+                }
+              ) }) : null
+            ]
+          }
+        )
       );
     }
     function CapabilityCard(props) {
@@ -1617,7 +1737,7 @@ window.__ModuleLoader__.load({
         ] });
         if (onOpen === void 0) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: tag }, fact.kind);
         return (
-          // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
+          // biome-ignore lint/a11y/useSemanticElements: an artifact tag is a card-internal link; the row stays the primary activation.
           /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
             "span",
             {
@@ -1645,6 +1765,7 @@ window.__ModuleLoader__.load({
       const { change, artifact, delta, t, labels } = props;
       const archived = change.archived === true;
       const phase = archived ? "archived" : phaseOf(change);
+      const complete = !archived && isComplete(change);
       const deltas = change.deltas ?? [];
       const baseId = `dsh-openspec-artifacts-${archived ? "archived" : "active"}-${encodeURIComponent(change.name)}`;
       const options = ARTIFACT_KINDS.map((kind) => {
@@ -1670,12 +1791,23 @@ window.__ModuleLoader__.load({
           summaryText(change.summary) === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-purpose", children: change.summary }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-progress-row", children: [
             change.totalTasks > 0 ? ProgressBar({ done: change.completedTasks, total: change.totalTasks, t }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-openspec-meta", children: t("change.tasksNotWritten") }),
-            archived ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onApply, children: t("change.apply") })
+            archived ? null : complete ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              import_dsh_client_ui_primitives.Button,
+              {
+                type: "button",
+                variant: "outline",
+                size: "sm",
+                disabled: props.archiving === true,
+                onClick: props.onArchive,
+                children: props.archiving === true ? t("change.archiving") : t("change.archive")
+              }
+            ) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onApply, children: t("change.apply") })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "dsh-openspec-meta", children: [
             updated === null ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: `${t("change.updated")} ${updated}` }),
             change.commit === void 0 || change.commit === null ? null : CommitFactView({ commit: change.commit })
-          ] })
+          ] }),
+          props.archiveReason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "dsh-openspec-action-refusal", role: "alert", children: `${t("change.archiveRefused")}: ${props.archiveReason}` })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
           import_dsh_client_ui_primitives.SegmentedControl,
@@ -2265,6 +2397,21 @@ window.__ModuleLoader__.load({
       flex-wrap: wrap;
       gap: 8px;
       min-width: 0;
+    }
+    .dsh-openspec-card-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+    .dsh-openspec-action-refusal {
+      flex: 1 1 160px;
+      min-width: 0;
+      margin: 0;
+      font: var(--dsw-font-xxs-12);
+      color: var(--dsw-alias-state-error-primary);
+      overflow-wrap: anywhere;
     }
     .dsh-openspec-commit {
       display: inline-flex;

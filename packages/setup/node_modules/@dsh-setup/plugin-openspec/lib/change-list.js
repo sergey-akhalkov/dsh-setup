@@ -4,6 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
 /** Time one `openspec list` call may take before its process tree is killed. */
 export const LIST_TIMEOUT_MS = 60_000;
+/** Time one `openspec archive` call may take before its process tree is killed. */
+export const ARCHIVE_TIMEOUT_MS = 120_000;
+/** The archive CLI call exceeded its bound. */
+export const ARCHIVE_TIMEOUT_MESSAGE = `\`openspec archive\` did not finish within ${String(ARCHIVE_TIMEOUT_MS / 1000)} seconds.`;
 /** Time one `git log` call may take before it is killed. */
 export const GIT_TIMEOUT_MS = 5_000;
 /** Largest `git log` output a read accepts. */
@@ -171,7 +175,10 @@ function windowsArgument(value) {
     return `"${value.replaceAll('"', '""')}"`;
 }
 /** Run one bounded `openspec` CLI call and return its stdout. */
-function runCli(workspace, args, label) {
+function runCli(workspace, args, label, timeout = {
+    ms: LIST_TIMEOUT_MS,
+    message: TIMEOUT_MESSAGE,
+}) {
     const windows = process.platform === 'win32';
     const file = windows ? (process.env.ComSpec ?? 'cmd.exe') : 'openspec';
     // Every request-derived name is a quoted token: no shell metacharacter in a
@@ -206,10 +213,10 @@ function runCli(workspace, args, label) {
             const tree = process.platform !== 'win32' || !childExited;
             void (tree ? killTree(child.pid) : Promise.resolve(false)).then((killed) => {
                 finish(() => reject(new Error(killed
-                    ? TIMEOUT_MESSAGE
-                    : `${TIMEOUT_MESSAGE} Its process tree could not be confirmed terminated.`)));
+                    ? timeout.message
+                    : `${timeout.message} Its process tree could not be confirmed terminated.`)));
             });
-        }, LIST_TIMEOUT_MS);
+        }, timeout.ms);
         child.stdout?.setEncoding('utf8');
         child.stdout?.on('data', (chunk) => {
             stdout += chunk;
@@ -283,6 +290,34 @@ export async function runOpenSpecJson(workspace, args, label, rootOf = reportedR
         throw new Error(MALFORMED_MESSAGE);
     requireRoot(parsed, workspace, rootOf);
     return parsed;
+}
+/**
+ * Archive one completed change through the documented CLI. The name is a
+ * validated CLI-reported change name and travels as one quoted argument; no
+ * shell command is built from request text.
+ * @param workspace - absolute session working directory.
+ * @param name - a change name the CLI reported for this workspace.
+ * @throws a readable error for a missing CLI, no local root, a timeout, or a failed archive.
+ */
+export async function archiveWorkspaceChange(workspace, name) {
+    // cmd.exe expands `%VAR%` even inside quotes, so a CLI-reported name that is
+    // not a plain slug must be refused before it reaches the shell.
+    requireSafeCliName(name, 'change');
+    let isDirectory = false;
+    try {
+        isDirectory = statSync(join(workspace, 'openspec')).isDirectory();
+    }
+    catch {
+        isDirectory = false;
+    }
+    if (!isDirectory)
+        throw new Error(NO_LOCAL_ROOT_MESSAGE);
+    if (!cliOnPath())
+        throw new Error(MISSING_CLI_MESSAGE);
+    await runCli(workspace, ['archive', name, '--yes'], 'archive', {
+        ms: ARCHIVE_TIMEOUT_MS,
+        message: ARCHIVE_TIMEOUT_MESSAGE,
+    });
 }
 function isMissing(error) {
     const code = error?.code;

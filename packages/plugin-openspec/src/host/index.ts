@@ -10,7 +10,7 @@ import {
   readWorkspaceChange,
   UnreportedItemError,
 } from './change-detail.js'
-import { listWorkspaceChanges } from './change-list.js'
+import { archiveWorkspaceChange, listWorkspaceChanges } from './change-list.js'
 import { registerWorkflowsContribution } from './workflows.js'
 
 /**
@@ -222,6 +222,13 @@ export const CHANGE_DETAIL_ROUTE = '/api/plugins/dsh-setup-openspec/change'
 /** The capability inventory, or one capability's spec body when `id` is given. */
 export const SPECS_ROUTE = '/api/plugins/dsh-setup-openspec/specs'
 
+/**
+ * The one authorized write: archive a completed change after the user clicked
+ * `Archive`. The click is the confirmation; the body names the live session and
+ * the change, never a path.
+ */
+export const ARCHIVE_ROUTE = '/api/plugins/dsh-setup-openspec/archive'
+
 /** One exact Fetch route of the Host Connection service. */
 interface FetchRoute {
   readonly path: string
@@ -290,12 +297,11 @@ function readErrorResponse(error: unknown, fallback: string): Response {
 type ResolvedWorkspace = { readonly workspace: string } | { readonly response: Response }
 
 /**
- * Resolve the live session's workspace from the request query. A returned
- * `Response` is the refusal; the workspace always comes from the session,
- * never from any other request text.
+ * Resolve one live session id to its workspace. A returned `Response` is the
+ * refusal; the workspace always comes from the session, never from request
+ * text other than the session id.
  */
-function sessionWorkspace(services: ChangeRouteServices, request: Request): ResolvedWorkspace {
-  const sessionId = new URL(request.url).searchParams.get('session')
+function liveWorkspace(services: ChangeRouteServices, sessionId: string | null): ResolvedWorkspace {
   if (sessionId === null || sessionId === '') {
     return { response: jsonResponse(400, { error: 'A session id is required.' }) }
   }
@@ -306,12 +312,40 @@ function sessionWorkspace(services: ChangeRouteServices, request: Request): Reso
   return { workspace: services.workingDirectory.get(agent.session) }
 }
 
+function sessionWorkspace(services: ChangeRouteServices, request: Request): ResolvedWorkspace {
+  return liveWorkspace(services, new URL(request.url).searchParams.get('session'))
+}
+
+/** The optional host service the workflows engine provides when it is installed. */
+interface ArchiveGateService {
+  authorizeAndCheck(
+    workspace: string,
+    change: string,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>
+}
+
+/** Read the optional engine service at request time; a host without it skips the engine checks. */
+function archiveGateOf(ctx: Context): ArchiveGateService | undefined {
+  try {
+    const gate = ctx.get('workflowsArchiveGate') as ArchiveGateService | undefined
+    return gate !== undefined && typeof gate.authorizeAndCheck === 'function' ? gate : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A bounded one-line reason, never the whole request body. */
+function boundedReason(text: string): string {
+  return text.length > 500 ? `${text.slice(0, 499)}…` : text
+}
+
 /**
- * Register the workspace-scoped, read-only OpenSpec routes on the Host's fetch
- * registry: the picker's change list (now carrying artifact presence), one
- * change's artifacts, and the capability inventory or one spec body. Every
- * request carries a session id and at most an item name; the workspace comes
- * from that live session, never from the request. The carrier admits each
+ * Register the workspace-scoped OpenSpec routes on the Host's fetch registry:
+ * the picker's change list (now carrying artifact presence), one change's
+ * artifacts, the capability inventory or one spec body, and the one authorized
+ * write — archiving a completed change after its user-clicked authorization.
+ * Every request carries a session id and at most an item name; the workspace
+ * comes from that live session, never from the request. The carrier admits each
  * request (origin/cookie fence) before dispatching to these handlers. Each
  * registration is an effect, so disposal removes the routes with the context
  * that owns them.
@@ -377,6 +411,90 @@ function registerRoutes(ctx: Context): void {
         }
       },
     },
+    {
+      path: ARCHIVE_ROUTE,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        let body: unknown
+        try {
+          body = await request.json()
+        } catch {
+          return jsonResponse(400, { error: 'The archive request body must be JSON.' })
+        }
+        const sessionId = isRecord(body) && typeof body.session === 'string' ? body.session : ''
+        const name = isRecord(body) && typeof body.name === 'string' ? body.name.trim() : ''
+        if (sessionId === '' || name === '') {
+          return jsonResponse(400, { error: 'A session id and a change name are required.' })
+        }
+        const resolved = liveWorkspace(services, sessionId)
+        if ('response' in resolved) return resolved.response
+        let listed: Awaited<ReturnType<typeof listWorkspaceChanges>>
+        try {
+          listed = await listWorkspaceChanges(resolved.workspace)
+        } catch (error) {
+          return errorResponse(error, 'The change list could not be read.')
+        }
+        const change = listed.changes.find((row) => row.name === name)
+        if (change === undefined) {
+          return jsonResponse(409, {
+            error: boundedReason(`The change "${name}" is not an active change in this workspace.`),
+          })
+        }
+        if (change.totalTasks === 0 || change.completedTasks !== change.totalTasks) {
+          return jsonResponse(409, {
+            error: boundedReason(
+              `The change "${name}" is not complete (${String(change.completedTasks)}/${String(change.totalTasks)} tasks done); every task must be complete before it can be archived.`,
+            ),
+          })
+        }
+        const gate = archiveGateOf(ctx)
+        if (gate !== undefined) {
+          let decision: Awaited<ReturnType<ArchiveGateService['authorizeAndCheck']>>
+          try {
+            decision = await gate.authorizeAndCheck(resolved.workspace, name)
+          } catch (error) {
+            return errorResponse(error, 'The archive gate could not be evaluated.')
+          }
+          if (!decision.ok) return jsonResponse(409, { error: boundedReason(decision.reason) })
+        }
+        // The archive family before the CLI call distinguishes the newly added
+        // row from a pre-existing archive with the same base name.
+        let archivedBefore: ReadonlySet<string> | undefined
+        try {
+          archivedBefore = new Set(
+            (await listWorkspaceChanges(resolved.workspace)).archived.map((row) => row.name),
+          )
+        } catch {
+          archivedBefore = undefined
+        }
+        try {
+          await archiveWorkspaceChange(resolved.workspace, name)
+        } catch (error) {
+          return jsonResponse(409, {
+            error: boundedReason(error instanceof Error ? error.message : String(error)),
+          })
+        }
+        // The CLI renames the directory `<date>-<name>`; report the newly added
+        // row so the client can open the real archived tab. A failed confirmation
+        // read, or no identifiable new row, succeeds without an address: a
+        // fabricated name is not a valid archived address.
+        let archivedName: string | undefined
+        if (archivedBefore !== undefined) {
+          try {
+            archivedName = (await listWorkspaceChanges(resolved.workspace)).archived
+              .filter((row) => !archivedBefore?.has(row.name))
+              .find((row) => row.name.replace(/^\d{4}-\d{2}-\d{2}-/u, '') === name)?.name
+          } catch {
+            archivedName = undefined
+          }
+        }
+        return jsonResponse(
+          200,
+          archivedName === undefined ? { ok: true } : { ok: true, name: archivedName },
+        )
+      },
+    },
   ]
   for (const route of routes) {
     const register = (): (() => void) => services.connection.fetch.register(route)
@@ -390,7 +508,7 @@ function registerRoutes(ctx: Context): void {
 }
 
 /**
- * Register the OpenSpec read routes when the Host services exist.
+ * Register the OpenSpec routes when the Host services exist.
  *
  * The plain Web profile provides `connection`, `agents`, and
  * `workingDirectory` after this row mounts, so an absent probe waits through

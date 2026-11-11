@@ -21,6 +21,7 @@ import {
   OUTSIDE_ROOT_MESSAGE,
 } from '../src/host/change-list.ts'
 import {
+  ARCHIVE_ROUTE,
   CHANGE_DETAIL_ROUTE,
   CHANGES_ROUTE,
   registerChangeRoute,
@@ -1690,11 +1691,19 @@ function serveDetail(
 }
 
 describe('openspec read routes', () => {
-  it('registers the three exact GET routes on the desktop shell carrier', () => {
+  it('registers the three exact GET routes and the archive POST on the desktop shell carrier', () => {
     const harness = routeHarness(new Map())
-    expect([...harness.routes.keys()]).toEqual([CHANGES_ROUTE, CHANGE_DETAIL_ROUTE, SPECS_ROUTE])
+    expect([...harness.routes.keys()]).toEqual([
+      CHANGES_ROUTE,
+      CHANGE_DETAIL_ROUTE,
+      SPECS_ROUTE,
+      ARCHIVE_ROUTE,
+    ])
     for (const route of harness.routes.values()) {
-      expect(route).toMatchObject({ methods: ['GET'], requestBody: 'buffered' })
+      expect(route).toMatchObject({
+        methods: [route.path === ARCHIVE_ROUTE ? 'POST' : 'GET'],
+        requestBody: 'buffered',
+      })
     }
   })
 
@@ -2053,9 +2062,13 @@ describe('openspec read routes', () => {
       CHANGES_ROUTE,
       CHANGE_DETAIL_ROUTE,
       SPECS_ROUTE,
+      ARCHIVE_ROUTE,
     ])
     for (const route of registered) {
-      expect(route).toMatchObject({ methods: ['GET'], requestBody: 'buffered' })
+      expect(route).toMatchObject({
+        methods: [route.path === ARCHIVE_ROUTE ? 'POST' : 'GET'],
+        requestBody: 'buffered',
+      })
     }
     for (const dispose of disposers) dispose()
     expect(registered).toEqual([])
@@ -2088,7 +2101,7 @@ describe('openspec read routes', () => {
       },
     }
     registerChangeRoute(ctx as never)
-    expect(registered).toEqual([CHANGES_ROUTE, CHANGE_DETAIL_ROUTE, SPECS_ROUTE])
+    expect(registered).toEqual([CHANGES_ROUTE, CHANGE_DETAIL_ROUTE, SPECS_ROUTE, ARCHIVE_ROUTE])
     expect(injectCalled).toBe(false)
   })
 

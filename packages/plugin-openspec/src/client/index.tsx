@@ -59,6 +59,7 @@ import {
   hasArtifact,
   initialArtifact,
   initialRootSegment,
+  isComplete,
   isoDate,
   LOADING,
   matchesQuery,
@@ -79,6 +80,7 @@ import {
   type RootSegment,
   readSegment,
   relativeLabel,
+  requestArchive,
   requestCapabilities,
   requestCapability,
   requestChange,
@@ -249,6 +251,9 @@ const EN: Record<string, string> = {
   'phase.complete': 'complete',
   'phase.archived': 'archived',
   'change.apply': 'Apply change',
+  'change.archive': 'Archive',
+  'change.archiving': 'Archiving…',
+  'change.archiveRefused': 'Archive refused',
   'change.tasks': 'tasks',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
@@ -455,6 +460,20 @@ export function createHandoff(
       sidebarRight.openResource(address)
     },
   }
+}
+
+/**
+ * The one archive action: the click is the authorization, the Host archives the
+ * change, and its archived name opens in its own tab when the Host identified
+ * the new row. Without an address the caller refreshes its list instead.
+ */
+async function archiveChange(
+  sessionId: string,
+  name: string,
+  open: (address: string) => void,
+): Promise<void> {
+  const archived = await requestArchive(sessionId, name)
+  if (archived !== undefined) open(archivedChangeAddress(archived))
 }
 
 /** Dispatch the tab body by its canonical address; owns the one style block. */
@@ -837,6 +856,32 @@ export function RootBody(props: RootBodyProps): ReactNode {
     writeSegment(storage, sessionId, next)
     if (next === 'specs' && !started.current.specs) loadSpecs()
   }
+  // A successful archive re-reads the list so the row leaves Changes and the
+  // change arrives in Archive; the archived tab opens only when the Host names
+  // the new row.
+  const [archiveState, setArchiveState] = useState<{
+    name?: string
+    busy: boolean
+    reason?: string
+  }>({ busy: false })
+  const archive = (name: string): void => {
+    if (archiveState.busy) return
+    setArchiveState({ name, busy: true })
+    archiveChange(sessionId, name, open).then(
+      () => {
+        // Clear busy so the next card's action is not blocked; the re-read moves
+        // the row into Archive.
+        setArchiveState({ busy: false })
+        changes.reload()
+      },
+      (error: unknown) =>
+        setArchiveState({
+          name,
+          busy: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+    )
+  }
   return (
     <>
       {segment === 'changes' ? (
@@ -874,6 +919,9 @@ export function RootBody(props: RootBodyProps): ReactNode {
         onExplore={() => draft(EXPLORE_DRAFT)}
         onPropose={() => draft(PROPOSE_DRAFT)}
         onSeeArchive={() => choose('archive')}
+        onApply={(name) => draft(applyDraft(name))}
+        onArchiveChange={archive}
+        archiveState={archiveState}
       />
     </>
   )
@@ -895,6 +943,24 @@ export function ChangeBody(props: ChangeBodyProps): ReactNode {
   const [artifact, setArtifact] = useState<ArtifactKind | undefined>(props.initialArtifact)
   const [delta, setDelta] = useState<string | undefined>(undefined)
   const [requirementQuery, setRequirementQuery] = useState('')
+  const [archiveState, setArchiveState] = useState<{ busy: boolean; reason?: string }>({
+    busy: false,
+  })
+  // The click is the authorization: the panel sends one request, opens the
+  // archived tab the Host resolved, and shows a refusal inline otherwise.
+  const archive = (): void => {
+    if (archiveState.busy) return
+    setArchiveState({ busy: true })
+    archiveChange(sessionId, name, props.open).then(
+      // Clear busy after success or refusal so the action stays usable.
+      () => setArchiveState({ busy: false }),
+      (error: unknown) =>
+        setArchiveState({
+          busy: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+    )
+  }
   useEffect(() => {
     read.reload()
     // The change name and family are fixed for the tab's lifetime.
@@ -940,6 +1006,9 @@ export function ChangeBody(props: ChangeBodyProps): ReactNode {
           onDelta={setDelta}
           onRequirementQuery={setRequirementQuery}
           onApply={() => draft(applyDraft(change.name))}
+          onArchive={archive}
+          archiving={archiveState.busy}
+          {...(archiveState.reason === undefined ? {} : { archiveReason: archiveState.reason })}
           onOpenCapability={(id) => props.open(capabilityAddress(id))}
         />
       ))}
@@ -1081,6 +1150,16 @@ export interface RootViewProps {
   onExplore(): void
   onPropose(): void
   onSeeArchive(): void
+  /** Fill the apply draft for a change that is not complete. */
+  onApply(name: string): void
+  /** Archive a completed change; the click is the authorization. */
+  onArchiveChange(name: string): void
+  /** The in-flight archive and its last refusal, if any. */
+  readonly archiveState?: {
+    readonly name?: string
+    readonly busy: boolean
+    readonly reason?: string
+  }
 }
 
 /** Newest-first or oldest-first capability ordering. */
@@ -1155,6 +1234,15 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
   const inProgress = active.filter((row) => phaseOf(row) !== 'complete')
   const complete = active.filter((row) => phaseOf(row) === 'complete')
   const busy = props.refreshing === true
+  // Only the row that is archiving shows the busy label or its own refusal.
+  const archiveFacts = (name: string): { archiving: boolean; archiveReason?: string } => {
+    const state = props.archiveState
+    const mine = state?.name === name
+    return {
+      archiving: mine && state.busy === true,
+      ...(mine && state.reason !== undefined ? { archiveReason: state.reason } : {}),
+    }
+  }
   return (
     <>
       {inProgress.length > 0 ? (
@@ -1171,6 +1259,7 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 now: props.now,
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
+                onApply: () => props.onApply(row.name),
               }),
             )}
           </div>
@@ -1190,6 +1279,8 @@ function changesBody(response: ChangeListResponse, props: RootViewProps): ReactN
                 now: props.now,
                 onOpen: (name) => props.onOpenChange(name, false),
                 onOpenArtifact: (kind) => props.onOpenArtifact(row.name, false, kind),
+                onArchive: () => props.onArchiveChange(row.name),
+                ...archiveFacts(row.name),
               }),
             )}
           </div>
@@ -1406,23 +1497,38 @@ function FilterField(props: {
   )
 }
 
-/** One change card: phase, purpose, progress, and provenance. */
+/** One change card: phase, purpose, progress, provenance, and its one action. */
 function ChangeCard(props: {
   readonly row: ChangeRow
   readonly t: Translate
   readonly now?: Date
   readonly archived?: boolean
+  /** An archive action is in flight for this row. */
+  readonly archiving?: boolean
+  /** The Host's bounded archive refusal, shown inline. */
+  readonly archiveReason?: string
   onOpen(name: string): void
   onOpenArtifact?(kind: ArtifactKind): void
+  onApply?(): void
+  onArchive?(): void
 }): ReactNode {
   const archived = props.archived === true || props.row.archived === true
   const phase = archived ? 'archived' : phaseOf(props.row)
   const updated = relativeLabel(props.row.modified, props.now)
   return (
-    <button
-      type="button"
+    // biome-ignore lint/a11y/useSemanticElements: the card's own buttons cannot nest inside a <button>; the row keeps Enter/Space.
+    <div
+      role="button"
+      tabIndex={0}
       className={`dsh-openspec-card${archived ? ' dsh-openspec-card-archived' : ''}`}
       onClick={() => props.onOpen(props.row.name)}
+      onKeyDown={(event) => {
+        // A nested button handles its own Enter/Space; only the row itself opens.
+        if (event.target !== event.currentTarget) return
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        props.onOpen(props.row.name)
+      }}
     >
       <span className="dsh-openspec-card-head">
         {archived ? <primitives.IconCheckCircleOutlineRegular size={14} /> : null}
@@ -1468,7 +1574,42 @@ function ChangeCard(props: {
           </span>
         )}
       </span>
-    </button>
+      {archived ? null : props.onArchive !== undefined ? (
+        <span className="dsh-openspec-card-actions">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={props.archiving === true}
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onArchive?.()
+            }}
+          >
+            {props.archiving === true ? props.t('change.archiving') : props.t('change.archive')}
+          </Button>
+          {props.archiveReason === undefined ? null : (
+            <span className="dsh-openspec-action-refusal" role="alert">
+              {`${props.t('change.archiveRefused')}: ${props.archiveReason}`}
+            </span>
+          )}
+        </span>
+      ) : props.onApply !== undefined ? (
+        <span className="dsh-openspec-card-actions">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onApply?.()
+            }}
+          >
+            {props.t('change.apply')}
+          </Button>
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -1621,7 +1762,7 @@ function presenceFacts(
     )
     if (onOpen === undefined) return <span key={fact.kind}>{tag}</span>
     return (
-      // biome-ignore lint/a11y/useSemanticElements: a nested <button> is invalid inside the card's button.
+      // biome-ignore lint/a11y/useSemanticElements: an artifact tag is a card-internal link; the row stays the primary activation.
       <span
         key={fact.kind}
         role="button"
@@ -1653,11 +1794,17 @@ export interface ChangeViewProps {
   readonly labels: MarkdownLabels
   /** A background re-read is in flight; the shown artifact stays on screen. */
   readonly refreshing?: boolean
+  /** An archive request is in flight for this change. */
+  readonly archiving?: boolean
+  /** The Host's bounded archive refusal, shown inline. */
+  readonly archiveReason?: string
   readonly now?: Date
   onArtifact(kind: ArtifactKind): void
   onDelta(capability: string): void
   onRequirementQuery(value: string): void
   onApply(): void
+  /** Archive the completed change; the click is the authorization. */
+  onArchive?(): void
   onOpenCapability(id: string): void
 }
 
@@ -1666,6 +1813,7 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
   const { change, artifact, delta, t, labels } = props
   const archived = change.archived === true
   const phase: Phase = archived ? 'archived' : phaseOf(change)
+  const complete = !archived && isComplete(change)
   const deltas = change.deltas ?? []
   const baseId = `dsh-openspec-artifacts-${archived ? 'archived' : 'active'}-${encodeURIComponent(change.name)}`
   const options = ARTIFACT_KINDS.map((kind): SegmentedControlOption<ArtifactKind> => {
@@ -1698,7 +1846,17 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
           ) : (
             <span className="dsh-openspec-meta">{t('change.tasksNotWritten')}</span>
           )}
-          {archived ? null : (
+          {archived ? null : complete ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={props.archiving === true}
+              onClick={props.onArchive}
+            >
+              {props.archiving === true ? t('change.archiving') : t('change.archive')}
+            </Button>
+          ) : (
             <Button type="button" variant="outline" size="sm" onClick={props.onApply}>
               {t('change.apply')}
             </Button>
@@ -1710,6 +1868,11 @@ export function ChangeView(props: ChangeViewProps): ReactNode {
             ? null
             : CommitFactView({ commit: change.commit })}
         </div>
+        {props.archiveReason === undefined ? null : (
+          <p className="dsh-openspec-action-refusal" role="alert">
+            {`${t('change.archiveRefused')}: ${props.archiveReason}`}
+          </p>
+        )}
       </header>
       <SegmentedControl
         id={baseId}
@@ -2500,6 +2663,21 @@ export const PANEL_CSS = `
   flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
+}
+.dsh-openspec-card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.dsh-openspec-action-refusal {
+  flex: 1 1 160px;
+  min-width: 0;
+  margin: 0;
+  font: var(--dsw-font-xxs-12);
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
 }
 .dsh-openspec-commit {
   display: inline-flex;

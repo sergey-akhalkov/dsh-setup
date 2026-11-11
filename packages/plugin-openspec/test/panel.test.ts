@@ -116,6 +116,7 @@ import {
   TaskChecklist,
 } from '../src/client/index.tsx'
 import {
+  ARCHIVE_PATH,
   applyDraft,
   archivedChangeAddress,
   type CapabilityDetail,
@@ -223,6 +224,9 @@ const COPY: Record<string, string> = {
   'phase.complete': 'complete',
   'phase.archived': 'archived',
   'change.apply': 'Apply change',
+  'change.archive': 'Archive',
+  'change.archiving': 'Archiving…',
+  'change.archiveRefused': 'Archive refused',
   'change.tasks': 'tasks',
   'change.artifactLabel': 'Change artifacts',
   'change.deltas': 'delta specs',
@@ -335,6 +339,14 @@ const LATER: ChangeDetail = {
   completedTasks: 5,
   artifacts: { proposal: '# Why, revised', design: '# Design', tasks: '## Group\n- [x] task' },
   modified: '2026-11-05T15:20:00',
+}
+
+const COMPLETE: ChangeDetail = {
+  ...FULL,
+  status: 'complete',
+  completedTasks: 12,
+  totalTasks: 12,
+  phase: 'complete',
 }
 
 const TWO_DELTAS: ChangeDetail = { ...FULL, deltas: [AUTH_DELTA, BILLING_DELTA] }
@@ -656,9 +668,9 @@ function tabControl(tree: unknown): Found {
 function cardButtons(tree: unknown): Found[] {
   return nodes(tree).filter(
     (node) =>
-      (node.type === 'button' || node.type === 'Button') &&
+      (node.type === 'button' || node.type === 'Button' || node.type === 'div') &&
       typeof node.props.className === 'string' &&
-      /dsh-openspec-(card|history-row)/.exec(node.props.className) !== null,
+      /(?:^|\s)dsh-openspec-(?:card|history-row)(?:\s|$)/.exec(node.props.className) !== null,
   )
 }
 
@@ -923,6 +935,8 @@ function rootProps(overrides: Partial<RootViewProps> = {}): RootViewProps {
     onExplore: () => {},
     onPropose: () => {},
     onSeeArchive: () => {},
+    onApply: () => {},
+    onArchiveChange: () => {},
     ...overrides,
   }
 }
@@ -2945,6 +2959,197 @@ describe('OpenSpec tab bodies', () => {
     body.destroy()
     dispatch.destroy()
     root.destroy()
+  })
+
+  it('offers Archive instead of Apply for a complete change and opens the archived change', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: { method?: string }) =>
+      init?.method === 'POST'
+        ? response({ ok: true, name: '2026-11-11-add-auth' })
+        : response({ change: COMPLETE }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.fn()
+    const body = mount(ChangeBody as never, { ...changeProps(), open } as never)
+    body.render()
+    await settle()
+    body.render()
+    const view = (): Record<string, unknown> => viewProps(body.tree, ChangeView)
+    expect(textOf(ChangeView(view() as never))).not.toContain('Apply change')
+    click(buttonByText(ChangeView(view() as never), 'Archive'))
+    await settle()
+    body.render()
+    expect(fetchMock).toHaveBeenCalledWith(
+      ARCHIVE_PATH,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ session: 's1', name: 'add-auth' }),
+      }),
+    )
+    expect(open).toHaveBeenCalledWith(archivedChangeAddress('2026-11-11-add-auth'))
+    expect(view().archiving).toBe(false)
+    expect(buttonByText(ChangeView(view() as never), 'Archive').props.disabled).toBe(false)
+    body.destroy()
+  })
+
+  it('keeps Apply on an incomplete change and sends no archive request', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: { method?: string }) =>
+      response({ change: FULL }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const draft = vi.fn()
+    const body = mount(ChangeBody as never, { ...changeProps(), draft } as never)
+    body.render()
+    await settle()
+    body.render()
+    const view = ChangeView(viewProps(body.tree, ChangeView) as never)
+    expect(textOf(view)).not.toContain('Archive')
+    click(buttonByText(view, 'Apply change'))
+    expect(draft).toHaveBeenCalledWith('/openspec-apply-change add-auth')
+    const posts = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === 'POST',
+    )
+    expect(posts).toEqual([])
+    body.destroy()
+  })
+
+  it('shows an archive refusal inline, keeps the change open, and allows a retry', async () => {
+    const reason =
+      'the archive of "add-auth" is refused: the current whole-spec PASS record is stale'
+    const fetchMock = vi.fn(async (_url: string, init?: { method?: string }) =>
+      init?.method === 'POST'
+        ? response({ error: reason }, false, 409)
+        : response({ change: COMPLETE }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.fn()
+    const body = mount(ChangeBody as never, { ...changeProps(), open } as never)
+    body.render()
+    await settle()
+    body.render()
+    click(buttonByText(ChangeView(viewProps(body.tree, ChangeView) as never), 'Archive'))
+    await settle()
+    body.render()
+    expect(open).not.toHaveBeenCalled()
+    const view = ChangeView(viewProps(body.tree, ChangeView) as never)
+    expect(textOf(view)).toContain('Archive refused')
+    expect(textOf(view)).toContain('whole-spec PASS record is stale')
+    expect(buttonByText(view, 'Archive').props.disabled).toBe(false)
+    body.destroy()
+  })
+
+  it('does not navigate when the Host cannot name the archived row', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? response({ ok: true }) : response({ change: COMPLETE }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.fn()
+    const body = mount(ChangeBody as never, { ...changeProps(), open } as never)
+    body.render()
+    await settle()
+    body.render()
+    click(buttonByText(ChangeView(viewProps(body.tree, ChangeView) as never), 'Archive'))
+    await settle()
+    body.render()
+    expect(open).not.toHaveBeenCalled()
+    expect(viewProps(body.tree, ChangeView).archiving).toBe(false)
+    expect(
+      buttonByText(ChangeView(viewProps(body.tree, ChangeView) as never), 'Archive').props.disabled,
+    ).toBe(false)
+    body.destroy()
+  })
+
+  it('archives two different cards one after another', async () => {
+    const first = row('done-one', 'complete', 1, 1, EMPTY_PRESENCE, { phase: 'complete' })
+    const second = row('done-two', 'complete', 1, 1, EMPTY_PRESENCE, { phase: 'complete' })
+    const posted: string[] = []
+    const fetchMock = vi.fn(async (_url: string, init?: { method?: string; body?: string }) => {
+      if (init?.method === 'POST') {
+        const name = (JSON.parse(String(init.body)) as { name: string }).name
+        posted.push(name)
+        return response({ ok: true, name: `2026-11-11-${name}` })
+      }
+      return response(listOf([first, second]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.fn()
+    const body = mount(RootBody as never, { ...rootBodyProps(), open } as never)
+    body.render()
+    await settle()
+    body.render()
+    const archiveButton = (name: string): Found => {
+      const card = cardButtons(RootView(viewProps(body.tree, RootView) as never)).find((entry) =>
+        textOf(entry).includes(name),
+      )
+      if (card === undefined) throw new Error(`card ${name} missing`)
+      const button = typed(card, 'Button').find((entry) => entry.props.children === 'Archive')
+      if (button === undefined) throw new Error(`archive action ${name} missing`)
+      return button
+    }
+    const activate = (button: Found): void => {
+      ;(button.props.onClick as (event: { stopPropagation(): void }) => void)({
+        stopPropagation: () => {},
+      })
+    }
+    activate(archiveButton('done-one'))
+    await settle()
+    body.render()
+    activate(archiveButton('done-two'))
+    await settle()
+    body.render()
+    expect(posted).toEqual(['done-one', 'done-two'])
+    expect(open).toHaveBeenCalledTimes(2)
+    body.destroy()
+  })
+
+  it('puts the state action on each card and stops its click from opening the row', () => {
+    const onOpenChange = vi.fn()
+    const onApply = vi.fn()
+    const onArchiveChange = vi.fn()
+    const complete = row('done-change', 'complete', 2, 2, EMPTY_PRESENCE, { phase: 'complete' })
+    const working = row('add-auth', 'in-progress', 1, 2)
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([complete, working]) },
+        onOpenChange,
+        onApply,
+        onArchiveChange,
+      }),
+    )
+    const stop = vi.fn()
+    const archiveButton = buttonByText(tree, 'Archive')
+    ;(archiveButton.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: stop,
+    })
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(onArchiveChange).toHaveBeenCalledWith('done-change')
+    expect(onOpenChange).not.toHaveBeenCalled()
+    const applyButton = buttonByText(tree, 'Apply change')
+    ;(applyButton.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    expect(onApply).toHaveBeenCalledWith('add-auth')
+    const doneCard = cardButtons(tree).find((card) => textOf(card).includes('done-change'))
+    if (doneCard === undefined) throw new Error('complete card missing')
+    click(doneCard)
+    expect(onOpenChange).toHaveBeenCalledWith('done-change', false)
+  })
+
+  it('shows the card archive busy and refused states', () => {
+    const complete = row('done-change', 'complete', 2, 2, EMPTY_PRESENCE, { phase: 'complete' })
+    const list = { phase: 'ready' as const, value: listOf([complete]) }
+    const busyTree = RootView(
+      rootProps({ changes: list, archiveState: { name: 'done-change', busy: true } }),
+    )
+    expect(buttonByText(busyTree, 'Archiving…').props.disabled).toBe(true)
+    const refusedTree = RootView(
+      rootProps({
+        changes: list,
+        archiveState: { name: 'done-change', busy: false, reason: 'the run step is open' },
+      }),
+    )
+    expect(textOf(refusedTree)).toContain('Archive refused')
+    expect(textOf(refusedTree)).toContain('the run step is open')
+    expect(buttonByText(refusedTree, 'Archive').props.disabled).toBe(false)
   })
 
   it('dispatches the archived tab address to the archived change body', () => {

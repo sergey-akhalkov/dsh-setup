@@ -69,23 +69,29 @@ export interface TaskLine {
 }
 /** Checked numbered tasks from a tasks.md body. */
 export declare function checkedTaskLines(markdown: string): TaskLine[];
-/** The marker-pinned reviewer, or an error when the marker exists but is invalid. */
-export declare function reviewerBinding(workspace: string): {
-    provider?: string;
-    model?: string;
-    invalid?: string;
-} | undefined;
+/** The marker's reviewer binding, its archive-gate settings, or its error. */
+export interface ReviewApprovalBinding {
+    readonly provider?: string;
+    readonly model?: string;
+    readonly invalid?: string;
+    /** Whether the marker turns portable task approvals on for its archive gate. */
+    readonly archiveGate?: boolean;
+    /** The task-scoped review rule the marker binds. */
+    readonly taskRule?: string;
+}
+/** The marker-pinned reviewer and archive-gate settings, or an error when the marker is invalid. */
+export declare function reviewerBinding(workspace: string): ReviewApprovalBinding | undefined;
 export interface TaskReviewCoverage {
     readonly ok: boolean;
     /** One line per checked task without a valid portable PASS. */
     readonly gaps: readonly string[];
 }
 /**
- * The owned completion/archive coverage: every checked task needs a portable
- * `reviews/<taskId>.json` PASS for the strict `task-review` rule and the
- * marker's reviewer when one is declared.
+ * The portable completion/archive coverage: every checked task needs a portable
+ * PASS for the given task-scoped rule (default the shipped `task-review`) and
+ * the marker's reviewer when one is declared.
  */
-export declare function taskReviewCoverage(workspace: string, change: string): TaskReviewCoverage;
+export declare function taskReviewCoverage(workspace: string, change: string, rule?: string): TaskReviewCoverage;
 export interface CheckpointCloseRecord {
     readonly checkpoint?: unknown;
     readonly outcome?: unknown;

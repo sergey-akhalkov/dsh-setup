@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  archiveWorkspaceChange,
   cliOnPath,
   commitFor,
   commitWebBase,
@@ -934,5 +935,30 @@ describe('change list route', () => {
       },
     }
     expect(() => registerChangeRoute(ctx as never)).not.toThrow()
+  })
+})
+
+describe('archive runner', () => {
+  it('runs one bounded archive command and resolves on success', async () => {
+    const cwd = workspace(true)
+    const children = spawnQueue()
+    const pending = archiveWorkspaceChange(cwd, 'add-auth')
+    complete(children[0], 0, 'archived\n')
+    await expect(pending).resolves.toBeUndefined()
+    const call = spawnMock.mock.calls[0]
+    expect(call?.[2]).toMatchObject({ cwd })
+    const commandline = ((call?.[1] as string[] | undefined) ?? []).join(' ')
+    expect(commandline).toContain('archive')
+    expect(commandline).toContain('add-auth')
+    expect(commandline).toContain('--yes')
+  })
+
+  it('refuses a percent-expansion name before spawning', async () => {
+    const cwd = workspace(true)
+    spawnQueue()
+    await expect(archiveWorkspaceChange(cwd, 'a%DSH_REVIEW_SUFFIX%')).rejects.toThrow(
+      /cannot be passed to the CLI safely/u,
+    )
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 })

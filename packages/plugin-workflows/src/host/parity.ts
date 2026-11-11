@@ -479,10 +479,19 @@ function readPortableApproval(
   }
 }
 
-/** The marker-pinned reviewer, or an error when the marker exists but is invalid. */
-export function reviewerBinding(
-  workspace: string,
-): { provider?: string; model?: string; invalid?: string } | undefined {
+/** The marker's reviewer binding, its archive-gate settings, or its error. */
+export interface ReviewApprovalBinding {
+  readonly provider?: string
+  readonly model?: string
+  readonly invalid?: string
+  /** Whether the marker turns portable task approvals on for its archive gate. */
+  readonly archiveGate?: boolean
+  /** The task-scoped review rule the marker binds. */
+  readonly taskRule?: string
+}
+
+/** The marker-pinned reviewer and archive-gate settings, or an error when the marker is invalid. */
+export function reviewerBinding(workspace: string): ReviewApprovalBinding | undefined {
   let raw: unknown
   try {
     raw = JSON.parse(readFileSync(join(workspace, 'openspec', 'review-approval.json'), 'utf8'))
@@ -548,10 +557,11 @@ export function reviewerBinding(
   ) {
     return { invalid: 'reviewerModel must be a clean model name' }
   }
-  if (provider === undefined && model === undefined) return undefined
   return {
     ...(provider === undefined ? {} : { provider }),
     ...(model === undefined ? {} : { model }),
+    archiveGate: raw.archiveGate as boolean,
+    taskRule: raw.taskRule as string,
   }
 }
 
@@ -562,11 +572,15 @@ export interface TaskReviewCoverage {
 }
 
 /**
- * The owned completion/archive coverage: every checked task needs a portable
- * `reviews/<taskId>.json` PASS for the strict `task-review` rule and the
- * marker's reviewer when one is declared.
+ * The portable completion/archive coverage: every checked task needs a portable
+ * PASS for the given task-scoped rule (default the shipped `task-review`) and
+ * the marker's reviewer when one is declared.
  */
-export function taskReviewCoverage(workspace: string, change: string): TaskReviewCoverage {
+export function taskReviewCoverage(
+  workspace: string,
+  change: string,
+  rule = 'task-review',
+): TaskReviewCoverage {
   let markdown: string
   try {
     markdown = readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8')
@@ -601,7 +615,7 @@ export function taskReviewCoverage(workspace: string, change: string): TaskRevie
     const mismatch: string[] = []
     if (record === undefined) mismatch.push('no portable PASS record')
     else {
-      if (record.rule !== 'task-review') mismatch.push(`rule "${String(record.rule)}"`)
+      if (record.rule !== rule) mismatch.push(`rule "${String(record.rule)}"`)
       if (record.change !== change) mismatch.push(`change "${String(record.change)}"`)
       if (record.taskId !== task.id) mismatch.push(`task id "${String(record.taskId)}"`)
       if (record.verdict !== 'PASS') mismatch.push(`verdict ${String(record.verdict)}`)
@@ -615,7 +629,7 @@ export function taskReviewCoverage(workspace: string, change: string): TaskRevie
     }
     if (mismatch.length > 0) {
       gaps.push(
-        `checked task "${task.number} ${task.text}" (${task.id}) has no portable task-review PASS (${mismatch.join(', ')}); run delegate(rule: "task-review", change: "${change}", task: "${task.id}")`,
+        `checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`,
       )
     }
   }

@@ -376,7 +376,7 @@ function readPortableApproval(workspace, change, taskId) {
         return undefined;
     }
 }
-/** The marker-pinned reviewer, or an error when the marker exists but is invalid. */
+/** The marker-pinned reviewer and archive-gate settings, or an error when the marker is invalid. */
 export function reviewerBinding(workspace) {
     let raw;
     try {
@@ -440,19 +440,19 @@ export function reviewerBinding(workspace) {
         (typeof model !== 'string' || model.trim() === '' || hasMachinePath(model))) {
         return { invalid: 'reviewerModel must be a clean model name' };
     }
-    if (provider === undefined && model === undefined)
-        return undefined;
     return {
         ...(provider === undefined ? {} : { provider }),
         ...(model === undefined ? {} : { model }),
+        archiveGate: raw.archiveGate,
+        taskRule: raw.taskRule,
     };
 }
 /**
- * The owned completion/archive coverage: every checked task needs a portable
- * `reviews/<taskId>.json` PASS for the strict `task-review` rule and the
- * marker's reviewer when one is declared.
+ * The portable completion/archive coverage: every checked task needs a portable
+ * PASS for the given task-scoped rule (default the shipped `task-review`) and
+ * the marker's reviewer when one is declared.
  */
-export function taskReviewCoverage(workspace, change) {
+export function taskReviewCoverage(workspace, change, rule = 'task-review') {
     let markdown;
     try {
         markdown = readFileSync(join(workspace, 'openspec', 'changes', change, 'tasks.md'), 'utf8');
@@ -485,7 +485,7 @@ export function taskReviewCoverage(workspace, change) {
         if (record === undefined)
             mismatch.push('no portable PASS record');
         else {
-            if (record.rule !== 'task-review')
+            if (record.rule !== rule)
                 mismatch.push(`rule "${String(record.rule)}"`);
             if (record.change !== change)
                 mismatch.push(`change "${String(record.change)}"`);
@@ -502,7 +502,7 @@ export function taskReviewCoverage(workspace, change) {
             }
         }
         if (mismatch.length > 0) {
-            gaps.push(`checked task "${task.number} ${task.text}" (${task.id}) has no portable task-review PASS (${mismatch.join(', ')}); run delegate(rule: "task-review", change: "${change}", task: "${task.id}")`);
+            gaps.push(`checked task "${task.number} ${task.text}" (${task.id}) has no portable ${rule} PASS (${mismatch.join(', ')}); run delegate(rule: "${rule}", change: "${change}", task: "${task.id}")`);
         }
     }
     return { ok: gaps.length === 0, gaps };
