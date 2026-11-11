@@ -3101,6 +3101,77 @@ describe('OpenSpec tab bodies', () => {
     body.destroy()
   })
 
+  it('reloads the list after an archive so the change moves to Archive', async () => {
+    const done = row('done-move', 'complete', 1, 1, EMPTY_PRESENCE, { phase: 'complete' })
+    const archived = row('2026-11-11-done-move', 'complete', 1, 1, EMPTY_PRESENCE, {
+      phase: 'archived',
+      archived: true,
+      archivedAt: '2026-11-11',
+    })
+    let archivedNow = false
+    let gets = 0
+    const fetchMock = vi.fn(async (_url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') {
+        archivedNow = true
+        return response({ ok: true, name: '2026-11-11-done-move' })
+      }
+      gets += 1
+      return response(listOf(archivedNow ? [] : [done], archivedNow ? [archived] : []))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.fn()
+    const body = mount(RootBody as never, { ...rootBodyProps(), open } as never)
+    body.render()
+    await settle()
+    body.render()
+    const card = cardButtons(RootView(viewProps(body.tree, RootView) as never)).find((entry) =>
+      textOf(entry).includes('done-move'),
+    )
+    if (card === undefined) throw new Error('card missing')
+    const button = typed(card, 'Button').find((entry) => entry.props.children === 'Archive')
+    if (button === undefined) throw new Error('archive action missing')
+    ;(button.props.onClick as (event: { stopPropagation(): void }) => void)({
+      stopPropagation: () => {},
+    })
+    await settle()
+    body.render()
+    const resource = viewProps(body.tree, RootView).changes as {
+      value?: { changes: { name: string }[]; archived: { name: string }[] }
+    }
+    expect(resource.value?.changes.map((entry) => entry.name)).toEqual([])
+    expect(resource.value?.archived.map((entry) => entry.name)).toContain('2026-11-11-done-move')
+    expect(gets).toBeGreaterThan(1)
+    expect(open).toHaveBeenCalledTimes(1)
+    body.destroy()
+  })
+
+  it('opens a card from Enter and Space but not from its nested action', () => {
+    const onOpenChange = vi.fn()
+    const complete = row('done-key', 'complete', 1, 1, EMPTY_PRESENCE, { phase: 'complete' })
+    const tree = RootView(
+      rootProps({
+        changes: { phase: 'ready', value: listOf([complete]) },
+        onOpenChange,
+      }),
+    )
+    const card = cardButtons(tree)[0]
+    if (card === undefined) throw new Error('card missing')
+    const keydown = card.props.onKeyDown as (event: {
+      target: unknown
+      currentTarget: unknown
+      key: string
+      preventDefault(): void
+    }) => void
+    const prevent = vi.fn()
+    keydown({ target: card, currentTarget: card, key: 'Enter', preventDefault: prevent })
+    keydown({ target: card, currentTarget: card, key: ' ', preventDefault: prevent })
+    expect(onOpenChange).toHaveBeenCalledTimes(2)
+    expect(onOpenChange).toHaveBeenCalledWith('done-key', false)
+    expect(prevent).toHaveBeenCalledTimes(2)
+    keydown({ target: {}, currentTarget: card, key: 'Enter', preventDefault: prevent })
+    expect(onOpenChange).toHaveBeenCalledTimes(2)
+  })
+
   it('puts the state action on each card and stops its click from opening the row', () => {
     const onOpenChange = vi.fn()
     const onApply = vi.fn()
