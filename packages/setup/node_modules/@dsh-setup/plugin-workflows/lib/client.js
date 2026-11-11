@@ -12007,7 +12007,7 @@ window.__ModuleLoader__.load({
     .dsh-wf-def-row:last-child, .dsh-wf-trigger-row:last-child { border-bottom: none; }
     .dsh-wf-mono { font-family: var(--dsw-font-mono, monospace); }
     .dsh-wf-workbench { display: grid; grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 12px; min-height: 0; align-items: start; }
-    .dsh-wf-workbench[data-mode="list"], .dsh-wf-workbench[data-mode="blank"] { grid-template-columns: minmax(0, 1fr); }
+    .dsh-wf-workbench[data-mode="list"] { grid-template-columns: minmax(0, 1fr); }
     .dsh-wf-workbench[data-mode="list"] .dsh-wf-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
     .dsh-wf-workbench-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
     .dsh-wf-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -12288,7 +12288,7 @@ window.__ModuleLoader__.load({
       }
       const active = activeRun(runs, runId);
       const overlay = editor === void 0 ? overlayFor(void 0, blankDefinition(/* @__PURE__ */ new Set())) : overlayFor(active, editor.document.definition);
-      const surface = editor === void 0 ? "list" : resolveSurface(editor.mode, canvasFailed);
+      const surface = editor === void 0 ? defaultSurface(props.surfaceWidth) : resolveSurface(editor.mode, canvasFailed);
       const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected2);
       const choices = editor === void 0 || selected2 === void 0 ? [] : connectChoices(editor.diagram.nodes, selected2).flatMap(
         (choice) => choice.targets.map((target) => ({
@@ -12487,7 +12487,7 @@ window.__ModuleLoader__.load({
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-workbench", "data-mode": editor === void 0 ? "blank" : surface, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-workbench", "data-mode": surface, children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
             WorkflowRail,
             {

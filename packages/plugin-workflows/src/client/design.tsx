@@ -400,7 +400,10 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     editor === undefined
       ? overlayFor(undefined, blankDefinition(new Set()))
       : overlayFor(active, editor.document.definition)
-  const surface = editor === undefined ? 'list' : resolveSurface(editor.mode, canvasFailed)
+  const surface =
+    editor === undefined
+      ? defaultSurface(props.surfaceWidth)
+      : resolveSurface(editor.mode, canvasFailed)
   const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected)
   const choices =
     editor === undefined || selected === undefined
@@ -618,7 +621,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           {t('design.close')}
         </Button>
       </div>
-      <div className="dsh-wf-workbench" data-mode={editor === undefined ? 'blank' : surface}>
+      <div className="dsh-wf-workbench" data-mode={surface}>
         <WorkflowRail
           definitions={library.definitions}
           {...(editor === undefined ? {} : { currentId: editor.document.definition.id })}

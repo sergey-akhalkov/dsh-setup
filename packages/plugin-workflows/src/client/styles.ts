@@ -108,7 +108,7 @@ export const FLOW_CSS = `
 .dsh-wf-def-row:last-child, .dsh-wf-trigger-row:last-child { border-bottom: none; }
 .dsh-wf-mono { font-family: var(--dsw-font-mono, monospace); }
 .dsh-wf-workbench { display: grid; grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 12px; min-height: 0; align-items: start; }
-.dsh-wf-workbench[data-mode="list"], .dsh-wf-workbench[data-mode="blank"] { grid-template-columns: minmax(0, 1fr); }
+.dsh-wf-workbench[data-mode="list"] { grid-template-columns: minmax(0, 1fr); }
 .dsh-wf-workbench[data-mode="list"] .dsh-wf-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .dsh-wf-workbench-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
 .dsh-wf-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

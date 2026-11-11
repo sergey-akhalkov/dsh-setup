@@ -247,6 +247,26 @@ function renderText(node: unknown): string {
   return renderText(element.props?.children)
 }
 
+/** Find the first element matching a predicate without invoking any component. */
+function findElement(node: unknown, predicate: (element: Element) => boolean): Element | undefined {
+  if (node === null || typeof node !== 'object') return undefined
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElement(child, predicate)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  const element = node as Element
+  if (element.props === undefined || element.props === null) return undefined
+  if (predicate(element)) return element
+  for (const value of Object.values(element.props)) {
+    const found = findElement(value, predicate)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 const NOW = 1_762_500_300_000
 
 function run(id: string, startedAt: number): Record<string, unknown> {
@@ -998,12 +1018,20 @@ describe('Workflows session view interaction', () => {
     expect(renderElements(tree).find((element) => element.type === 'disclosure')?.props.title).toBe(
       'design.diagnostics',
     )
-    // With no installed workflow the workbench still shows the blank canvas surface.
+    // With no installed workflow the workbench still shows the wide blank-canvas layout:
+    // the rail beside the blank canvas, not stacked above it.
     expect(
       renderElements(tree).some(
         (element) => element.props.className === 'dsh-wf-canvas dsh-wf-blank-canvas',
       ),
     ).toBe(true)
+    const rendered = renderElements(tree)
+    expect(
+      rendered.find((element) => element.props.className === 'dsh-wf-workbench')?.props[
+        'data-mode'
+      ],
+    ).toBe('canvas')
+    expect(rendered.some((element) => element.props.className === 'dsh-wf-rail')).toBe(true)
     expect(text).toContain('tool.pre-execute')
     expect(text).toContain('run-created')
     expect(text).toContain('auth')
@@ -1073,27 +1101,9 @@ describe('Workflows session view interaction', () => {
     const tree = await runtime.settle(() =>
       mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 }),
     )
-    const walk = (node: unknown, predicate: (element: Element) => boolean): Element | undefined => {
-      if (node === null || typeof node !== 'object') return undefined
-      if (Array.isArray(node)) {
-        for (const child of node) {
-          const found = walk(child, predicate)
-          if (found !== undefined) return found
-        }
-        return undefined
-      }
-      const element = node as Element
-      if (element.props === undefined || element.props === null) return undefined
-      if (predicate(element)) return element
-      for (const value of Object.values(element.props)) {
-        const found = walk(value, predicate)
-        if (found !== undefined) return found
-      }
-      return undefined
-    }
     // The rail is the first installed workflow's code path.
     expect(
-      walk(
+      findElement(
         tree,
         (element) =>
           Array.isArray(element.props.definitions) &&
@@ -1103,14 +1113,105 @@ describe('Workflows session view interaction', () => {
       ),
     ).toBeDefined()
     // The page opened the definition on the read-only canvas, not a list.
-    const boundary = walk(
-      tree,
-      (element) => element.props.fallback !== undefined && element.props.onError !== undefined,
-    )
+    const boundary = findElement(tree, (element) => element.props.fallback !== undefined)
     const canvas = boundary?.props.children as Element | undefined
     const nodes = canvas?.props.nodes as { kind: string }[] | undefined
     expect(nodes?.map((node) => node.kind)).toEqual(['trigger', 'step', 'end'])
     expect(tracker.violations).toEqual([])
+  })
+
+  it('switches the workflow canvas overlay to an older run without leaving the page', () => {
+    const runtime = createRuntime('./src/client/overview.tsx')
+    const module = runtime.load() as {
+      WorkflowPage?: (props: Record<string, unknown>) => unknown
+    }
+    const WorkflowPage = module.WorkflowPage
+    if (WorkflowPage === undefined) throw new Error('WorkflowPage is not exported')
+    const definition = {
+      id: 'change-intake',
+      name: 'OpenSpec change intake',
+      version: 1,
+      risk: 'low',
+      gateOwnership: 'own',
+      trigger: { kind: 'tool.pre-execute', match: {}, mode: 'active', dedupe: 'name' },
+      steps: [
+        { id: 'one', title: 'One', executor: 'main', next: 'two' },
+        { id: 'two', title: 'Two', executor: 'tool' },
+      ],
+    }
+    const newest = {
+      id: 'workflow:run-new',
+      source: 'workflow',
+      attribution: 'local',
+      title: 'newest',
+      startedAt: 2,
+      status: 'running',
+      definition: { id: 'change-intake', name: 'OpenSpec change intake', version: 1 },
+      steps: [{ id: 'one', title: 'One', state: 'running' }],
+    }
+    const older = {
+      ...newest,
+      id: 'workflow:run-old',
+      title: 'older',
+      startedAt: 1,
+      status: 'done',
+      steps: [{ id: 'one', title: 'One', state: 'done' }],
+    }
+    let opened = 0
+    const render = (): unknown =>
+      WorkflowPage({
+        definitionId: 'change-intake',
+        phase: 'ready',
+        document: definition,
+        runs: { items: [newest, older] },
+        events: { items: [] },
+        t: (key: string) => key,
+        onBack: () => {},
+        onOpenRun: () => {
+          opened += 1
+        },
+        onLoadRuns: () => {},
+        onLoadHistory: () => {},
+        onRetry: () => {},
+      })
+    let tree = runtime.commit(render)
+    const canvasElement = (): Element | undefined =>
+      findElement(tree, (element) => element.props.fallback !== undefined)?.props.children as
+        | Element
+        | undefined
+    const stepStates = (): Record<string, string | undefined> => {
+      const nodes = canvasElement()?.props.nodes as
+        | { id: string; kind: string; position: unknown; runState?: string }[]
+        | undefined
+      return Object.fromEntries(
+        (nodes ?? [])
+          .filter((node) => node.id.startsWith('step:'))
+          .map((node) => [node.id, node.runState]),
+      )
+    }
+    const positions = (): unknown[] =>
+      ((canvasElement()?.props.nodes as { position: unknown }[] | undefined) ?? []).map(
+        (node) => node.position,
+      )
+    const beforePositions = positions()
+    expect(stepStates()['step:one']).toBe('running')
+    const select = findElement(
+      tree,
+      (element) =>
+        element.type === 'select' && element.props['aria-label'] === 'workflow.overlayRun',
+    )
+    const change = select?.props.onChange as ((event: unknown) => void) | undefined
+    if (change === undefined) throw new Error('no overlay run selector')
+    change({ currentTarget: { value: 'workflow:run-old' } })
+    tree = runtime.commit(render)
+    // Only the overlay changed: the older run's step state is drawn on the same graph.
+    expect(stepStates()['step:one']).toBe('done')
+    expect(stepStates()['step:two']).toBeUndefined()
+    expect(positions()).toEqual(beforePositions)
+    expect(
+      findElement(tree, (element) => element.props['data-workflow-page'] !== undefined),
+    ).toBeDefined()
+    expect(opened).toBe(0)
   })
 
   it('keeps newest-first order after Back reinsertion and a later page', async () => {
