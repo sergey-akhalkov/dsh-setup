@@ -82,6 +82,8 @@ export interface EditorDefinitionEntry {
   readonly name: string
   /** The optional human-readable definition summary the editor list shows. */
   readonly description?: string
+  /** The trigger kind that starts the workflow, as the rail shows it. */
+  readonly trigger?: string
   readonly version: number
   readonly stepCount: number
   readonly source: DefinitionSource
@@ -262,6 +264,7 @@ function editorEntry(
     id: definition.id,
     name: definition.name,
     ...(definition.description === undefined ? {} : { description: definition.description }),
+    trigger: definition.trigger.kind,
     version: definition.version,
     stepCount: definition.steps.length,
     source,

@@ -558,9 +558,10 @@ intake/adoption flow and migration are documented in [workflows](workflows.md).
 ### Editor and Workflow design page
 
 The editor lives in the right-sidebar **Workflow design** page, opened from its Start guide-card entry:
-a workbench with a left rail (the installed workflows and the trigger/executor blocks), a React Flow
-canvas bundled into the single client artifact, an equivalent List form editor (the narrow panel's
-default surface, below the shipped 720 px threshold, with the rail stacked above it), templates and
+a workbench with a left rail (the installed workflows, each with its description, trigger kind, source,
+step count and latest run, plus the trigger/executor blocks), a React Flow canvas bundled into the
+single client artifact, an equivalent List form editor (the narrow panel's default surface, below the
+shipped 720 px threshold, with the rail stacked above it), templates and
 local definitions opened through the revision-checked host write API, a layout sidecar, and the run
 overlay (the latest run per definition with step state, structured evidence references, failure class,
 violations, and an orphan badge; the recorded definition name/version, evidence, failure class and

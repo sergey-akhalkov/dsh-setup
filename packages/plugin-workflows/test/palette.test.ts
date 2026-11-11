@@ -389,6 +389,7 @@ describe('palette and property panel', () => {
         id: 'alpha',
         name: 'Alpha',
         description: 'First flow.',
+        trigger: 'tool.pre-execute',
         version: 1,
         stepCount: 2,
         source: 'shipped' as const,
@@ -397,6 +398,7 @@ describe('palette and property panel', () => {
       {
         id: 'beta',
         name: 'Beta',
+        trigger: 'fs.change',
         version: 2,
         stepCount: 1,
         source: 'local' as const,
@@ -423,6 +425,8 @@ describe('palette and property panel', () => {
     expect(text(tree)).toContain('Alpha')
     expect(text(tree)).toContain('First flow.')
     expect(text(tree)).toContain('design.noDescription')
+    expect(text(tree)).toContain('definitions.trigger: tool.pre-execute')
+    expect(text(tree)).toContain('definitions.trigger: fs.change')
     expect(text(tree)).toContain('overview.latestRun')
     expect(text(tree)).toContain('design.blocksTriggers')
     expect(text(tree)).toContain('design.blocksSteps')

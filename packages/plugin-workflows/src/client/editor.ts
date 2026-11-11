@@ -36,6 +36,8 @@ export interface EditorListEntry {
   readonly id: string
   readonly name: string
   readonly description?: string
+  /** The trigger kind, so the rail can describe a workflow without opening it. */
+  readonly trigger?: string
   readonly version: number
   readonly stepCount: number
   readonly source: 'shipped' | 'local'

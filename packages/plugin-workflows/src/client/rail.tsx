@@ -75,6 +75,11 @@ export function WorkflowRail(props: WorkflowRailProps): ReactNode {
                     <span className="dsh-wf-muted" data-description={entry.id}>
                       {entry.description ?? t('design.noDescription')}
                     </span>
+                    <span className="dsh-wf-chip" data-trigger-kind={entry.trigger ?? ''}>
+                      {entry.trigger === undefined
+                        ? t('overview.unknownKind')
+                        : `${t('definitions.trigger')}: ${entry.trigger}`}
+                    </span>
                     <span className="dsh-wf-muted">
                       {entry.id} · v{String(entry.version)} · {entry.source} ·{' '}
                       {String(entry.stepCount)} steps

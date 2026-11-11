@@ -34,6 +34,8 @@ export interface EditorDefinitionEntry {
     readonly name: string;
     /** The optional human-readable definition summary the editor list shows. */
     readonly description?: string;
+    /** The trigger kind that starts the workflow, as the rail shows it. */
+    readonly trigger?: string;
     readonly version: number;
     readonly stepCount: number;
     readonly source: DefinitionSource;

@@ -180,6 +180,7 @@ function editorEntry(definition, source, revision) {
         id: definition.id,
         name: definition.name,
         ...(definition.description === undefined ? {} : { description: definition.description }),
+        trigger: definition.trigger.kind,
         version: definition.version,
         stepCount: definition.steps.length,
         source,

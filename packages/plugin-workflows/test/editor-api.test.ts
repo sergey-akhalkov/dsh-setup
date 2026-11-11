@@ -138,6 +138,10 @@ describe('editor read API', () => {
       (entry) => entry.source === 'shipped',
     )
     expect(shipped.length).toBeGreaterThanOrEqual(3)
+    expect(
+      (shipped as { id?: string; trigger?: string }[]).find((entry) => entry.id === 'change-intake')
+        ?.trigger,
+    ).toBe('tool.pre-execute')
 
     const installedRevision = await install(routes)
     const after = await call(routes, EDITOR_DEFINITIONS_ROUTE)
@@ -148,6 +152,7 @@ describe('editor read API', () => {
       source: 'local',
       revision: installedRevision,
       description: 'A definition edited in the design page.',
+      trigger: 'turn.stopping',
     })
 
     const templates = await call(routes, EDITOR_TEMPLATES_ROUTE)

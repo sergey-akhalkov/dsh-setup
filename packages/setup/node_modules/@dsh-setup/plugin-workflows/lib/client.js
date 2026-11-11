@@ -11230,6 +11230,7 @@ window.__ModuleLoader__.load({
                 children: [
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-subject", children: entry.name }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-muted", "data-description": entry.id, children: entry.description ?? t("design.noDescription") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-chip", "data-trigger-kind": entry.trigger ?? "", children: entry.trigger === void 0 ? t("overview.unknownKind") : `${t("definitions.trigger")}: ${entry.trigger}` }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { className: "dsh-wf-muted", children: [
                     entry.id,
                     " \xB7 v",
