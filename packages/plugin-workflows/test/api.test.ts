@@ -44,7 +44,18 @@ afterEach(async () => {
 })
 
 async function setup(
-  options: { definitions?: readonly unknown[]; installed?: readonly InstalledDefinition[] } = {},
+  options: {
+    definitions?: readonly unknown[]
+    installed?: readonly InstalledDefinition[]
+    entries?: readonly {
+      readonly id: string
+      readonly name: string
+      readonly version: number
+      readonly source: 'shipped' | 'plugin' | 'local'
+      readonly plugin?: string
+      readonly revision: string | null
+    }[]
+  } = {},
 ): Promise<Setup> {
   const root = await mkdtemp(join(tmpdir(), 'workflows-api-'))
   TEMP_DIRECTORIES.push(root)
@@ -97,6 +108,9 @@ async function setup(
     ...(options.installed === undefined
       ? {}
       : { installedDefinitionsFor: () => options.installed as never }),
+    ...(options.entries === undefined
+      ? {}
+      : { definitionEntriesFor: async () => ({ definitions: options.entries as never }) }),
   }
   return {
     routes: createWorkflowRoutes(services),
@@ -466,6 +480,47 @@ describe('workflows read API', () => {
         (upgradedTriggers.body as { triggers?: Array<Record<string, unknown>> }).triggers ?? []
       ).find((entry) => entry.id === 'definition:acme-deploy'),
     ).toMatchObject({ filter: expect.objectContaining({ command: 'acme deploy2 {name}' }) })
+  })
+
+  it('serves an approved local override trigger instead of the installed one', async () => {
+    const installed = {
+      ...contributedDefinition(),
+      trigger: { ...contributedDefinition().trigger, mode: 'shadow' as const },
+    }
+    const local = {
+      ...contributedDefinition(),
+      name: 'Local deploy',
+      trigger: {
+        ...contributedDefinition().trigger,
+        mode: 'active' as const,
+        match: { tool: 'shell', command: 'acme release {name}' },
+      },
+    }
+    const value = await setup({
+      definitions: [local],
+      installed: [{ definition: installed, source: 'plugin', plugin: '@acme/plugin' }],
+      entries: [
+        {
+          id: 'acme-deploy',
+          name: 'Local deploy',
+          version: 1,
+          source: 'local',
+          revision: 'rev-1',
+        },
+      ],
+    })
+    const triggers = await request(value, TRIGGERS_ROUTE, { session: 's1' })
+    expect(
+      ((triggers.body as { triggers?: Array<Record<string, unknown>> }).triggers ?? []).find(
+        (entry) => entry.id === 'definition:acme-deploy',
+      ),
+    ).toMatchObject({ mode: 'active', filter: { tool: 'shell', command: 'acme release {name}' } })
+    const definitions = await request(value, DEFINITIONS_ROUTE, { session: 's1' })
+    expect(
+      (
+        (definitions.body as { definitions?: Array<Record<string, unknown>> }).definitions ?? []
+      ).find((entry) => entry.id === 'acme-deploy'),
+    ).toMatchObject({ source: 'local' })
   })
 
   it('serves runs, triggers, and health with the session selector', async () => {

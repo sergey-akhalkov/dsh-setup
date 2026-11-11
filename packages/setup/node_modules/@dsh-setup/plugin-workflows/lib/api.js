@@ -270,13 +270,19 @@ export function createWorkflowRoutes(services) {
                 return { matched: evaluation?.matchedCount ?? 0, total: evaluation?.total ?? 0 };
             };
             const installed = new Map((services.installedDefinitionsFor?.() ?? []).map((entry) => [entry.definition.id, entry]));
-            const visible = new Set((await services.definitionEntriesFor?.(resolved.workspace))?.definitions.map((entry) => entry.id) ?? []);
+            const localIds = new Set((await services.definitionEntriesFor?.(resolved.workspace))?.definitions
+                .filter((entry) => entry.source === 'local')
+                .map((entry) => entry.id) ?? []);
             // A disposed contribution is absent from the installed registry and the
             // editor list; its cached runtime row must not stay listed as a trigger.
             const definitions = services.installedDefinitionsFor === undefined
                 ? cached
-                : cached.filter((definition) => installed.has(definition.id) || visible.has(definition.id));
-            const fresh = (definition) => installed.get(definition.id)?.definition ?? definition;
+                : cached.filter((definition) => installed.has(definition.id) || localIds.has(definition.id));
+            // An approved local override shadows the installed definition at runtime,
+            // so its effective trigger binding must win over the registry entry.
+            const fresh = (definition) => localIds.has(definition.id)
+                ? definition
+                : (installed.get(definition.id)?.definition ?? definition);
             return json(200, {
                 session: resolved.session,
                 triggers: [
