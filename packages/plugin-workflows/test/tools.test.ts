@@ -248,8 +248,15 @@ describe('workflows tool', () => {
         target,
       ),
     ).rejects.toThrow(/evidence kind must be "file"/u)
+    expect(parseWorkflowsToolArgs({ action: 'adopt', change: 'auth' })).toMatchObject({
+      action: 'adopt',
+      change: 'auth',
+    })
     expect(() => parseWorkflowsToolArgs({ action: 'adopt', name: 'auth' })).toThrow(
-      /action must be|unknown field/u,
+      /unknown field/u,
+    )
+    await expect(executeWorkflowsTool({ action: 'adopt' }, target)).rejects.toThrow(
+      /needs a change name/u,
     )
     expect(() => parseWorkflowsToolArgs({ action: 'install', path: 'x' })).toThrow(
       /action must be|unknown field/u,

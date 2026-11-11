@@ -1,0 +1,16 @@
+{
+  "rule": "task-review",
+  "change": "add-agent-requested-adoption",
+  "scope": "task",
+  "taskId": "eda2fc4d56f79423",
+  "digest": "79edfc9ccc03aeaff817a5bd21d5349b3813a44ec9770923bfce0e2a57a8c1d7",
+  "worktreeDigest": "40f002ae1683f82ea71a9693fd77225baaaa22ad38e45ba1d2ddbafcc5b7d7bf",
+  "verdict": "PASS",
+  "findings": [],
+  "target": {
+    "provider": "codex-subagent",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "xhigh"
+  },
+  "time": "2026-11-11T12:33:46.716Z"
+}

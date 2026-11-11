@@ -28,6 +28,7 @@ The change is one Host/Client package with shared editor, API, and canvas files 
 - [x] 4.2 Run `pnpm gen` after the build, commit the regenerated setup vendored tree and patch, and verify `pnpm gen:check`.
 - [x] 4.3 Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm workflows:parity --check`; verify all pass.
 - [x] 4.4 Run `pnpm validate` and record the result; fix any failure before the change is proposed for archive.
+- [ ] 4.5 Verify the workbench at wide and narrow sidebar widths in a live session and adjust the rail, canvas, and inspector layout if needed.
 
 ## Workflow follow-up
 

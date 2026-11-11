@@ -1,3 +1,5 @@
+import { lstat, readdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { CHANGE_NAME } from './command-parse.js'
 import { type EvidenceCheck, type EvidenceContext, verifyEvidence } from './evidence.js'
 import type { HumanQuestionService } from './executors.js'
@@ -5,19 +7,19 @@ import type { HostAuth } from './host-auth.js'
 import { issueAdoptionReceipt, type WorkflowReceipt } from './receipts.js'
 
 /**
- * Adoption of a change that predates the workflow engine. Only the
- * user-started `/workflows adopt <name>` path reaches this module: it verifies
- * the existing artifacts and the current whole-spec PASS record, asks the user,
- * and writes the host-authenticated receipt without recreating the directory
- * and without calling `openspec new change`.
+ * Adoption of a change that predates the workflow engine. The user-started
+ * `/workflows adopt <name>` command and the model-facing `workflows` tool action
+ * `adopt` both reach this module: it verifies the existing artifacts and the
+ * current whole-spec PASS record, asks the user through the host question
+ * service, and writes the host-authenticated receipt without recreating the
+ * directory and without calling `openspec new change`. The interactive user
+ * answer is the authorization; the model cannot supply it.
  */
 
 export interface AdoptionInput {
   readonly workspace: string
   readonly change: string
   readonly auth: HostAuth
-  /** Only the user-started command passes true; the model path is refused. */
-  readonly userStarted: boolean
   readonly questions?: HumanQuestionService
   readonly now?: number
 }
@@ -28,6 +30,39 @@ export type AdoptionResult =
 
 function evidenceContext(workspace: string, change: string): EvidenceContext {
   return { workspace, values: { name: change } }
+}
+
+/**
+ * The first linked path beneath the change directory, if any. The evidence
+ * reader follows an artifact link inside the workspace while the spec digest
+ * skips links, so a link could change the adopted content without changing the
+ * digest; adoption requires real files only.
+ */
+async function linkedChangePath(workspace: string, change: string): Promise<string | undefined> {
+  const root = join(workspace, 'openspec', 'changes', change)
+  for (const relative of [
+    join('openspec', 'changes', change),
+    join('openspec', 'changes'),
+    'openspec',
+  ]) {
+    const absolute = join(workspace, relative)
+    const info = await lstat(absolute).catch(() => undefined)
+    if (info?.isSymbolicLink() === true) return relative
+  }
+  const stack = [root]
+  while (stack.length > 0) {
+    const directory = stack.pop()
+    if (directory === undefined) break
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      const absolute = join(directory, entry.name)
+      const info = await lstat(absolute).catch(() => undefined)
+      if (info === undefined) continue
+      if (info.isSymbolicLink()) return absolute.slice(workspace.length + 1)
+      if (info.isDirectory()) stack.push(absolute)
+    }
+  }
+  return undefined
 }
 
 /**
@@ -42,6 +77,13 @@ export async function verifyAdoptionEvidence(
 > {
   if (!CHANGE_NAME.test(change)) {
     return { ok: false, reason: `"${change}" is not a valid change name` }
+  }
+  const linked = await linkedChangePath(workspace, change)
+  if (linked !== undefined) {
+    return {
+      ok: false,
+      reason: `the change cannot be adopted: "${linked}" is a symbolic link; adoption requires real files`,
+    }
   }
   const context = evidenceContext(workspace, change)
   const files: EvidenceCheck = await verifyEvidence(
@@ -93,12 +135,6 @@ export async function verifyAdoptionEvidence(
  * and the current PASS record verify and the user answers yes.
  */
 export async function adoptChange(input: AdoptionInput): Promise<AdoptionResult> {
-  if (!input.userStarted) {
-    return {
-      ok: false,
-      reason: 'adoption is user-started only; the model cannot invoke it',
-    }
-  }
   const verified = await verifyAdoptionEvidence(input.workspace, input.change)
   if (!verified.ok) return verified
   if (input.questions === undefined) {

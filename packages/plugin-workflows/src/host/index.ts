@@ -3538,18 +3538,22 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         toolsService.register({
           name: 'workflows',
           description:
-            'List, start, resume, inspect, evidence-check, or cancel a stored workflow run. It never accepts a script or definition, never installs a definition, never starts an adoption, and never writes an approval or receipt.',
+            'List, start, resume, inspect, evidence-check, cancel a stored workflow run, or request adoption of an existing change after a direct user confirmation. It never accepts a script or definition, never installs a definition, never starts an adoption without the host asking the user, and never writes an approval.',
           parameters: {
             type: 'object',
             properties: {
               action: {
                 type: 'string',
-                enum: ['list', 'start', 'resume', 'status', 'evidence', 'cancel'],
+                enum: ['list', 'start', 'resume', 'status', 'evidence', 'cancel', 'adopt'],
                 description: 'The bounded action to run.',
               },
               definitionId: { type: 'string', description: 'A stored definition id.' },
               runId: { type: 'string', description: 'A workflow run id.' },
               stepId: { type: 'string', description: 'A step id of the run.' },
+              change: {
+                type: 'string',
+                description: 'An existing OpenSpec change name to adopt after the user confirms.',
+              },
               evidence: {
                 type: 'object',
                 properties: {
@@ -3771,7 +3775,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     workspace,
                     change: name,
                     auth,
-                    userStarted: true,
                     ...(questions === undefined ? {} : { questions }),
                     now: journal.time(),
                   })

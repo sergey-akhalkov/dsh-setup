@@ -5398,7 +5398,7 @@ describe('session disposal', () => {
 })
 
 describe('workflows tool live wiring', () => {
-  it('registers the six actions and verifies observed evidence through the real tool', async () => {
+  it('registers the seven actions and verifies observed evidence through the real tool', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const host = fakeHost(workspace)
@@ -5418,6 +5418,7 @@ describe('workflows tool live wiring', () => {
       'status',
       'evidence',
       'cancel',
+      'adopt',
     ])
     const runs = await import('../src/host/runs.ts')
     const { loadShippedDefinitions } = await import('../src/host/definitions.ts')

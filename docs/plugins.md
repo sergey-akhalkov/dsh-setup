@@ -542,7 +542,8 @@ A local definition or override is active only with a host-signed approval in
 model-mediated writes, while a hostile same-user shell is outside the threat model. Completed intake
 and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The shipped definitions are
 `change-intake` (active), and `task-review` and `retro` (active, `defer` until `retire-legacy-gates`).
-The `workflows` tool exposes list, start, resume, status, evidence and cancel, and the `/workflows`
+The `workflows` tool exposes list, start, resume, status, evidence, cancel and adopt; `adopt` asks the
+user in the question UI and writes the host-authenticated receipt only after a yes. The `/workflows`
 command family covers run, resume, install, adopt and status; `/workflows` itself names the Workflows
 tab as the session entry and the `Workflow design` card as the editor entry and opens nothing. The
 design page holds the definition list, the editor, the trigger catalog with its last evaluation and the

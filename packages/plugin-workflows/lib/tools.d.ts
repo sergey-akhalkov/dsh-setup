@@ -5,17 +5,20 @@ import type { HostAuth } from './host-auth.js';
 import { type WorkflowRun } from './runs.js';
 /**
  * The model-facing `workflows` tool. It is a bounded control surface: list,
- * start an allowed definition, resume, status, host-verified evidence, cancel.
- * It never accepts a script, a definition body, an install, an adoption, a
- * receipt write, or a text claim.
+ * start an allowed definition, resume, status, host-verified evidence, cancel,
+ * and a user-confirmed adoption of an existing change. It never accepts a
+ * script, a definition body, an install, a receipt write outside the adoption
+ * path, or a text claim.
  */
-export declare const WORKFLOWS_TOOL_ACTIONS: readonly ["list", "start", "resume", "status", "evidence", "cancel"];
+export declare const WORKFLOWS_TOOL_ACTIONS: readonly ["list", "start", "resume", "status", "evidence", "cancel", "adopt"];
 export type WorkflowsToolAction = (typeof WORKFLOWS_TOOL_ACTIONS)[number];
 export interface WorkflowsToolRequest {
     readonly action: WorkflowsToolAction;
     readonly definitionId?: string;
     readonly runId?: string;
     readonly stepId?: string;
+    /** The existing change whose adoption the user must confirm. */
+    readonly change?: string;
     /** The host resolves and verifies the declared evidence; text is never it. */
     readonly evidence?: {
         readonly kind: string;

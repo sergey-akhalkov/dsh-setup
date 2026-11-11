@@ -106,7 +106,7 @@ User commands:
 - `/workflows adopt <name>` — verifies an existing change's four artifacts and the current whole-spec PASS record, asks the user, and writes the adoption receipt without recreating the directory or calling `openspec new change`.
 - `/workflows status` — bounded text summary.
 
-The model tool `workflows` offers `list`, `start`, `resume`, `status`, `evidence`, `cancel`. It refuses a raw script or definition, a start without `allowModelStart` (and a high-risk start without a direct user yes), a resume in another session, and unauthenticated runs, an unverified evidence claim, an install, and an adoption; `cancel` also accepts a run whose owning session has no live agent, because no agent can satisfy it. `list` names a definition with `allowModelStart: false` as user-started, never as a refused model start. The tool never writes an approval or receipt.
+The model tool `workflows` offers `list`, `start`, `resume`, `status`, `evidence`, `cancel`, and `adopt`. It refuses a raw script or definition, a start without `allowModelStart` (and a high-risk start without a direct user yes), a resume in another session, and unauthenticated runs, an unverified evidence claim, and an install. `adopt` requests adoption of one existing change: the host asks the user in the question UI and writes the same host-authenticated receipt only after a yes; the model cannot supply the answer, and no receipt is written for a no, a timeout, or an unavailable question service. `cancel` also accepts a run whose owning session has no live agent, because no agent can satisfy it. `list` names a definition with `allowModelStart: false` as user-started, never as a refused model start. The tool never writes an approval, and the only receipt it can cause is the user-confirmed adoption receipt.
 
 ## Intake flow
 
@@ -121,7 +121,7 @@ A restart after `create-change` marks the run interrupted; the next `openspec ne
 
 ## Migration and rollback
 
-A change created before the row was installed is adopted with `/workflows adopt <name>`: the host verifies `proposal.md`, `design.md`, `tasks.md`, at least one `specs/*/spec.md`, and the current whole-spec PASS record, asks the user, and writes the adoption receipt. The model cannot invoke adoption. A pre-existing active change (including `add-workflow-obligations` itself) can be adopted this way.
+A change created before the row was installed is adopted with `/workflows adopt <name>` or the `workflows` tool `adopt` action: the host verifies `proposal.md`, `design.md`, `tasks.md`, at least one `specs/*/spec.md`, and the current whole-spec PASS record, asks the user, and writes the adoption receipt. The model may request the adoption, but the confirmation answer and the receipt are the host's.
 
 While a legacy gate is installed, a step covering the same behavior declares `legacy: {plugin, signal}` and `ownership: defer`; it reads the legacy record, dispatches no executor, and adds no second steer. A deferred definition or step refuses to load when its source is not installed (naming `retire-legacy-gates`), and an `own` step refuses to load while its declared source is installed. `task-review` and `retro` ship active but deferred: they create observational runs (retro only for applicable turns) and never steer.
 

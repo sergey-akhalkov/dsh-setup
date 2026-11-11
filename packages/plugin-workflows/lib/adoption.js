@@ -1,8 +1,47 @@
+import { lstat, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { CHANGE_NAME } from './command-parse.js';
 import { verifyEvidence } from './evidence.js';
 import { issueAdoptionReceipt } from './receipts.js';
 function evidenceContext(workspace, change) {
     return { workspace, values: { name: change } };
+}
+/**
+ * The first linked path beneath the change directory, if any. The evidence
+ * reader follows an artifact link inside the workspace while the spec digest
+ * skips links, so a link could change the adopted content without changing the
+ * digest; adoption requires real files only.
+ */
+async function linkedChangePath(workspace, change) {
+    const root = join(workspace, 'openspec', 'changes', change);
+    for (const relative of [
+        join('openspec', 'changes', change),
+        join('openspec', 'changes'),
+        'openspec',
+    ]) {
+        const absolute = join(workspace, relative);
+        const info = await lstat(absolute).catch(() => undefined);
+        if (info?.isSymbolicLink() === true)
+            return relative;
+    }
+    const stack = [root];
+    while (stack.length > 0) {
+        const directory = stack.pop();
+        if (directory === undefined)
+            break;
+        const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            const absolute = join(directory, entry.name);
+            const info = await lstat(absolute).catch(() => undefined);
+            if (info === undefined)
+                continue;
+            if (info.isSymbolicLink())
+                return absolute.slice(workspace.length + 1);
+            if (info.isDirectory())
+                stack.push(absolute);
+        }
+    }
+    return undefined;
 }
 /**
  * Verify the four change artifacts and the current whole-spec `PASS` record.
@@ -11,6 +50,13 @@ function evidenceContext(workspace, change) {
 export async function verifyAdoptionEvidence(workspace, change) {
     if (!CHANGE_NAME.test(change)) {
         return { ok: false, reason: `"${change}" is not a valid change name` };
+    }
+    const linked = await linkedChangePath(workspace, change);
+    if (linked !== undefined) {
+        return {
+            ok: false,
+            reason: `the change cannot be adopted: "${linked}" is a symbolic link; adoption requires real files`,
+        };
     }
     const context = evidenceContext(workspace, change);
     const files = await verifyEvidence({
@@ -55,12 +101,6 @@ export async function verifyAdoptionEvidence(workspace, change) {
  * and the current PASS record verify and the user answers yes.
  */
 export async function adoptChange(input) {
-    if (!input.userStarted) {
-        return {
-            ok: false,
-            reason: 'adoption is user-started only; the model cannot invoke it',
-        };
-    }
     const verified = await verifyAdoptionEvidence(input.workspace, input.change);
     if (!verified.ok)
         return verified;

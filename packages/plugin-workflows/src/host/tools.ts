@@ -1,3 +1,4 @@
+import { adoptChange } from './adoption.js'
 import { CHANGE_NAME } from './command-parse.js'
 import type { Definition, Step } from './definitions.js'
 import { collectEvidencePaths, type EvidenceContext, verifyEvidence } from './evidence.js'
@@ -7,9 +8,10 @@ import { openRunCount, type WorkflowRun } from './runs.js'
 
 /**
  * The model-facing `workflows` tool. It is a bounded control surface: list,
- * start an allowed definition, resume, status, host-verified evidence, cancel.
- * It never accepts a script, a definition body, an install, an adoption, a
- * receipt write, or a text claim.
+ * start an allowed definition, resume, status, host-verified evidence, cancel,
+ * and a user-confirmed adoption of an existing change. It never accepts a
+ * script, a definition body, an install, a receipt write outside the adoption
+ * path, or a text claim.
  */
 
 export const WORKFLOWS_TOOL_ACTIONS = [
@@ -19,6 +21,7 @@ export const WORKFLOWS_TOOL_ACTIONS = [
   'status',
   'evidence',
   'cancel',
+  'adopt',
 ] as const
 export type WorkflowsToolAction = (typeof WORKFLOWS_TOOL_ACTIONS)[number]
 
@@ -27,6 +30,8 @@ export interface WorkflowsToolRequest {
   readonly definitionId?: string
   readonly runId?: string
   readonly stepId?: string
+  /** The existing change whose adoption the user must confirm. */
+  readonly change?: string
   /** The host resolves and verifies the declared evidence; text is never it. */
   readonly evidence?: { readonly kind: string; readonly ref: string }
 }
@@ -73,7 +78,7 @@ function objectArgs(value: unknown): Record<string, unknown> {
 /** Parse and validate the tool arguments; an unknown field is refused. */
 export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
   const args = objectArgs(value)
-  const allowed = new Set(['action', 'definitionId', 'runId', 'stepId', 'evidence'])
+  const allowed = new Set(['action', 'definitionId', 'runId', 'stepId', 'change', 'evidence'])
   for (const key of Object.keys(args)) {
     if (!allowed.has(key)) {
       fail(`unknown field "${key}"; the tool has no raw script or definition input`)
@@ -112,11 +117,13 @@ export function parseWorkflowsToolArgs(value: unknown): WorkflowsToolRequest {
   const definitionId = text('definitionId')
   const runId = text('runId')
   const stepId = text('stepId')
+  const change = text('change')
   return {
     action: action as WorkflowsToolAction,
     ...(definitionId === undefined ? {} : { definitionId }),
     ...(runId === undefined ? {} : { runId }),
     ...(stepId === undefined ? {} : { stepId }),
+    ...(change === undefined ? {} : { change }),
     ...(evidence === undefined ? {} : { evidence }),
   }
 }
@@ -296,6 +303,21 @@ export async function executeWorkflowsTool(
         )
       }
       return `evidence verified for step "${request.stepId}"`
+    }
+    case 'adopt': {
+      if (request.change === undefined) fail('adopt needs a change name')
+      if (!CHANGE_NAME.test(request.change)) {
+        fail('change must be a plain change name, not a script or path')
+      }
+      const adopted = await adoptChange({
+        workspace: host.workspace,
+        change: request.change,
+        auth: host.auth,
+        ...(host.questions === undefined ? {} : { questions: host.questions }),
+        ...(host.now === undefined ? {} : { now: host.now() }),
+      })
+      if (!adopted.ok) fail(adopted.reason)
+      return `change "${request.change}" adopted`
     }
     case 'cancel': {
       if (request.runId === undefined) fail('cancel needs a runId')
