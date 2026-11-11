@@ -637,11 +637,11 @@ task is done. `Apply change` writes `/openspec-apply-change <name>` into the com
 submitting. `Archive` is the click-as-authorization write: the panel POSTs one request for that
 change, the Host refuses a change that is not complete, and the workflows engine's
 `workflowsArchiveGate` service (when the engine is installed) verifies the change artifacts and the
-current whole-spec `PASS`, writes the host-signed adoption receipt for the click, and applies the same
-archive gate checks as the chat command — authenticated completed intake run or receipt, current
-whole-spec `PASS`, no open required run step, and portable task-review coverage while the shipped
-rule owns that behavior (when the shipped rule is deferred, the portable rule the workspace's
-`openspec/review-approval.json` enables is enforced instead). A refusal is shown inline, the action
+current whole-spec `PASS`, writes the host-signed adoption receipt for the click, and reports
+success. The click is the final authorization: an open run step, a missing portable task approval,
+or a deferred/malformed review marker does not block it; the agent's chat command still passes the
+full archive gate (authenticated completed intake run or receipt, current whole-spec `PASS`, no open
+required run step, and portable task-review coverage). A refusal names its cause inline, the action
 stays available for a retry, and the change stays active; a success clears the busy state, opens the
 CLI-reported archived tab when the Host can identify the new row, and otherwise refreshes the list
 without opening a fabricated address. The same action appears on each active change card in the

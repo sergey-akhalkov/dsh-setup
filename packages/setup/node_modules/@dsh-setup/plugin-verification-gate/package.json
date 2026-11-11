@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-verification-gate",
-  "version": "0.32.0",
+  "version": "0.32.1",
   "description": "Legacy verification gate, disabled by default once the workflows verify definition owns the close; while enabled it refuses a code-changing turn until one configured check succeeds after the last edit",
   "license": "MIT",
   "icon": "./icon.svg",

@@ -2,26 +2,14 @@ import type { Definition } from './definitions.js';
 import { type ArchiveGateDecision } from './gates.js';
 import type { HostAuth } from './host-auth.js';
 /**
- * The one archive decision shared by the agent pre-execute gate and the
- * user-clicked archive service. Both paths must verify the same evidence or the
- * click would become an authorization bypass.
+ * The one archive decision for the agent pre-execute gate. The user-clicked
+ * service does not call it: the click is the final authorization.
  */
-/** The click path's portable task rule, or why the marker could not be read. */
-export type ClickedTaskReview = {
-    readonly rule: string;
-} | {
-    readonly invalid: string;
-};
 export interface ArchiveEvidenceDeps {
     /** The host key; absent means no authenticated run or receipt can count. */
     readonly auth?: HostAuth;
     /** The installed definitions, for the shipped task-review ownership. */
     readonly definitions: readonly Definition[];
-    /**
-     * The click path's portable-approval requirement while the legacy gate owns
-     * task approvals; absent means the installed definition decides.
-     */
-    readonly clickedTaskReview?: ClickedTaskReview;
 }
 /** The archive gate's decision with the evidence already read. */
 export declare function decideArchiveAuthorization(workspace: string, change: string, deps: ArchiveEvidenceDeps): Promise<ArchiveGateDecision>;
@@ -41,8 +29,10 @@ export type ArchiveAuthorizationResult = {
     readonly reason: string;
 };
 /**
- * The click is the authorization: verify the change artifacts and the current
- * whole-spec PASS, write the host-signed adoption receipt for the click, then
- * apply the same decision the agent archive path applies.
+ * The click is the final authorization: verify the change artifacts and the
+ * current whole-spec PASS, then write the host-signed adoption receipt for the
+ * click. The agent command path still applies the full archive gate, but a stuck
+ * review run or a pending task approval can no longer block the user's explicit
+ * click.
  */
-export declare function authorizeUserArchive(workspace: string, change: string, auth: HostAuth, definitions: readonly Definition[], now?: number): Promise<ArchiveAuthorizationResult>;
+export declare function authorizeUserArchive(workspace: string, change: string, auth: HostAuth, now?: number): Promise<ArchiveAuthorizationResult>;

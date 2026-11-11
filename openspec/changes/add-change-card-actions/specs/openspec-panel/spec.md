@@ -6,7 +6,8 @@
 
 The panel SHALL read only, with one exception: the `Archive` action on a completed change is an
 authorized write that archives that change after the Host verifies the user-clicked authorization and
-the archive gate. Every other outward action SHALL place a command draft in the composer without
+the change's artifacts and current whole-spec PASS; the click is the final authorization, and the
+agent's archive command keeps the archive gate. Every other outward action SHALL place a command draft in the composer without
 submitting: `/openspec-apply-change <name>` for a change that is not complete, `/openspec-explore `
 for exploration, and `/openspec-propose ` for a new proposal. The panel MUST NOT sync, validate, tick
 a task, edit any file, or archive a change that is not complete.

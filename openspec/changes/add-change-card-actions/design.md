@@ -14,9 +14,11 @@ four change artifacts and the current whole-spec PASS.
 Two facts shape the design. First, the click on `Archive` is the user's confirmation, so the host may
 write the adoption receipt for it: the route is reachable only through the carrier's admission fence
 (origin/cookie), the session comes from the request and is resolved to a live workspace, and every
-call is the direct result of a user activation in the panel. Second, an archive without the gate
-checks would be an authorization bypass, so the clicked path must verify the same evidence the
-agent path verifies, not merely the task counts.
+call is the direct result of a user activation in the panel. Second, the user's explicit click is the
+final authorization for that archive: the host verifies the change artifacts and the current
+whole-spec `PASS`, records the click as the host-signed receipt, and archives. Internal review state
+(an open run step, a pending task approval, a stale marker) can delay the agent command path but must
+not turn the user's click into a wall of process errors.
 
 The panel's current `ChangeCard` is a `<button>`; a nested action button would be invalid HTML. The
 card becomes a focusable `role="button"` element with the same activation behavior, so the action can
@@ -29,7 +31,8 @@ be a real button inside it.
 - A completed change offers `Archive` in the detail header and on its card; the click archives it
   after the host authorizes the click.
 - `Apply change` remains the action for an incomplete change and still only fills the draft.
-- One shared archive-gate decision, so the agent path and the clicked path cannot drift.
+- One shared archive-gate decision for the agent path; the user's click is the final authorization
+  and does not wait on internal review state.
 - A refusal names the cause, leaves the change active, and is shown inline.
 - The separator bypass of the pre-execute archive gate is closed.
 - A host without the workflows engine still archives after the task-count check.
@@ -51,38 +54,24 @@ be a real button inside it.
 2. verify the four change artifacts (`proposal.md`, `design.md`, `tasks.md`, at least one
    `specs/**/spec.md`) and the current whole-spec `PASS` record with `verifyAdoptionEvidence`;
 3. write the host-signed adoption receipt for the click with `issueAdoptionReceipt`;
-4. compute the shared archive-gate decision (below) and return `{ ok: true }` or
-   `{ ok: false, reason }`.
+4. return `{ ok: true }`; the route then runs the archive.
 
 Reusing adoption evidence and the adoption receipt keeps one host-authenticated artifact for "this
 change was verified and the user asked to close it" instead of inventing a second receipt kind. It
-also means the receipt survives run-history pruning exactly like the existing adoption path. A
-refused click may still have written the receipt after step 2; that receipt binds the verified digest
-and only authorizes a later archive once the run/coverage blockers clear, which is the same state a
-manual adoption would leave. The receipt is not a review record and does not bypass the PASS check.
+also means the receipt survives run-history pruning exactly like the existing adoption path. The
+receipt is not a review record and does not bypass the whole-spec `PASS` check; the agent command
+path still applies the full archive gate.
 
-### One gate computation shared by both paths
+### The agent path keeps the full gate; the click is the final authorization
 
 `packages/plugin-workflows/src/host/archive-authorization.ts` exports
-`decideArchiveAuthorization(workspace, change, { auth, definitions, clickedTaskReview? })`. It reads
-the current whole-spec `PASS` record, computes optional portable task-review coverage when the
-installed `task-review` definition's `gateOwnership` is `own`, loads `hasTamperedRuns`, authenticated
-runs and receipts, and returns `evaluateArchiveGate`'s decision. The pre-execute listener calls it
-after its existing command/form/workdir/nested-root checks; when the host key is unavailable it
-passes no auth and the decision is unchanged from today (empty runs and receipts, no tampering). The
-service passes the ensured auth. This keeps one place for the evidence order and leaves the agent
-path's refusal text identical.
-
-### The clicked path enforces the approvals the legacy gate owns
-
-When the shipped `task-review` rule is `defer`, the legacy delegation-rules archive gate still guards
-the agent path, but the click path runs the CLI directly. The click therefore reads
-`openspec/review-approval.json`: when the marker's `archiveGate` is true, the service passes the
-marker's `taskRule` as `clickedTaskReview` and `decideArchiveAuthorization` computes
-`taskReviewCoverage` for that rule even though the definition is deferred. A malformed marker is a
-refusal, not an off switch. The coverage helper gained an optional rule id (default `task-review`) so
-the shipped and marker-named rules share one strict record check. An `own` definition still
-determines coverage from ownership alone.
+`decideArchiveAuthorization(workspace, change, { auth, definitions, clickedTaskReview? })` for the
+pre-execute listener. It reads the current whole-spec `PASS` record, computes optional portable
+task-review coverage when the installed `task-review` definition's `gateOwnership` is `own`, loads
+`hasTamperedRuns`, authenticated runs and receipts, and returns `evaluateArchiveGate`'s decision.
+When the host key is unavailable it passes no auth and the decision is unchanged from today (empty
+runs and receipts, no tampering). The clicked path does not call this decision: an open run step, a
+missing portable approval, or a deferred/malformed marker cannot block the user's explicit click.
 
 ### The Host route validates the request before any write
 
@@ -152,10 +141,12 @@ archive still goes to `next()`.
 ## Risks / Trade-offs
 
 - The panel can now write: one CLI archive, one host receipt. The alternative (no button) leaves the
-  workflow incomplete; both writes are gated and audited by the same evidence as the agent path.
-- The adoption receipt is written before the run/coverage checks. A refused click can leave a valid
-  receipt behind; it authorizes only the change's artifacts at the verified digest, and the archive
-  gate still refuses while a run step is open or coverage is missing.
+  workflow incomplete. The click path verifies the change artifacts and the current whole-spec
+  `PASS`; the agent command path keeps the full archive gate.
+- The click is the final authorization: an open run step, a missing portable task approval, or a
+  deferred/malformed review marker no longer refuses the user's click. The alternative is the
+  support loop this change replaces (stuck review state blocking the click with a wall of internal
+  errors). The receipt binds the verified digest and is the audit record of the user's decision.
 - The separator check is deliberately conservative: a quoted string that merely contains
   `openspec archive` after a separator is refused rather than interpreted. Shell-free invocation is
   the documented form.

@@ -566,7 +566,7 @@ export function apply(ctx, config = {}) {
                 reason: 'the host key is unavailable, so the archive click could not be authorized',
             };
         }
-        return authorizeUserArchive(workspace, change, auth, await definitionsFor(workspace));
+        return authorizeUserArchive(workspace, change, auth);
     }
     const journal = new Journal();
     /** Latest turn per session, so a tool result belongs to a turn. */

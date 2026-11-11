@@ -6035,7 +6035,7 @@ describe('user-clicked archive authorization', () => {
     })
   })
 
-  it('refuses a click without the current PASS record or with an open run step', async () => {
+  it('refuses a click without the current PASS record', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const receipts = await import('../src/host/receipts.ts')
@@ -6051,7 +6051,13 @@ describe('user-clicked archive authorization', () => {
     if (missingResult.ok) return
     expect(missingResult.reason).toMatch(/cannot be adopted|whole-spec/u)
     expect(await receipts.readReceipt(missing, 'auth', auth)).toBeUndefined()
+  })
 
+  it('a click authorizes despite an open run step', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const { HostAuth } = await import('../src/host/host-auth.ts')
+    const receipts = await import('../src/host/receipts.ts')
+    const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const blocked = await tempWorkspace()
     await completeChange(blocked, { portable: true })
     const runs = await import('../src/host/runs.ts')
@@ -6072,70 +6078,36 @@ describe('user-clicked archive authorization', () => {
     const blockedHost = fakeHost(blocked)
     apply(blockedHost.ctx as never)
     const blockedResult = await serviceOf(blockedHost).authorizeAndCheck(blocked, 'auth')
-    expect(blockedResult.ok).toBe(false)
-    if (blockedResult.ok) return
-    expect(blockedResult.reason).toMatch(/run "run-open-click" step "requirements" is open/u)
-    // The click receipt is written before the gate refuses; it binds the digest.
+    expect(blockedResult).toEqual({ ok: true })
     expect(await receipts.readReceipt(blocked, 'auth', auth)).toMatchObject({ kind: 'adoption' })
   })
 
-  it('refuses a click when a checked task has no portable PASS', async () => {
+  it('a click is the final authorization even without a portable task PASS', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     await completeChange(workspace)
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     const result = await serviceOf(host).authorizeAndCheck(workspace, 'auth')
-    expect(result.ok).toBe(false)
-    if (result.ok) return
-    expect(result.reason).toMatch(/portable task-review PASS/u)
+    expect(result).toEqual({ ok: true })
   })
 
-  it('enforces the marker rule on a clicked archive while the shipped rule is deferred', async () => {
+  it('a click ignores the legacy marker and never needs definitions', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const { authorizeUserArchive } = await import('../src/host/archive-authorization.ts')
-    const { taskIdOf } = await import('../src/host/tasks.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const marker = `${JSON.stringify({ version: 1, archiveGate: true, taskRule: 'task-review' })}\n`
 
-    // No definitions are passed: the shipped rule is treated as deferred and
-    // the marker alone turns the portable check on.
     const workspace = await tempWorkspace()
     await completeChange(workspace)
     await writeFile(join(workspace, 'openspec', 'review-approval.json'), marker, 'utf8')
-    const refused = await authorizeUserArchive(workspace, 'auth', auth, [])
-    expect(refused.ok).toBe(false)
-    if (refused.ok) return
-    expect(refused.reason).toMatch(/portable task-review PASS/u)
+    expect(await authorizeUserArchive(workspace, 'auth', auth)).toEqual({ ok: true })
 
-    const id = taskIdOf('Complete work')
-    await mkdir(join(workspace, 'openspec', 'changes', 'auth', 'reviews'), { recursive: true })
-    await writeFile(
-      join(workspace, 'openspec', 'changes', 'auth', 'reviews', `${id}.json`),
-      `${JSON.stringify({ rule: 'task-review', change: 'auth', scope: 'task', taskId: id, digest: 'a'.repeat(64), verdict: 'PASS', findings: [], target: { provider: 'codex-subagent' }, time: '2026-11-08T00:00:00.000Z' })}\n`,
-      'utf8',
-    )
-    expect(await authorizeUserArchive(workspace, 'auth', auth, [])).toEqual({ ok: true })
-
-    // A marker with the archive gate off does not add the check.
-    const off = await tempWorkspace()
-    await completeChange(off)
-    await writeFile(
-      join(off, 'openspec', 'review-approval.json'),
-      `${JSON.stringify({ version: 1, archiveGate: false, taskRule: 'task-review' })}\n`,
-      'utf8',
-    )
-    expect(await authorizeUserArchive(off, 'auth', auth, [])).toEqual({ ok: true })
-
-    // A malformed marker refuses instead of silently skipping the check.
     const malformed = await tempWorkspace()
     await completeChange(malformed)
     await writeFile(join(malformed, 'openspec', 'review-approval.json'), '{ not json', 'utf8')
-    const invalid = await authorizeUserArchive(malformed, 'auth', auth, [])
-    expect(invalid.ok).toBe(false)
-    if (invalid.ok) return
-    expect(invalid.reason).toMatch(/review-approval\.json/u)
+    expect(await authorizeUserArchive(malformed, 'auth', auth)).toEqual({ ok: true })
   })
 })
 

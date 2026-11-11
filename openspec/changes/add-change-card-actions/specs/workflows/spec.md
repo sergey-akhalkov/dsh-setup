@@ -60,11 +60,11 @@ The engine SHALL refuse `openspec archive <change>` while a required review or s
 
 ### Requirement: User-clicked archive authorization
 
-The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(workspace, change)`. It SHALL ensure the host key, verify the change artifacts and the current whole-spec `PASS`, and write the host-signed adoption receipt for the click. It SHALL then apply the pre-execute archive gate's evidence checks and, while the shipped rule is `defer`, the portable rule the workspace's `openspec/review-approval.json` enables. It MUST NOT run the archive or accept a text claim.
+The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(workspace, change)`. It SHALL ensure the host key, verify the change artifacts and the current whole-spec `PASS`, and write the host-signed adoption receipt for the click. The click is the final authorization: the service MUST NOT apply the pre-execute archive gate's evidence checks (open run steps, portable task approvals, the legacy review marker) to the clicked path, and MUST NOT run the archive or accept a text claim. The agent command path keeps the full pre-execute archive gate.
 
 #### Scenario: Verified click is authorized
 
-- **WHEN** the click service runs for a change with all four artifacts, a current whole-spec `PASS` record, and no blocker
+- **WHEN** the click service runs for a change with all four artifacts and a current whole-spec `PASS` record
 - **THEN** the host-signed adoption receipt is written and the service returns `ok`
 
 #### Scenario: Missing PASS record is refused
@@ -72,30 +72,20 @@ The workflows plugin SHALL provide `workflowsArchiveGate.authorizeAndCheck(works
 - **WHEN** the current whole-spec `PASS` record is missing or stale
 - **THEN** no archive is authorized, the service returns the missing or stale reason, and the change stays active
 
-#### Scenario: Open run step is refused
+#### Scenario: Open run step does not block the click
 
-- **WHEN** a related run has an open required step
-- **THEN** the service returns a refusal naming the run and step, and no archive is authorized
+- **WHEN** a related run has an open required step but the artifacts and whole-spec `PASS` are current
+- **THEN** the click is authorized and the receipt is written
 
-#### Scenario: Incomplete coverage is refused
+#### Scenario: Missing portable approvals do not block the click
 
-- **WHEN** the shipped `task-review` rule is `own` and a checked task has no portable task-review PASS
-- **THEN** the service returns a bounded reason naming the gap, and no archive is authorized
+- **WHEN** a checked task has no portable task-review PASS, whether the shipped rule is `own` or `defer`
+- **THEN** the click is authorized and the receipt is written
 
-#### Scenario: Legacy-owned approvals are enforced on the click
-
-- **WHEN** the shipped rule is `defer`, `openspec/review-approval.json` enables the archive gate with a task rule, and a checked task has no portable PASS for that rule
-- **THEN** the service refuses the click with the coverage gap
-
-#### Scenario: Legacy-owned approvals present are allowed
-
-- **WHEN** the same deferred profile has a valid portable PASS for every checked task
-- **THEN** the click is authorized
-
-#### Scenario: Malformed marker refuses the click
+#### Scenario: Malformed legacy marker does not block the click
 
 - **WHEN** `openspec/review-approval.json` exists but cannot be read as a valid marker
-- **THEN** the service refuses the click with the marker error instead of skipping the check
+- **THEN** the click is authorized; the marker only affects the agent command path
 
 #### Scenario: Engine absent means no engine checks
 
