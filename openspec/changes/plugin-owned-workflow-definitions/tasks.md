@@ -35,7 +35,7 @@
 
 ## 4. Post-release archive follow-up
 
-- [ ] 4.1 Confirm that `add-change-card-actions` is released and installed; once this readiness check is checked, the change is complete again and the OpenSpec panel's Archive button can archive it (the click authorizes the adoption receipt and runs the archive gate).
+- [x] 4.1 Confirm that `add-change-card-actions` is released and installed; once this readiness check is checked, the change is complete again and the OpenSpec panel's Archive button can archive it (the click authorizes the adoption receipt and runs the archive gate).
 - After the archive, record the archive and the 0.31.8 release in `docs/openspec-status.md`. This is a follow-up instruction, not a counted task, so it cannot block the Archive button.
 
 
