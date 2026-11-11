@@ -6196,6 +6196,29 @@ describe('archive separator bypass', () => {
       'git status; openspec "archive" auth',
       'git status; & "openspec" archive auth',
       'Write-Output "it\'s ready"; openspec archive auth',
+      'Write-Output "a`""; openspec archive auth',
+      "git status; # don't forget\nopenspec archive auth",
+      'git status; Write-Output $(openspec archive auth)',
+      'git status; Write-Output "$(openspec archive auth)"',
+      'git status; Write-Output "$(Get-Date; openspec archive auth)"',
+      'git status; Write-Output "$(Write-Output (Get-Date -Format yyyy); openspec archive auth)"',
+      'git status; openspec `\r\narchive auth',
+      'Write-Output (openspec archive auth)',
+      'Write-Output @(openspec archive auth)',
+      'git status; openspec 2>$null archive auth',
+      'git status; openspec 2>&1 archive auth',
+      'cd .; openspec 2>"log;file.txt" archive auth',
+      'git status; openspec "archive"2>$null auth',
+      'git status; openspec *> $null archive auth',
+      'git status; <# comment #> openspec archive auth',
+      'cd .; openspec <# ; #> archive auth',
+      'bash -c "openspec archive auth"',
+      'pwsh -Command "openspec archive auth"',
+      "iex 'openspec archive auth'",
+      'git status; $result = openspec archive auth',
+      'git status; iex "git status; openspec archive auth"',
+      'git status; pwsh -Command "git status; openspec archive auth"',
+      "Write-Output @'\nit's\n'@\nopenspec archive auth",
       'git status; pnpm exec openspec archive auth',
       'pnpm exec openspec archive auth; git status',
     ]) {
@@ -6229,11 +6252,17 @@ describe('archive separator bypass', () => {
       'cd foo && git status',
       'cd .; mv docs/a.md docs/b.md',
       'cd openspec/changes; mv auth auth-copy',
-      'git status; git mv docs/archive docs/history',
-      'Write-Output archive; mv docs/a.md docs/b.md',
-      'git status -- openspec/changes/archive; git mv docs/a.md docs/b.md',
-      'git status; Write-Output "Run openspec archive auth after review"',
-      'git status; Write-Output "Run; openspec archive auth after review"',
+      'git status; git mv docs/notes docs/history',
+      'git status; <# comment #> git status',
+      'git status; Write-Output "a`"b"; done',
+      "git status; # don't forget\ngit status",
+      'git status; Write-Output "$(git status)"',
+      'git status; mv docs/a.md docs/b.md -ErrorAction Stop',
+      'git status; mv docs/a.md docs/b.md *> "log file.txt"',
+      "Write-Output @'\nit's\n'@",
+      'git status; Move-Item docs/a.md "archive2">$null',
+      'git status; git mv docs/a.md openspec/changes/archive2',
+      'git status; mv docs/a.md docs/tmp/../archive',
     ]) {
       let nextCalled = false
       const decision = (await host.emit(
@@ -6254,6 +6283,75 @@ describe('archive separator bypass', () => {
     }
   })
 
+  it('refuses a compound command that mentions an archive only as text or a source', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const [index, command] of [
+      'git status -- openspec/changes/archive; git mv docs/a.md docs/b.md',
+      'git status; Write-Output "Run; openspec archive auth after review"',
+      'git status; Write-Output "openspec archive auth"',
+      'git status; Write-Output "Example commands:\nMove-Item openspec/changes/auth openspec/changes/archive\n"',
+      'git status "x"#; openspec archive auth',
+      'git status; git mv openspec/changes/archive/2026-11-11-auth openspec/changes/auth',
+      'git status; Move-Item -Destination openspec/changes/auth openspec/changes/archive/2026-11-11-auth',
+      'git status; mv -t openspec/changes openspec/changes/archive/2026-11-11-auth',
+      'Write-Output archive; mv docs/a.md docs/b.md',
+    ].entries()) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: `archive-mention-${String(index)}`,
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+  })
+
+  it('refuses a bash escaped-quote or substitution compound archive', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const [index, command] of [
+      'echo "a\\""; openspec archive auth',
+      'echo `openspec archive auth`',
+      'open\\spec archive auth',
+      'git status; mv openspec/changes/auth \\\n"openspec/changes/archive"',
+    ].entries()) {
+      let nextCalled = false
+      const decision = (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: `archive-bash-bypass-${String(index)}`,
+          name: 'bash',
+          arguments: { command },
+        },
+        async () => {
+          nextCalled = true
+          return { kind: 'continue' }
+        },
+      )) as { kind?: string; reason?: string } | undefined
+      expect(decision?.kind, command).toBe('deny')
+      expect(decision?.reason, command).toMatch(/could not be parsed safely/u)
+      expect(nextCalled, command).toBe(false)
+    }
+  })
+
   it('refuses an unparseable archive move with a quoted or compound destination', async () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
@@ -6265,6 +6363,26 @@ describe('archive separator bypass', () => {
       'git status; git mv openspec/changes/auth "openspec/changes/archive"',
       'git status; mv openspec/changes/auth openspec/changes/archive; git status',
       'git status; Move-Item openspec/changes/auth "openspec/changes/archive"',
+      'git status; git mv openspec/changes/auth --force openspec/changes/archive/',
+      'git status; git mv openspec/changes/auth --verbose openspec/changes/archive/',
+      'git status; git mv openspec/changes/auth -- openspec/changes/archive/',
+      'git status; Move-Item openspec/changes/auth openspec/changes/archive > "log file.txt"',
+      'git status; Move-Item openspec/changes/auth "openspec/changes/archive" -ErrorAction Stop',
+      'git status; Move-Item openspec/changes/auth "openspec/changes/archive" *> "log file.txt"',
+      'git status; Move-Item openspec/changes/auth "openspec/changes/archive"> "log file.txt"',
+      "git status; # don't forget\nMove-Item openspec/changes/auth openspec/changes/archive",
+      'git status; Write-Output "$(Move-Item openspec/changes/auth "openspec/changes/archive")"',
+      'git status; (Move-Item openspec/changes/auth "openspec/changes/archive") > $null',
+      'git status; Move-Item openspec/changes/auth `\n"openspec/changes/archive"',
+      'git status; Move-Item openspec/changes/auth `\r\n"openspec/changes/archive"',
+      'git status; Write-Output "$((Get-Date); Move-Item openspec/changes/auth \'openspec/changes/archive\')"',
+      'pushd openspec/changes; mv auth archive/2026-11-11-auth',
+      'Set-Location openspec/changes; mv auth archive/2026-11-11-auth',
+      'git status; <# comment #> Move-Item openspec/changes/auth "openspec/changes/archive"',
+      'git status; Move-Item openspec/changes/auth ("openspec/changes/archive")',
+      'cd openspec/changes; Move-Item auth <# ; #> archive',
+      'git status; $null = Move-Item openspec/changes/auth openspec/changes/archive',
+      'git status; Move-Item openspec/changes/auth "openspec/changes/archive" -InformationVariable moveLog',
     ].entries()) {
       let nextCalled = false
       const decision = (await host.emit(
@@ -6291,6 +6409,31 @@ describe('archive separator bypass', () => {
       'git status; mv auth "archive/2026-11-11-auth"',
       'git status; mv auth ./archive/2026-11-11-auth',
       'git status; Move-Item auth ".\\archive\\2026-11-11-auth"',
+      'git status; Move-Item auth archive/2026-11-11-auth -ErrorAction Stop',
+      'git status; Move-Item auth archive/2026-11-11-auth > log.txt',
+      'git status; mv auth ar"chive"/2026-11-11-auth',
+      'git status; Move-Item auth "archive"> log.txt',
+      'git status; Move-Item auth "archive">log.txt',
+      'cd openspec/changes; Move-Item auth 2>"log;file.txt" archive',
+      'cd openspec/changes; Move-Item auth -Destination:("archive"); pwd',
+      'git status; Move-Item auth ./archive',
+      'git status; Move-Item auth .\\archive',
+      'cd .; Move-Item auth "archive"|Out-Null',
+      'cd .; Move-Item auth ./archive; pwd',
+      'git status; Move-Item auth ../changes/archive',
+      'git status; Move-Item auth ..\\changes\\archive',
+      'cd .; Move-Item auth ././archive',
+      'cd openspec/changes; Move-Item auth "archive"2>$null',
+      'git status; Move-Item auth auth/../archive',
+      'git status; & "Move-Item"2>$null auth archive',
+      'git status; Move-Item auth "../changes/./archive"',
+      'git status; Move-Item auth "..\\changes\\.\\archive"',
+      'git status; Move-Item auth .//archive',
+      'git status; Move-Item auth .\\\\archive',
+      'git status; Move-Item auth changes//archive',
+      'git status; Move-Item auth auth//../archive',
+      'git status; Move-Item auth auth/..//archive',
+      'git status; Move-Item auth auth\\\\..\\\\archive',
     ].entries()) {
       let nextCalled = false
       const decision = (await host.emit(

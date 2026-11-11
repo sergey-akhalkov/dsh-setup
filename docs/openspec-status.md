@@ -777,5 +777,8 @@ runs `openspec archive`; the agent's chat command keeps the full pre-execute gat
 the click the final authorization, so an open review run or a pending portable approval no longer
 blocks the user). The same release fixed the `/workflows` command's missing `input.hint` so the
 composer keeps the line open for `adopt <name>` instead of executing on Tab. The change archived
-19/19 tasks. Open follow-up: `add-change-card-actions` records its shipped panel work with 10 of
-14 tasks checked; its four remaining tasks are the archive-gate shell-parsing hardening.
+19/19 tasks. `add-change-card-actions` was archived on 2026-11-12 with 12 of 14 tasks checked: the
+pre-execute fallback now refuses a compound archive invocation or move with one conservative
+textual rule (no shell parser), quoted and commented mentions included, with a host test for each
+bypass form. Its 1.3/1.8 task reviews still returned FINDINGS when the owner force-released, so
+those two stay unchecked in the archived record; the shipped code carries their implementation.

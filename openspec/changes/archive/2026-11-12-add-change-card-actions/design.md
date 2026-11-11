@@ -123,20 +123,24 @@ would run `/workflows` before the user could type `adopt <name>`. The command de
 the documented `CommandInputDescriptor.hint` placeholder for capable clients. The handler and its
 accepted argument forms are unchanged; the descriptor only keeps the composer line open.
 
-### Refuse what the parser cannot understand
+### Refuse what the parser cannot read
 
 `parseArchiveCommand` already refuses any command carrying a shell control character, so a compound
-command never becomes an `ArchiveIntent`. The bypass was that the fallback refusal only matched an
-archive invocation at the start of the command, and the move fallback only recognized
-`openspec/changes/archive` immediately followed by `/` or the end of the command. The listener now
-recognises an `openspec archive` invocation at any command-word boundary — after an operator, a
-space, a subshell `(`, or a backtick — and refuses when the whole command could not be parsed,
-keeping the existing "could not be parsed safely" reason. The move check uses the same boundary
-class for the verb and accepts an archive destination followed by a path separator or the end of that
-argument (quote, whitespace, shell operator, or end of command), so
-`cd x;mv openspec/changes/y openspec/changes/archive/`, quoted destinations such as
-`"openspec/changes/archive"`, and `…/archive; pwd` are refused too. A command whose segments name no
-archive still goes to `next()`.
+command never becomes an `ArchiveIntent`. The listener then applies one conservative textual rule
+instead of interpreting shell syntax: it lowercases the command, joins backtick/backslash line
+continuations, keeps block-comment and stream-merge text but removes quotes, backticks and
+backslashes, and scans the whole command without splitting it. A command that names `openspec` and
+`archive` is refused, as is a command with a move verb together with `openspec/changes/archive` or an
+`archive`/`archive/...` path token. A mention inside quoted text, a comment, a separator, or a
+command substitution is refused the same way; the rule never executes or interprets the text. A
+command that names no archive still goes to `next()`.
+
+Rationale: six review rounds showed that a purpose-written shell parser keeps finding new
+PowerShell/Bash constructs (parameter values, comments, block comments, substitutions, redirects,
+continuations, assignments). A textual rule is fixed-size and cannot be out-parsed; the alternative
+reading of "names no archive" — exact shell semantics — is an interpreter, not a gate. The cost is
+one deliberate false positive: a quoted or commented mention of an archive is refused rather than
+allowed.
 
 ## Risks / Trade-offs
 

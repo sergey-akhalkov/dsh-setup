@@ -51,6 +51,11 @@ The engine SHALL refuse `openspec archive <change>` while a required review or s
 - **WHEN** a command moves a change into the archive with a quoted destination or another command after the destination, such as `git status; git mv openspec/changes/auth "openspec/changes/archive"` or `cd .; mv openspec/changes/auth openspec/changes/archive; pwd`
 - **THEN** the call is refused with the "could not be parsed safely" reason and the move does not run
 
+#### Scenario: A quoted or commented mention is refused
+
+- **WHEN** a compound command contains an archive invocation or archive move only inside quoted text or a comment
+- **THEN** the call is refused with the "could not be parsed safely" reason rather than interpreted
+
 #### Scenario: Benign compound command is not an archive
 
 - **WHEN** a compound shell command names no archive invocation or archive move
