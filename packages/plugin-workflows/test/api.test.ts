@@ -425,6 +425,15 @@ describe('workflows read API', () => {
         (entry) => entry.id === 'acme-deploy',
       ),
     ).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
+    // A disposed contribution is no longer installed; its stale runtime row is
+    // not listed even while definitionsFor still carries it.
+    const disposed = await setup({ definitions: [definition], installed: [] })
+    const after = await request(disposed, DEFINITIONS_ROUTE, { session: 's1' })
+    expect(
+      (after.body.definitions as Array<Record<string, unknown>>).some(
+        (entry) => entry.id === 'acme-deploy',
+      ),
+    ).toBe(false)
   })
 
   it('serves runs, triggers, and health with the session selector', async () => {

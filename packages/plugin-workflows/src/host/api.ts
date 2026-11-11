@@ -453,6 +453,11 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       )
       for (const definition of definitions) {
         if (covered.has(definition.id)) continue
+        // A disposed contribution is no longer installed; its stale runtime row
+        // must not reappear after the editor list already dropped it.
+        if (services.installedDefinitionsFor !== undefined && !installed.has(definition.id)) {
+          continue
+        }
         const source = installed.get(definition.id)
         rows.push({
           ...summary(definition),
