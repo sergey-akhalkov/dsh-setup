@@ -30,6 +30,8 @@ export interface EvaluationContext {
     /** Whether this event was already evaluated for this trigger. */
     isDuplicate(key: string): boolean;
 }
+/** One glob segment, where `*` matches any run of non-slash characters. */
+export declare function segmentGlobMatches(pattern: string, value: string): boolean;
 /** Segment glob: `*` within one segment, `**` across zero or more segments. */
 export declare function globMatches(pattern: string, path: string): boolean;
 /** The de-duplication identity for one trigger/event pair, or undefined. */

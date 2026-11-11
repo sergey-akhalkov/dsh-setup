@@ -13,7 +13,7 @@ export const WHY_NOT_REASONS = [
     'error',
 ];
 /** One glob segment, where `*` matches any run of non-slash characters. */
-function segmentMatches(pattern, value) {
+export function segmentGlobMatches(pattern, value) {
     const escaped = pattern
         .replace(/[.+^${}()|[\]\\]/gu, '\\$&')
         .replaceAll('*', '[^/]*')
@@ -39,7 +39,7 @@ export function globMatches(pattern, path) {
             return false;
         const candidate = pathSegments[pathIndex];
         return (candidate !== undefined &&
-            segmentMatches(segment ?? '', candidate) &&
+            segmentGlobMatches(segment ?? '', candidate) &&
             walk(patternIndex + 1, pathIndex + 1));
     };
     return walk(0, 0);

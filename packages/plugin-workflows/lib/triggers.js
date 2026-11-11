@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { matchCommandTemplate, matchPathTemplate } from './command-parse.js';
 import { globMatches } from './evaluate.js';
 /**
  * The shipped shadow trigger catalog. Triggers are data only: loading,
@@ -19,6 +20,7 @@ export const TRIGGER_MODES = ['shadow', 'disabled'];
 /** De-duplication policies a trigger may declare. */
 export const DEDUPE_POLICIES = ['none', 'path+content-hash'];
 const FILTER_KEYS = new Set(['path', 'tool', 'change']);
+const TRIGGER_KEYS = new Set(['id', 'event', 'filter', 'mode', 'dedupe']);
 function fail(id, field, message) {
     throw new Error(`workflow trigger ${id === undefined ? '' : `"${id}" `}field "${field}" ${message}`);
 }
@@ -60,6 +62,10 @@ export function validateCatalog(raw) {
             fail(undefined, `triggers[${String(index)}]`, 'must be an object');
         }
         const value = entry;
+        for (const key of Object.keys(value)) {
+            if (!TRIGGER_KEYS.has(key))
+                fail(undefined, key, 'is not a known field');
+        }
         const id = typeof value.id === 'string' && value.id.trim() !== '' ? value.id : undefined;
         if (id === undefined)
             fail(undefined, `triggers[${String(index)}].id`, 'must be a non-empty string');
@@ -147,37 +153,47 @@ function filterMismatch(trigger, event) {
     const match = trigger.match;
     if (match.workspace !== undefined &&
         !globMatches(match.workspace.replaceAll('\\', '/'), (event.workspace ?? '').replaceAll('\\', '/'))) {
-        return { path: event.workspace, filter: `workspace: ${match.workspace}` };
+        return { mismatch: { path: event.workspace, filter: `workspace: ${match.workspace}` } };
     }
     if (match.session !== undefined && match.session !== event.session) {
-        return { path: event.session, filter: `session: ${match.session}` };
+        return { mismatch: { path: event.session, filter: `session: ${match.session}` } };
     }
     if (match.tool !== undefined && !toolMatches(match.tool, event)) {
-        return { path: event.tool, filter: `tool: ${match.tool}` };
+        return { mismatch: { path: event.tool, filter: `tool: ${match.tool}` } };
     }
-    if (match.command !== undefined && match.command !== event.command) {
-        return { path: event.command, filter: `command: ${match.command}` };
+    let capture;
+    if (match.command !== undefined) {
+        const template = matchCommandTemplate(match.command, event.command ?? '');
+        if (template === undefined) {
+            return { mismatch: { path: event.command, filter: `command: ${match.command}` } };
+        }
+        capture = template.capture;
     }
-    if (match.path !== undefined && !globMatches(match.path, event.path ?? event.subject)) {
-        return { path: event.path ?? event.subject, filter: `path: ${match.path}` };
+    if (match.path !== undefined) {
+        const target = event.path ?? event.subject;
+        const template = matchPathTemplate(match.path, target);
+        if (template === undefined) {
+            return { mismatch: { path: target, filter: `path: ${match.path}` } };
+        }
+        capture ??= template.capture;
     }
     if (match.subject !== undefined && match.subject !== event.subject) {
-        return { path: event.subject, filter: `subject: ${match.subject}` };
+        return { mismatch: { path: event.subject, filter: `subject: ${match.subject}` } };
     }
     if (match.verdict !== undefined && match.verdict !== event.verdict) {
-        return { path: event.verdict, filter: `verdict: ${match.verdict}` };
+        return { mismatch: { path: event.verdict, filter: `verdict: ${match.verdict}` } };
     }
     if (match.classifier !== undefined && match.classifier !== event.classifier) {
-        return { path: event.classifier, filter: `classifier: ${match.classifier}` };
+        return { mismatch: { path: event.classifier, filter: `classifier: ${match.classifier}` } };
     }
-    return undefined;
+    return capture === undefined ? {} : { capture };
 }
 /**
  * The de-duplication identity for one definition trigger and event. It always
  * includes the definition, the trigger policy, and the session; the subject is
- * the turn, the path and content hash, the call id, or the parsed name.
+ * the turn, the path and content hash, the call id, or the captured name.
  */
-export function obligationDedupeKey(definition, trigger, event) {
+export function obligationDedupeKey(definition, trigger, event, capture) {
     const session = event.session ?? '';
     switch (trigger.dedupe) {
         case 'none':
@@ -192,10 +208,12 @@ export function obligationDedupeKey(definition, trigger, event) {
             if (event.callId === undefined)
                 return undefined;
             return `${definition}\u0000call\u0000${session}\u0000${event.callId}`;
-        case 'name':
-            if (event.name === undefined)
+        case 'name': {
+            const name = capture ?? event.name;
+            if (name === undefined)
                 return undefined;
-            return `${definition}\u0000name\u0000${session}\u0000${event.name}`;
+            return `${definition}\u0000name\u0000${session}\u0000${name}`;
+        }
     }
 }
 /** Evaluate one definition's trigger against one event. Pure and contained. */
@@ -215,7 +233,8 @@ export function evaluateDefinitionTrigger(definition, event, context) {
         }
         if (trigger.kind !== event.kind)
             return { ...base, matched: false, reason: 'event-mismatch' };
-        const mismatch = filterMismatch(trigger, event);
+        const matched = filterMismatch(trigger, event);
+        const { mismatch } = matched;
         if (mismatch !== undefined) {
             return {
                 ...base,
@@ -225,11 +244,21 @@ export function evaluateDefinitionTrigger(definition, event, context) {
                 filter: mismatch.filter,
             };
         }
-        const key = obligationDedupeKey(definition.id, trigger, event);
+        const key = obligationDedupeKey(definition.id, trigger, event, matched.capture);
         if (key !== undefined && trigger.repeat !== true && context.isDuplicate(key, definition)) {
-            return { ...base, matched: false, reason: 'dedupe' };
+            return {
+                ...base,
+                matched: false,
+                reason: 'dedupe',
+                ...(matched.capture === undefined ? {} : { capture: matched.capture }),
+            };
         }
-        return { ...base, matched: true, reason: 'would-fire' };
+        return {
+            ...base,
+            matched: true,
+            reason: 'would-fire',
+            ...(matched.capture === undefined ? {} : { capture: matched.capture }),
+        };
     }
     catch (error) {
         return {
@@ -259,14 +288,14 @@ export function evaluateDefinitions(definitions, event, context) {
             rows.push(row);
             continue;
         }
-        const key = obligationDedupeKey(definition.id, definition.trigger, event);
+        const key = obligationDedupeKey(definition.id, definition.trigger, event, row.capture);
         if (definition.trigger.mode === 'shadow') {
             if (key !== undefined)
                 context.markKey?.(key);
             rows.push({ ...row, reason: 'would-fire' });
             continue;
         }
-        const outcome = context.startRun?.(definition, event);
+        const outcome = context.startRun?.(definition, event, row.capture);
         if (outcome === undefined) {
             rows.push({
                 ...row,

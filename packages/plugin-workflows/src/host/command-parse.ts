@@ -7,6 +7,8 @@
  */
 
 import { posix, win32 } from 'node:path'
+import { NAME_CAPTURE } from './definitions.js'
+import { globMatches, segmentGlobMatches } from './evaluate.js'
 
 export type OpenspecIntent =
   | { readonly kind: 'create-change'; readonly name: string }
@@ -97,6 +99,92 @@ export interface ArchiveIntent {
   readonly form: 'openspec' | 'mv' | 'Move-Item' | 'git'
   /** A move of more than one change; the host refuses it rather than authorizing each. */
   readonly multipleSources?: true
+}
+
+/* ------------------------------------------------------------------ */
+/* content-agnostic trigger matching                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Normalize one command for a `match.command` template: trim, collapse
+ * whitespace, and strip one documented `rtk` or `pnpm exec` invocation prefix.
+ * A compound command, a shell control, a backslash, or a substitution returns
+ * undefined and never matches; the archive gate re-parses its own exceptions.
+ */
+export function normalizeCommand(command: string): string | undefined {
+  // A horizontal tab separates shell tokens exactly like a space; a newline or
+  // another control character still makes the command compound.
+  const trimmed = command.replaceAll('\t', ' ').trim()
+  if (isCompound(trimmed)) return undefined
+  const withoutPrefix = trimmed.replace(/^(?:(?:rtk)|(?:pnpm\s+exec))\s+/u, '')
+  return withoutPrefix.replace(/\s+/gu, ' ').trim()
+}
+
+/** One template match: the captured name when the template declares a capture. */
+export interface TriggerCapture {
+  readonly capture?: string
+}
+
+/**
+ * Match one normalized command against a `match.command` template. A template
+ * with `{name}` matches its literal prefix and suffix and captures one
+ * unquoted, validated change name; a template without a capture is compared
+ * literally and behaves as before.
+ */
+export function matchCommandTemplate(
+  template: string,
+  command: string,
+): TriggerCapture | undefined {
+  const normalized = normalizeCommand(command)
+  if (normalized === undefined) return undefined
+  const collapsed = template.replace(/\s+/gu, ' ').trim()
+  const at = collapsed.indexOf(NAME_CAPTURE)
+  if (at < 0) return normalized === collapsed ? {} : undefined
+  // Keep the literal separators: a capture is one complete token between them,
+  // so `openspec new changeauth` cannot match `openspec new change {name}`.
+  const prefix = collapsed.slice(0, at)
+  const suffix = collapsed.slice(at + NAME_CAPTURE.length)
+  if (!normalized.startsWith(prefix) || !normalized.endsWith(suffix)) return undefined
+  if (normalized.length < prefix.length + suffix.length) return undefined
+  const middle = normalized.slice(prefix.length, normalized.length - suffix.length)
+  const name = nameOf(middle)
+  return name === undefined ? undefined : { capture: name }
+}
+
+/**
+ * Match one workspace path against a `match.path` glob. The single `{name}`
+ * segment captures one validated change name; every other segment keeps the
+ * existing glob syntax.
+ */
+export function matchPathTemplate(pattern: string, path: string): TriggerCapture | undefined {
+  if (!pattern.includes(NAME_CAPTURE)) {
+    return globMatches(pattern, path) ? {} : undefined
+  }
+  const patternSegments = pattern.split('/')
+  const pathSegments = path.split('/')
+  let capture: string | undefined
+  const walk = (patternIndex: number, pathIndex: number): boolean => {
+    if (patternIndex === patternSegments.length) return pathIndex === pathSegments.length
+    const segment = patternSegments[patternIndex]
+    if (segment === '**') {
+      for (let index = pathIndex; index <= pathSegments.length; index += 1) {
+        if (walk(patternIndex + 1, index)) return true
+      }
+      return false
+    }
+    if (pathIndex >= pathSegments.length) return false
+    const value = pathSegments[pathIndex] ?? ''
+    if (segment === NAME_CAPTURE) {
+      if (capture !== undefined || !CHANGE_NAME.test(value)) return false
+      const previous = capture
+      capture = value
+      if (walk(patternIndex + 1, pathIndex + 1)) return true
+      capture = previous
+      return false
+    }
+    return segmentGlobMatches(segment ?? '', value) && walk(patternIndex + 1, pathIndex + 1)
+  }
+  return walk(0, 0) ? (capture === undefined ? {} : { capture }) : undefined
 }
 
 /** The archive directory a move must target. */

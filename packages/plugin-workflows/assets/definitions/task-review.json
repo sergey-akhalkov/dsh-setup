@@ -6,7 +6,7 @@
   "version": 1,
   "trigger": {
     "kind": "fs.change",
-    "match": { "path": "openspec/changes/**/tasks.md" },
+    "match": { "path": "openspec/changes/{name}/tasks.md" },
     "mode": "active",
     "dedupe": "path+content-hash"
   },

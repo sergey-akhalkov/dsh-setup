@@ -2,11 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import {
-  type Definition,
-  loadShippedDefinitions,
-  validateDefinition,
-} from '../src/host/definitions.ts'
+import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import { collectEvidencePaths } from '../src/host/evidence.ts'
 import {
   adaptUserQuestions,
@@ -35,6 +31,7 @@ import {
   writeRun,
 } from '../src/host/runs.ts'
 import type { SteerTarget } from '../src/host/steer.ts'
+import { contributedIntake } from './intake-definition.ts'
 
 const definition: Definition = validateDefinition({
   v: 1,
@@ -391,9 +388,7 @@ describe('tool executor', () => {
         return owned.has(request.callId) ? { ok: true } : { ok: false, error: 'not owned' }
       },
     }
-    const shipped = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-    expect(shipped).toBeDefined()
-    if (shipped === undefined) return
+    const shipped = contributedIntake()
     const step = shipped.steps.find((entry) => entry.id === 'create-change')
     expect(step).toBeDefined()
     if (step === undefined) return

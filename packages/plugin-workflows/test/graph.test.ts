@@ -19,9 +19,11 @@ import {
 const packageDir = join(import.meta.dirname, '..')
 
 function template(name: string): GraphDefinition {
-  return JSON.parse(
-    readFileSync(join(packageDir, 'assets', 'definitions', `${name}.json`), 'utf8'),
-  ) as GraphDefinition
+  const file =
+    name === 'change-intake'
+      ? join(packageDir, '..', 'plugin-openspec', 'assets', 'workflows', `${name}.json`)
+      : join(packageDir, 'assets', 'definitions', `${name}.json`)
+  return JSON.parse(readFileSync(file, 'utf8')) as GraphDefinition
 }
 
 function baseDefinition(overrides: Partial<GraphDefinition> = {}): GraphDefinition {

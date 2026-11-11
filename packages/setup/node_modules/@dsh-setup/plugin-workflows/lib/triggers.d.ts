@@ -1,4 +1,4 @@
-import type { Definition, DefinitionTrigger, DefinitionTriggerKind, ObligationEventKind, TriggerCommand } from './definitions.js';
+import type { Definition, DefinitionTrigger, DefinitionTriggerKind, ObligationEventKind } from './definitions.js';
 /**
  * The shipped shadow trigger catalog. Triggers are data only: loading,
  * validating, and evaluating them never registers a tool or steers a turn.
@@ -53,8 +53,9 @@ export interface DefinitionEvent {
     readonly session?: string;
     readonly turn?: number;
     readonly tool?: string;
-    readonly command?: TriggerCommand;
-    /** The parsed change name for `openspec new change` and archive events. */
+    /** The raw observed command; a `match.command` template normalizes it. */
+    readonly command?: string;
+    /** An engine-provided change name hint; a matched capture takes precedence. */
     readonly name?: string;
     readonly path?: string;
     readonly verdict?: string;
@@ -68,6 +69,8 @@ export interface DefinitionEvaluation {
     readonly trigger: DefinitionTriggerKind;
     readonly matched: boolean;
     readonly reason: ObligationReason;
+    /** The name captured from the matched command template or path glob. */
+    readonly capture?: string;
     readonly path?: string;
     readonly filter?: string;
     readonly detail?: string;
@@ -86,9 +89,9 @@ export interface DefinitionEvaluationContext {
 /**
  * The de-duplication identity for one definition trigger and event. It always
  * includes the definition, the trigger policy, and the session; the subject is
- * the turn, the path and content hash, the call id, or the parsed name.
+ * the turn, the path and content hash, the call id, or the captured name.
  */
-export declare function obligationDedupeKey(definition: string, trigger: DefinitionTrigger, event: DefinitionEvent): string | undefined;
+export declare function obligationDedupeKey(definition: string, trigger: DefinitionTrigger, event: DefinitionEvent, capture?: string): string | undefined;
 /** Evaluate one definition's trigger against one event. Pure and contained. */
 export declare function evaluateDefinitionTrigger(definition: Definition, event: DefinitionEvent, context: DefinitionEvaluationContext): DefinitionEvaluation;
 export interface StartRunOutcome {
@@ -99,7 +102,7 @@ export interface StartRunOutcome {
 export interface DefinitionRouterContext extends DefinitionEvaluationContext {
     readonly resolveApplicability?: (definition: Definition, event: DefinitionEvent) => boolean | undefined;
     readonly markKey?: (key: string) => void;
-    readonly startRun?: (definition: Definition, event: DefinitionEvent) => StartRunOutcome;
+    readonly startRun?: (definition: Definition, event: DefinitionEvent, capture?: string) => StartRunOutcome;
 }
 /**
  * Evaluate every loaded definition for one event. A shadow match records

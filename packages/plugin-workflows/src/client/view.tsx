@@ -267,11 +267,17 @@ export async function readDefinitionDocument(
   session: string,
   definitionId: string,
 ): Promise<DefinitionView> {
-  const body = await requestJson<{ definition?: DefinitionView }>(
-    definitionsUrl(session, definitionId),
-  )
+  const body = await requestJson<{
+    definition?: DefinitionView
+    source?: string
+    plugin?: string
+  }>(definitionsUrl(session, definitionId))
   if (body.definition === undefined) throw new Error('the definition document is missing')
-  return body.definition
+  return {
+    ...body.definition,
+    ...(body.source === undefined ? {} : { source: body.source }),
+    ...(body.plugin === undefined ? {} : { plugin: body.plugin }),
+  }
 }
 
 /** Re-read the workflow page's run pages, newest first. */

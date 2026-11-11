@@ -46,7 +46,7 @@ export interface EvaluationContext {
 }
 
 /** One glob segment, where `*` matches any run of non-slash characters. */
-function segmentMatches(pattern: string, value: string): boolean {
+export function segmentGlobMatches(pattern: string, value: string): boolean {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/gu, '\\$&')
     .replaceAll('*', '[^/]*')
@@ -71,7 +71,7 @@ export function globMatches(pattern: string, path: string): boolean {
     const candidate = pathSegments[pathIndex]
     return (
       candidate !== undefined &&
-      segmentMatches(segment ?? '', candidate) &&
+      segmentGlobMatches(segment ?? '', candidate) &&
       walk(patternIndex + 1, pathIndex + 1)
     )
   }

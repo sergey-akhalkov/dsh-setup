@@ -25,6 +25,7 @@ import {
 } from '../src/host/runs.ts'
 import { renderMainSteer } from '../src/host/steer.ts'
 import { taskIdOf } from '../src/host/tasks.ts'
+import { contributedIntake } from './intake-definition.ts'
 
 const TEMP_DIRECTORIES: string[] = []
 
@@ -150,9 +151,7 @@ describe('intake drafts', () => {
 
 describe('change-intake engine', () => {
   function intakeDefinition(): Definition {
-    const definition = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-    if (definition === undefined) throw new Error('the change-intake definition is missing')
-    return definition
+    return contributedIntake()
   }
 
   function newRun(definition: Definition, workspace: string): WorkflowRun {
@@ -454,9 +453,7 @@ describe('end-to-end intake receipt', () => {
     const workspace = await tempWorkspace()
     const auth = HostAuth.fromKey('test-intake-host-key-0123456789')
     const definition = (() => {
-      const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-      if (found === undefined) throw new Error('the change-intake definition is missing')
-      return found
+      return contributedIntake()
     })()
     const digest = 'a'.repeat(64)
     const runId = 'run-intake-e2e'
@@ -506,9 +503,7 @@ describe('end-to-end intake receipt', () => {
 })
 
 it('keeps the evidence contract when the prompt exceeds the steer budget', () => {
-  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-  if (found === undefined) throw new Error('the change-intake definition is missing')
-  const definition = found
+  const definition = contributedIntake()
   const base = definition.steps[0] as (typeof definition.steps)[number]
   const step = { ...base, prompt: 'x'.repeat(5_000) }
   const run = createRun({
@@ -531,9 +526,7 @@ it('keeps the evidence contract when the prompt exceeds the steer budget', () =>
 })
 
 it('does not redact a validated evidence path', () => {
-  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-  if (found === undefined) throw new Error('the change-intake definition is missing')
-  const definition = found
+  const definition = contributedIntake()
   const base = definition.steps[0] as (typeof definition.steps)[number]
   const path = '.dsh/workflows/drafts/auth/basic requirements.md'
   const step = {
@@ -557,9 +550,7 @@ it('does not redact a validated evidence path', () => {
   expect(text).toContain(path)
 })
 it('keeps the contract when prompt redaction expands the text', () => {
-  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-  if (found === undefined) throw new Error('the change-intake definition is missing')
-  const definition = found
+  const definition = contributedIntake()
   const base = definition.steps[0] as (typeof definition.steps)[number]
   const step = {
     ...base,
@@ -584,9 +575,7 @@ it('keeps the contract when prompt redaction expands the text', () => {
 })
 
 it('renders the resolved record task id in a main steer', () => {
-  const found = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-  if (found === undefined) throw new Error('the change-intake definition is missing')
-  const definition = found
+  const definition = contributedIntake()
   const base = definition.steps[0] as (typeof definition.steps)[number]
   const step = {
     ...base,

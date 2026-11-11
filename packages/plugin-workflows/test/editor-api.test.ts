@@ -19,6 +19,7 @@ import {
   validateLayout,
 } from '../src/host/editor-api.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
+import { definitionsRegistry } from '../src/host/registry.ts'
 import { createRun, setRunStatus, writeRun } from '../src/host/runs.ts'
 
 const TEMP_DIRECTORIES: string[] = []
@@ -137,11 +138,11 @@ describe('editor read API', () => {
     const shipped = (listed.body.definitions as { source: string }[]).filter(
       (entry) => entry.source === 'shipped',
     )
-    expect(shipped.length).toBeGreaterThanOrEqual(3)
-    expect(
-      (shipped as { id?: string; trigger?: string }[]).find((entry) => entry.id === 'change-intake')
-        ?.trigger,
-    ).toBe('tool.pre-execute')
+    expect(shipped.map((entry) => (entry as { id?: string }).id)).toEqual([
+      'retro',
+      'task-review',
+      'verify',
+    ])
 
     const installedRevision = await install(routes)
     const after = await call(routes, EDITOR_DEFINITIONS_ROUTE)
@@ -160,7 +161,7 @@ describe('editor read API', () => {
     const templateIds = (templates.body.templates as { id: string; stepCount: number }[]).map(
       (entry) => entry.id,
     )
-    expect(templateIds).toEqual(expect.arrayContaining(['change-intake', 'task-review', 'retro']))
+    expect(templateIds).toEqual(expect.arrayContaining(['task-review', 'retro', 'verify']))
     expect(templates.body.templates).toEqual(
       expect.arrayContaining([expect.objectContaining({ stepCount: expect.any(Number) })]),
     )
@@ -172,17 +173,17 @@ describe('editor read API', () => {
     const missing = await call(routes, EDITOR_DEFINITION_ROUTE, { query: { id: 'nope' } })
     expect(missing.status).toBe(404)
     const shippedRead = await call(routes, EDITOR_DEFINITION_ROUTE, {
-      query: { id: 'change-intake' },
+      query: { id: 'task-review' },
     })
     expect(shippedRead.body).toMatchObject({ revision: null, source: 'shipped' })
     expect(shippedRead.body.definition).toEqual(
-      loadShippedDefinitions().find((entry) => entry.id === 'change-intake'),
+      loadShippedDefinitions().find((entry) => entry.id === 'task-review'),
     )
     expect(templates.body.templates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: 'change-intake',
-          definition: expect.objectContaining({ id: 'change-intake', steps: expect.any(Array) }),
+          id: 'task-review',
+          definition: expect.objectContaining({ id: 'task-review', steps: expect.any(Array) }),
         }),
       ]),
     )
@@ -200,6 +201,38 @@ describe('editor read API', () => {
 })
 
 describe('literal read routes', () => {
+  it('lists a plugin contribution read-only with its plugin source', async () => {
+    const workspace = await tempWorkspace()
+    const routes = createEditorRoutes(services(workspace))
+    const contributed = { ...DEFINITION, id: 'acme-flow', name: 'Acme flow' }
+    const dispose = definitionsRegistry.register({
+      source: '@acme/plugin',
+      definitions: [contributed],
+      triggers: [],
+    })
+    try {
+      const listed = await call(routes, EDITOR_DEFINITIONS_ROUTE)
+      const entry = (listed.body.definitions as Array<Record<string, unknown>>).find(
+        (row) => row.id === 'acme-flow',
+      )
+      expect(entry).toMatchObject({
+        source: 'plugin',
+        plugin: '@acme/plugin',
+        revision: null,
+      })
+      const templates = await call(routes, EDITOR_TEMPLATES_ROUTE)
+      expect(
+        (templates.body.templates as Array<Record<string, unknown>>).find(
+          (row) => row.id === 'acme-flow',
+        ),
+      ).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
+      const document = await call(routes, EDITOR_DEFINITION_ROUTE, { query: { id: 'acme-flow' } })
+      expect(document.body).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
+    } finally {
+      dispose()
+    }
+  })
+
   it('serves templates and definitions with revisions and one document by id', async () => {
     const workspace = await tempWorkspace()
     const readRoutes = createWorkflowRoutes({
@@ -265,9 +298,9 @@ describe('literal read routes', () => {
     expect(templates.status).toBe(200)
     expect(
       (templates.body.templates as { id: string; definition: { id: string } }[]).find(
-        (entry) => entry.id === 'change-intake',
+        (entry) => entry.id === 'task-review',
       )?.definition.id,
-    ).toBe('change-intake')
+    ).toBe('task-review')
     const listed = await fetchRoute(DEFINITIONS_ROUTE)
     expect(listed.status).toBe(200)
     const listedLocal = (

@@ -74,9 +74,10 @@ export interface ApprovedDefinitions {
     readonly errors: readonly string[];
 }
 /**
- * Load the shipped definitions plus the approved local ones. A local file is
+ * Load the installed definitions plus the approved local ones. A local file is
  * considered only when its id has a valid host approval for its exact content
- * hash; an approved local id overrides the shipped definition. The drafts
+ * hash; an approved local id overrides the installed definition. A local copy
+ * that drops or weakens a declared pre-execute gate is refused. The drafts
  * directory is never read.
  */
 export declare function loadApprovedDefinitions(workspace: string, options: {

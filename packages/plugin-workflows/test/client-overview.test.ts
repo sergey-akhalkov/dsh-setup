@@ -136,6 +136,8 @@ const DEFINITIONS = [
     name: 'OpenSpec change intake',
     version: 1,
     risk: 'low',
+    source: 'plugin',
+    plugin: '@dsh-setup/plugin-openspec',
     trigger: { kind: 'tool.pre-execute', mode: 'active', match: { tool: 'shell' } },
   },
   {
@@ -143,6 +145,7 @@ const DEFINITIONS = [
     name: 'Task review',
     version: 1,
     risk: 'medium',
+    source: 'shipped',
     trigger: { kind: 'fs.change', mode: 'shadow', match: { path: 'openspec/changes/**' } },
   },
   {
@@ -519,6 +522,8 @@ describe('overview and workflow page render', () => {
     const rendered = elements(tree)
     const body = text(tree)
     expect(body).toContain('OpenSpec change intake')
+    expect(body).toContain('definitions.source: plugin:@dsh-setup/plugin-openspec')
+    expect(body).toContain('definitions.source: shipped')
     expect(body).toContain('2 / 3 overview.firings')
     expect(body).toContain('1 / 1 overview.firings')
     expect(body).toContain('3 / 5 overview.runs')
@@ -607,6 +612,9 @@ describe('overview and workflow page render', () => {
     expect(body).toContain('v1')
     expect(body).toContain('definitions.risk')
     expect(body).toContain('workflow.gateOwnership')
+    // The fact is a <dt>/<dd> pair, so the label and value are separate nodes.
+    expect(body).toContain('definitions.source')
+    expect(body).toContain('plugin:@dsh-setup/plugin-openspec')
     expect(body).toContain('2 / 3 overview.firings')
     expect(body).toContain('workflow.architecture')
     expect(body).toContain('next: two')

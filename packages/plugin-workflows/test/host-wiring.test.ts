@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -24,8 +25,29 @@ vi.mock('../src/host/parity.ts', async (importOriginal) => {
 })
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadApprovedDefinitions } from '../src/host/approval-store.ts'
 import { apply, definitionEventsOf, inject } from '../src/host/index.ts'
+import { definitionsRegistry } from '../src/host/registry.ts'
+
+// The real profile installs the OpenSpec plugin beside the engine; these host
+// tests register its read-only contribution the same way the plugin does.
+const OPENSPEC_WORKFLOW_ASSETS = join(
+  fileURLToPath(new URL('..', import.meta.url)),
+  '..',
+  'plugin-openspec',
+  'assets',
+  'workflows',
+)
+definitionsRegistry.register({
+  source: '@dsh-setup/plugin-openspec',
+  definitions: [
+    JSON.parse(readFileSync(join(OPENSPEC_WORKFLOW_ASSETS, 'change-intake.json'), 'utf8')),
+  ],
+  triggers: (
+    JSON.parse(readFileSync(join(OPENSPEC_WORKFLOW_ASSETS, 'triggers.json'), 'utf8')) as {
+      triggers: unknown[]
+    }
+  ).triggers,
+})
 
 /**
  * Host-level regression for the engine wiring: a `tools/pre-execute` call for
@@ -135,6 +157,7 @@ function fakeHost(
   fireFs(error?: Error): void
 } {
   const listeners = new Map<string, Listener[]>()
+  const provided = new Map<string, unknown>()
   const fsWatchers: Array<(error?: Error) => void> = []
   const steers: unknown[] = []
   const toolExecutions: Array<{
@@ -306,7 +329,11 @@ function fakeHost(
           },
         }
       }
+      if (provided.has(name)) return provided.get(name)
       return undefined
+    },
+    provide(name: string, value: unknown): void {
+      provided.set(name, value)
     },
     on(name: string, listener: Listener): () => void {
       const list = listeners.get(name) ?? []
@@ -2026,19 +2053,10 @@ describe('pre-execute trigger gates', () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
   }
 
-  function intakeRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-    return rows.flatMap((entry) =>
-      Array.isArray(entry.triggers)
-        ? (entry.triggers as Array<Record<string, unknown>>).filter(
-            (row) => row.id === 'definition:change-intake',
-          )
-        : [],
-    )
-  }
-
-  it('does not create an intake run for a shadow or session-filtered trigger', async () => {
-    // A shadow local override of change-intake and a session-filtered local
-    // definition are installed through the host path before the plugin loads.
+  it('does not start a run for a shadow or session-filtered trigger', async () => {
+    // Two local definitions that match a non-intake command: the shadow one
+    // evaluates but acts on nothing, and the session-filtered one never sees
+    // this session. Neither declares the intake gate.
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const { installDefinition } = await import('../src/host/approval-store.ts')
@@ -2046,12 +2064,12 @@ describe('pre-execute trigger gates', () => {
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
     const shadow = {
       v: 1,
-      id: 'change-intake',
-      name: 'Shadow intake override',
+      id: 'shadow-watch',
+      name: 'Shadow watch',
       version: 1,
       trigger: {
         kind: 'tool.pre-execute',
-        match: { tool: 'shell', command: 'openspec new change <name>' },
+        match: { tool: 'shell', command: 'acme watch {name}' },
         mode: 'shadow',
         dedupe: 'name',
       },
@@ -2073,68 +2091,53 @@ describe('pre-execute trigger gates', () => {
         },
       ],
     }
-    await import('node:fs/promises').then(async ({ writeFile: write }) => {
-      await write(join(workspace, 'shadow.json'), `${JSON.stringify(shadow, null, 2)}\n`, 'utf8')
-    })
-    await installDefinition(workspace, join(workspace, 'shadow.json'), auth)
-    // A session-filtered active definition for the same command.
     const filtered = {
       ...shadow,
-      id: 'filtered-intake',
-      name: 'Filtered intake',
+      id: 'filtered-watch',
+      name: 'Filtered watch',
       trigger: { ...shadow.trigger, mode: 'active', match: { session: 'another-session' } },
-      steps: shadow.steps.map((step) => ({ ...step, id: 'filtered-only' })),
     }
-    await import('node:fs/promises').then(async ({ writeFile: write }) => {
-      await write(
-        join(workspace, 'filtered.json'),
-        `${JSON.stringify(filtered, null, 2)}\n`,
-        'utf8',
-      )
-    })
-    await installDefinition(workspace, join(workspace, 'filtered.json'), auth)
-    const loaded = await loadApprovedDefinitions(workspace, { auth })
-    expect(loaded.definitions.find((entry) => entry.id === 'change-intake')?.trigger.mode).toBe(
-      'shadow',
-    )
+    for (const [file, definition] of [
+      ['shadow.json', shadow],
+      ['filtered.json', filtered],
+    ] as const) {
+      await writeFile(join(workspace, file), `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
+      await installDefinition(workspace, join(workspace, file), auth)
+    }
     const host = fakeHost(workspace)
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
-    let nextCalled = false
-    await host.emit(
-      'tools/pre-execute',
-      {
-        agent: host.agent,
-        callId: 'call-shadow',
-        name: 'pwsh',
-        arguments: { command: 'openspec new change shadow-auth' },
-      },
-      async () => {
-        nextCalled = true
-        return { kind: 'continue' }
-      },
-    )
-    await waitFor(async () => (await journalRows(workspace)).length > 0)
-    const rows = await journalRows(workspace)
-    expect(nextCalled).toBe(true)
-    expect(intakeRows(rows).some((row) => row.reason === 'would-fire')).toBe(true)
-    await host.emit(
-      'tools/pre-execute',
-      {
-        agent: host.agent,
-        callId: 'call-shadow-2',
-        name: 'pwsh',
-        arguments: { command: 'openspec new change shadow-auth' },
-      },
-      async () => ({ kind: 'continue' }),
-    )
+    const call = async (callId: string, command: string): Promise<unknown> =>
+      host.emit(
+        'tools/pre-execute',
+        { agent: host.agent, callId, name: 'pwsh', arguments: { command } },
+        async () => ({ kind: 'continue' }),
+      )
+    expect((await call('call-shadow', 'acme watch auth')) as { kind?: string }).toMatchObject({
+      kind: 'continue',
+    })
     await waitFor(async () =>
-      intakeRows(await journalRows(workspace)).some((row) => row.reason === 'dedupe'),
+      (await journalRows(workspace)).some((entry) =>
+        Array.isArray(entry.triggers)
+          ? (entry.triggers as Array<Record<string, unknown>>).some(
+              (row) => row.id === 'definition:shadow-watch' && row.reason === 'would-fire',
+            )
+          : false,
+      ),
     )
-    expect(intakeRows(await journalRows(workspace)).some((row) => row.reason === 'dedupe')).toBe(
-      true,
+    await call('call-shadow-2', 'acme watch auth')
+    await waitFor(async () =>
+      (await journalRows(workspace)).some((entry) =>
+        Array.isArray(entry.triggers)
+          ? (entry.triggers as Array<Record<string, unknown>>).some(
+              (row) => row.id === 'definition:shadow-watch' && row.reason === 'dedupe',
+            )
+          : false,
+      ),
     )
-    expect(intakeRows(rows).some((row) => row.reason === 'run-created')).toBe(false)
+    await call('call-filtered', 'acme watch auth')
+    const runs = await readdir(join(workspace, '.dsh', 'workflows', 'runs')).catch(() => [])
+    expect(runs.filter((entry) => entry.endsWith('.json'))).toHaveLength(0)
   })
 
   it('refuses a second call while the intake run is in progress and starts no second run', async () => {
@@ -2165,6 +2168,289 @@ describe('pre-execute trigger gates', () => {
       ),
     )
     expect(runs).toHaveLength(1)
+  })
+
+  function customGated(id: string, command: string): Record<string, unknown> {
+    return {
+      v: 1,
+      id,
+      name: id,
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'shell', command },
+        mode: 'active',
+        dedupe: 'name',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+        allowTools: ['shell'],
+        gate: 'intake',
+      },
+      steps: [
+        {
+          id: 'requirements',
+          title: 'Requirements',
+          executor: 'main',
+          prompt: 'Write the requirements.',
+          evidence: { kind: 'file', path: '.dsh/workflows/drafts/{name}/requirements.md' },
+          next: 'create-change',
+          blockTurnClose: true,
+        },
+        {
+          id: 'create-change',
+          title: 'Create',
+          executor: 'tool',
+          tool: { name: 'shell', command },
+          evidence: { kind: 'tool', name: 'shell' },
+          next: 'end',
+          blockTurnClose: true,
+        },
+      ],
+    }
+  }
+
+  it('runs a differently named gated definition through the public registry service', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const service = host.ctx.get('workflowsDefinitions') as
+      | { register(contribution: unknown): () => void }
+      | undefined
+    expect(service).toBeDefined()
+    const dispose = service?.register({
+      source: '@acme/plugin',
+      definitions: [customGated('custom-intake', 'acme intake {name}')],
+      triggers: [],
+    })
+    try {
+      const call = async (callId: string): Promise<{ kind?: string; reason?: string }> =>
+        (await host.emit(
+          'tools/pre-execute',
+          {
+            agent: host.agent,
+            callId,
+            name: 'pwsh',
+            arguments: { command: 'acme intake auth' },
+          },
+          async () => ({ kind: 'continue' }),
+        )) as { kind?: string; reason?: string }
+      const first = await call('call-custom-1')
+      expect(first.kind).toBe('deny')
+      const runs = await import('../src/host/runs.ts')
+      const auth = (await import('../src/host/host-auth.ts')).HostAuth.fromKey(
+        Buffer.from(KEY, 'hex'),
+      )
+      const stored = await runs.listAuthenticatedRuns(workspace, auth)
+      const run = stored.find((entry) => entry.definition.id === 'custom-intake')
+      expect(run?.context.name).toBe('auth')
+      if (run === undefined) return
+
+      const repeated = await call('call-custom-2')
+      expect(repeated.kind).toBe('deny')
+      expect(repeated.reason).toContain('already in progress')
+
+      await runs.writeRun(workspace, runs.setRunStatus(run, 'interrupted', 2_000), auth)
+      const resumed = await call('call-custom-3')
+      expect(resumed.kind).toBe('deny')
+      expect(resumed.reason).toContain('resumed')
+      expect(resumed.reason).toContain(run.id)
+
+      let completed = runs.setRunStatus(run, 'running', 2_100)
+      for (const step of completed.steps) {
+        completed = runs.settleStep(completed, step.id, 'done', { at: 2_200 })
+      }
+      completed = runs.setRunStatus(completed, 'completed', 2_300)
+      await runs.writeRun(workspace, completed, auth)
+      // An allow continues the command and creates no second run.
+      const allowed = await call('call-custom-4')
+      expect(allowed.kind).toBe('continue')
+      const storedAfter = await runs.listAuthenticatedRuns(workspace, auth)
+      expect(storedAfter.filter((entry) => entry.definition.id === 'custom-intake')).toHaveLength(1)
+    } finally {
+      dispose?.()
+    }
+  })
+
+  it('keeps an earlier gate denial when a later gated definition is completed', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const service = host.ctx.get('workflowsDefinitions') as
+      | { register(contribution: unknown): () => void }
+      | undefined
+    expect(service).toBeDefined()
+    const dispose = service?.register({
+      source: '@acme/plugin',
+      definitions: [
+        customGated('intake-a', 'acme policy {name}'),
+        customGated('intake-b', 'acme policy {name}'),
+      ],
+      triggers: [],
+    })
+    try {
+      const call = async (callId: string): Promise<{ kind?: string; reason?: string }> =>
+        (await host.emit(
+          'tools/pre-execute',
+          {
+            agent: host.agent,
+            callId,
+            name: 'pwsh',
+            arguments: { command: 'acme policy auth' },
+          },
+          async () => ({ kind: 'continue' }),
+        )) as { kind?: string; reason?: string }
+      expect((await call('call-policy-1')).kind).toBe('deny')
+      const runs = await import('../src/host/runs.ts')
+      const auth = (await import('../src/host/host-auth.ts')).HostAuth.fromKey(
+        Buffer.from(KEY, 'hex'),
+      )
+      const stored = await runs.listAuthenticatedRuns(workspace, auth)
+      const later = stored.find((entry) => entry.definition.id === 'intake-b')
+      if (later === undefined) throw new Error('the later gated run was not created')
+      let completed = runs.setRunStatus(later, 'running', 2_100)
+      for (const step of completed.steps) {
+        completed = runs.settleStep(completed, step.id, 'done', { at: 2_200 })
+      }
+      completed = runs.setRunStatus(completed, 'completed', 2_300)
+      await runs.writeRun(workspace, completed, auth)
+
+      // The first definition's run is still running, so its gate must deny even
+      // though the later definition's completed run would allow the call.
+      const decision = await call('call-policy-2')
+      expect(decision.kind).toBe('deny')
+      expect(decision.reason).toContain('already in progress')
+    } finally {
+      dispose?.()
+    }
+  })
+
+  it('applies the intake gate to rtk and pnpm exec prefixed calls', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const call = async (callId: string, command: string): Promise<{ kind?: string }> =>
+      (await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId,
+          name: 'pwsh',
+          arguments: { command },
+        },
+        async () => ({ kind: 'continue' }),
+      )) as { kind?: string }
+    for (const [callId, command] of [
+      ['call-rtk', 'rtk openspec new change auth-rtk'],
+      ['call-pnpm', 'pnpm exec openspec new change auth-pnpm'],
+      ['call-tab', 'openspec\tnew change auth-tab'],
+    ] as const) {
+      const decision = await call(callId, command)
+      expect(decision.kind).toBe('deny')
+      expect((decision as { reason?: string }).reason).toContain('intake run')
+    }
+    const runs = await import('node:fs/promises').then(async ({ readdir }) =>
+      (await readdir(join(workspace, '.dsh', 'workflows', 'runs'))).filter((entry) =>
+        entry.endsWith('.json'),
+      ),
+    )
+    expect(runs).toHaveLength(3)
+  })
+
+  it('loads a contribution registered after the workspace definitions were cached', async () => {
+    process.env.DSH_WORKFLOWS_HOST_KEY = KEY
+    const workspace = await tempWorkspace()
+    const host = fakeHost(workspace)
+    apply(host.ctx as never)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // The first call loads and caches this workspace's definitions.
+    await host.emit(
+      'tools/pre-execute',
+      {
+        agent: host.agent,
+        callId: 'call-before-contribution',
+        name: 'pwsh',
+        arguments: { command: 'openspec new change auth' },
+      },
+      async () => ({ kind: 'continue' }),
+    )
+    const definition = {
+      v: 1,
+      id: 'acme-deploy',
+      name: 'Acme deploy',
+      version: 1,
+      trigger: {
+        kind: 'tool.pre-execute',
+        match: { tool: 'shell', command: 'acme deploy {name}' },
+        mode: 'active',
+        dedupe: 'name',
+      },
+      settings: {
+        allowModelStart: false,
+        risk: 'low',
+        gateOwnership: 'own',
+        maxBlocks: 3,
+        allowIntent: false,
+      },
+      steps: [
+        {
+          id: 'only',
+          title: 'Only',
+          executor: 'main',
+          prompt: 'Do.',
+          evidence: { kind: 'file', path: 'out.md' },
+          next: 'end',
+        },
+      ],
+    }
+    const dispose = definitionsRegistry.register({
+      source: '@acme/plugin',
+      definitions: [definition],
+      triggers: [],
+    })
+    try {
+      await host.emit(
+        'tools/pre-execute',
+        {
+          agent: host.agent,
+          callId: 'call-after-contribution',
+          name: 'pwsh',
+          arguments: { command: 'acme deploy auth' },
+        },
+        async () => ({ kind: 'continue' }),
+      )
+      await waitFor(async () =>
+        (await journalRows(workspace)).some((entry) =>
+          Array.isArray(entry.triggers)
+            ? (entry.triggers as Array<Record<string, unknown>>).some(
+                (row) => row.id === 'definition:acme-deploy' && row.reason === 'run-created',
+              )
+            : false,
+        ),
+      )
+      const rows = await journalRows(workspace)
+      expect(
+        rows.some((entry) =>
+          Array.isArray(entry.triggers)
+            ? (entry.triggers as Array<Record<string, unknown>>).some(
+                (row) => row.id === 'definition:acme-deploy' && row.reason === 'run-created',
+              )
+            : false,
+        ),
+      ).toBe(true)
+    } finally {
+      dispose()
+    }
   })
 
   it('evaluates a non-intake pre-execute trigger and starts its run', async () => {
@@ -3541,10 +3827,9 @@ describe('deferred step at runtime', () => {
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
-    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
     let run = runs.createRun({
@@ -3600,10 +3885,9 @@ describe('intake runtime', () => {
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
-    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
     const change = join(workspace, 'openspec', 'changes', 'auth')
@@ -3693,10 +3977,9 @@ describe('intake runtime', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
     const receipts = await import('../src/host/receipts.ts')
-    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
     let run = runs.createRun({
@@ -3795,7 +4078,7 @@ it('denies a dot-relative archive move without evidence', async () => {
   expect(nextCalled).toBe(false)
 })
 
-it('carries a filesystem change name into the definition event', () => {
+it('carries a raw filesystem path into the definition event without extracting a name', () => {
   const events = definitionEventsOf(
     {
       at: 1,
@@ -3815,9 +4098,9 @@ it('carries a filesystem change name into the definition event', () => {
   )
   expect(events[0]).toMatchObject({
     kind: 'fs.change',
-    name: 'auth',
     path: 'openspec/changes/auth/tasks.md',
   })
+  expect(events[0]?.name).toBeUndefined()
 })
 
 it('denies a move from the changes subdirectory without evidence', async () => {
@@ -4053,10 +4336,9 @@ describe('intake end-to-end in a fake host', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     const runs = await import('../src/host/runs.ts')
     const receipts = await import('../src/host/receipts.ts')
-    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
     let run = runs.createRun({
@@ -4273,10 +4555,9 @@ describe('/workflows command starts and resumes work', () => {
     apply(host.ctx as never)
     await new Promise((resolve) => setTimeout(resolve, 150))
     const runs = await import('../src/host/runs.ts')
-    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined) return
     const base = runs.createRun({
@@ -5421,10 +5702,9 @@ describe('workflows tool live wiring', () => {
       'adopt',
     ])
     const runs = await import('../src/host/runs.ts')
-    const { loadShippedDefinitions } = await import('../src/host/definitions.ts')
     const { HostAuth } = await import('../src/host/host-auth.ts')
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const intake = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
+    const intake = definitionsRegistry.installed('change-intake')?.definition
     expect(intake).toBeDefined()
     if (intake === undefined || tool === undefined) return
     const base = runs.createRun({

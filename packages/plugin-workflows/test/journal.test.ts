@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import {
   appendFile,
   mkdir,
@@ -14,6 +15,20 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/host/index.ts'
 import { eventsDirectory, Journal } from '../src/host/journal.ts'
+import { definitionsRegistry } from '../src/host/registry.ts'
+import { openspecWorkflowAssets } from './intake-definition.ts'
+
+// The real profile installs the OpenSpec plugin's shadow triggers beside the
+// engine; these tests register that read-only contribution the same way.
+definitionsRegistry.register({
+  source: '@dsh-setup/plugin-openspec',
+  definitions: [],
+  triggers: (
+    JSON.parse(readFileSync(join(openspecWorkflowAssets(), 'triggers.json'), 'utf8')) as {
+      triggers: unknown[]
+    }
+  ).triggers,
+})
 
 type Listener = (...args: unknown[]) => unknown
 

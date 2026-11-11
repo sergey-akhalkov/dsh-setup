@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { matchCommandTemplate, matchPathTemplate } from './command-parse.js'
 import type {
   Definition,
   DefinitionTrigger,
   DefinitionTriggerKind,
   ObligationEventKind,
-  TriggerCommand,
 } from './definitions.js'
 import { globMatches } from './evaluate.js'
 
@@ -51,6 +51,7 @@ export interface Trigger {
 }
 
 const FILTER_KEYS = new Set(['path', 'tool', 'change'])
+const TRIGGER_KEYS = new Set(['id', 'event', 'filter', 'mode', 'dedupe'])
 
 function fail(id: string | undefined, field: string, message: string): never {
   throw new Error(
@@ -95,6 +96,9 @@ export function validateCatalog(raw: unknown): Trigger[] {
       fail(undefined, `triggers[${String(index)}]`, 'must be an object')
     }
     const value = entry as Record<string, unknown>
+    for (const key of Object.keys(value)) {
+      if (!TRIGGER_KEYS.has(key)) fail(undefined, key, 'is not a known field')
+    }
     const id = typeof value.id === 'string' && value.id.trim() !== '' ? value.id : undefined
     if (id === undefined)
       fail(undefined, `triggers[${String(index)}].id`, 'must be a non-empty string')
@@ -189,8 +193,9 @@ export interface DefinitionEvent {
   readonly session?: string
   readonly turn?: number
   readonly tool?: string
-  readonly command?: TriggerCommand
-  /** The parsed change name for `openspec new change` and archive events. */
+  /** The raw observed command; a `match.command` template normalizes it. */
+  readonly command?: string
+  /** An engine-provided change name hint; a matched capture takes precedence. */
   readonly name?: string
   readonly path?: string
   readonly verdict?: string
@@ -205,6 +210,8 @@ export interface DefinitionEvaluation {
   readonly trigger: DefinitionTriggerKind
   readonly matched: boolean
   readonly reason: ObligationReason
+  /** The name captured from the matched command template or path glob. */
+  readonly capture?: string
   readonly path?: string
   readonly filter?: string
   readonly detail?: string
@@ -227,10 +234,18 @@ function toolMatches(filter: string, event: DefinitionEvent): boolean {
   return filter === event.tool
 }
 
-function filterMismatch(
-  trigger: DefinitionTrigger,
-  event: DefinitionEvent,
-): { readonly path?: string; readonly filter: string } | undefined {
+interface FilterMismatch {
+  readonly path?: string
+  readonly filter: string
+}
+
+/** The matched capture and the first filter mismatch, if any. */
+interface TriggerMatchResult {
+  readonly mismatch?: FilterMismatch
+  readonly capture?: string
+}
+
+function filterMismatch(trigger: DefinitionTrigger, event: DefinitionEvent): TriggerMatchResult {
   const match = trigger.match
   if (
     match.workspace !== undefined &&
@@ -239,41 +254,52 @@ function filterMismatch(
       (event.workspace ?? '').replaceAll('\\', '/'),
     )
   ) {
-    return { path: event.workspace, filter: `workspace: ${match.workspace}` }
+    return { mismatch: { path: event.workspace, filter: `workspace: ${match.workspace}` } }
   }
   if (match.session !== undefined && match.session !== event.session) {
-    return { path: event.session, filter: `session: ${match.session}` }
+    return { mismatch: { path: event.session, filter: `session: ${match.session}` } }
   }
   if (match.tool !== undefined && !toolMatches(match.tool, event)) {
-    return { path: event.tool, filter: `tool: ${match.tool}` }
+    return { mismatch: { path: event.tool, filter: `tool: ${match.tool}` } }
   }
-  if (match.command !== undefined && match.command !== event.command) {
-    return { path: event.command, filter: `command: ${match.command}` }
+  let capture: string | undefined
+  if (match.command !== undefined) {
+    const template = matchCommandTemplate(match.command, event.command ?? '')
+    if (template === undefined) {
+      return { mismatch: { path: event.command, filter: `command: ${match.command}` } }
+    }
+    capture = template.capture
   }
-  if (match.path !== undefined && !globMatches(match.path, event.path ?? event.subject)) {
-    return { path: event.path ?? event.subject, filter: `path: ${match.path}` }
+  if (match.path !== undefined) {
+    const target = event.path ?? event.subject
+    const template = matchPathTemplate(match.path, target)
+    if (template === undefined) {
+      return { mismatch: { path: target, filter: `path: ${match.path}` } }
+    }
+    capture ??= template.capture
   }
   if (match.subject !== undefined && match.subject !== event.subject) {
-    return { path: event.subject, filter: `subject: ${match.subject}` }
+    return { mismatch: { path: event.subject, filter: `subject: ${match.subject}` } }
   }
   if (match.verdict !== undefined && match.verdict !== event.verdict) {
-    return { path: event.verdict, filter: `verdict: ${match.verdict}` }
+    return { mismatch: { path: event.verdict, filter: `verdict: ${match.verdict}` } }
   }
   if (match.classifier !== undefined && match.classifier !== event.classifier) {
-    return { path: event.classifier, filter: `classifier: ${match.classifier}` }
+    return { mismatch: { path: event.classifier, filter: `classifier: ${match.classifier}` } }
   }
-  return undefined
+  return capture === undefined ? {} : { capture }
 }
 
 /**
  * The de-duplication identity for one definition trigger and event. It always
  * includes the definition, the trigger policy, and the session; the subject is
- * the turn, the path and content hash, the call id, or the parsed name.
+ * the turn, the path and content hash, the call id, or the captured name.
  */
 export function obligationDedupeKey(
   definition: string,
   trigger: DefinitionTrigger,
   event: DefinitionEvent,
+  capture?: string,
 ): string | undefined {
   const session = event.session ?? ''
   switch (trigger.dedupe) {
@@ -287,9 +313,11 @@ export function obligationDedupeKey(
     case 'callId':
       if (event.callId === undefined) return undefined
       return `${definition}\u0000call\u0000${session}\u0000${event.callId}`
-    case 'name':
-      if (event.name === undefined) return undefined
-      return `${definition}\u0000name\u0000${session}\u0000${event.name}`
+    case 'name': {
+      const name = capture ?? event.name
+      if (name === undefined) return undefined
+      return `${definition}\u0000name\u0000${session}\u0000${name}`
+    }
   }
 }
 
@@ -310,7 +338,8 @@ export function evaluateDefinitionTrigger(
       if (!context.applicability) return { ...base, matched: false, reason: 'not-applicable' }
     }
     if (trigger.kind !== event.kind) return { ...base, matched: false, reason: 'event-mismatch' }
-    const mismatch = filterMismatch(trigger, event)
+    const matched = filterMismatch(trigger, event)
+    const { mismatch } = matched
     if (mismatch !== undefined) {
       return {
         ...base,
@@ -320,11 +349,21 @@ export function evaluateDefinitionTrigger(
         filter: mismatch.filter,
       }
     }
-    const key = obligationDedupeKey(definition.id, trigger, event)
+    const key = obligationDedupeKey(definition.id, trigger, event, matched.capture)
     if (key !== undefined && trigger.repeat !== true && context.isDuplicate(key, definition)) {
-      return { ...base, matched: false, reason: 'dedupe' }
+      return {
+        ...base,
+        matched: false,
+        reason: 'dedupe',
+        ...(matched.capture === undefined ? {} : { capture: matched.capture }),
+      }
     }
-    return { ...base, matched: true, reason: 'would-fire' }
+    return {
+      ...base,
+      matched: true,
+      reason: 'would-fire',
+      ...(matched.capture === undefined ? {} : { capture: matched.capture }),
+    }
   } catch (error) {
     return {
       ...base,
@@ -347,7 +386,11 @@ export interface DefinitionRouterContext extends DefinitionEvaluationContext {
     event: DefinitionEvent,
   ) => boolean | undefined
   readonly markKey?: (key: string) => void
-  readonly startRun?: (definition: Definition, event: DefinitionEvent) => StartRunOutcome
+  readonly startRun?: (
+    definition: Definition,
+    event: DefinitionEvent,
+    capture?: string,
+  ) => StartRunOutcome
 }
 
 /**
@@ -373,13 +416,13 @@ export function evaluateDefinitions(
       rows.push(row)
       continue
     }
-    const key = obligationDedupeKey(definition.id, definition.trigger, event)
+    const key = obligationDedupeKey(definition.id, definition.trigger, event, row.capture)
     if (definition.trigger.mode === 'shadow') {
       if (key !== undefined) context.markKey?.(key)
       rows.push({ ...row, reason: 'would-fire' })
       continue
     }
-    const outcome = context.startRun?.(definition, event)
+    const outcome = context.startRun?.(definition, event, row.capture)
     if (outcome === undefined) {
       rows.push({
         ...row,

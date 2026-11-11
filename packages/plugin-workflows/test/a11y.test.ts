@@ -32,7 +32,10 @@ import {
 const ui = loadClientModules(['canvas.tsx', 'palette.tsx', 'list.tsx', 'design.tsx'])
 
 const DEFINITION = JSON.parse(
-  readFileSync(join(packageDir, 'assets', 'definitions', 'change-intake.json'), 'utf8'),
+  readFileSync(
+    join(packageDir, '..', 'plugin-openspec', 'assets', 'workflows', 'change-intake.json'),
+    'utf8',
+  ),
 ) as GraphDefinition
 
 describe('mode and fallback', () => {

@@ -522,6 +522,8 @@ describe('Workflows Client half', () => {
         filter: { path: 'openspec/changes/**/tasks.md', change: 'created-or-modified' },
         mode: 'shadow',
         dedupe: 'path+content-hash',
+        source: 'plugin',
+        plugin: '@dsh-setup/plugin-openspec',
         last: { at: 1, matched: true, reason: 'would-fire' },
       },
     ]
@@ -530,6 +532,7 @@ describe('Workflows Client half', () => {
     expect(text).toContain('openspec-tasks-checked')
     expect(text).toContain('path: openspec/changes/**/tasks.md')
     expect(text).toContain('would-fire')
+    expect(text).toContain('plugin:@dsh-setup/plugin-openspec')
     const empty = renderTree(module.TriggersTable?.({ triggers: [], t: translate }))
     expect(childText(empty)).toContain('triggers.empty')
   })
@@ -848,7 +851,8 @@ describe('Workflows Client half', () => {
         return response({
           definition: { id: 'change-intake', name: 'Intake', settings: { risk: 'low' } },
           revision: null,
-          source: 'shipped',
+          source: 'plugin',
+          plugin: '@dsh-setup/plugin-openspec',
         })
       }
       if (url.includes('/api/workflows/definitions')) {
@@ -907,6 +911,10 @@ describe('Workflows Client half', () => {
       expect(await module.readRunStats?.('s')).toBeUndefined()
       const document = await module.readDefinitionDocument?.('s', 'change-intake')
       expect(document?.id).toBe('change-intake')
+      expect(document).toMatchObject({
+        source: 'plugin',
+        plugin: '@dsh-setup/plugin-openspec',
+      })
       const runs = await module.readDefinitionRuns?.('s', 'change-intake', 1)
       expect(runs?.items.map((run) => run.id)).toEqual(['workflow:run-1'])
       expect(runs?.next).toBe('9')

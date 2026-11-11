@@ -11,6 +11,7 @@ import {
   UnreportedItemError,
 } from './change-detail.js'
 import { listWorkspaceChanges } from './change-list.js'
+import { registerWorkflowsContribution } from './workflows.js'
 
 /**
  * OpenSpec plugin: registers the six generated core skills from a pinned
@@ -203,6 +204,7 @@ export function apply(ctx: Context): void {
   const guidance = readGuidance()
   ctx.skills.registerProvider(() => createSkillProvider(lock, guidance))
   registerChangeRoute(ctx)
+  registerWorkflowsContribution(ctx)
 }
 
 /**

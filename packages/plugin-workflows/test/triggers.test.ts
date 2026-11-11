@@ -18,22 +18,18 @@ import {
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 
 describe('shadow trigger catalog', () => {
-  it('loads the shipped catalog with every supported event kind', () => {
+  it('loads the shipped generic catalog with every supported event kind', () => {
     const triggers = loadCatalog()
-    expect(triggers.length).toBeGreaterThanOrEqual(9)
+    expect(triggers).toHaveLength(5)
     expect(new Set(triggers.map((trigger) => trigger.id)).size).toBe(triggers.length)
     for (const trigger of triggers) {
       expect(EVENT_KINDS).toContain(trigger.event)
       expect(trigger.mode).toBe('shadow')
       expect(['none', 'path+content-hash']).toContain(trigger.dedupe)
     }
-    expect(triggers.map((trigger) => trigger.event)).toEqual(
-      expect.arrayContaining([...EVENT_KINDS]),
-    )
-    const tasks = triggers.find((trigger) => trigger.id === 'openspec-tasks-checked')
-    expect(tasks?.filter.path).toBe('openspec/changes/**/tasks.md')
-    expect(tasks?.filter.change).toBe('created-or-modified')
-    expect(tasks?.dedupe).toBe('path+content-hash')
+    // The OpenSpec fs.change entries are contributed by the OpenSpec plugin,
+    // not shipped by the engine.
+    expect(triggers.map((trigger) => trigger.id)).not.toContain('openspec-tasks-checked')
   })
 
   it('loads the catalog from the compiled lib layout too', async () => {
@@ -655,4 +651,70 @@ it('enforces an intent session filter', () => {
     reason: 'filter-mismatch',
     filter: 'session: another-session',
   })
+})
+
+it('captures the name from a command template and keys dedupe by it', () => {
+  const definition = obligation('deploy-def', {
+    kind: 'tool.pre-execute',
+    match: { tool: 'shell', command: 'acme deploy {name}' },
+    mode: 'active',
+    dedupe: 'name',
+  })
+  const event: DefinitionEvent = {
+    kind: 'tool.pre-execute',
+    subject: 'shell',
+    tool: 'shell',
+    command: 'rtk acme deploy auth',
+    session: 'session-1',
+  }
+  const seen = new Map<string, number>()
+  const captures: Array<string | undefined> = []
+  const rows = evaluateDefinitions([definition], event, {
+    isDuplicate: (key) => seen.has(key),
+    markKey: (key) => seen.set(key, 1),
+    startRun: (_definition, _event, capture) => {
+      captures.push(capture)
+      return { ok: true }
+    },
+  })
+  expect(rows[0]).toMatchObject({ matched: true, reason: 'run-created', capture: 'auth' })
+  expect(captures).toEqual(['auth'])
+  const key = obligationDedupeKey(definition.id, definition.trigger, event, 'auth')
+  expect(key).toContain('auth')
+  expect(obligationDedupeKey(definition.id, definition.trigger, event)).toBeUndefined()
+  const second = evaluateDefinitions([definition], event, {
+    isDuplicate: (key) => seen.has(key),
+    markKey: (key) => seen.set(key, 1),
+    startRun: () => ({ ok: true }),
+  })
+  expect(second[0]).toMatchObject({ matched: false, reason: 'dedupe' })
+})
+
+it('captures the name from a path glob and passes it to the run start', () => {
+  const definition = obligation('path-def', {
+    kind: 'fs.change',
+    match: { path: 'openspec/changes/{name}/tasks.md' },
+    mode: 'active',
+    dedupe: 'path+content-hash',
+  })
+  const captures: Array<string | undefined> = []
+  const rows = evaluateDefinitions(
+    [definition],
+    {
+      kind: 'fs.change',
+      subject: 'openspec/changes/auth/tasks.md',
+      path: 'openspec/changes/auth/tasks.md',
+      hash: 'abc',
+      session: 'session-1',
+    },
+    {
+      isDuplicate: () => false,
+      startRun: (_definition, _event, capture) => {
+        captures.push(capture)
+        return { ok: true }
+      },
+    },
+  )
+  expect(rows[0]).toMatchObject({ matched: true, reason: 'run-created', capture: 'auth' })
+  expect(captures).toEqual(['auth'])
 })

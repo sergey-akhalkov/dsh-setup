@@ -73,7 +73,7 @@ export interface IntakeGateInput {
     readonly session: string;
     readonly workspace: string;
     readonly callId?: string;
-    /** The loaded `change-intake` definition. */
+    /** The matched definition that declares the intake gate. */
     readonly definition: Definition;
     /** Every authenticated run in the workspace. */
     readonly runs: readonly WorkflowRun[];

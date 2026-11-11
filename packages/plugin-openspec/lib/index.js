@@ -4,6 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listWorkspaceCapabilityRows, readWorkspaceCapability, readWorkspaceChange, UnreportedItemError, } from './change-detail.js';
 import { listWorkspaceChanges } from './change-list.js';
+import { registerWorkflowsContribution } from './workflows.js';
 /**
  * OpenSpec plugin: registers the six generated core skills from a pinned
  * upstream release as on-demand catalog entries in the profile's global skill
@@ -166,6 +167,7 @@ export function apply(ctx) {
     const guidance = readGuidance();
     ctx.skills.registerProvider(() => createSkillProvider(lock, guidance));
     registerChangeRoute(ctx);
+    registerWorkflowsContribution(ctx);
 }
 /**
  * Read-only fetch routes the Client picker and panel ask for the session

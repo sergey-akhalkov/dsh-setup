@@ -23,15 +23,16 @@ export declare const DEDUPE_BY_TRIGGER: Record<DefinitionTriggerKind, readonly D
 /** The one applicability decision a definition may declare for a trigger. */
 export declare const APPLICABILITY_KINDS: readonly ["checkpoint-required", "code-write"];
 export type ApplicabilityKind = (typeof APPLICABILITY_KINDS)[number];
-/** The structured command match an intent trigger accepts. */
-export type TriggerCommand = 'openspec new change <name>' | 'openspec archive <name>';
-export declare const TRIGGER_COMMANDS: readonly TriggerCommand[];
+/** The one capture placeholder a command template or path glob may carry. */
+export declare const NAME_CAPTURE = "{name}";
 /** Filters are exact strings except the two workspace/path globs. */
 export interface TriggerMatch {
     readonly workspace?: string;
     readonly session?: string;
     readonly tool?: string;
-    readonly command?: TriggerCommand;
+    /** A normalized command template carrying at most one `{name}` capture. */
+    readonly command?: string;
+    /** A path glob carrying at most one `{name}` capture. */
     readonly path?: string;
     readonly subject?: string;
     readonly verdict?: string;
@@ -53,6 +54,9 @@ export declare const RISKS: readonly ["low", "medium", "high"];
 export type Risk = (typeof RISKS)[number];
 export declare const GATE_OWNERSHIP: readonly ["own", "defer"];
 export type GateOwnership = (typeof GATE_OWNERSHIP)[number];
+/** The closed pre-execute gate a definition may declare; the engine owns each. */
+export declare const DEFINITION_GATES: readonly ["intake"];
+export type DefinitionGate = (typeof DEFINITION_GATES)[number];
 /** The legacy gate a deferred definition or step defers to. */
 export interface LegacySource {
     readonly plugin: string;
@@ -67,6 +71,8 @@ export interface DefinitionSettings {
     /** Tool names a `tool` step may call. */
     readonly allowTools?: readonly string[];
     readonly legacy?: LegacySource;
+    /** The engine-owned pre-execute gate this definition selects, if any. */
+    readonly gate?: DefinitionGate;
 }
 export declare const EVIDENCE_KINDS: readonly ["file", "record", "tool", "check", "human", "all", "declaration"];
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];

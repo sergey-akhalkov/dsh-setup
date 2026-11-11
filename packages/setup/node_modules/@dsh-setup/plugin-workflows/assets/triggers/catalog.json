@@ -34,34 +34,6 @@
       "filter": {},
       "mode": "shadow",
       "dedupe": "none"
-    },
-    {
-      "id": "openspec-tasks-checked",
-      "event": "fs.change",
-      "filter": { "path": "openspec/changes/**/tasks.md", "change": "created-or-modified" },
-      "mode": "shadow",
-      "dedupe": "path+content-hash"
-    },
-    {
-      "id": "openspec-review-recorded",
-      "event": "fs.change",
-      "filter": { "path": "openspec/changes/**/reviews/*.json", "change": "created-or-modified" },
-      "mode": "shadow",
-      "dedupe": "path+content-hash"
-    },
-    {
-      "id": "openspec-change-created",
-      "event": "fs.change",
-      "filter": { "path": "openspec/changes/*/proposal.md", "change": "created-or-modified" },
-      "mode": "shadow",
-      "dedupe": "path+content-hash"
-    },
-    {
-      "id": "openspec-change-archived",
-      "event": "fs.change",
-      "filter": { "path": "openspec/changes/archive/**", "change": "created-or-modified" },
-      "mode": "shadow",
-      "dedupe": "none"
     }
   ]
 }

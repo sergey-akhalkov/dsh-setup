@@ -53,6 +53,8 @@ export interface TriggerView {
   readonly counts?: TriggerCounts
   /** `workflow-definition` marks the per-definition trigger entries. */
   readonly source?: string
+  /** The contributing plugin package name for a contributed trigger. */
+  readonly plugin?: string
 }
 
 export interface HealthView {
@@ -202,6 +204,9 @@ export interface DefinitionView {
   readonly gateOwnership?: string
   readonly settings?: DefinitionSettingsView
   readonly steps?: readonly DefinitionStepView[]
+  /** `shipped`, `plugin`, or `local`; a plugin entry also names its plugin. */
+  readonly source?: string
+  readonly plugin?: string
 }
 
 /** The definition document route's body for `?id=`. */
@@ -209,6 +214,7 @@ export interface DefinitionDocumentView {
   readonly definition: DefinitionView
   readonly revision?: string | null
   readonly source?: string
+  readonly plugin?: string
 }
 
 /** The per-definition run buckets of the runs route's `stats=1` response. */
@@ -353,6 +359,13 @@ export function TriggersTable(props: {
                 <span className="dsh-wf-subject">{trigger.id}</span>
                 <span className="dsh-wf-chip">{trigger.event}</span>
                 <Tag tone="quiet">{trigger.mode}</Tag>
+                {trigger.source === undefined ? null : (
+                  <span className="dsh-wf-muted" data-source={trigger.source}>
+                    {trigger.plugin === undefined
+                      ? trigger.source
+                      : `${trigger.source}:${trigger.plugin}`}
+                  </span>
+                )}
                 <span className="dsh-wf-time">
                   {trigger.last === undefined
                     ? t('triggers.notEvaluated')

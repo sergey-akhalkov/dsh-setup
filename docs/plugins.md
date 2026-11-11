@@ -482,9 +482,10 @@ workspace keeps at most 30 days and 50 MB total, pruning the oldest sessions fir
 rotates to `<sessionId>.jsonl.1` at 5 MiB and the rotation is retained beside the current file until a
 later write prunes it; a failed write leaves the previous records intact. The shipped shadow catalog
 lives in
-`packages/plugin-workflows/assets/triggers/` (turn start/stop, delegate result, subagent start/end,
-OpenSpec `tasks.md`, review record, change created and archive move) and is evaluated by a pure
-function whose reasons are exactly `would-fire`, `event-mismatch`, `filter-mismatch`, `dedupe`,
+`packages/plugin-workflows/assets/triggers/` (turn start/stop, delegate result, subagent start/end)
+and the OpenSpec plugin contributes the four OpenSpec entries from its `assets/workflows/` (below);
+both are evaluated by a pure function whose reasons are exactly `would-fire`, `event-mismatch`,
+`filter-mismatch`, `dedupe`,
 `disabled`, `not-ready` and `error`. `matched` means the trigger would have fired in shadow mode; it
 does not mean anything acted.
 
@@ -540,8 +541,10 @@ Every action comes from an owned or explicitly deferred definition step; shadow 
 A local definition or override is active only with a host-signed approval in
 `.dsh/workflows/approved.json`; the host key is held outside `.dsh` and gives tamper-evidence against
 model-mediated writes, while a hostile same-user shell is outside the threat model. Completed intake
-and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The shipped definitions are
-`change-intake` (active), and `task-review` and `retro` (active, `defer` until `retire-legacy-gates`).
+and adoption write authenticated receipts under `.dsh/workflows/receipts/`. The engine ships
+`task-review`, `retro`, and `verify` (active, `own`, with their legacy source recorded); the OpenSpec
+plugin contributes `change-intake` (active, see
+[OpenSpec workflow contribution](#openspec-workflow-contribution)).
 The `workflows` tool exposes list, start, resume, status, evidence, cancel and adopt; `adopt` asks the
 user in the question UI and writes the host-authenticated receipt only after a yes. The `/workflows`
 command family covers run, resume, install, adopt and status; `/workflows` itself names the Workflows
@@ -681,6 +684,19 @@ while nothing changes. Archived views are immutable by convention and skip obser
 re-reads them. A host without the provider reports no live resource, and the native refresh plus the
 hidden-to-visible re-read remain the fallback. A failing read shows the Host's cause with a `Retry`
 action rather than an empty workspace.
+
+## OpenSpec workflow contribution
+
+[`packages/plugin-openspec`](../packages/plugin-openspec) also contributes the `change-intake` workflow
+definition and the four OpenSpec shadow triggers (`openspec-tasks-checked`, `openspec-review-recorded`,
+`openspec-change-created`, `openspec-change-archived`) from its own read-only `assets/workflows/`. The
+engine dependency is optional: the host half waits for the `workflowsDefinitions` host service through
+`ctx.inject` and registers `{ source: '@dsh-setup/plugin-openspec', definitions, triggers }`; the
+design page lists them with the source `plugin:@dsh-setup/plugin-openspec`. There is no bundle or
+package dependency on the workflows engine, and a profile without it registers nothing while the
+picker, panel and six skills keep working. The assets are read-only: editing the definition creates a
+workspace-local copy through the engine's editor and approval flow, the plugin asset stays unchanged,
+and the plugin never writes `.dsh/workflows/`.
 
 ## Adding a package
 

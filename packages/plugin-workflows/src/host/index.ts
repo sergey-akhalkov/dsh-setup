@@ -14,12 +14,11 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { adoptChange } from './adoption.js'
 import { registerWorkflowRoutes } from './api.js'
 import { installDefinition, loadApprovedDefinitions } from './approval-store.js'
-import { CHANGE_NAME, parseArchiveCommand, parseOpenspecCommand } from './command-parse.js'
+import { CHANGE_NAME, parseArchiveCommand } from './command-parse.js'
 import { runWorkflowCommand, type WorkflowCommandHost } from './commands.js'
 import {
   type Definition,
   KNOWN_LEGACY_SOURCES,
-  loadShippedDefinitions,
   resolveOwnership,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
@@ -77,6 +76,7 @@ import {
 } from './parity.js'
 import { registerActiveRunsContext } from './prompt.js'
 import { issueCompletionReceipt, listReceipts } from './receipts.js'
+import { definitionsRegistry, type WorkflowsDefinitionsService } from './registry.js'
 import { cancelRun, pendingStep, recoverRuns, resumeRun } from './resume.js'
 import {
   addViolation,
@@ -108,9 +108,9 @@ import {
   evaluateDefinitionTrigger,
   evaluateIntents,
   intentDedupeKey,
-  loadCatalog,
   obligationDedupeKey,
   type StartRunOutcome,
+  type Trigger,
 } from './triggers.js'
 
 /** Workflows: a read-only Host recorder and the Workflows conversation view. */
@@ -184,13 +184,13 @@ export function definitionEventsOf(
           ]
     case 'fs.change': {
       const path = event.subject
-      const changeName = /^openspec\/changes\/([^/]+)\//u.exec(path)?.[1]
+      // The path is carried raw; a trigger's `{name}` path segment captures the
+      // change name, so the engine keeps no product path regex here.
       const events: DefinitionEvent[] = [
         {
           kind: 'fs.change',
           subject: path,
           path,
-          ...(changeName === undefined ? {} : { name: changeName }),
           ...(event.hash === undefined ? {} : { hash: event.hash }),
           ...base,
         },
@@ -507,14 +507,25 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   const maxRuns = config.maxRuns ?? DEFAULT_MAX_RUNS
   const checkpointApplicability = resolveCheckpointApplicability(config.checkpointApplicability)
   const verifySettings = resolveVerifySettings(config.verify)
-  // A malformed shipped trigger refuses the plugin load, naming the field.
-  const triggers = loadCatalog()
-  // A malformed or duplicate shipped definition refuses the plugin load too.
-  loadShippedDefinitions()
+  // A malformed shipped trigger or definition refuses the plugin load, naming
+  // the field. The registry then holds one merged installed catalog.
+  definitionsRegistry.seedShipped()
   const services = hostServices(ctx)
   if (services === undefined) {
     console.error('workflows: required Host services are unavailable; the recorder is inert')
     return
+  }
+  // Feature plugins contribute their read-only definitions through this host
+  // service; no package scan and no profile path list is consulted.
+  try {
+    const definitionsService: WorkflowsDefinitionsService = {
+      register: (contribution) => definitionsRegistry.register(contribution),
+    }
+    ctx.provide('workflowsDefinitions', definitionsService)
+  } catch (error) {
+    console.error(
+      `workflows: the definitions registry service could not be provided (${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)})`,
+    )
   }
   const journal = new Journal()
   /** Latest turn per session, so a tool result belongs to a turn. */
@@ -536,7 +547,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
   let listenerCount = 0
   let scopedFailures = 0
   let registrationError: unknown
-  const triggerCount = triggers.length
+  /** The merged shadow catalog; a contribution can arrive after load. */
+  const installedTriggers = (): readonly Trigger[] =>
+    definitionsRegistry.triggers().map((entry) => entry.trigger)
   /** The count every published health file must use right now. */
   const publishedListenerCount = (workspace: string): number =>
     Math.max(0, listenerCount + (watchHealthy.get(workspace) === true ? 1 : 0) - scopedFailures)
@@ -545,7 +558,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     if (existing !== undefined) return existing
     const health = new WorkflowHealth({
       root: workflowsDirectory(workspace),
-      triggerCount,
+      triggerCount: definitionsRegistry.triggers().length,
     })
     health.setListenerCount(publishedListenerCount(workspace))
     if (registrationError !== undefined) health.recordError(registrationError)
@@ -662,11 +675,16 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     return { installed, enabled }
   }
-  /** Load the shipped set plus the approved local overrides for one workspace. */
+  /** Load the installed registry set plus the approved local overrides. */
   const definitionLoads = new Map<string, Promise<void>>()
+  /** The registry revision each cached workspace load was built from. */
+  const definitionLoadRevisions = new Map<string, number>()
   const loadDefinitions = (workspace: string): Promise<void> => {
+    const revision = definitionsRegistry.revision
     const existing = definitionLoads.get(workspace)
-    if (existing !== undefined) return existing
+    if (existing !== undefined && definitionLoadRevisions.get(workspace) === revision) {
+      return existing
+    }
     if (pluginDisposed) return Promise.resolve()
     const promise = (async () => {
       try {
@@ -674,6 +692,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const legacy = legacySignalState()
         const loaded = await loadApprovedDefinitions(workspace, {
           ...(storedAuth === undefined ? {} : { auth: storedAuth }),
+          shipped: definitionsRegistry.definitions().map((entry) => entry.definition),
           installedLegacy: legacy.installed,
           enabledLegacy: legacy.enabled,
         })
@@ -712,11 +731,17 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       }
     })()
     definitionLoads.set(workspace, promise)
+    definitionLoadRevisions.set(workspace, revision)
     return promise
   }
   /** The approved definitions of one workspace, loaded on first use. */
   const definitionsFor = async (workspace: string): Promise<Definition[]> => {
-    await loadDefinitions(workspace)
+    // A contribution that registered while a load was in flight changes the
+    // revision; re-read once so the caller never sees the stale catalog.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await loadDefinitions(workspace)
+      if (definitionLoadRevisions.get(workspace) === definitionsRegistry.revision) break
+    }
     return [...(definitionsByWorkspace.get(workspace) ?? [])]
   }
   /** Start one run for an active trigger; persistence happens before success. */
@@ -743,7 +768,12 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     }
     reserveStart(workspace)
     try {
-      const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, event)
+      const dedupeKey = obligationDedupeKey(
+        definition.id,
+        definition.trigger,
+        event,
+        typeof extraContext.name === 'string' ? extraContext.name : undefined,
+      )
       const session = event.session ?? ''
       const entryGeneration = sessionGeneration(session)
       const run = createRun({
@@ -1118,7 +1148,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
       const knownRunGenerations = stableKnown.generations
       const runLimitReached = storedAuth !== undefined && atRunLimit(workspace, knownRuns)
       let startedThisEvent = 0
-      const records = evaluateEvent(triggers, event, sessionSeen, true, input.at)
+      const records = evaluateEvent(installedTriggers(), event, sessionSeen, true, input.at)
       const metrics = input.turn === undefined ? undefined : turnMetrics.get(input.session)
       // The checked-task delta names the task a task-review run reads. It is
       // computed here, not added to the observed fs.change event.
@@ -1141,7 +1171,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 ? false
                 : sessionSeen.has(key),
             markKey: (key) => sessionSeen.set(key, input.at),
-            startRun: (definition, matched) => {
+            startRun: (definition, matched, capture) => {
               const limited = (): boolean =>
                 storedAuth !== undefined &&
                 (runLimitReached || openRunCount(knownRuns) + startedThisEvent >= maxRuns)
@@ -1150,6 +1180,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 // gets its own observational run.
                 if (taskReviewTaskIds.length === 0) {
                   return { ok: false, reason: 'no newly checked task in this tasks.md change' }
+                }
+                if (capture === undefined) {
+                  return { ok: false, reason: 'the change name was not captured from the path' }
                 }
                 let first: StartRunOutcome | undefined
                 let suppressed: StartRunOutcome | undefined
@@ -1161,7 +1194,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   const duplicate = knownRuns.find(
                     (run) =>
                       run.definition.id === 'task-review' &&
-                      run.context.name === matched.name &&
+                      run.context.name === capture &&
                       run.context.taskId === taskId &&
                       isOpenRun(run) &&
                       services.agents.get(run.session) !== undefined,
@@ -1174,6 +1207,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     continue
                   }
                   const outcome = startDefinitionRun(workspace, definition, matched, limited(), {
+                    name: capture,
                     taskId,
                   })
                   if (outcome.ok) {
@@ -1201,7 +1235,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 definition,
                 matched,
                 limited(),
-                extraContext,
+                capture === undefined ? extraContext : { name: capture, ...extraContext },
               )
               if (outcome.ok) startedThisEvent += 1
               return outcome
@@ -2547,7 +2581,6 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
           }
         }
         const command = shellCommandOf(exec)
-        const create = command === undefined ? undefined : parseOpenspecCommand(command)
         const sessionId = String(agent.session.id)
         const definitions = await definitionsFor(workspace)
         await recoverIfNeeded(workspace)
@@ -2565,11 +2598,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
             session: sessionId,
             ...(exec.callId === undefined ? {} : { callId: String(exec.callId) }),
             ...(turns.get(sessionId) === undefined ? {} : { turn: turns.get(sessionId) }),
-            ...(create?.kind === 'create-change'
-              ? { command: 'openspec new change <name>', name: create.name }
-              : create?.kind === 'archive'
-                ? { command: 'openspec archive <name>', name: create.change }
-                : {}),
+            ...(command === undefined ? {} : { command }),
           }
           const currentMetrics = turnMetrics.get(sessionId)
           const triggerRows: TriggerEvaluationRecord[] = []
@@ -2602,8 +2631,8 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
               ...(evaluation.filter === undefined ? {} : { filter: evaluation.filter }),
               ...(evaluation.detail === undefined ? {} : { detail: evaluation.detail }),
             }
-            const createsIntake =
-              definition.id === 'change-intake' && create?.kind === 'create-change'
+            const capture = evaluation.capture
+            const createsIntake = definition.settings.gate === 'intake' && capture !== undefined
             if (!evaluation.matched && evaluation.reason !== 'dedupe') {
               triggerRows.push(row)
               continue
@@ -2615,13 +2644,23 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 triggerRows.push(row)
                 continue
               }
-              const key = obligationDedupeKey(definition.id, definition.trigger, observed)
+              const key = obligationDedupeKey(
+                definition.id,
+                definition.trigger,
+                observed,
+                evaluation.capture,
+              )
               if (key !== undefined) sessionSeen.set(key, journal.time())
               triggerRows.push({ ...row, reason: 'would-fire' })
               continue
             }
             const repeats = definition.trigger.repeat === true
-            const dedupeKey = obligationDedupeKey(definition.id, definition.trigger, observed)
+            const dedupeKey = obligationDedupeKey(
+              definition.id,
+              definition.trigger,
+              observed,
+              evaluation.capture,
+            )
             // A concurrent call that already reserved the key must not start a
             // second run or invoke the intake gate again, unless the trigger
             // repeats on every matching event.
@@ -2633,7 +2672,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                 detail: 'a matching event is already being evaluated',
               })
               if (createsIntake) {
-                concurrentIntakeReason = `an intake evaluation for "${create.name}" is already in progress; no second run was created`
+                concurrentIntakeReason = `an intake evaluation for "${capture}" is already in progress; no second run was created`
               }
               continue
             }
@@ -2651,13 +2690,13 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     reason: 'run-suppressed',
                     detail: 'the host key is unavailable; no run was created',
                   })
-                  keyUnavailableReason = `workflows: the host key is unavailable, so the intake run for "${create.name}" was not created; the call was refused`
+                  keyUnavailableReason = `workflows: the host key is unavailable, so the intake run for "${capture}" was not created; the call was refused`
                   continue
                 }
                 let decision: Awaited<ReturnType<typeof evaluateIntakeGate>>
                 try {
                   decision = await evaluateIntakeGate({
-                    name: create.name,
+                    name: capture,
                     session: sessionId,
                     workspace,
                     callId: String(exec.callId),
@@ -2665,7 +2704,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                     runs: knownRuns,
                     receipts: await listReceipts(workspace, auth),
                     ownedCallIds: new Set(ownedCalls.list()),
-                    changeExists: await changeDirectoryExists(workspace, create.name),
+                    changeExists: await changeDirectoryExists(workspace, capture),
                     startRun: async (entry, name) => {
                       if (
                         atRunLimit(workspace, knownRuns) ||
@@ -2736,12 +2775,19 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                       reason: 'run-suppressed',
                       detail: 'the run limit is reached; no intake run was created',
                     })
-                    capacityReason = `workflows: the run limit (${String(maxRuns)}) is reached, so the intake run for "${create.name}" was not created; the call was refused`
+                    capacityReason = `workflows: the run limit (${String(maxRuns)}) is reached, so the intake run for "${capture}" was not created; the call was refused`
                     continue
                   }
                   throw error
                 }
-                intakeDecision = decision
+                // A later gated definition may not overwrite an earlier denial:
+                // every matching gate must authorize the command independently.
+                if (
+                  intakeDecision === undefined ||
+                  (intakeDecision.kind === 'allow' && decision.kind === 'deny')
+                ) {
+                  intakeDecision = decision
+                }
                 if (decision.kind === 'deny' && decision.action === 'started') {
                   if (dedupeKey !== undefined) sessionSeen.set(dedupeKey, journal.time())
                   triggerRows.push({
@@ -2801,7 +2847,7 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
                   sessionId,
                   auth,
                   definition,
-                  {},
+                  capture === undefined ? {} : { name: capture },
                   dedupeKey,
                 )
                 startedThisEvent += 1
@@ -3810,7 +3856,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
     journal,
     healthFor,
     lastEventAtFor: (session) => sessionEventAt.get(session),
-    triggers,
+    triggers: [],
+    triggersFor: () => definitionsRegistry.triggers(),
+    installedDefinitionsFor: () => definitionsRegistry.definitions(),
     definitionsFor: (workspace) => definitionsByWorkspace.get(workspace) ?? [],
     definitionEntriesFor: (workspace) => listEditorDefinitions(workspace),
     definitionDocumentFor: (workspace, id) => readEditorDefinitionDocument(workspace, id),

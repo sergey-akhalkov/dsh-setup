@@ -22,14 +22,15 @@ import type { RunView } from './panel.tsx'
  * this module only pre-checks the graph and tracks the revision contract.
  */
 
-export type EditorSource = 'shipped' | 'local' | 'draft'
+export type EditorSource = 'shipped' | 'plugin' | 'local' | 'draft'
 export type EditorMode = 'canvas' | 'list'
 export type SaveKind = 'create' | 'update' | 'layout'
 
 export interface DefinitionDocument {
   readonly definition: GraphDefinition
   readonly revision: string | null
-  readonly source: 'shipped' | 'local'
+  readonly source: 'shipped' | 'plugin' | 'local'
+  readonly plugin?: string
 }
 
 export interface EditorListEntry {
@@ -40,7 +41,8 @@ export interface EditorListEntry {
   readonly trigger?: string
   readonly version: number
   readonly stepCount: number
-  readonly source: 'shipped' | 'local'
+  readonly source: 'shipped' | 'plugin' | 'local'
+  readonly plugin?: string
   readonly revision: string | null
 }
 
@@ -725,11 +727,11 @@ export function reconcileCopy(
  * definition it did not touch.
  */
 export async function save(state: EditorState, context: SaveContext): Promise<EditorState> {
-  if (state.document.source === 'shipped') {
+  if (state.document.source === 'shipped' || state.document.source === 'plugin') {
     return {
       ...state,
       status: 'error',
-      message: 'a shipped definition is read-only; copy it before saving',
+      message: 'a shipped or plugin definition is read-only; copy it before saving',
     }
   }
   if (state.issues.some((issue) => issue.kind !== 'host')) {

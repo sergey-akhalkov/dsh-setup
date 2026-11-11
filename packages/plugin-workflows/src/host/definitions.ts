@@ -56,19 +56,17 @@ export const DEDUPE_BY_TRIGGER: Record<DefinitionTriggerKind, readonly DedupePol
 export const APPLICABILITY_KINDS = ['checkpoint-required', 'code-write'] as const
 export type ApplicabilityKind = (typeof APPLICABILITY_KINDS)[number]
 
-/** The structured command match an intent trigger accepts. */
-export type TriggerCommand = 'openspec new change <name>' | 'openspec archive <name>'
-export const TRIGGER_COMMANDS: readonly TriggerCommand[] = [
-  'openspec new change <name>',
-  'openspec archive <name>',
-]
+/** The one capture placeholder a command template or path glob may carry. */
+export const NAME_CAPTURE = '{name}'
 
 /** Filters are exact strings except the two workspace/path globs. */
 export interface TriggerMatch {
   readonly workspace?: string
   readonly session?: string
   readonly tool?: string
-  readonly command?: TriggerCommand
+  /** A normalized command template carrying at most one `{name}` capture. */
+  readonly command?: string
+  /** A path glob carrying at most one `{name}` capture. */
   readonly path?: string
   readonly subject?: string
   readonly verdict?: string
@@ -95,6 +93,10 @@ export type Risk = (typeof RISKS)[number]
 export const GATE_OWNERSHIP = ['own', 'defer'] as const
 export type GateOwnership = (typeof GATE_OWNERSHIP)[number]
 
+/** The closed pre-execute gate a definition may declare; the engine owns each. */
+export const DEFINITION_GATES = ['intake'] as const
+export type DefinitionGate = (typeof DEFINITION_GATES)[number]
+
 /** The legacy gate a deferred definition or step defers to. */
 export interface LegacySource {
   readonly plugin: string
@@ -110,6 +112,8 @@ export interface DefinitionSettings {
   /** Tool names a `tool` step may call. */
   readonly allowTools?: readonly string[]
   readonly legacy?: LegacySource
+  /** The engine-owned pre-execute gate this definition selects, if any. */
+  readonly gate?: DefinitionGate
 }
 
 export const EVIDENCE_KINDS = [
@@ -276,6 +280,7 @@ const SETTINGS_KEYS = new Set([
   'allowIntent',
   'allowTools',
   'legacy',
+  'gate',
 ])
 const TRIGGER_KEYS = new Set(['kind', 'match', 'mode', 'dedupe', 'repeat', 'applicability'])
 const MATCH_KEYS = new Set([
@@ -407,6 +412,21 @@ function legacySource(raw: unknown, definition: string, field: string): LegacySo
   }
 }
 
+/**
+ * A capture template: at most one `{name}`, no other brace. A template without
+ * a capture is a literal and behaves exactly as before.
+ */
+function captureTemplate(value: unknown, definition: string, field: string): string {
+  const template = nonEmptyString(value, definition, field)
+  const captures = template.split(NAME_CAPTURE).length - 1
+  if (captures > 1) fail(definition, field, `must not repeat the ${NAME_CAPTURE} capture`)
+  const rest = template.replaceAll(NAME_CAPTURE, '')
+  if (rest.includes('{') || rest.includes('}')) {
+    fail(definition, field, `must carry at most one complete ${NAME_CAPTURE} capture`)
+  }
+  return template
+}
+
 function triggerMatch(raw: unknown, definition: string): TriggerMatch {
   if (!isRecord(raw)) fail(definition, 'trigger.match', 'must be an object')
   assertKnown(raw, MATCH_KEYS, definition, 'trigger.match')
@@ -415,8 +435,12 @@ function triggerMatch(raw: unknown, definition: string): TriggerMatch {
     match[key] = nonEmptyString(value, definition, `trigger.match.${key}`)
   }
   if (match.command !== undefined) {
-    if (!TRIGGER_COMMANDS.includes(match.command as TriggerCommand)) {
-      fail(definition, 'trigger.match.command', `must be one of: ${TRIGGER_COMMANDS.join(', ')}`)
+    match.command = captureTemplate(match.command, definition, 'trigger.match.command')
+  }
+  if (match.path !== undefined) {
+    match.path = captureTemplate(match.path, definition, 'trigger.match.path')
+    if (match.path.includes(NAME_CAPTURE) && !match.path.split('/').includes(NAME_CAPTURE)) {
+      fail(definition, 'trigger.match.path', `must use ${NAME_CAPTURE} as a whole path segment`)
     }
   }
   return match
@@ -478,6 +502,10 @@ function settings(raw: unknown, definition: string): DefinitionSettings {
   if (gateOwnership === 'defer' && legacy === undefined) {
     fail(definition, 'settings.legacy', 'is required when settings.gateOwnership is "defer"')
   }
+  const gate =
+    raw.gate === undefined
+      ? undefined
+      : isOneOf(raw.gate, DEFINITION_GATES, definition, 'settings.gate')
   let allowTools: readonly string[] | undefined
   if (raw.allowTools !== undefined) {
     if (!Array.isArray(raw.allowTools) || raw.allowTools.length === 0) {
@@ -498,6 +526,7 @@ function settings(raw: unknown, definition: string): DefinitionSettings {
     allowIntent: raw.allowIntent,
     ...(allowTools === undefined ? {} : { allowTools }),
     ...(legacy === undefined ? {} : { legacy }),
+    ...(gate === undefined ? {} : { gate }),
   }
 }
 

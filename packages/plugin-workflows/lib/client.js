@@ -10412,11 +10412,11 @@ window.__ModuleLoader__.load({
       };
     }
     async function save(state, context) {
-      if (state.document.source === "shipped") {
+      if (state.document.source === "shipped" || state.document.source === "plugin") {
         return {
           ...state,
           status: "error",
-          message: "a shipped definition is read-only; copy it before saving"
+          message: "a shipped or plugin definition is read-only; copy it before saving"
         };
       }
       if (state.issues.some((issue) => issue.kind !== "host")) {
@@ -11231,14 +11231,15 @@ window.__ModuleLoader__.load({
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-subject", children: entry.name }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-muted", "data-description": entry.id, children: entry.description ?? t("design.noDescription") }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-chip", "data-trigger-kind": entry.trigger ?? "", children: entry.trigger === void 0 ? t("overview.unknownKind") : `${t("definitions.trigger")}: ${entry.trigger}` }),
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { className: "dsh-wf-muted", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { className: "dsh-wf-muted", "data-source": entry.source, children: [
                     entry.id,
                     " \xB7 v",
                     String(entry.version),
-                    " \xB7 ",
-                    entry.source,
                     " \xB7",
                     " ",
+                    entry.plugin === void 0 ? entry.source : `${entry.source}:${entry.plugin}`,
+                    " ",
+                    "\xB7 ",
                     String(entry.stepCount),
                     " steps"
                   ] }),
@@ -12788,6 +12789,7 @@ window.__ModuleLoader__.load({
       "definitions.mode": "Mode",
       "definitions.risk": "Risk",
       "definitions.steps": "Steps",
+      "definitions.source": "Source",
       "receipts.heading": "Receipts",
       "receipts.empty": "No authenticated receipt exists yet.",
       "triggers.title": "Triggers",
@@ -12950,6 +12952,7 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-subject", children: trigger.id }),
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-chip", children: trigger.event }),
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "quiet", children: trigger.mode }),
+            trigger.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-muted", "data-source": trigger.source, children: trigger.plugin === void 0 ? trigger.source : `${trigger.source}:${trigger.plugin}` }),
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-time", children: trigger.last === void 0 ? t("triggers.notEvaluated") : `${reasonLabel(trigger.last.reason, t)} \xB7 ${formatTime(trigger.last.at, t)}` })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "dsh-wf-row-meta", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-muted dsh-wf-mono", children: filterText(trigger) }) })
@@ -13420,7 +13423,8 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { className: "dsh-wf-card-head", children: [
               /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
               definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
-              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` })
+              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
+              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-card-meta", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }) }),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { className: "dsh-wf-card-stats", children: [
@@ -13543,6 +13547,13 @@ window.__ModuleLoader__.load({
             ),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact, { label: t("definitions.risk"), value: risk ?? "\u2014" }),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact, { label: t("workflow.gateOwnership"), value: gateOwnership ?? "\u2014" }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+              Fact,
+              {
+                label: t("definitions.source"),
+                value: document2.source === void 0 ? "\u2014" : document2.plugin === void 0 ? document2.source : `${document2.source}:${document2.plugin}`
+              }
+            ),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
               Fact,
               {
@@ -13948,11 +13959,13 @@ window.__ModuleLoader__.load({
       };
     }
     async function readDefinitionDocument(session, definitionId) {
-      const body = await requestJson(
-        definitionsUrl(session, definitionId)
-      );
+      const body = await requestJson(definitionsUrl(session, definitionId));
       if (body.definition === void 0) throw new Error("the definition document is missing");
-      return body.definition;
+      return {
+        ...body.definition,
+        ...body.source === void 0 ? {} : { source: body.source },
+        ...body.plugin === void 0 ? {} : { plugin: body.plugin }
+      };
     }
     async function readDefinitionRuns(session, definitionId, pages) {
       const items = [];

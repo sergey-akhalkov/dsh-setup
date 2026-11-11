@@ -104,6 +104,7 @@ export const EN: Record<string, string> = {
   'definitions.mode': 'Mode',
   'definitions.risk': 'Risk',
   'definitions.steps': 'Steps',
+  'definitions.source': 'Source',
   'receipts.heading': 'Receipts',
   'receipts.empty': 'No authenticated receipt exists yet.',
   'triggers.title': 'Triggers',

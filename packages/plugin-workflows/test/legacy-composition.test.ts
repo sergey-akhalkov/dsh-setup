@@ -1,18 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import {
-  type Definition,
-  loadShippedDefinitions,
-  resolveOwnership,
-} from '../src/host/definitions.ts'
+import { type Definition, resolveOwnership } from '../src/host/definitions.ts'
 import { evaluateTurnClose, runDeferredStep, selectBlockingStep } from '../src/host/gates.ts'
 import { createRun, settleStep, type WorkflowRun } from '../src/host/runs.ts'
+import { contributedIntake } from './intake-definition.ts'
 
 const INSTALLED: ReadonlySet<string> = new Set(['delegation-rules', 'goal-continuity'])
 
 function intakeDefinition(): Definition {
-  const definition = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-  if (definition === undefined) throw new Error('the change-intake definition is missing')
-  return definition
+  return contributedIntake()
 }
 
 function intakeRun(): WorkflowRun {

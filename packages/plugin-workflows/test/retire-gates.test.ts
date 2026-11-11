@@ -26,6 +26,7 @@ import {
   settleStep,
   type WorkflowRun,
 } from '../src/host/runs.ts'
+import { contributedIntake } from './intake-definition.ts'
 
 /**
  * The retirement load gate, the owned close/archive decisions, and the verify
@@ -34,6 +35,7 @@ import {
  */
 
 function shipped(id: string): Definition {
+  if (id === 'change-intake') return contributedIntake()
   const found = loadShippedDefinitions().find((entry) => entry.id === id)
   if (found === undefined) throw new Error(`the ${id} definition is missing`)
   return found

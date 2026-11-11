@@ -12,13 +12,13 @@ import { CHANGE_NAME } from './command-parse.js'
 import {
   DEFINITION_ID,
   type Definition,
-  loadShippedDefinitions,
   validateDefinition,
   workspaceDefinitionsDirectory,
 } from './definitions.js'
 import { DRAFTS_ROOT, readDraft } from './drafts.js'
 import { isInside } from './fs-change.js'
 import type { HostAuth } from './host-auth.js'
+import { definitionsRegistry } from './registry.js'
 import { isOpenRun, listRuns } from './runs.js'
 
 /**
@@ -75,7 +75,8 @@ export interface LayoutSidecar {
   readonly positions: Readonly<Record<string, LayoutPosition>>
 }
 
-export type DefinitionSource = 'shipped' | 'local'
+/** Where an editor definition came from; a plugin contribution is read-only. */
+export type DefinitionSource = 'shipped' | 'plugin' | 'local'
 
 export interface EditorDefinitionEntry {
   readonly id: string
@@ -87,6 +88,8 @@ export interface EditorDefinitionEntry {
   readonly version: number
   readonly stepCount: number
   readonly source: DefinitionSource
+  /** The contributing plugin package name, for a plugin definition. */
+  readonly plugin?: string
   /** The SHA-256 of the exact local file bytes; null for a shipped template. */
   readonly revision: string | null
 }
@@ -95,6 +98,8 @@ export interface DefinitionDocument {
   readonly definition: Definition
   readonly revision: string | null
   readonly source: DefinitionSource
+  /** The contributing plugin package name, for a plugin definition. */
+  readonly plugin?: string
 }
 
 export interface TemplateEntry extends EditorDefinitionEntry {
@@ -259,6 +264,7 @@ function editorEntry(
   definition: Definition,
   source: DefinitionSource,
   revision: string | null,
+  plugin?: string,
 ): EditorDefinitionEntry {
   return {
     id: definition.id,
@@ -268,20 +274,23 @@ function editorEntry(
     version: definition.version,
     stepCount: definition.steps.length,
     source,
+    ...(plugin === undefined ? {} : { plugin }),
     revision,
   }
 }
 
-/** Local definitions plus the shipped set; a local file shadows its shipped id. */
+/** Local definitions plus the installed registry; a local file shadows its id. */
 async function listDefinitions(
   workspace: string,
 ): Promise<{ definitions: EditorDefinitionEntry[]; errors: string[] }> {
   const errors: string[] = []
-  const shipped = loadShippedDefinitions()
+  const installed = definitionsRegistry.definitions()
   const local = new Map<string, EditorDefinitionEntry>()
   if (await hasLinkedAncestor(workspace)) {
     return {
-      definitions: shipped.map((definition) => editorEntry(definition, 'shipped', null)),
+      definitions: installed.map((entry) =>
+        editorEntry(entry.definition, entry.source, null, entry.plugin),
+      ),
       errors: ['a workflow directory is a link; local definitions are refused'],
     }
   }
@@ -309,13 +318,13 @@ async function listDefinitions(
       errors.push(bounded(error))
     }
   }
-  const definitions: EditorDefinitionEntry[] = shipped.map((definition) => {
-    const override = local.get(definition.id)
+  const definitions: EditorDefinitionEntry[] = installed.map((entry) => {
+    const override = local.get(entry.definition.id)
     if (override !== undefined) {
-      local.delete(definition.id)
+      local.delete(entry.definition.id)
       return override
     }
-    return editorEntry(definition, 'shipped', null)
+    return editorEntry(entry.definition, entry.source, null, entry.plugin)
   })
   for (const entry of [...local.values()].sort((left, right) => left.id.localeCompare(right.id))) {
     definitions.push(entry)
@@ -333,9 +342,14 @@ async function readDefinitionDocument(
   if (read !== undefined) {
     return { definition: read.definition, revision: read.revision, source: 'local' }
   }
-  const shipped = loadShippedDefinitions().find((definition) => definition.id === id)
-  if (shipped === undefined) return undefined
-  return { definition: shipped, revision: null, source: 'shipped' }
+  const installed = definitionsRegistry.installed(id)
+  if (installed === undefined) return undefined
+  return {
+    definition: installed.definition,
+    revision: null,
+    source: installed.source,
+    ...(installed.plugin === undefined ? {} : { plugin: installed.plugin }),
+  }
 }
 
 /** Validate a layout sidecar; the engine ignores it, the editor must not crash on it. */
@@ -679,9 +693,9 @@ export function createEditorRoutes(services: EditorApiServices): FetchRoute[] {
     route(EDITOR_TEMPLATES_ROUTE, async (request) => {
       const resolved = resolveSession(services, request)
       if ('response' in resolved) return resolved.response
-      const templates: TemplateEntry[] = loadShippedDefinitions().map((definition) => ({
-        ...editorEntry(definition, 'shipped', null),
-        definition,
+      const templates: TemplateEntry[] = definitionsRegistry.definitions().map((entry) => ({
+        ...editorEntry(entry.definition, entry.source, null, entry.plugin),
+        definition: entry.definition,
       }))
       return json(200, { templates })
     }),

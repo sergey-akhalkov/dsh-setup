@@ -457,9 +457,32 @@ function applyLoadRules(
 }
 
 /**
- * Load the shipped definitions plus the approved local ones. A local file is
+ * Whether a local override enforces the installed definition's declared gate
+ * exactly: the same pre-execute trigger kind and match, and an active mode.
+ * Changing any of these would silently bypass the installed gate.
+ */
+function preservesGate(installed: Definition, local: Definition): boolean {
+  if (installed.trigger.kind !== local.trigger.kind) return false
+  if (local.trigger.mode !== 'active') return false
+  const keys = [
+    'workspace',
+    'session',
+    'tool',
+    'command',
+    'path',
+    'subject',
+    'verdict',
+    'classifier',
+    'intent',
+  ] as const
+  return keys.every((key) => installed.trigger.match[key] === local.trigger.match[key])
+}
+
+/**
+ * Load the installed definitions plus the approved local ones. A local file is
  * considered only when its id has a valid host approval for its exact content
- * hash; an approved local id overrides the shipped definition. The drafts
+ * hash; an approved local id overrides the installed definition. A local copy
+ * that drops or weakens a declared pre-execute gate is refused. The drafts
  * directory is never read.
  */
 export async function loadApprovedDefinitions(
@@ -553,7 +576,21 @@ export async function loadApprovedDefinitions(
       continue
     }
     try {
-      local.set(id, validateDefinition(JSON.parse(bytes.toString('utf8')), name))
+      const parsed = validateDefinition(JSON.parse(bytes.toString('utf8')), name)
+      // A local copy that shadows a gated installed definition may not remove
+      // the declaration; the installed definition stays effective and the user
+      // re-saves a copy from the installed template.
+      const installed = shipped.find((entry) => entry.id === id)
+      if (
+        installed?.settings.gate !== undefined &&
+        (parsed.settings.gate !== installed.settings.gate || !preservesGate(installed, parsed))
+      ) {
+        errors.push(
+          `definition "${id}" is refused: the approved local copy drops or weakens the installed definition's declared "${installed.settings.gate}" gate (it must keep the active trigger, its exact match, settings.gate, and the {name} capture), so the installed definition remains effective; re-save a copy from the installed template and approve it (the retired <name> token cannot be used)`,
+        )
+        continue
+      }
+      local.set(id, parsed)
     } catch (error) {
       errors.push(`approved definition "${id}" is invalid: ${errorMessage(error)}`)
     }

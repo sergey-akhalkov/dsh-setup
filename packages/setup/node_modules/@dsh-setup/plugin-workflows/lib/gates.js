@@ -192,11 +192,11 @@ function intakeName(run) {
     const name = run.context.name;
     return typeof name === 'string' ? name : undefined;
 }
-function isCompletedIntake(run, name) {
-    return (run.definition.id === 'change-intake' && run.status === 'completed' && intakeName(run) === name);
+function isCompletedIntake(run, name, definitionId) {
+    return (run.definition.id === definitionId && run.status === 'completed' && intakeName(run) === name);
 }
-function isResumableIntake(run, name, session) {
-    return (run.definition.id === 'change-intake' &&
+function isResumableIntake(run, name, session, definitionId) {
+    return (run.definition.id === definitionId &&
         (run.status === 'interrupted' || run.status === 'blocked') &&
         intakeName(run) === name &&
         run.session === session);
@@ -209,11 +209,12 @@ function isResumableIntake(run, name, session) {
  */
 export async function evaluateIntakeGate(input) {
     const name = input.name;
-    const completed = input.runs.find((run) => isCompletedIntake(run, name));
+    const definitionId = input.definition.id;
+    const completed = input.runs.find((run) => isCompletedIntake(run, name, definitionId));
     if (completed !== undefined) {
         return {
             kind: 'allow',
-            reason: `the change-intake run "${completed.id}" is completed`,
+            reason: `the intake run "${completed.id}" is completed`,
             runId: completed.id,
         };
     }
@@ -227,7 +228,7 @@ export async function evaluateIntakeGate(input) {
     if (input.callId !== undefined && input.ownedCallIds.has(input.callId)) {
         return { kind: 'allow', reason: 'the call id is owned by the intake run' };
     }
-    const running = input.runs.find((run) => run.definition.id === 'change-intake' &&
+    const running = input.runs.find((run) => run.definition.id === definitionId &&
         run.status === 'running' &&
         run.session === input.session &&
         intakeName(run) === name);
@@ -242,7 +243,7 @@ export async function evaluateIntakeGate(input) {
             reason: `the intake run "${running.id}" is already in progress; continue at step "${stepId}" and do not create the change`,
         };
     }
-    const resumable = input.runs.find((run) => isResumableIntake(run, name, input.session));
+    const resumable = input.runs.find((run) => isResumableIntake(run, name, input.session, definitionId));
     if (resumable !== undefined) {
         const resumed = await input.resumeRun(resumable.id);
         return {
@@ -261,7 +262,7 @@ export async function evaluateIntakeGate(input) {
         };
     }
     if (!input.definition.steps.some((step) => step.id === 'create-change')) {
-        throw new Error('the change-intake definition has no create-change step');
+        throw new Error(`the "${definitionId}" definition has no create-change step`);
     }
     const started = await input.startRun(input.definition, name);
     const first = input.definition.steps[0]?.id ?? 'requirements';
@@ -493,7 +494,7 @@ export function evaluateArchiveGate(input) {
             reason: `the archive of "${input.change}" is refused: run "${blocked.run.id}" step "${blocked.open.step}" is open and has no verified evidence${coverage}`,
         };
     }
-    const completed = related.find((run) => isCompletedIntake(run, input.change));
+    const completed = related.find((run) => isCompletedIntake(run, input.change, 'change-intake'));
     const receipt = input.receipts.find((entry) => entry.change === input.change);
     if (completed === undefined && receipt === undefined) {
         return {

@@ -3,11 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseArchiveCommand } from '../src/host/command-parse.ts'
-import {
-  type Definition,
-  loadShippedDefinitions,
-  validateDefinition,
-} from '../src/host/definitions.ts'
+import { type Definition, validateDefinition } from '../src/host/definitions.ts'
 import {
   authorizationWriteDecision,
   evaluateArchiveGate,
@@ -30,6 +26,7 @@ import {
   writeRun,
 } from '../src/host/runs.ts'
 import type { SteerTarget } from '../src/host/steer.ts'
+import { contributedIntake } from './intake-definition.ts'
 
 const ORIGINAL_SETTINGS = {
   allowModelStart: false,
@@ -335,9 +332,7 @@ function intakeRunFor(workspace: string, name = 'auth', id?: string): WorkflowRu
 }
 
 function intakeDefinition(): Definition {
-  const definition = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-  if (definition === undefined) throw new Error('the change-intake definition is missing')
-  return definition
+  return contributedIntake()
 }
 
 function callbacks(): {
@@ -1228,4 +1223,89 @@ it('denies archival when a run file failed authentication', () => {
   })
   expect(decision).toMatchObject({ kind: 'deny' })
   if (decision.kind === 'deny') expect(decision.reason).toContain('authentication')
+})
+
+describe('declared intake gate under another definition id', () => {
+  function renamed(): Definition {
+    const base = intakeDefinition()
+    return {
+      ...base,
+      id: 'custom-intake',
+      settings: { ...base.settings, gate: 'intake' },
+    }
+  }
+
+  async function runFor(
+    workspace: string,
+    status: 'running' | 'interrupted' | 'completed',
+    id: string,
+  ): Promise<WorkflowRun> {
+    const definition = renamed()
+    const run = createRun({
+      definition: definition.id,
+      trigger: 'tool.pre-execute',
+      session: 'session-1',
+      workspace,
+      context: { name: 'auth' },
+      steps: definition.steps.map((step) => step.id),
+      id,
+    })
+    const settled = status === 'running' ? run : setRunStatus(run, status, 2_000)
+    await writeRun(workspace, settled, gateAuth())
+    return settled
+  }
+
+  it('finds a running run by the selected id without starting a duplicate', async () => {
+    const workspace = await tempWorkspace()
+    const definition = renamed()
+    const running = await runFor(workspace, 'running', 'run-custom-running')
+    const recorder = callbacks()
+    const decision = await evaluateIntakeGate(
+      gateInput(workspace, await listAuthenticatedRuns(workspace, gateAuth()), [], {
+        definition,
+        startRun: recorder.startRun,
+        resumeRun: recorder.resumeRun,
+      }),
+    )
+    expect(decision).toMatchObject({ kind: 'deny', action: 'resumed', runId: running.id })
+    expect(recorder.starts).toEqual([])
+  })
+
+  it('resumes an interrupted run by the selected id instead of redirecting to adoption', async () => {
+    const workspace = await tempWorkspace()
+    const definition = renamed()
+    const interrupted = await runFor(workspace, 'interrupted', 'run-custom-interrupted')
+    let resumed = 0
+    const recorder = callbacks()
+    const decision = await evaluateIntakeGate(
+      gateInput(workspace, await listAuthenticatedRuns(workspace, gateAuth()), [], {
+        definition,
+        changeExists: true,
+        startRun: recorder.startRun,
+        resumeRun: async () => {
+          resumed += 1
+          return { stepId: 'requirements' }
+        },
+      }),
+    )
+    expect(decision).toMatchObject({ kind: 'deny', action: 'resumed', runId: interrupted.id })
+    expect(resumed).toBe(1)
+    expect(recorder.starts).toEqual([])
+  })
+
+  it('allows a completed run by the selected id without restarting intake', async () => {
+    const workspace = await tempWorkspace()
+    const definition = renamed()
+    const completed = await runFor(workspace, 'completed', 'run-custom-completed')
+    const recorder = callbacks()
+    const decision = await evaluateIntakeGate(
+      gateInput(workspace, await listAuthenticatedRuns(workspace, gateAuth()), [], {
+        definition,
+        startRun: recorder.startRun,
+        resumeRun: recorder.resumeRun,
+      }),
+    )
+    expect(decision).toMatchObject({ kind: 'allow', runId: completed.id })
+    expect(recorder.starts).toEqual([])
+  })
 })

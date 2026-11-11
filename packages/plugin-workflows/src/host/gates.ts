@@ -278,7 +278,7 @@ export interface IntakeGateInput {
   readonly session: string
   readonly workspace: string
   readonly callId?: string
-  /** The loaded `change-intake` definition. */
+  /** The matched definition that declares the intake gate. */
   readonly definition: Definition
   /** Every authenticated run in the workspace. */
   readonly runs: readonly WorkflowRun[]
@@ -296,15 +296,20 @@ function intakeName(run: WorkflowRun): string | undefined {
   return typeof name === 'string' ? name : undefined
 }
 
-function isCompletedIntake(run: WorkflowRun, name: string): boolean {
+function isCompletedIntake(run: WorkflowRun, name: string, definitionId: string): boolean {
   return (
-    run.definition.id === 'change-intake' && run.status === 'completed' && intakeName(run) === name
+    run.definition.id === definitionId && run.status === 'completed' && intakeName(run) === name
   )
 }
 
-function isResumableIntake(run: WorkflowRun, name: string, session: string): boolean {
+function isResumableIntake(
+  run: WorkflowRun,
+  name: string,
+  session: string,
+  definitionId: string,
+): boolean {
   return (
-    run.definition.id === 'change-intake' &&
+    run.definition.id === definitionId &&
     (run.status === 'interrupted' || run.status === 'blocked') &&
     intakeName(run) === name &&
     run.session === session
@@ -319,11 +324,12 @@ function isResumableIntake(run: WorkflowRun, name: string, session: string): boo
  */
 export async function evaluateIntakeGate(input: IntakeGateInput): Promise<IntakeGateDecision> {
   const name = input.name
-  const completed = input.runs.find((run) => isCompletedIntake(run, name))
+  const definitionId = input.definition.id
+  const completed = input.runs.find((run) => isCompletedIntake(run, name, definitionId))
   if (completed !== undefined) {
     return {
       kind: 'allow',
-      reason: `the change-intake run "${completed.id}" is completed`,
+      reason: `the intake run "${completed.id}" is completed`,
       runId: completed.id,
     }
   }
@@ -339,7 +345,7 @@ export async function evaluateIntakeGate(input: IntakeGateInput): Promise<Intake
   }
   const running = input.runs.find(
     (run) =>
-      run.definition.id === 'change-intake' &&
+      run.definition.id === definitionId &&
       run.status === 'running' &&
       run.session === input.session &&
       intakeName(run) === name,
@@ -355,7 +361,9 @@ export async function evaluateIntakeGate(input: IntakeGateInput): Promise<Intake
       reason: `the intake run "${running.id}" is already in progress; continue at step "${stepId}" and do not create the change`,
     }
   }
-  const resumable = input.runs.find((run) => isResumableIntake(run, name, input.session))
+  const resumable = input.runs.find((run) =>
+    isResumableIntake(run, name, input.session, definitionId),
+  )
   if (resumable !== undefined) {
     const resumed = await input.resumeRun(resumable.id)
     return {
@@ -374,7 +382,7 @@ export async function evaluateIntakeGate(input: IntakeGateInput): Promise<Intake
     }
   }
   if (!input.definition.steps.some((step) => step.id === 'create-change')) {
-    throw new Error('the change-intake definition has no create-change step')
+    throw new Error(`the "${definitionId}" definition has no create-change step`)
   }
   const started = await input.startRun(input.definition, name)
   const first = input.definition.steps[0]?.id ?? 'requirements'
@@ -708,7 +716,7 @@ export function evaluateArchiveGate(input: ArchiveGateInput): ArchiveGateDecisio
       reason: `the archive of "${input.change}" is refused: run "${blocked.run.id}" step "${blocked.open.step}" is open and has no verified evidence${coverage}`,
     }
   }
-  const completed = related.find((run) => isCompletedIntake(run, input.change))
+  const completed = related.find((run) => isCompletedIntake(run, input.change, 'change-intake'))
   const receipt = input.receipts.find((entry) => entry.change === input.change)
   if (completed === undefined && receipt === undefined) {
     return {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import {
   link,
   mkdir,
@@ -12,6 +13,7 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   approvalsPath,
@@ -26,6 +28,7 @@ import {
   workspaceDefinitionsDirectory,
   workspaceDraftsDirectory,
 } from '../src/host/definitions.ts'
+import { evaluateIntakeGate } from '../src/host/gates.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 
 const TEMP_DIRECTORIES: string[] = []
@@ -108,16 +111,16 @@ function intentFor(id: string): Record<string, unknown> {
 }
 
 describe('local definitions and the host approval store', () => {
-  it('installs a draft, approves it, and lets the approved local id override the shipped one', async () => {
+  it('installs a draft, approves it, and lets the approved local id override the installed one', async () => {
     const workspace = await tempWorkspace()
     const draft = await writeDefinitionFile(
       workspace,
       workspaceDraftsDirectory(workspace),
       'mine.json',
-      definitionFor('change-intake', 'Local intake'),
+      definitionFor('retro', 'Local retro'),
     )
     const installed = await installDefinition(workspace, draft, auth())
-    expect(installed.definition.id).toBe('change-intake')
+    expect(installed.definition.id).toBe('retro')
     expect(installed.hash).toMatch(/^[a-f0-9]{64}$/u)
     // The approval signs the validated source bytes, never a re-read of the
     // writable destination.
@@ -129,18 +132,13 @@ describe('local definitions and the host approval store', () => {
       shipped: loadShippedDefinitions(),
     })
     expect(loaded.errors).toEqual([])
-    const intake = loaded.definitions.find((definition) => definition.id === 'change-intake')
-    expect(intake?.name).toBe('Local intake')
+    const retro = loaded.definitions.find((definition) => definition.id === 'retro')
+    expect(retro?.name).toBe('Local retro')
     // The shipped asset is read-only: the override lives only in the workspace.
-    expect(loadShippedDefinitions().find((entry) => entry.id === 'change-intake')?.name).toBe(
-      'OpenSpec change intake',
+    expect(loadShippedDefinitions().find((entry) => entry.id === 'retro')?.name).toBe(
+      'Work checkpoint',
     )
-    expect(loaded.definitions.map((entry) => entry.id)).toEqual([
-      'change-intake',
-      'retro',
-      'task-review',
-      'verify',
-    ])
+    expect(loaded.definitions.map((entry) => entry.id)).toEqual(['retro', 'task-review', 'verify'])
   })
 
   it('refuses an unapproved local definition and never loads a draft', async () => {
@@ -499,5 +497,129 @@ describe('install transaction isolation', () => {
     const backups = (await readdir(directory)).filter((name) => name.endsWith('.bak'))
     expect(backups).toHaveLength(1)
     expect(await readFile(join(directory, backups[0] as string), 'utf8')).toContain('Original')
+  })
+})
+
+describe('gate-preserving intake override', () => {
+  function contributedIntake(): Record<string, unknown> {
+    return JSON.parse(
+      readFileSync(
+        join(
+          fileURLToPath(new URL('..', import.meta.url)),
+          '..',
+          'plugin-openspec',
+          'assets',
+          'workflows',
+          'change-intake.json',
+        ),
+        'utf8',
+      ),
+    ) as Record<string, unknown>
+  }
+
+  it('refuses the old approved override, keeps the installed gate, and loads a reapproved copy', async () => {
+    const workspace = await tempWorkspace()
+    const old = contributedIntake()
+    // The retired shape: no gate declaration and the <name> token.
+    old.name = 'Old local intake'
+    const oldSettings = old.settings as Record<string, unknown>
+    delete oldSettings.gate
+    ;(old.trigger as { match: Record<string, unknown> }).match.command =
+      'openspec new change <name>'
+    const oldDraft = await writeDefinitionFile(
+      workspace,
+      workspaceDraftsDirectory(workspace),
+      'old-intake.json',
+      old,
+    )
+    await installDefinition(workspace, oldDraft, auth())
+    const intake = validateDefinition(contributedIntake())
+
+    const loaded = await loadApprovedDefinitions(workspace, {
+      auth: auth(),
+      shipped: [...loadShippedDefinitions(), intake],
+    })
+    expect(loaded.errors.join('\n')).toMatch(
+      /drops or weakens the installed definition's declared "intake" gate.*retired <name> token/u,
+    )
+    const installed = loaded.definitions.find((definition) => definition.id === 'change-intake')
+    expect(installed?.name).toBe('OpenSpec change intake')
+    expect(installed?.settings.gate).toBe('intake')
+    expect(installed?.trigger.match.command).toBe('openspec new change {name}')
+
+    // Keeping the gate field is not enough: a shadow trigger or the retired
+    // token would silently disable enforcement and is refused too.
+    const shadowed = contributedIntake()
+    shadowed.name = 'Shadow gate copy'
+    ;(shadowed.trigger as { mode: string }).mode = 'shadow'
+    const shadowDraft = await writeDefinitionFile(
+      workspace,
+      workspaceDraftsDirectory(workspace),
+      'shadow-intake.json',
+      shadowed,
+    )
+    await installDefinition(workspace, shadowDraft, auth())
+    const weakened = await loadApprovedDefinitions(workspace, {
+      auth: auth(),
+      shipped: [...loadShippedDefinitions(), intake],
+    })
+    expect(weakened.errors.join('\n')).toMatch(/drops or weakens.*"intake" gate/u)
+    expect(weakened.definitions.find((definition) => definition.id === 'change-intake')?.name).toBe(
+      'OpenSpec change intake',
+    )
+
+    const retired = contributedIntake()
+    retired.name = 'Retired token copy'
+    ;(retired.trigger as { match: Record<string, unknown> }).match.command =
+      'openspec new change <name>'
+    const retiredDraft = await writeDefinitionFile(
+      workspace,
+      workspaceDraftsDirectory(workspace),
+      'retired-intake.json',
+      retired,
+    )
+    await installDefinition(workspace, retiredDraft, auth())
+    const retiredLoad = await loadApprovedDefinitions(workspace, {
+      auth: auth(),
+      shipped: [...loadShippedDefinitions(), intake],
+    })
+    expect(retiredLoad.errors.join('\n')).toMatch(/drops or weakens.*"intake" gate/u)
+    expect(
+      retiredLoad.definitions.find((definition) => definition.id === 'change-intake')?.name,
+    ).toBe('OpenSpec change intake')
+
+    // The installed gate still refuses the create command with no completed run.
+    const decision = await evaluateIntakeGate({
+      name: 'auth',
+      session: 'session-1',
+      workspace,
+      definition: installed as NonNullable<typeof installed>,
+      runs: [],
+      receipts: [],
+      ownedCallIds: new Set<string>(),
+      changeExists: false,
+      startRun: async () => ({ runId: 'run-intake' }),
+      resumeRun: async () => ({ stepId: 'requirements' }),
+    })
+    expect(decision.kind).toBe('deny')
+
+    // A copy saved from the installed template keeps the gate and loads.
+    const reapproved = contributedIntake()
+    reapproved.name = 'Reapproved local intake'
+    const draft = await writeDefinitionFile(
+      workspace,
+      workspaceDraftsDirectory(workspace),
+      'new-intake.json',
+      reapproved,
+    )
+    await installDefinition(workspace, draft, auth())
+    const reloaded = await loadApprovedDefinitions(workspace, {
+      auth: auth(),
+      shipped: [...loadShippedDefinitions(), intake],
+    })
+    expect(reloaded.errors).toEqual([])
+    const local = reloaded.definitions.find((definition) => definition.id === 'change-intake')
+    expect(local?.name).toBe('Reapproved local intake')
+    expect(local?.settings.gate).toBe('intake')
   })
 })

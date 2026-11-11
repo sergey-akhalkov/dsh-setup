@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   CHANGE_NAME,
+  matchCommandTemplate,
+  matchPathTemplate,
+  normalizeCommand,
   parseArchiveCommand,
   parseOpenspecCommand,
 } from '../src/host/command-parse.ts'
@@ -449,3 +452,78 @@ it.skipIf(process.platform !== 'win32')(
     })
   },
 )
+
+describe('content-agnostic trigger matching', () => {
+  it('normalizes the documented prefixes and whitespace', () => {
+    expect(normalizeCommand('  openspec   new  change   auth  ')).toBe('openspec new change auth')
+    expect(normalizeCommand('openspec\tnew change auth')).toBe('openspec new change auth')
+    expect(normalizeCommand('rtk openspec new change auth')).toBe('openspec new change auth')
+    expect(normalizeCommand('pnpm exec openspec new change auth')).toBe('openspec new change auth')
+    expect(normalizeCommand('openspec new change auth && rm -rf openspec')).toBeUndefined()
+    expect(normalizeCommand('openspec new change $(whoami)')).toBeUndefined()
+    expect(normalizeCommand('openspec new change auth\nrm -rf openspec')).toBeUndefined()
+  })
+
+  it('matches a template and captures one unquoted name', () => {
+    const template = 'openspec new change {name}'
+    expect(matchCommandTemplate(template, 'openspec new change auth')).toEqual({ capture: 'auth' })
+    expect(matchCommandTemplate(template, 'openspec\tnew change auth')).toEqual({
+      capture: 'auth',
+    })
+    expect(matchCommandTemplate(template, 'rtk openspec new change auth')).toEqual({
+      capture: 'auth',
+    })
+    expect(matchCommandTemplate(template, 'pnpm exec openspec new change auth')).toEqual({
+      capture: 'auth',
+    })
+    expect(matchCommandTemplate(template, 'openspec new change "auth"')).toEqual({
+      capture: 'auth',
+    })
+    expect(matchCommandTemplate(template, "openspec new change 'auth'")).toEqual({
+      capture: 'auth',
+    })
+    expect(matchCommandTemplate(template, 'acme deploy auth')).toBeUndefined()
+    expect(matchCommandTemplate(template, 'openspec new change Auth')).toBeUndefined()
+    expect(matchCommandTemplate(template, 'openspec new change auth extra')).toBeUndefined()
+    expect(matchCommandTemplate(template, 'openspec new change auth && echo x')).toBeUndefined()
+    // A captured token needs its literal separators.
+    expect(matchCommandTemplate(template, 'openspec new changeauth')).toBeUndefined()
+    expect(matchCommandTemplate('acme deploy {name} --yes', 'acme deploy auth --yes')).toEqual({
+      capture: 'auth',
+    })
+    expect(matchCommandTemplate('acme deploy {name} --yes', 'acme deploy auth')).toBeUndefined()
+    expect(
+      matchCommandTemplate('acme deploy {name} --yes', 'acme deploy auth--yes'),
+    ).toBeUndefined()
+  })
+
+  it('compares a capture-free template literally', () => {
+    expect(matchCommandTemplate('acme deploy auth', 'acme deploy auth')).toEqual({})
+    expect(matchCommandTemplate('acme deploy auth', 'acme deploy other')).toBeUndefined()
+  })
+
+  it('captures a validated path segment and keeps the glob syntax', () => {
+    expect(
+      matchPathTemplate('openspec/changes/{name}/tasks.md', 'openspec/changes/auth/tasks.md'),
+    ).toEqual({
+      capture: 'auth',
+    })
+    expect(
+      matchPathTemplate('openspec/changes/{name}/tasks.md', 'openspec/changes/Auth/tasks.md'),
+    ).toBeUndefined()
+    expect(
+      matchPathTemplate('openspec/changes/**/tasks.md', 'openspec/changes/a/b/tasks.md'),
+    ).toEqual({})
+    expect(
+      matchPathTemplate('openspec/changes/**/tasks.md', 'openspec/changes/a/design.md'),
+    ).toBeUndefined()
+    expect(
+      matchPathTemplate(
+        'openspec/changes/{name}/reviews/*.json',
+        'openspec/changes/auth/reviews/a.json',
+      ),
+    ).toEqual({
+      capture: 'auth',
+    })
+  })
+})

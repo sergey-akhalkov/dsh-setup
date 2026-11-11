@@ -7,6 +7,7 @@ import type { Journal, TriggerEvaluationRecord } from './journal.js'
 import { type RunView, sessionRuns } from './projection.js'
 import type { WorkflowReceipt } from './receipts.js'
 import { redactPayload, redactValue } from './redact.js'
+import type { InstalledDefinition, InstalledTrigger } from './registry.js'
 import type { Trigger } from './triggers.js'
 
 /**
@@ -53,6 +54,10 @@ export interface WorkflowApiServices {
   /** The requesting session's own last observed event time, if any. */
   readonly lastEventAtFor?: (session: string) => number | undefined
   readonly triggers: readonly Trigger[]
+  /** The merged trigger catalog once the registry is available. */
+  readonly triggersFor?: () => readonly InstalledTrigger[]
+  /** The merged installed definition catalog once the registry is available. */
+  readonly installedDefinitionsFor?: () => readonly InstalledDefinition[]
   /** The approved definitions of one workspace. */
   readonly definitionsFor?: (workspace: string) => readonly Definition[]
   /** The editor's list view: source and revision per definition. */
@@ -62,7 +67,8 @@ export interface WorkflowApiServices {
       readonly name: string
       readonly description?: string
       readonly version: number
-      readonly source: 'shipped' | 'local'
+      readonly source: 'shipped' | 'plugin' | 'local'
+      readonly plugin?: string
       readonly revision: string | null
     }[]
     readonly errors?: readonly string[]
@@ -343,7 +349,10 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
       return json(200, {
         session: resolved.session,
         triggers: [
-          ...services.triggers.map((trigger) => {
+          ...(
+            services.triggersFor?.() ??
+            services.triggers.map((trigger): InstalledTrigger => ({ trigger, source: 'shipped' }))
+          ).map(({ trigger, source, plugin }) => {
             const last = lastOf(trigger.id)
             return {
               id: trigger.id,
@@ -351,6 +360,8 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
               filter: trigger.filter,
               mode: trigger.mode,
               dedupe: trigger.dedupe,
+              ...(source === undefined ? {} : { source }),
+              ...(plugin === undefined ? {} : { plugin }),
               ...(last === undefined ? {} : { last }),
               counts: countsOf(trigger.id),
             }
@@ -433,11 +444,25 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
               }
             : summary(definition)),
           source: entry.source,
+          ...(entry.plugin === undefined ? {} : { plugin: entry.plugin }),
           revision: entry.revision,
         })
       }
+      const installed = new Map(
+        (services.installedDefinitionsFor?.() ?? []).map((entry) => [entry.definition.id, entry]),
+      )
       for (const definition of definitions) {
-        if (!covered.has(definition.id)) rows.push(summary(definition))
+        if (covered.has(definition.id)) continue
+        const source = installed.get(definition.id)
+        rows.push({
+          ...summary(definition),
+          ...(source === undefined
+            ? {}
+            : {
+                source: source.source,
+                ...(source.plugin === undefined ? {} : { plugin: source.plugin }),
+              }),
+        })
       }
       return json(200, {
         session: resolved.session,
@@ -450,14 +475,20 @@ export function createWorkflowRoutes(services: WorkflowApiServices): FetchRoute[
     route(TEMPLATES_ROUTE, async (request) => {
       const resolved = resolveSession(services, request)
       if ('response' in resolved) return resolved.response
+      const installed =
+        services.installedDefinitionsFor?.() ??
+        loadShippedDefinitions().map(
+          (definition): InstalledDefinition => ({ definition, source: 'shipped' }),
+        )
       return json(200, {
         session: resolved.session,
-        templates: loadShippedDefinitions().map((definition) => ({
+        templates: installed.map(({ definition, source, plugin }) => ({
           id: definition.id,
           name: definition.name,
           version: definition.version,
           stepCount: definition.steps.length,
-          source: 'shipped',
+          source,
+          ...(plugin === undefined ? {} : { plugin }),
           revision: null,
           definition,
         })),

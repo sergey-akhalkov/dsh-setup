@@ -363,6 +363,11 @@ function WorkflowRow(props: {
           {definition.risk === undefined ? null : (
             <Tag tone="quiet">{`${t('definitions.risk')}: ${definition.risk}`}</Tag>
           )}
+          {definition.source === undefined ? null : (
+            <Tag tone="quiet" data-source={definition.source}>
+              {`${t('definitions.source')}: ${definition.plugin === undefined ? definition.source : `${definition.source}:${definition.plugin}`}`}
+            </Tag>
+          )}
         </span>
         <span className="dsh-wf-card-meta">
           <span className="dsh-wf-summary">{triggerText(definition.trigger, t)}</span>
@@ -578,6 +583,16 @@ export function WorkflowPage(props: {
             />
             <Fact label={t('definitions.risk')} value={risk ?? '—'} />
             <Fact label={t('workflow.gateOwnership')} value={gateOwnership ?? '—'} />
+            <Fact
+              label={t('definitions.source')}
+              value={
+                document.source === undefined
+                  ? '—'
+                  : document.plugin === undefined
+                    ? document.source
+                    : `${document.source}:${document.plugin}`
+              }
+            />
             <Fact
               label={t('workflow.trigger')}
               value={

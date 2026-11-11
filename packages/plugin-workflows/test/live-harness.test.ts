@@ -1,13 +1,29 @@
+import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadShippedDefinitions, validateDefinition } from '../src/host/definitions.ts'
+import { validateDefinition } from '../src/host/definitions.ts'
 import { writeDraft } from '../src/host/drafts.ts'
 import { currentSpecDigest } from '../src/host/evidence.ts'
 import { runSubagentStep } from '../src/host/executors.ts'
 import { HostAuth } from '../src/host/host-auth.ts'
 import { apply } from '../src/host/index.ts'
+import { definitionsRegistry } from '../src/host/registry.ts'
+import { contributedIntake, openspecWorkflowAssets } from './intake-definition.ts'
+
+// The real profile installs the OpenSpec plugin's contribution beside the
+// engine; this live-proxy test registers it the same way.
+definitionsRegistry.register({
+  source: '@dsh-setup/plugin-openspec',
+  definitions: [contributedIntake()],
+  triggers: (
+    JSON.parse(readFileSync(join(openspecWorkflowAssets(), 'triggers.json'), 'utf8')) as {
+      triggers: unknown[]
+    }
+  ).triggers,
+})
+
 import { hashSession } from '../src/host/projection.ts'
 import { listReceipts } from '../src/host/receipts.ts'
 import { cancelRun, recoverRuns, resumeRun } from '../src/host/resume.ts'
@@ -245,8 +261,7 @@ describe('obligation engine live proxy', () => {
     process.env.DSH_WORKFLOWS_HOST_KEY = KEY
     const workspace = await tempWorkspace()
     const auth = HostAuth.fromKey(Buffer.from(KEY, 'hex'))
-    const definition = loadShippedDefinitions().find((entry) => entry.id === 'change-intake')
-    if (definition === undefined) throw new Error('the change-intake definition is missing')
+    const definition = contributedIntake()
     const listeners = new Map<string, Listener[]>()
     const routes: Route[] = []
     const commands: Array<{

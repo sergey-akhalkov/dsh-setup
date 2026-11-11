@@ -3,9 +3,10 @@ import { lstat, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'no
 import { dirname, join } from 'node:path';
 import { InstallConflictError, installDefinition, runInstallTransaction, writeAtomic, } from './approval-store.js';
 import { CHANGE_NAME } from './command-parse.js';
-import { DEFINITION_ID, loadShippedDefinitions, validateDefinition, workspaceDefinitionsDirectory, } from './definitions.js';
+import { DEFINITION_ID, validateDefinition, workspaceDefinitionsDirectory, } from './definitions.js';
 import { DRAFTS_ROOT, readDraft } from './drafts.js';
 import { isInside } from './fs-change.js';
+import { definitionsRegistry } from './registry.js';
 import { isOpenRun, listRuns } from './runs.js';
 /**
  * The editor's workspace-scoped write API. The Host carrier dispatches exact
@@ -175,7 +176,7 @@ async function readLocal(workspace, id) {
     return { definition: validateDefinition(raw, id), revision: revisionOf(bytes), bytes };
 }
 /** The editor's list entry for one definition; the description stays optional. */
-function editorEntry(definition, source, revision) {
+function editorEntry(definition, source, revision, plugin) {
     return {
         id: definition.id,
         name: definition.name,
@@ -184,17 +185,18 @@ function editorEntry(definition, source, revision) {
         version: definition.version,
         stepCount: definition.steps.length,
         source,
+        ...(plugin === undefined ? {} : { plugin }),
         revision,
     };
 }
-/** Local definitions plus the shipped set; a local file shadows its shipped id. */
+/** Local definitions plus the installed registry; a local file shadows its id. */
 async function listDefinitions(workspace) {
     const errors = [];
-    const shipped = loadShippedDefinitions();
+    const installed = definitionsRegistry.definitions();
     const local = new Map();
     if (await hasLinkedAncestor(workspace)) {
         return {
-            definitions: shipped.map((definition) => editorEntry(definition, 'shipped', null)),
+            definitions: installed.map((entry) => editorEntry(entry.definition, entry.source, null, entry.plugin)),
             errors: ['a workflow directory is a link; local definitions are refused'],
         };
     }
@@ -225,13 +227,13 @@ async function listDefinitions(workspace) {
             errors.push(bounded(error));
         }
     }
-    const definitions = shipped.map((definition) => {
-        const override = local.get(definition.id);
+    const definitions = installed.map((entry) => {
+        const override = local.get(entry.definition.id);
         if (override !== undefined) {
-            local.delete(definition.id);
+            local.delete(entry.definition.id);
             return override;
         }
-        return editorEntry(definition, 'shipped', null);
+        return editorEntry(entry.definition, entry.source, null, entry.plugin);
     });
     for (const entry of [...local.values()].sort((left, right) => left.id.localeCompare(right.id))) {
         definitions.push(entry);
@@ -246,10 +248,15 @@ async function readDefinitionDocument(workspace, id) {
     if (read !== undefined) {
         return { definition: read.definition, revision: read.revision, source: 'local' };
     }
-    const shipped = loadShippedDefinitions().find((definition) => definition.id === id);
-    if (shipped === undefined)
+    const installed = definitionsRegistry.installed(id);
+    if (installed === undefined)
         return undefined;
-    return { definition: shipped, revision: null, source: 'shipped' };
+    return {
+        definition: installed.definition,
+        revision: null,
+        source: installed.source,
+        ...(installed.plugin === undefined ? {} : { plugin: installed.plugin }),
+    };
 }
 /** Validate a layout sidecar; the engine ignores it, the editor must not crash on it. */
 export function validateLayout(raw, id) {
@@ -573,9 +580,9 @@ export function createEditorRoutes(services) {
             const resolved = resolveSession(services, request);
             if ('response' in resolved)
                 return resolved.response;
-            const templates = loadShippedDefinitions().map((definition) => ({
-                ...editorEntry(definition, 'shipped', null),
-                definition,
+            const templates = definitionsRegistry.definitions().map((entry) => ({
+                ...editorEntry(entry.definition, entry.source, null, entry.plugin),
+                definition: entry.definition,
             }));
             return json(200, { templates });
         }),

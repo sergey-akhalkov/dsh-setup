@@ -46,11 +46,28 @@ describe('fresh-workspace migration', () => {
         validateDefinition(JSON.parse(readFileSync(join(definitionsDir, name), 'utf8')), name),
       )
     expect(definitions.map((definition) => definition.id).sort()).toEqual([
-      'change-intake',
       'retro',
       'task-review',
       'verify',
     ])
+    // The moved intake definition ships read-only with the OpenSpec plugin.
+    const pluginDefinitionsDir = join(
+      setup,
+      'node_modules',
+      '@dsh-setup',
+      'plugin-openspec',
+      'assets',
+      'workflows',
+    )
+    const intake = validateDefinition(
+      JSON.parse(readFileSync(join(pluginDefinitionsDir, 'change-intake.json'), 'utf8')),
+      'change-intake',
+    )
+    expect(intake.id).toBe('change-intake')
+    expect(intake.settings.gate).toBe('intake')
+    expect(readFileSync(join(pluginDefinitionsDir, 'triggers.json'), 'utf8')).toContain(
+      'openspec-tasks-checked',
+    )
     const result = parityLoadIssues(definitions, report, reportPath, error)
     expect(result.issues).toEqual([])
     expect([...result.refused]).toEqual([])

@@ -2,6 +2,7 @@ import { type Definition } from './definitions.js';
 import type { WorkflowHealth } from './health.js';
 import type { Journal } from './journal.js';
 import type { WorkflowReceipt } from './receipts.js';
+import type { InstalledDefinition, InstalledTrigger } from './registry.js';
 import type { Trigger } from './triggers.js';
 /**
  * The read-only Workflows API. Routes are registered through the carrier-neutral
@@ -46,6 +47,10 @@ export interface WorkflowApiServices {
     /** The requesting session's own last observed event time, if any. */
     readonly lastEventAtFor?: (session: string) => number | undefined;
     readonly triggers: readonly Trigger[];
+    /** The merged trigger catalog once the registry is available. */
+    readonly triggersFor?: () => readonly InstalledTrigger[];
+    /** The merged installed definition catalog once the registry is available. */
+    readonly installedDefinitionsFor?: () => readonly InstalledDefinition[];
     /** The approved definitions of one workspace. */
     readonly definitionsFor?: (workspace: string) => readonly Definition[];
     /** The editor's list view: source and revision per definition. */
@@ -55,7 +60,8 @@ export interface WorkflowApiServices {
             readonly name: string;
             readonly description?: string;
             readonly version: number;
-            readonly source: 'shipped' | 'local';
+            readonly source: 'shipped' | 'plugin' | 'local';
+            readonly plugin?: string;
             readonly revision: string | null;
         }[];
         readonly errors?: readonly string[];

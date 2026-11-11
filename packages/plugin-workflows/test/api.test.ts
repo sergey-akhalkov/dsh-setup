@@ -17,9 +17,11 @@ import {
   TRIGGERS_ROUTE,
   type WorkflowApiServices,
 } from '../src/host/api.ts'
+import { validateDefinition } from '../src/host/definitions.ts'
 import { WorkflowHealth } from '../src/host/health.ts'
 import { Journal, type JournalInput } from '../src/host/journal.ts'
 import { hashSession } from '../src/host/projection.ts'
+import type { InstalledDefinition } from '../src/host/registry.ts'
 import { loadCatalog } from '../src/host/triggers.ts'
 
 interface Setup {
@@ -41,7 +43,9 @@ afterEach(async () => {
   )
 })
 
-async function setup(options: { definitions?: readonly unknown[] } = {}): Promise<Setup> {
+async function setup(
+  options: { definitions?: readonly unknown[]; installed?: readonly InstalledDefinition[] } = {},
+): Promise<Setup> {
   const root = await mkdtemp(join(tmpdir(), 'workflows-api-'))
   TEMP_DIRECTORIES.push(root)
   const workspaceOne = join(root, 'one')
@@ -90,6 +94,9 @@ async function setup(options: { definitions?: readonly unknown[] } = {}): Promis
     ...(options.definitions === undefined
       ? {}
       : { definitionsFor: () => options.definitions as never }),
+    ...(options.installed === undefined
+      ? {}
+      : { installedDefinitionsFor: () => options.installed as never }),
   }
   return {
     routes: createWorkflowRoutes(services),
@@ -99,6 +106,38 @@ async function setup(options: { definitions?: readonly unknown[] } = {}): Promis
     workspaceOne,
     workspaceTwo,
   }
+}
+
+function contributedDefinition(): InstalledDefinition['definition'] {
+  return validateDefinition({
+    v: 1,
+    id: 'acme-deploy',
+    name: 'Acme deploy',
+    version: 1,
+    trigger: {
+      kind: 'tool.pre-execute',
+      match: { tool: 'shell', command: 'acme deploy {name}' },
+      mode: 'shadow',
+      dedupe: 'name',
+    },
+    settings: {
+      allowModelStart: false,
+      risk: 'low',
+      gateOwnership: 'own',
+      maxBlocks: 3,
+      allowIntent: false,
+    },
+    steps: [
+      {
+        id: 'only',
+        title: 'Only',
+        executor: 'main',
+        prompt: 'Do.',
+        evidence: { kind: 'file', path: 'out.md' },
+        next: 'end',
+      },
+    ],
+  })
 }
 
 function input(overrides: Partial<JournalInput> = {}): JournalInput {
@@ -368,6 +407,26 @@ describe('workflows read API', () => {
     )
   })
 
+  it('serves a contributed definition with its plugin source in the API and templates', async () => {
+    const definition = contributedDefinition()
+    const value = await setup({
+      definitions: [definition],
+      installed: [{ definition, source: 'plugin', plugin: '@acme/plugin' }],
+    })
+    const listed = await request(value, DEFINITIONS_ROUTE, { session: 's1' })
+    expect(listed.status).toBe(200)
+    const row = (listed.body.definitions as Array<Record<string, unknown>>).find(
+      (entry) => entry.id === 'acme-deploy',
+    )
+    expect(row).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
+    const templates = await request(value, TEMPLATES_ROUTE, { session: 's1' })
+    expect(
+      (templates.body.templates as Array<Record<string, unknown>>).find(
+        (entry) => entry.id === 'acme-deploy',
+      ),
+    ).toMatchObject({ source: 'plugin', plugin: '@acme/plugin' })
+  })
+
   it('serves runs, triggers, and health with the session selector', async () => {
     const value = await setup()
     const runs = await request(value, RUNS_ROUTE, { session: 's1' })
@@ -375,7 +434,7 @@ describe('workflows read API', () => {
     expect((runs.body as { runs: unknown[] }).runs).toEqual([])
     const triggers = await request(value, TRIGGERS_ROUTE, { session: 's1' })
     expect(triggers.status).toBe(200)
-    expect((triggers.body as { triggers: unknown[] }).triggers).toHaveLength(9)
+    expect((triggers.body as { triggers: unknown[] }).triggers).toHaveLength(5)
     const health = await request(value, HEALTH_ROUTE, { session: 's1' })
     expect(health.status).toBe(200)
     expect(health.body).toMatchObject({ state: 'waiting', session: 's1', listenerCount: 5 })
@@ -441,7 +500,7 @@ describe('workflows read API', () => {
         input({
           session,
           summary: `read ${session}`,
-          triggers: [{ id: 'openspec-tasks-checked', matched: reason === 'would-fire', reason }],
+          triggers: [{ id: 'agent-turn-start', matched: reason === 'would-fire', reason }],
         }),
       )
       await value.journal.append(value.workspaceOne, record.record)
@@ -469,7 +528,7 @@ describe('workflows read API', () => {
     const triggersTwo = await request(value, TRIGGERS_ROUTE, { session: 's2' })
     const lastOf = (body: unknown): unknown =>
       (body as { triggers: Array<{ id: string; last?: { reason: string } }> }).triggers.find(
-        (trigger) => trigger.id === 'openspec-tasks-checked',
+        (trigger) => trigger.id === 'agent-turn-start',
       )?.last?.reason
     expect(lastOf(triggersOne.body)).toBe('would-fire')
     expect(lastOf(triggersTwo.body)).toBe('event-mismatch')

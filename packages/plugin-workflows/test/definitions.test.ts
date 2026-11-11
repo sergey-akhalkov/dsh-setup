@@ -18,6 +18,18 @@ import { HostAuth } from '../src/host/host-auth.ts'
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 const TEMP_DIRECTORIES: string[] = []
 
+/** The intake definition that now ships read-only with the OpenSpec plugin. */
+function contributedIntake(): Definition {
+  return validateDefinition(
+    JSON.parse(
+      readFileSync(
+        join(packageDir, '..', 'plugin-openspec', 'assets', 'workflows', 'change-intake.json'),
+        'utf8',
+      ),
+    ) as unknown,
+  )
+}
+
 async function tempWorkspace(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'workflows-ownership-'))
   TEMP_DIRECTORIES.push(directory)
@@ -46,7 +58,7 @@ function valid(): Record<string, unknown> {
     version: 1,
     trigger: {
       kind: 'tool.pre-execute',
-      match: { tool: 'shell', command: 'openspec new change <name>' },
+      match: { tool: 'shell', command: 'openspec new change {name}' },
       mode: 'active',
       dedupe: 'name',
     },
@@ -82,11 +94,8 @@ function firstStep(definition: Record<string, unknown>): Record<string, unknown>
 }
 
 describe('workflow definition schema', () => {
-  it('loads the complete shipped change-intake definition with its all contracts', () => {
-    const definitions = loadShippedDefinitions()
-    const intake = definitions.find((definition) => definition.id === 'change-intake')
-    expect(intake).toBeDefined()
-    const definition = intake as Definition
+  it('loads the complete contributed change-intake definition with its all contracts', () => {
+    const definition = contributedIntake()
     expect(definition.name).toBe('OpenSpec change intake')
     expect(definition.description).toBe(
       'Collect the requirements, architecture, and interface, then create and review an OpenSpec change.',
@@ -381,8 +390,8 @@ describe('workflow definition schema', () => {
 })
 
 describe('ownership and the installed legacy profile', () => {
-  it('keeps the shipped intake own for its own steps and defers only spec-review', () => {
-    const intake = loadShippedDefinitions().find((definition) => definition.id === 'change-intake')
+  it('keeps the contributed intake own for its own steps and defers only spec-review', () => {
+    const intake = contributedIntake()
     const resolved = resolveOwnership(
       intake as Definition,
       profile('delegation-rules', 'goal-continuity'),
@@ -407,20 +416,22 @@ describe('ownership and the installed legacy profile', () => {
   })
 
   it('refuses a deferred step when its legacy source is not installed', async () => {
-    const intake = loadShippedDefinitions().find((definition) => definition.id === 'change-intake')
-    const missing = resolveOwnership(intake as Definition, profile())
+    const intake = contributedIntake()
+    const missing = resolveOwnership(intake, profile())
     expect(missing.issues.join('\n')).toMatch(
       /step "spec-review".*"delegation-rules\/spec-review" is not installed.*retire-legacy-gates/u,
     )
     const workspace = await tempWorkspace()
     const refused = await loadApprovedDefinitions(workspace, {
       auth: HostAuth.fromKey('test-ownership-host-key-0123'),
+      shipped: [...loadShippedDefinitions(), intake],
       installedLegacy: profile(),
     })
     expect(refused.definitions.map((definition) => definition.id)).not.toContain('change-intake')
     expect(refused.errors.join('\n')).toMatch(/retire-legacy-gates/u)
     const loaded = await loadApprovedDefinitions(workspace, {
       auth: HostAuth.fromKey('test-ownership-host-key-0123'),
+      shipped: [...loadShippedDefinitions(), intake],
       installedLegacy: profile('delegation-rules', 'goal-continuity'),
     })
     expect(loaded.definitions.map((definition) => definition.id)).toContain('change-intake')
@@ -493,11 +504,8 @@ it('resolves the shipped intake against the shipped strict spec-review rule', ()
     scope: 'whole',
     gate: 'strict',
   })
-  const intake = loadShippedDefinitions().find((definition) => definition.id === 'change-intake')
-  const resolved = resolveOwnership(
-    intake as Definition,
-    profile('delegation-rules', 'goal-continuity'),
-  )
+  const intake = contributedIntake()
+  const resolved = resolveOwnership(intake, profile('delegation-rules', 'goal-continuity'))
   expect(resolved.issues).toEqual([])
   const byId = new Map(resolved.steps.map((step) => [step.id, step]))
   expect(byId.get('spec-review')).toMatchObject({
@@ -558,4 +566,67 @@ it('requires a closed, supported result schema for a subagent step', () => {
   unsupportedStep.subagent = { provider: 'spawn', schema: { type: 'string', pattern: 'x' } }
   delete unsupportedStep.evidence
   expect(() => validateDefinition(unsupported)).toThrow(/unsupported constraint/u)
+})
+
+it('validates the one {name} capture in a command template and a path glob', () => {
+  const captured = valid()
+  captured.trigger = {
+    kind: 'tool.pre-execute',
+    match: { tool: 'shell', command: 'acme deploy {name}' },
+    mode: 'active',
+    dedupe: 'name',
+  }
+  expect(validateDefinition(captured).trigger.match.command).toBe('acme deploy {name}')
+
+  const pathCaptured = valid()
+  pathCaptured.trigger = {
+    kind: 'fs.change',
+    match: { path: 'openspec/changes/{name}/tasks.md' },
+    mode: 'active',
+    dedupe: 'path+content-hash',
+  }
+  expect(validateDefinition(pathCaptured).trigger.match.path).toBe(
+    'openspec/changes/{name}/tasks.md',
+  )
+
+  for (const command of [
+    'acme deploy {name} {name}',
+    'acme deploy {}',
+    'acme deploy {name',
+    'acme deploy {other}',
+  ]) {
+    const bad = valid()
+    bad.trigger = {
+      kind: 'tool.pre-execute',
+      match: { tool: 'shell', command },
+      mode: 'active',
+      dedupe: 'name',
+    }
+    expect(() => validateDefinition(bad)).toThrow(/trigger\.match\.command/u)
+  }
+
+  const badPath = valid()
+  badPath.trigger = {
+    kind: 'fs.change',
+    match: { path: 'openspec/{name}x/tasks.md' },
+    mode: 'active',
+    dedupe: 'none',
+  }
+  expect(() => validateDefinition(badPath)).toThrow(/whole path segment/u)
+})
+
+it('accepts the closed intake gate declaration and refuses another gate', () => {
+  const gated = valid()
+  gated.settings = {
+    ...(gated.settings as Record<string, unknown>),
+    gate: 'intake',
+  }
+  expect(validateDefinition(gated).settings.gate).toBe('intake')
+
+  const unknown = valid()
+  unknown.settings = {
+    ...(unknown.settings as Record<string, unknown>),
+    gate: 'archive',
+  }
+  expect(() => validateDefinition(unknown)).toThrow(/settings\.gate/u)
 })

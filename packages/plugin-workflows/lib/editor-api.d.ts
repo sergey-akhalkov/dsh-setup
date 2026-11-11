@@ -28,7 +28,8 @@ export interface LayoutSidecar {
     readonly id: string;
     readonly positions: Readonly<Record<string, LayoutPosition>>;
 }
-export type DefinitionSource = 'shipped' | 'local';
+/** Where an editor definition came from; a plugin contribution is read-only. */
+export type DefinitionSource = 'shipped' | 'plugin' | 'local';
 export interface EditorDefinitionEntry {
     readonly id: string;
     readonly name: string;
@@ -39,6 +40,8 @@ export interface EditorDefinitionEntry {
     readonly version: number;
     readonly stepCount: number;
     readonly source: DefinitionSource;
+    /** The contributing plugin package name, for a plugin definition. */
+    readonly plugin?: string;
     /** The SHA-256 of the exact local file bytes; null for a shipped template. */
     readonly revision: string | null;
 }
@@ -46,6 +49,8 @@ export interface DefinitionDocument {
     readonly definition: Definition;
     readonly revision: string | null;
     readonly source: DefinitionSource;
+    /** The contributing plugin package name, for a plugin definition. */
+    readonly plugin?: string;
 }
 export interface TemplateEntry extends EditorDefinitionEntry {
     readonly definition: Definition;
@@ -77,7 +82,7 @@ export declare function definitionErrors(error: unknown): {
     path: string;
     message: string;
 }[];
-/** Local definitions plus the shipped set; a local file shadows its shipped id. */
+/** Local definitions plus the installed registry; a local file shadows its id. */
 declare function listDefinitions(workspace: string): Promise<{
     definitions: EditorDefinitionEntry[];
     errors: string[];

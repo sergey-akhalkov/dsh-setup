@@ -38,13 +38,13 @@ export const DEDUPE_BY_TRIGGER = {
 };
 /** The one applicability decision a definition may declare for a trigger. */
 export const APPLICABILITY_KINDS = ['checkpoint-required', 'code-write'];
-export const TRIGGER_COMMANDS = [
-    'openspec new change <name>',
-    'openspec archive <name>',
-];
+/** The one capture placeholder a command template or path glob may carry. */
+export const NAME_CAPTURE = '{name}';
 export const EXECUTORS = ['main', 'subagent', 'tool', 'branch', 'loop', 'human'];
 export const RISKS = ['low', 'medium', 'high'];
 export const GATE_OWNERSHIP = ['own', 'defer'];
+/** The closed pre-execute gate a definition may declare; the engine owns each. */
+export const DEFINITION_GATES = ['intake'];
 export const EVIDENCE_KINDS = [
     'file',
     'record',
@@ -75,6 +75,7 @@ const SETTINGS_KEYS = new Set([
     'allowIntent',
     'allowTools',
     'legacy',
+    'gate',
 ]);
 const TRIGGER_KEYS = new Set(['kind', 'match', 'mode', 'dedupe', 'repeat', 'applicability']);
 const MATCH_KEYS = new Set([
@@ -186,6 +187,21 @@ function legacySource(raw, definition, field) {
         signal: nonEmptyString(raw.signal, definition, `${field}.signal`),
     };
 }
+/**
+ * A capture template: at most one `{name}`, no other brace. A template without
+ * a capture is a literal and behaves exactly as before.
+ */
+function captureTemplate(value, definition, field) {
+    const template = nonEmptyString(value, definition, field);
+    const captures = template.split(NAME_CAPTURE).length - 1;
+    if (captures > 1)
+        fail(definition, field, `must not repeat the ${NAME_CAPTURE} capture`);
+    const rest = template.replaceAll(NAME_CAPTURE, '');
+    if (rest.includes('{') || rest.includes('}')) {
+        fail(definition, field, `must carry at most one complete ${NAME_CAPTURE} capture`);
+    }
+    return template;
+}
 function triggerMatch(raw, definition) {
     if (!isRecord(raw))
         fail(definition, 'trigger.match', 'must be an object');
@@ -195,8 +211,12 @@ function triggerMatch(raw, definition) {
         match[key] = nonEmptyString(value, definition, `trigger.match.${key}`);
     }
     if (match.command !== undefined) {
-        if (!TRIGGER_COMMANDS.includes(match.command)) {
-            fail(definition, 'trigger.match.command', `must be one of: ${TRIGGER_COMMANDS.join(', ')}`);
+        match.command = captureTemplate(match.command, definition, 'trigger.match.command');
+    }
+    if (match.path !== undefined) {
+        match.path = captureTemplate(match.path, definition, 'trigger.match.path');
+        if (match.path.includes(NAME_CAPTURE) && !match.path.split('/').includes(NAME_CAPTURE)) {
+            fail(definition, 'trigger.match.path', `must use ${NAME_CAPTURE} as a whole path segment`);
         }
     }
     return match;
@@ -253,6 +273,9 @@ function settings(raw, definition) {
     if (gateOwnership === 'defer' && legacy === undefined) {
         fail(definition, 'settings.legacy', 'is required when settings.gateOwnership is "defer"');
     }
+    const gate = raw.gate === undefined
+        ? undefined
+        : isOneOf(raw.gate, DEFINITION_GATES, definition, 'settings.gate');
     let allowTools;
     if (raw.allowTools !== undefined) {
         if (!Array.isArray(raw.allowTools) || raw.allowTools.length === 0) {
@@ -271,6 +294,7 @@ function settings(raw, definition) {
         allowIntent: raw.allowIntent,
         ...(allowTools === undefined ? {} : { allowTools }),
         ...(legacy === undefined ? {} : { legacy }),
+        ...(gate === undefined ? {} : { gate }),
     };
 }
 function evidence(raw, definition, field) {

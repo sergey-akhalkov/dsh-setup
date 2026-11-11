@@ -272,7 +272,8 @@ export function createWorkflowRoutes(services) {
             return json(200, {
                 session: resolved.session,
                 triggers: [
-                    ...services.triggers.map((trigger) => {
+                    ...(services.triggersFor?.() ??
+                        services.triggers.map((trigger) => ({ trigger, source: 'shipped' }))).map(({ trigger, source, plugin }) => {
                         const last = lastOf(trigger.id);
                         return {
                             id: trigger.id,
@@ -280,6 +281,8 @@ export function createWorkflowRoutes(services) {
                             filter: trigger.filter,
                             mode: trigger.mode,
                             dedupe: trigger.dedupe,
+                            ...(source === undefined ? {} : { source }),
+                            ...(plugin === undefined ? {} : { plugin }),
                             ...(last === undefined ? {} : { last }),
                             counts: countsOf(trigger.id),
                         };
@@ -365,12 +368,24 @@ export function createWorkflowRoutes(services) {
                         }
                         : summary(definition)),
                     source: entry.source,
+                    ...(entry.plugin === undefined ? {} : { plugin: entry.plugin }),
                     revision: entry.revision,
                 });
             }
+            const installed = new Map((services.installedDefinitionsFor?.() ?? []).map((entry) => [entry.definition.id, entry]));
             for (const definition of definitions) {
-                if (!covered.has(definition.id))
-                    rows.push(summary(definition));
+                if (covered.has(definition.id))
+                    continue;
+                const source = installed.get(definition.id);
+                rows.push({
+                    ...summary(definition),
+                    ...(source === undefined
+                        ? {}
+                        : {
+                            source: source.source,
+                            ...(source.plugin === undefined ? {} : { plugin: source.plugin }),
+                        }),
+                });
             }
             return json(200, {
                 session: resolved.session,
@@ -384,14 +399,17 @@ export function createWorkflowRoutes(services) {
             const resolved = resolveSession(services, request);
             if ('response' in resolved)
                 return resolved.response;
+            const installed = services.installedDefinitionsFor?.() ??
+                loadShippedDefinitions().map((definition) => ({ definition, source: 'shipped' }));
             return json(200, {
                 session: resolved.session,
-                templates: loadShippedDefinitions().map((definition) => ({
+                templates: installed.map(({ definition, source, plugin }) => ({
                     id: definition.id,
                     name: definition.name,
                     version: definition.version,
                     stepCount: definition.steps.length,
-                    source: 'shipped',
+                    source,
+                    ...(plugin === undefined ? {} : { plugin }),
                     revision: null,
                     definition,
                 })),

@@ -6,7 +6,7 @@
   "version": 1,
   "trigger": {
     "kind": "tool.pre-execute",
-    "match": { "tool": "shell", "command": "openspec new change <name>" },
+    "match": { "tool": "shell", "command": "openspec new change {name}" },
     "mode": "active",
     "dedupe": "name"
   },
@@ -14,6 +14,7 @@
     "allowModelStart": false,
     "risk": "low",
     "gateOwnership": "own",
+    "gate": "intake",
     "maxBlocks": 3,
     "allowIntent": false,
     "allowTools": ["shell", "delegate"]

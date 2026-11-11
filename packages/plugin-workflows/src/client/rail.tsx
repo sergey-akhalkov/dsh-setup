@@ -80,9 +80,12 @@ export function WorkflowRail(props: WorkflowRailProps): ReactNode {
                         ? t('overview.unknownKind')
                         : `${t('definitions.trigger')}: ${entry.trigger}`}
                     </span>
-                    <span className="dsh-wf-muted">
-                      {entry.id} · v{String(entry.version)} · {entry.source} ·{' '}
-                      {String(entry.stepCount)} steps
+                    <span className="dsh-wf-muted" data-source={entry.source}>
+                      {entry.id} · v{String(entry.version)} ·{' '}
+                      {entry.plugin === undefined
+                        ? entry.source
+                        : `${entry.source}:${entry.plugin}`}{' '}
+                      · {String(entry.stepCount)} steps
                     </span>
                     {current && props.latestRun !== undefined ? (
                       <span className="dsh-wf-time" data-latest-run={props.latestRun.id}>

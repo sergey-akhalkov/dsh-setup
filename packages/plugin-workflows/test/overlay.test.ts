@@ -8,7 +8,10 @@ import { activeRun, createRunSelection } from '../src/client/run-selection.ts'
 import { packageDir } from './client-harness.ts'
 
 const DEFINITION = JSON.parse(
-  readFileSync(join(packageDir, 'assets', 'definitions', 'change-intake.json'), 'utf8'),
+  readFileSync(
+    join(packageDir, '..', 'plugin-openspec', 'assets', 'workflows', 'change-intake.json'),
+    'utf8',
+  ),
 ) as GraphDefinition
 
 function run(overrides: Partial<RunView> = {}): RunView {
