@@ -95,6 +95,7 @@ ${output.text}
         Component: StubComponent,
         useEffect: () => {},
         useMemo: (factory: () => unknown) => factory(),
+        useRef: (value: unknown) => ({ current: value }),
         useState: (initial: unknown) => [
           typeof initial === 'function' ? (initial as () => unknown)() : initial,
           () => {},
@@ -106,6 +107,9 @@ ${output.text}
         Handle: (props: Record<string, unknown>) => jsx('handle', props),
         Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
         ReactFlow: (props: Record<string, unknown>) => jsx('reactflow', props),
+        Background: (props: Record<string, unknown>) => jsx('background', props),
+        Controls: (props: Record<string, unknown>) => jsx('controls', props),
+        BackgroundVariant: { Lines: 'lines', Dots: 'dots', Cross: 'cross' },
       }
     }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
@@ -120,11 +124,31 @@ ${output.text}
         Pill: (props: Record<string, unknown>) => jsx('pill', props),
         PathLabel: (props: Record<string, unknown>) =>
           jsx('pathlabel', { ...props, children: props.path }),
+        ...ICON_STUBS,
       }
     }
     return stubs[id] ?? {}
   })
 }
+
+/** The shipped icons the workbench renders; the test tree only needs elements. */
+export const ICON_STUBS: Record<string, unknown> = Object.fromEntries(
+  [
+    'IconPlayOutlineRegular',
+    'IconSparkleRegular',
+    'IconCodeOutlineRegular',
+    'IconUsersOutlineRegular',
+    'IconUserOutlineRegular',
+    'IconBranchOutlineRegular',
+    'IconRefreshOutlineRegular',
+    'IconPlusOutlineRegular',
+    'IconEllipsisOutlineRegular',
+    'IconCloseOutlineRegular',
+    'IconSlidersTwoOutlineRegular',
+    'IconTrashOutlineRegular',
+    'IconListPenOutlineRegular',
+  ].map((name) => [name, (props: Record<string, unknown>) => jsx('icon', { name, ...props })]),
+)
 
 export function call(module: LoadedClient, name: string, props: Record<string, unknown>): unknown {
   const component = module[name]

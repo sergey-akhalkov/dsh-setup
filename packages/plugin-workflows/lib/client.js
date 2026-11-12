@@ -124,9 +124,9 @@ window.__ModuleLoader__.load({
             return x === y && (0 !== x || 1 / x === 1 / y) || x !== x && y !== y;
           }
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef5 = React.useRef, useEffect5 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
+          var React = require("react"), shim = require_shim(), objectIs = "function" === typeof Object.is ? Object.is : is, useSyncExternalStore = shim.useSyncExternalStore, useRef6 = React.useRef, useEffect5 = React.useEffect, useMemo3 = React.useMemo, useDebugValue2 = React.useDebugValue;
           exports.useSyncExternalStoreWithSelector = function(subscribe, getSnapshot, getServerSnapshot, selector2, isEqual) {
-            var instRef = useRef5(null);
+            var instRef = useRef6(null);
             if (null === instRef.current) {
               var inst = { hasValue: false, value: null };
               instRef.current = inst;
@@ -208,15 +208,19 @@ window.__ModuleLoader__.load({
     module.exports = __toCommonJS(index_exports);
 
     // packages/plugin-workflows/src/client/design-page.tsx
-    var import_dsh_client_ui_primitives7 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react7 = require("react");
 
     // packages/plugin-workflows/src/client/design.tsx
-    var import_dsh_client_ui_primitives5 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives6 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react6 = require("react");
 
     // packages/plugin-workflows/src/client/a11y.ts
     var NARROW_WIDTH = 720;
+    var WIDE_WIDTH = 980;
+    function inspectorPlacement(width) {
+      return width >= WIDE_WIDTH ? "column" : "drawer";
+    }
     function defaultMode(width) {
       return width > 0 && width < NARROW_WIDTH ? "list" : "canvas";
     }
@@ -9435,78 +9439,185 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/canvas.tsx
     var import_react4 = require("react");
+
+    // packages/plugin-workflows/src/client/bricks.ts
+    var BRICK_MIME = "application/x-dsh-wf-brick";
+    var TRIGGER_BRICKS = [
+      { value: "turn.stopping", icon: "trigger", hintKey: "design.brick.trigger.turnStopping" },
+      { value: "tool.pre-execute", icon: "trigger", hintKey: "design.brick.trigger.toolPreExecute" },
+      { value: "tool.result", icon: "trigger", hintKey: "design.brick.trigger.toolResult" },
+      { value: "fs.change", icon: "trigger", hintKey: "design.brick.trigger.fsChange" },
+      { value: "subagent.end", icon: "trigger", hintKey: "design.brick.trigger.subagentEnd" },
+      { value: "review.record", icon: "trigger", hintKey: "design.brick.trigger.reviewRecord" }
+    ];
+    var STEP_BRICKS = [
+      {
+        value: "main",
+        icon: "agent",
+        labelKey: "design.brick.agent",
+        hintKey: "design.brick.agent.hint"
+      },
+      {
+        value: "tool",
+        icon: "tool",
+        labelKey: "design.brick.tool",
+        hintKey: "design.brick.tool.hint"
+      },
+      {
+        value: "subagent",
+        icon: "subagent",
+        labelKey: "design.brick.subagent",
+        hintKey: "design.brick.subagent.hint"
+      },
+      {
+        value: "human",
+        icon: "human",
+        labelKey: "design.brick.human",
+        hintKey: "design.brick.human.hint"
+      },
+      {
+        value: "branch",
+        icon: "branch",
+        labelKey: "design.brick.branch",
+        hintKey: "design.brick.branch.hint"
+      },
+      {
+        value: "loop",
+        icon: "loop",
+        labelKey: "design.brick.loop",
+        hintKey: "design.brick.loop.hint"
+      }
+    ];
+    function brickPayload(kind, value2) {
+      return `${kind}:${value2}`;
+    }
+    function parseBrickPayload(payload) {
+      const separator = payload.indexOf(":");
+      if (separator <= 0 || separator === payload.length - 1) return void 0;
+      const kind = payload.slice(0, separator);
+      if (kind !== "trigger" && kind !== "step") return void 0;
+      const value2 = payload.slice(separator + 1);
+      const catalog = kind === "trigger" ? TRIGGER_BRICKS : STEP_BRICKS;
+      return catalog.some((brick) => brick.value === value2) ? { kind, value: value2 } : void 0;
+    }
+
+    // packages/plugin-workflows/src/client/glyphs.tsx
+    var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime2 = require("react/jsx-runtime");
+    var GLYPHS = {
+      trigger: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconPlayOutlineRegular, {}),
+      agent: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconSparkleRegular, {}),
+      tool: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconCodeOutlineRegular, {}),
+      subagent: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconUsersOutlineRegular, {}),
+      human: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconUserOutlineRegular, {}),
+      branch: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconBranchOutlineRegular, {}),
+      loop: () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.IconRefreshOutlineRegular, {})
+    };
+    function brickGlyph(icon) {
+      return GLYPHS[icon]();
+    }
+    function executorIcon(executor, kind) {
+      if (executor === "tool") return "tool";
+      if (executor === "subagent") return "subagent";
+      if (executor === "human") return "human";
+      if (executor === "branch" || kind === "branch") return "branch";
+      if (executor === "loop" || kind === "loop") return "loop";
+      if (kind === "trigger") return "trigger";
+      return "agent";
+    }
+
+    // packages/plugin-workflows/src/client/canvas.tsx
+    var import_jsx_runtime3 = require("react/jsx-runtime");
     function stateBadge(data) {
       const parts = [];
       if (data.runState !== void 0) parts.push(data.runState);
       if (data.failureClass !== void 0) parts.push(data.failureClass);
-      return parts.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wf-node-badge", "data-run-state": data.runState, children: parts.join(" \xB7 ") });
+      return parts.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-badge", "data-run-state": data.runState, children: parts.join(" \xB7 ") });
+    }
+    function nodeHead(data) {
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-head", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-icon", "aria-hidden": "true", children: brickGlyph(executorIcon(data.executor, data.kind)) }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-titles", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-title", children: data.title }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-meta", children: data.executor ?? data.kind })
+        ] })
+      ] });
     }
     function StepHandles(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "target", position: Position.Left, id: "target" }),
-        props.kind === "branch" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "source", position: Position.Right, id: "true", style: { top: "30%" } }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "source", position: Position.Right, id: "false", style: { top: "70%" } })
-        ] }) : props.kind === "loop" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "source", position: Position.Right, id: "exit" }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "source", position: Position.Bottom, id: "body" })
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "source", position: Position.Right, id: "next" })
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "target", position: Position.Left, id: "target" }),
+        props.kind === "branch" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "source", position: Position.Right, id: "true", style: { top: "30%" } }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "source", position: Position.Right, id: "false", style: { top: "70%" } })
+        ] }) : props.kind === "loop" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "source", position: Position.Right, id: "exit" }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "source", position: Position.Bottom, id: "body" })
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "source", position: Position.Right, id: "next" })
       ] });
     }
     function nodeBody(data) {
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf-node-title", children: data.title }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf-node-meta", children: data.kind }),
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+        nodeHead(data),
         stateBadge(data),
-        data.evidence === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dsh-wf-node-evidence", title: data.evidence.ref, children: [
+        data.evidence === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "dsh-wf-node-evidence", title: data.evidence.ref, children: [
           data.evidence.kind,
           data.evidence.ref === void 0 ? "" : `: ${data.evidence.ref}`
         ] }),
-        (data.violations ?? []).map((reason) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dsh-wf-node-violation", children: reason }, reason))
+        (data.violations ?? []).map((reason) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-violation", children: reason }, reason))
       ] });
     }
     function TriggerNodeView(props) {
       const data = props.data;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf-node", "data-kind": "trigger", "data-state": data.runState, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf-node-title", children: "Trigger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf-node-meta", children: data.title }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "source", position: Position.Right, id: "start" })
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node", "data-kind": "trigger", "data-state": data.runState, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-icon", "aria-hidden": "true", children: brickGlyph("trigger") }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-titles", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-title", children: "Trigger" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-meta", children: data.title })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "source", position: Position.Right, id: "start" })
       ] });
     }
     function StepNodeView(props) {
       const data = props.data;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf-node", "data-kind": "step", "data-state": data.runState, children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node", "data-kind": "step", "data-state": data.runState, children: [
         nodeBody(data),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StepHandles, { kind: "step" })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(StepHandles, { kind: "step" })
       ] });
     }
     function BranchNodeView(props) {
       const data = props.data;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf-node", "data-kind": "branch", "data-state": data.runState, children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node", "data-kind": "branch", "data-state": data.runState, children: [
         nodeBody(data),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StepHandles, { kind: "branch" })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(StepHandles, { kind: "branch" })
       ] });
     }
     function LoopNodeView(props) {
       const data = props.data;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf-node", "data-kind": "loop", "data-state": data.runState, children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node", "data-kind": "loop", "data-state": data.runState, children: [
         nodeBody(data),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StepHandles, { kind: "loop" })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(StepHandles, { kind: "loop" })
       ] });
     }
     function HumanNodeView(props) {
       const data = props.data;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf-node", "data-kind": "human", "data-state": data.runState, children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node", "data-kind": "human", "data-state": data.runState, children: [
         nodeBody(data),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StepHandles, { kind: "human" })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(StepHandles, { kind: "human" })
       ] });
     }
     function EndNodeView(props) {
       const data = props.data;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dsh-wf-node", "data-kind": "end", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dsh-wf-node-title", children: data.title }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Handle, { type: "target", position: Position.Left, id: "target" })
+      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node dsh-wf-node-end", "data-kind": "end", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-icon", "aria-hidden": "true", children: brickGlyph("agent") }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-titles", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-title", children: data.title }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-meta", children: "end" })
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Handle, { type: "target", position: Position.Left, id: "target" })
       ] });
     }
     var CANVAS_NODE_TYPES = {
@@ -9544,6 +9655,7 @@ window.__ModuleLoader__.load({
           title: node.title,
           kind: node.kind,
           ...node.step === void 0 ? {} : { stepId: node.step.id },
+          ...node.step === void 0 ? {} : { executor: node.step.executor },
           ...node.runState === void 0 ? {} : { runState: node.runState },
           ...node.failureClass === void 0 ? {} : { failureClass: node.failureClass },
           ...node.evidence === void 0 ? {} : { evidence: node.evidence },
@@ -9551,6 +9663,7 @@ window.__ModuleLoader__.load({
         }
       }));
     }
+    var LABELLED_EDGES = /* @__PURE__ */ new Set(["true", "false", "body", "exit"]);
     function toFlowEdges(edges, nodes = []) {
       const titles = new Map(nodes.map((node) => [node.id, node.title]));
       return edges.map((edge2) => {
@@ -9565,7 +9678,7 @@ window.__ModuleLoader__.load({
           sourceHandle: edge2.kind,
           // Distinct outputs between the same nodes must not share an accessible name.
           ariaLabel: `${source} ${edge2.label ?? edge2.kind} ${target}`,
-          ...edge2.label === void 0 ? {} : { label: edge2.label },
+          ...LABELLED_EDGES.has(edge2.kind) && edge2.label !== void 0 ? { label: edge2.label } : {},
           data: { kind: edge2.kind }
         };
       });
@@ -9575,44 +9688,73 @@ window.__ModuleLoader__.load({
       const flowNodes = toFlowNodes(props.nodes, props.selected);
       const flowEdges = toFlowEdges(props.edges, props.nodes);
       const readOnly = props.readOnly === true;
-      return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-        index,
-        {
-          nodes: flowNodes,
-          edges: flowEdges,
-          nodeTypes: CANVAS_NODE_TYPES,
-          fitView: true,
-          fitViewOptions: { padding: 0.2, maxZoom: 1.2 },
-          nodesFocusable: true,
-          edgesFocusable: true,
-          nodesDraggable: !readOnly,
-          nodesConnectable: !readOnly,
-          onNodeClick: (_event, node) => props.onSelect(node.id),
-          onPaneClick: () => props.onSelect(void 0),
-          onNodesChange: (changes) => {
-            const selects = changes.filter(
-              (change) => change.type === "select" && change.id !== void 0
-            );
-            if (selects.length === 0) return;
-            const selected2 = selects.filter((change) => change.selected === true).at(-1)?.id;
-            props.onSelect(selected2);
+      const instance = (0, import_react4.useRef)(void 0);
+      const onDrop = (event) => {
+        const parsed = parseBrickPayload(event.dataTransfer.getData(BRICK_MIME));
+        if (parsed === void 0 || parsed.kind !== "step" || props.onDropBrick === void 0) return;
+        if (instance.current === void 0) return;
+        event.preventDefault();
+        props.onDropBrick(
+          parsed.value,
+          instance.current.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+        );
+      };
+      return (
+        // biome-ignore lint/a11y/noStaticElementInteractions: the wrapper is the palette's drop target; the keyboard path is the brick buttons, not this surface.
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-flow", onDragOver: (event) => event.preventDefault(), onDrop, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+          index,
+          {
+            nodes: flowNodes,
+            edges: flowEdges,
+            nodeTypes: CANVAS_NODE_TYPES,
+            fitView: true,
+            fitViewOptions: { padding: 0.2, maxZoom: 1.2 },
+            nodesFocusable: true,
+            edgesFocusable: true,
+            nodesDraggable: !readOnly,
+            nodesConnectable: !readOnly,
+            onInit: (flow) => {
+              instance.current = flow;
+            },
+            onNodeClick: (_event, node) => props.onSelect(node.id),
+            onPaneClick: () => props.onSelect(void 0),
+            onNodesChange: (changes) => {
+              const selects = changes.filter(
+                (change) => change.type === "select" && change.id !== void 0
+              );
+              if (selects.length === 0) return;
+              const selected2 = selects.filter((change) => change.selected === true).at(-1)?.id;
+              props.onSelect(selected2);
+            },
+            onSelectionChange: (selection2) => {
+              const first = selection2.nodes?.[0];
+              props.onSelect(first?.id);
+            },
+            onNodeDragStop: readOnly ? void 0 : (_event, node) => props.onMove?.(node.id, node.position),
+            onConnect: readOnly ? void 0 : (connection) => {
+              if (connection.source === null || connection.target === null) return;
+              const handle = connection.sourceHandle;
+              props.onConnectNode?.(
+                connection.source,
+                connection.target,
+                handle !== null && KNOWN_KINDS.has(handle) ? handle : "next"
+              );
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                Background,
+                {
+                  variant: BackgroundVariant.Dots,
+                  gap: 18,
+                  size: 1.2,
+                  color: "var(--dsw-alias-border-l2)"
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Controls, { showInteractive: false, "aria-label": "Canvas controls" })
+            ]
           },
-          onSelectionChange: (selection2) => {
-            const first = selection2.nodes?.[0];
-            props.onSelect(first?.id);
-          },
-          onNodeDragStop: readOnly ? void 0 : (_event, node) => props.onMove?.(node.id, node.position),
-          onConnect: readOnly ? void 0 : (connection) => {
-            if (connection.source === null || connection.target === null) return;
-            const handle = connection.sourceHandle;
-            props.onConnectNode?.(
-              connection.source,
-              connection.target,
-              handle !== null && KNOWN_KINDS.has(handle) ? handle : "next"
-            );
-          }
-        },
-        props.focusKey
+          props.focusKey
+        ) })
       );
     }
 
@@ -10787,8 +10929,8 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/list.tsx
-    var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-    var import_jsx_runtime3 = require("react/jsx-runtime");
+    var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_jsx_runtime4 = require("react/jsx-runtime");
     var EXECUTORS = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS = ["file", "record", "tool", "check", "human", "all", "declaration"];
     function outputsFor(step) {
@@ -10861,12 +11003,12 @@ window.__ModuleLoader__.load({
       const trigger = props.state.document.definition.trigger;
       const startTarget = currentTarget(props.state.diagram.edges, TRIGGER_NODE, "start");
       const stepTargets = props.state.diagram.nodes.filter((node) => node.step !== void 0);
-      return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-list-wrap", "data-tab-group": "list", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { className: "dsh-wf-list-trigger", "data-tab-group": "trigger", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { children: "Trigger" }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "dsh-wf-list-wrap", "data-tab-group": "list", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "dsh-wf-list-trigger", "data-tab-group": "trigger", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h4", { children: "Trigger" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Kind",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
               "input",
               {
                 value: typeof trigger.kind === "string" ? trigger.kind : "",
@@ -10875,24 +11017,24 @@ window.__ModuleLoader__.load({
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Mode",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
               "select",
               {
                 value: typeof trigger.mode === "string" ? trigger.mode : "shadow",
                 "aria-label": "Trigger mode",
                 onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } }),
                 children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "shadow", children: "shadow" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "active", children: "active" })
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "shadow", children: "shadow" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "active", children: "active" })
                 ]
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Dedupe",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
               "select",
               {
                 value: typeof trigger.dedupe === "string" ? trigger.dedupe : "turn",
@@ -10900,13 +11042,13 @@ window.__ModuleLoader__.load({
                 onChange: (event) => props.onDefinitionPatch({
                   trigger: { ...trigger, dedupe: event.currentTarget.value }
                 }),
-                children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: policy, children: policy }, policy))
+                children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: policy, children: policy }, policy))
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Start step",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
               "select",
               {
                 value: startTarget ?? "",
@@ -10916,8 +11058,8 @@ window.__ModuleLoader__.load({
                   if (target !== "") props.onConnect(TRIGGER_NODE, target, "start");
                 },
                 children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", children: "(unconnected)" }),
-                  stepTargets.map((node) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("option", { value: node.id, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(unconnected)" }),
+                  stepTargets.map((node) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("option", { value: node.id, children: [
                     node.title,
                     " (",
                     node.step?.id ?? node.id,
@@ -10927,9 +11069,9 @@ window.__ModuleLoader__.load({
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Repeat",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
               "input",
               {
                 type: "checkbox",
@@ -10941,9 +11083,9 @@ window.__ModuleLoader__.load({
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Applicability",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
               "select",
               {
                 value: typeof trigger.applicability === "string" ? trigger.applicability : "",
@@ -10955,15 +11097,15 @@ window.__ModuleLoader__.load({
                   }
                 }),
                 children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", children: "(none)" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(none)" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
                 ]
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "Match (JSON)",
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
               "textarea",
               {
                 defaultValue: JSON.stringify(trigger.match ?? {}),
@@ -10981,29 +11123,29 @@ window.__ModuleLoader__.load({
             )
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("table", { className: "dsh-wf-list", "aria-label": "Definition steps", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("tr", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("th", { children: "Step" }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("th", { children: "Title" }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("th", { children: "Executor" }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("th", { children: "Evidence kind" }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("th", { children: "Connections" }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("th", {})
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("table", { className: "dsh-wf-list", "aria-label": "Definition steps", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Step" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Title" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Executor" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Evidence kind" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", { children: "Connections" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("th", {})
           ] }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("tbody", { children: steps.map((step) => {
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("tbody", { children: steps.map((step) => {
             const values = listRowModel(props.state, step);
             const graphId = graphIdOfStep(props.state, step.id);
             const selected2 = props.selected === graphId;
-            return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+            return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
               "tr",
               {
                 "data-step": step.id,
                 "data-selected": selected2 ? "true" : void 0,
                 onClick: () => props.onSelect(graphId),
                 children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: step.id }) }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("td", { children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("code", { children: step.id }) }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("td", { children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                       "input",
                       {
                         value: values.title ?? "",
@@ -11017,7 +11159,7 @@ window.__ModuleLoader__.load({
                         )
                       }
                     ),
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                       "input",
                       {
                         value: values.prompt ?? "",
@@ -11033,7 +11175,7 @@ window.__ModuleLoader__.load({
                       }
                     )
                   ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                     "select",
                     {
                       value: values.executor ?? "main",
@@ -11045,10 +11187,10 @@ window.__ModuleLoader__.load({
                         event.currentTarget.value,
                         props.onPatch
                       ),
-                      children: EXECUTORS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: executor, children: executor }, executor))
+                      children: EXECUTORS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: executor, children: executor }, executor))
                     }
                   ) }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
                     "select",
                     {
                       value: values.evidenceKind ?? "",
@@ -11061,14 +11203,14 @@ window.__ModuleLoader__.load({
                         props.onPatch
                       ),
                       children: [
-                        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", children: "(none)" }),
-                        EVIDENCE_KINDS.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: kind, children: kind }, kind))
+                        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(none)" }),
+                        EVIDENCE_KINDS.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: kind, children: kind }, kind))
                       ]
                     }
                   ) }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("td", { children: listConnectionChoices(props.state, step).map((choice) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { "data-connection": choice.kind, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: listConnectionChoices(props.state, step).map((choice) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { "data-connection": choice.kind, children: [
                     EDGE_LABELS[choice.kind],
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
                       "select",
                       {
                         value: values[`connection:${choice.kind}`] ?? "",
@@ -11078,8 +11220,8 @@ window.__ModuleLoader__.load({
                           if (target !== "") props.onConnect(graphId, target, choice.kind);
                         },
                         children: [
-                          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", children: "(unconnected)" }),
-                          choice.targets.map((target) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("option", { value: target.id, children: [
+                          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: "(unconnected)" }),
+                          choice.targets.map((target) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("option", { value: target.id, children: [
                             target.title,
                             " (",
                             target.id,
@@ -11089,8 +11231,8 @@ window.__ModuleLoader__.load({
                       }
                     )
                   ] }, choice.kind)) }),
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-                    import_dsh_client_ui_primitives.Button,
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    import_dsh_client_ui_primitives2.Button,
                     {
                       type: "button",
                       variant: "ghost",
@@ -11192,106 +11334,11 @@ window.__ModuleLoader__.load({
 
     // packages/plugin-workflows/src/client/palette.tsx
     var import_dsh_client_ui_primitives3 = require("@deepseek-ai/dsh-client-ui-primitives");
-
-    // packages/plugin-workflows/src/client/rail.tsx
-    var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
-    var import_jsx_runtime4 = require("react/jsx-runtime");
-    var TRIGGER_BLOCKS = [
-      "turn.stopping",
-      "tool.pre-execute",
-      "tool.result",
-      "fs.change",
-      "subagent.end",
-      "review.record"
-    ];
-    var EXECUTOR_BLOCKS = ["main", "tool", "subagent", "human", "branch", "loop"];
-    function defaultDefinitionId(definitions) {
-      return definitions[0]?.id;
-    }
-    function WorkflowRail(props) {
-      const { t } = props;
-      return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("aside", { className: "dsh-wf-rail", "data-tab-group": "palette", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "dsh-wf-rail-section", "data-section": "workflow-rail", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { className: "dsh-wf-heading", children: t("design.railWorkflows") }),
-          props.definitions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "dsh-wf-muted", children: t("definitions.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("ul", { className: "dsh-wf-rows", children: props.definitions.map((entry) => {
-            const current = entry.id === props.currentId;
-            return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
-              import_dsh_client_ui_primitives2.Button,
-              {
-                type: "button",
-                variant: "toolbar",
-                size: "sm",
-                className: "dsh-wf-lib-row",
-                "data-definition": entry.id,
-                "aria-pressed": current,
-                ...current ? { "data-selected": "true" } : {},
-                disabled: props.disabled === true,
-                onClick: () => props.onOpen(entry.id),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-subject", children: entry.name }),
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-muted", "data-description": entry.id, children: entry.description ?? t("design.noDescription") }),
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-chip", "data-trigger-kind": entry.trigger ?? "", children: entry.trigger === void 0 ? t("overview.unknownKind") : `${t("definitions.trigger")}: ${entry.trigger}` }),
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { className: "dsh-wf-muted", "data-source": entry.source, children: [
-                    entry.id,
-                    " \xB7 v",
-                    String(entry.version),
-                    " \xB7",
-                    " ",
-                    entry.plugin === void 0 ? entry.source : `${entry.source}:${entry.plugin}`,
-                    " ",
-                    "\xB7 ",
-                    String(entry.stepCount),
-                    " steps"
-                  ] }),
-                  current && props.latestRun !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "dsh-wf-time", "data-latest-run": props.latestRun.id, children: `${t("overview.latestRun")}: ${props.latestRun.status}` }) : null
-                ]
-              }
-            ) }, entry.id);
-          }) }),
-          props.actions
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "dsh-wf-rail-section", "data-section": "block-rail", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { className: "dsh-wf-heading", children: t("design.railBlocks") }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "dsh-wf-kind", children: t("design.blocksTriggers") }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("ul", { className: "dsh-wf-block-rows", children: TRIGGER_BLOCKS.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-            import_dsh_client_ui_primitives2.Button,
-            {
-              type: "button",
-              variant: "ghost",
-              size: "sm",
-              className: "dsh-wf-block-row",
-              "data-block": kind,
-              "aria-label": `Set trigger ${kind}`,
-              disabled: props.disabled === true || props.currentId === void 0,
-              onClick: () => props.onTrigger(kind),
-              children: kind
-            }
-          ) }, kind)) }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "dsh-wf-kind", children: t("design.blocksSteps") }),
-          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("ul", { className: "dsh-wf-block-rows", children: EXECUTOR_BLOCKS.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-            import_dsh_client_ui_primitives2.Button,
-            {
-              type: "button",
-              variant: "ghost",
-              size: "sm",
-              className: "dsh-wf-block-row",
-              "data-block": executor,
-              "aria-label": paletteLabel(executor),
-              disabled: props.disabled === true || props.currentId === void 0,
-              onClick: () => props.onExecutor(executor),
-              children: paletteLabel(executor)
-            }
-          ) }, executor)) })
-        ] })
-      ] });
-    }
-
-    // packages/plugin-workflows/src/client/palette.tsx
     var import_jsx_runtime5 = require("react/jsx-runtime");
     function PaletteMenu(props) {
-      const items = EXECUTOR_BLOCKS.map((executor) => ({
-        id: executor,
-        label: paletteLabel(executor)
+      const items = STEP_BRICKS.map((brick) => ({
+        id: brick.value,
+        label: paletteLabel(brick.value)
       }));
       return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
         import_dsh_client_ui_primitives3.Menu,
@@ -11364,6 +11411,12 @@ window.__ModuleLoader__.load({
     }
     var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
+    function Group(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("section", { className: "dsh-wf-group", "data-group": props.id, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h5", { className: "dsh-wf-group-title", children: props.title }),
+        props.children
+      ] });
+    }
     function selectTarget(props, node, kind) {
       const current = currentTarget(props.state.diagram.edges, node.id, kind);
       const choices = connectChoices(props.state.diagram.nodes, node.id).find(
@@ -11496,257 +11549,265 @@ window.__ModuleLoader__.load({
     function stepFields(props, node, step) {
       const branch = step.branch;
       const loop = step.loop;
+      const regularConnections = branch === void 0 && loop === void 0;
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Step title",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
-            {
-              value: step.title,
-              "aria-label": "Step title",
-              onChange: (event) => props.onPatch(node.id, { title: event.currentTarget.value })
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Step id",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
-            {
-              defaultValue: step.id,
-              "aria-label": "Step id",
-              disabled: props.onRename === void 0,
-              onBlur: (event) => props.onRename?.(node.id, event.currentTarget.value)
-            },
-            `id:${step.id}`
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "Flags" }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "step", title: "Step", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Step title",
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
               "input",
               {
-                type: "checkbox",
-                checked: step.nonCritical === true,
-                "aria-label": "Non-critical step",
-                onChange: (event) => props.onPatch(node.id, { nonCritical: event.currentTarget.checked })
+                value: step.title,
+                "aria-label": "Step title",
+                onChange: (event) => props.onPatch(node.id, { title: event.currentTarget.value })
               }
-            ),
-            "non-critical"
+            )
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Step id",
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
               "input",
               {
-                type: "checkbox",
-                checked: step.blockTurnClose === true,
-                "aria-label": "Blocks turn close",
-                onChange: (event) => props.onPatch(node.id, {
-                  ...event.currentTarget.checked ? { blockTurnClose: true } : { blockTurnClose: void 0 }
-                })
-              }
-            ),
-            "blocks turn close"
+                defaultValue: step.id,
+                "aria-label": "Step id",
+                disabled: props.onRename === void 0,
+                onBlur: (event) => props.onRename?.(node.id, event.currentTarget.value)
+              },
+              `id:${step.id}`
+            )
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Ownership",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-            "select",
-            {
-              value: typeof step.ownership === "string" ? step.ownership : "",
-              "aria-label": "Step ownership",
-              onChange: (event) => props.onPatch(node.id, {
-                ...event.currentTarget.value === "" ? { ownership: void 0 } : { ownership: event.currentTarget.value }
-              }),
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(default)" }),
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "own", children: "own" }),
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
-              ]
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-          JsonField,
-          {
-            label: "Legacy (JSON)",
-            value: step.legacy,
-            ariaLabel: "Step legacy JSON",
-            allowEmpty: true,
-            commit: (value2) => props.onPatch(node.id, { legacy: value2 })
-          },
-          `legacy:${node.id}`
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Executor",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "select",
-            {
-              value: step.executor,
-              "aria-label": "Executor",
-              onChange: (event) => props.onPatch(node.id, { executor: event.currentTarget.value }),
-              children: EXECUTORS2.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: executor, children: executor }, executor))
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Prompt",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              value: typeof step.prompt === "string" ? step.prompt : "",
-              "aria-label": "Prompt",
-              rows: 3,
-              onChange: (event) => props.onPatch(node.id, {
-                prompt: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
-              })
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-          JsonField,
-          {
-            label: "Evidence (JSON)",
-            value: step.evidence,
-            ariaLabel: "Evidence JSON",
-            rows: 3,
-            allowEmpty: true,
-            commit: (value2) => props.onPatch(node.id, { evidence: value2 })
-          },
-          `evidence:${node.id}`
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Evidence kind",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-            "select",
-            {
-              value: typeof step.evidence?.kind === "string" ? String(step.evidence.kind) : "",
-              "aria-label": "Evidence kind",
-              onChange: (event) => props.onPatch(node.id, { evidence: { kind: event.currentTarget.value } }),
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
-                EVIDENCE_KINDS2.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: kind, children: kind }, kind))
-              ]
-            }
-          )
-        ] }),
-        step.executor === "human" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Human timeout",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-            "select",
-            {
-              value: step.human?.timeoutAction ?? "block",
-              "aria-label": "Human timeout action",
-              onChange: (event) => props.onPatch(node.id, {
-                human: { ...step.human ?? {}, timeoutAction: event.currentTarget.value }
-              }),
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "block", children: "block" }),
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "cancel", children: "cancel" })
-              ]
-            }
-          )
-        ] }) : null,
-        step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-          JsonField,
-          {
-            label: "Tool config (JSON)",
-            value: step.tool,
-            ariaLabel: "Tool config JSON",
-            commit: (value2) => props.onPatch(node.id, { tool: value2 })
-          },
-          `tool:${node.id}`
-        ),
-        step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-          JsonField,
-          {
-            label: "Subagent config (JSON)",
-            value: step.subagent,
-            ariaLabel: "Subagent config JSON",
-            commit: (value2) => props.onPatch(node.id, { subagent: value2 })
-          },
-          `subagent:${node.id}`
-        ),
-        branch === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            JsonField,
-            {
-              label: "Branch predicate (JSON)",
-              value: branch.predicate,
-              ariaLabel: "Branch predicate JSON",
-              commit: (value2) => props.onPatch(node.id, { branch: { ...branch, predicate: value2 } })
-            },
-            `predicate:${node.id}`
-          ),
-          selectTarget(props, node, "true"),
-          selectTarget(props, node, "false")
-        ] }),
-        loop === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "behavior", title: "Behavior", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Max iterations",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                type: "number",
-                min: 1,
-                value: loop.maxIterations ?? 1,
-                "aria-label": "Max iterations",
-                onChange: (event) => props.onPatch(node.id, {
-                  loop: { ...loop, maxIterations: Number(event.currentTarget.value) }
-                })
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            JsonField,
-            {
-              label: "Loop stop (JSON)",
-              value: loop.stop,
-              ariaLabel: "Loop stop JSON",
-              commit: (value2) => props.onPatch(node.id, { loop: { ...loop, stop: value2 } })
-            },
-            `stop:${node.id}`
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Loop list key",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                value: loop.list ?? "",
-                "aria-label": "Loop list key",
-                onChange: (event) => props.onPatch(node.id, {
-                  loop: {
-                    ...loop,
-                    // An empty list means "no list"; omit it rather than send "".
-                    ...event.currentTarget.value === "" ? { list: void 0 } : { list: event.currentTarget.value }
-                  }
-                })
-              }
-            )
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "Flags" }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: step.nonCritical === true,
+                  "aria-label": "Non-critical step",
+                  onChange: (event) => props.onPatch(node.id, { nonCritical: event.currentTarget.checked })
+                }
+              ),
+              "non-critical"
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: step.blockTurnClose === true,
+                  "aria-label": "Blocks turn close",
+                  onChange: (event) => props.onPatch(node.id, {
+                    ...event.currentTarget.checked ? { blockTurnClose: true } : { blockTurnClose: void 0 }
+                  })
+                }
+              ),
+              "blocks turn close"
+            ] })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Loop cap",
+            "Ownership",
             /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
               "select",
               {
-                value: loop.cap ?? "blocked",
-                "aria-label": "Loop cap",
+                value: typeof step.ownership === "string" ? step.ownership : "",
+                "aria-label": "Step ownership",
                 onChange: (event) => props.onPatch(node.id, {
-                  loop: { ...loop, cap: event.currentTarget.value }
+                  ...event.currentTarget.value === "" ? { ownership: void 0 } : { ownership: event.currentTarget.value }
                 }),
                 children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "blocked", children: "blocked" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "failed", children: "failed" })
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(default)" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "own", children: "own" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
                 ]
               }
             )
           ] }),
-          selectTarget(props, node, "exit")
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Executor",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "select",
+              {
+                value: step.executor,
+                "aria-label": "Executor",
+                onChange: (event) => props.onPatch(node.id, { executor: event.currentTarget.value }),
+                children: EXECUTORS2.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: executor, children: executor }, executor))
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Prompt",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "textarea",
+              {
+                value: typeof step.prompt === "string" ? step.prompt : "",
+                "aria-label": "Prompt",
+                rows: 3,
+                onChange: (event) => props.onPatch(node.id, {
+                  prompt: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
+                })
+              }
+            )
+          ] })
         ] }),
-        branch !== void 0 || loop !== void 0 ? null : outputKinds(node.kind).map((kind) => selectTarget(props, node, kind)),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-row-actions", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(import_dsh_client_ui_primitives4.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => props.onDelete(node.id), children: "Delete step" }) })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "evidence", title: "Evidence", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            JsonField,
+            {
+              label: "Evidence (JSON)",
+              value: step.evidence,
+              ariaLabel: "Evidence JSON",
+              rows: 3,
+              allowEmpty: true,
+              commit: (value2) => props.onPatch(node.id, { evidence: value2 })
+            },
+            `evidence:${node.id}`
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Evidence kind",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+              "select",
+              {
+                value: typeof step.evidence?.kind === "string" ? String(step.evidence.kind) : "",
+                "aria-label": "Evidence kind",
+                onChange: (event) => props.onPatch(node.id, { evidence: { kind: event.currentTarget.value } }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
+                  EVIDENCE_KINDS2.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: kind, children: kind }, kind))
+                ]
+              }
+            )
+          ] }),
+          step.executor === "human" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Human timeout",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+              "select",
+              {
+                value: step.human?.timeoutAction ?? "block",
+                "aria-label": "Human timeout action",
+                onChange: (event) => props.onPatch(node.id, {
+                  human: { ...step.human ?? {}, timeoutAction: event.currentTarget.value }
+                }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "block", children: "block" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "cancel", children: "cancel" })
+                ]
+              }
+            )
+          ] }) : null,
+          step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            JsonField,
+            {
+              label: "Tool config (JSON)",
+              value: step.tool,
+              ariaLabel: "Tool config JSON",
+              commit: (value2) => props.onPatch(node.id, { tool: value2 })
+            },
+            `tool:${node.id}`
+          ),
+          step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            JsonField,
+            {
+              label: "Subagent config (JSON)",
+              value: step.subagent,
+              ariaLabel: "Subagent config JSON",
+              commit: (value2) => props.onPatch(node.id, { subagent: value2 })
+            },
+            `subagent:${node.id}`
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            JsonField,
+            {
+              label: "Legacy (JSON)",
+              value: step.legacy,
+              ariaLabel: "Step legacy JSON",
+              allowEmpty: true,
+              commit: (value2) => props.onPatch(node.id, { legacy: value2 })
+            },
+            `legacy:${node.id}`
+          )
+        ] }),
+        regularConnections ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "connections", title: "Connections", children: outputKinds(node.kind).map((kind) => selectTarget(props, node, kind)) }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "connections", title: "Connections", children: [
+          branch === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              JsonField,
+              {
+                label: "Branch predicate (JSON)",
+                value: branch.predicate,
+                ariaLabel: "Branch predicate JSON",
+                commit: (value2) => props.onPatch(node.id, { branch: { ...branch, predicate: value2 } })
+              },
+              `predicate:${node.id}`
+            ),
+            selectTarget(props, node, "true"),
+            selectTarget(props, node, "false")
+          ] }),
+          loop === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+              "Max iterations",
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                "input",
+                {
+                  type: "number",
+                  min: 1,
+                  value: loop.maxIterations ?? 1,
+                  "aria-label": "Max iterations",
+                  onChange: (event) => props.onPatch(node.id, {
+                    loop: { ...loop, maxIterations: Number(event.currentTarget.value) }
+                  })
+                }
+              )
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              JsonField,
+              {
+                label: "Loop stop (JSON)",
+                value: loop.stop,
+                ariaLabel: "Loop stop JSON",
+                commit: (value2) => props.onPatch(node.id, { loop: { ...loop, stop: value2 } })
+              },
+              `stop:${node.id}`
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+              "Loop list key",
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                "input",
+                {
+                  value: loop.list ?? "",
+                  "aria-label": "Loop list key",
+                  onChange: (event) => props.onPatch(node.id, {
+                    loop: {
+                      ...loop,
+                      // An empty list means "no list"; omit it rather than send "".
+                      ...event.currentTarget.value === "" ? { list: void 0 } : { list: event.currentTarget.value }
+                    }
+                  })
+                }
+              )
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+              "Loop cap",
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+                "select",
+                {
+                  value: loop.cap ?? "blocked",
+                  "aria-label": "Loop cap",
+                  onChange: (event) => props.onPatch(node.id, {
+                    loop: { ...loop, cap: event.currentTarget.value }
+                  }),
+                  children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "blocked", children: "blocked" }),
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "failed", children: "failed" })
+                  ]
+                }
+              )
+            ] }),
+            selectTarget(props, node, "exit")
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "danger", title: "Danger", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-row-actions", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(import_dsh_client_ui_primitives4.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => props.onDelete(node.id), children: "Delete step" }) }) })
       ] });
     }
     function triggerFields(props) {
@@ -11754,126 +11815,290 @@ window.__ModuleLoader__.load({
       const match = trigger.match;
       const triggerNode = props.state.diagram.nodes.find((node) => node.kind === "trigger");
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Trigger kind",
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "trigger", title: "Trigger", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Trigger kind",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                value: typeof trigger.kind === "string" ? trigger.kind : "",
+                "aria-label": "Trigger kind",
+                onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Trigger mode",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+              "select",
+              {
+                value: typeof trigger.mode === "string" ? trigger.mode : "shadow",
+                "aria-label": "Trigger mode",
+                onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "shadow", children: "shadow" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "active", children: "active" })
+                ]
+              }
+            )
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "behavior", title: "Behavior", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Dedupe",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "select",
+              {
+                value: typeof trigger.dedupe === "string" ? trigger.dedupe : "turn",
+                "aria-label": "Dedupe policy",
+                onChange: (event) => props.onDefinitionPatch({
+                  trigger: { ...trigger, dedupe: event.currentTarget.value }
+                }),
+                children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: policy, children: policy }, policy))
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                type: "checkbox",
+                checked: trigger.repeat === true,
+                "aria-label": "Trigger repeat",
+                onChange: (event) => props.onDefinitionPatch({
+                  trigger: { ...trigger, repeat: event.currentTarget.checked }
+                })
+              }
+            ),
+            "repeat"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Applicability",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+              "select",
+              {
+                value: typeof trigger.applicability === "string" ? trigger.applicability : "",
+                "aria-label": "Trigger applicability",
+                onChange: (event) => props.onDefinitionPatch({
+                  trigger: {
+                    ...trigger,
+                    ...event.currentTarget.value === "" ? { applicability: void 0 } : { applicability: event.currentTarget.value }
+                  }
+                }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
+                ]
+              }
+            )
+          ] }),
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
+            JsonField,
             {
-              value: typeof trigger.kind === "string" ? trigger.kind : "",
-              "aria-label": "Trigger kind",
-              onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
-            }
+              label: "Trigger match (JSON)",
+              value: match ?? {},
+              ariaLabel: "Trigger match JSON",
+              commit: (value2) => props.onDefinitionPatch({ trigger: { ...trigger, match: value2 } })
+            },
+            `match:${props.state.document.definition.id}`
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Trigger mode",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-            "select",
-            {
-              value: typeof trigger.mode === "string" ? trigger.mode : "shadow",
-              "aria-label": "Trigger mode",
-              onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } }),
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "shadow", children: "shadow" }),
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "active", children: "active" })
-              ]
-            }
-          )
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "connections", title: "Connections", children: triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind)) })
+      ] });
+    }
+    function workflowFields(props) {
+      const description = props.state.document.definition.description;
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "workflow", title: "Workflow", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Definition name",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                value: props.state.document.definition.name,
+                "aria-label": "Definition name",
+                onChange: (event) => props.onDefinitionPatch({ name: event.currentTarget.value })
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+            "Description",
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "textarea",
+              {
+                value: typeof description === "string" ? description : "",
+                "aria-label": "Definition description",
+                rows: 2,
+                onChange: (event) => props.onDefinitionPatch({
+                  // Empty sends undefined so a definition without one stays unchanged.
+                  description: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
+                })
+              }
+            )
+          ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Dedupe",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "select",
-            {
-              value: typeof trigger.dedupe === "string" ? trigger.dedupe : "turn",
-              "aria-label": "Dedupe policy",
-              onChange: (event) => props.onDefinitionPatch({
-                trigger: { ...trigger, dedupe: event.currentTarget.value }
-              }),
-              children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: policy, children: policy }, policy))
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
-            {
-              type: "checkbox",
-              checked: trigger.repeat === true,
-              "aria-label": "Trigger repeat",
-              onChange: (event) => props.onDefinitionPatch({
-                trigger: { ...trigger, repeat: event.currentTarget.checked }
-              })
-            }
-          ),
-          "repeat"
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Applicability",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-            "select",
-            {
-              value: typeof trigger.applicability === "string" ? trigger.applicability : "",
-              "aria-label": "Trigger applicability",
-              onChange: (event) => props.onDefinitionPatch({
-                trigger: {
-                  ...trigger,
-                  ...event.currentTarget.value === "" ? { applicability: void 0 } : { applicability: event.currentTarget.value }
-                }
-              }),
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
-                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
-              ]
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-          JsonField,
-          {
-            label: "Trigger match (JSON)",
-            value: match ?? {},
-            ariaLabel: "Trigger match JSON",
-            commit: (value2) => props.onDefinitionPatch({ trigger: { ...trigger, match: value2 } })
-          },
-          `match:${props.state.document.definition.id}`
-        ),
-        triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind))
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-group", "data-group": "settings", children: settingsFields(props) })
       ] });
     }
     function PropertyPanel(props) {
       const node = props.state.diagram.nodes.find((entry) => entry.id === props.selected);
-      const description = props.state.document.definition.description;
-      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("aside", { className: "dsh-wf-properties", "data-tab-group": "properties", "aria-label": "Properties", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h4", { children: "Properties" }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Definition name",
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("section", { className: "dsh-wf-properties", "data-tab-group": "properties", "aria-label": "Properties", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("header", { className: "dsh-wf-inspector-title", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
+            "span",
             {
-              value: props.state.document.definition.name,
-              "aria-label": "Definition name",
-              onChange: (event) => props.onDefinitionPatch({ name: event.currentTarget.value })
+              className: "dsh-wf-inspector-glyph",
+              "data-kind": node?.kind ?? "definition",
+              "aria-hidden": "true",
+              children: node === void 0 ? null : brickGlyph(executorIcon(node.step?.executor, node.kind))
             }
-          )
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-inspector-titles", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h4", { children: node === void 0 ? "Workflow" : node.title }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-muted", children: node === void 0 ? "Definition and settings" : node.step?.id ?? node.kind })
+          ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Description",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "textarea",
-            {
-              value: typeof description === "string" ? description : "",
-              "aria-label": "Definition description",
-              rows: 2,
-              onChange: (event) => props.onDefinitionPatch({
-                // Empty sends undefined so a definition without one stays unchanged.
-                description: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
-              })
-            }
-          )
-        ] }),
-        settingsFields(props),
+        workflowFields(props),
         node === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-muted", children: "Select a node to edit it." }) : node.kind === "trigger" ? triggerFields(props) : node.kind === "end" || node.step === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-muted", children: "The end node has no fields." }) : stepFields(props, node, node.step)
+      ] });
+    }
+
+    // packages/plugin-workflows/src/client/rail.tsx
+    var import_dsh_client_ui_primitives5 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_jsx_runtime7 = require("react/jsx-runtime");
+    function defaultDefinitionId(definitions) {
+      return definitions[0]?.id;
+    }
+    function runDotState(status) {
+      if (status === "done" || status === "completed") return "done";
+      if (status === "running") return "ongoing";
+      if (status === "failed") return "error";
+      if (status === "blocked" || status === "interrupted" || status === "cancelled") return "warning";
+      return "idle";
+    }
+    function sourceLabel(entry) {
+      return entry.plugin === void 0 ? entry.source : `${entry.source}:${entry.plugin}`;
+    }
+    function TriggerBricks(props) {
+      const { t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-bricks", "data-bricks": "triggers", children: TRIGGER_BRICKS.map((brick) => {
+        const current = props.currentTrigger === brick.value;
+        return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
+          import_dsh_client_ui_primitives5.Button,
+          {
+            type: "button",
+            variant: "ghost",
+            size: "sm",
+            className: "dsh-wf-brick",
+            "data-block": brick.value,
+            "data-brick-kind": "trigger",
+            ...current ? { "data-current": "true" } : {},
+            "aria-pressed": current,
+            "aria-label": `Set trigger ${brick.value}`,
+            title: brick.hintKey === void 0 ? brick.value : t(brick.hintKey),
+            disabled: props.disabled === true || props.currentId === void 0,
+            onClick: () => props.onTrigger(brick.value),
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-brick-icon", children: brickGlyph(brick.icon) }),
+              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-brick-label", children: brick.value })
+            ]
+          }
+        ) }, brick.value);
+      }) });
+    }
+    function StepBricks(props) {
+      const { t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-bricks", "data-bricks": "steps", children: STEP_BRICKS.map((brick) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
+        import_dsh_client_ui_primitives5.Button,
+        {
+          type: "button",
+          variant: "ghost",
+          size: "sm",
+          className: "dsh-wf-brick",
+          "data-block": brick.value,
+          "data-brick-kind": "step",
+          "aria-label": paletteLabel(brick.value),
+          title: brick.hintKey === void 0 ? brick.value : t(brick.hintKey),
+          draggable: props.disabled !== true && props.currentId !== void 0,
+          disabled: props.disabled === true || props.currentId === void 0,
+          onDragStart: (event) => {
+            event.dataTransfer.setData(BRICK_MIME, brickPayload("step", brick.value));
+            event.dataTransfer.effectAllowed = "copy";
+          },
+          onClick: () => props.onExecutor(brick.value),
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-brick-icon", children: brickGlyph(brick.icon) }),
+            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-brick-label", children: brick.labelKey === void 0 ? brick.value : t(brick.labelKey) })
+          ]
+        }
+      ) }, brick.value)) });
+    }
+    function WorkflowRail(props) {
+      const { t } = props;
+      return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("aside", { className: "dsh-wf-rail", "data-tab-group": "palette", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("section", { className: "dsh-wf-rail-section", "data-section": "workflow-rail", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-rail-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { className: "dsh-wf-heading", children: t("design.railWorkflows") }),
+            props.onNew === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+              import_dsh_client_ui_primitives5.Button,
+              {
+                type: "button",
+                variant: "toolbar",
+                size: "sm",
+                "aria-label": t("design.new"),
+                title: t("design.new"),
+                icon: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { "aria-hidden": "true", children: "+" }),
+                disabled: props.disabled === true,
+                onClick: () => props.onNew?.()
+              }
+            )
+          ] }),
+          props.definitions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("definitions.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-library", children: props.definitions.map((entry) => {
+            const current = entry.id === props.currentId;
+            return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
+              import_dsh_client_ui_primitives5.Button,
+              {
+                type: "button",
+                variant: "toolbar",
+                size: "sm",
+                className: "dsh-wf-lib-row",
+                "data-definition": entry.id,
+                "aria-pressed": current,
+                ...current ? { "data-selected": "true" } : {},
+                disabled: props.disabled === true,
+                onClick: () => props.onOpen(entry.id),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-lib-title", children: entry.name }),
+                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-lib-desc", "data-description": entry.id, children: entry.description ?? t("design.noDescription") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "dsh-wf-lib-meta", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-chip", "data-trigger-kind": entry.trigger ?? "", children: entry.trigger === void 0 ? t("overview.unknownKind") : `${t("definitions.trigger")}: ${entry.trigger}` }),
+                    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "dsh-wf-muted", "data-source": entry.source, children: [
+                      "v",
+                      String(entry.version),
+                      " \xB7 ",
+                      sourceLabel(entry),
+                      " \xB7 ",
+                      String(entry.stepCount),
+                      " ",
+                      "steps"
+                    ] }),
+                    current && props.latestRun !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "dsh-wf-lib-run", "data-latest-run": props.latestRun.id, children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(import_dsh_client_ui_primitives5.StateDot, { state: runDotState(props.latestRun.status) }),
+                      `${t("overview.latestRun")}: ${props.latestRun.status}`
+                    ] }) : null
+                  ] })
+                ]
+              }
+            ) }, entry.id);
+          }) })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("section", { className: "dsh-wf-rail-section", "data-section": "block-rail", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { className: "dsh-wf-heading", children: t("design.railBlocks") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-kind", children: t("design.blocksTriggers") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(TriggerBricks, { ...props }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-kind", children: t("design.blocksSteps") }),
+          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(StepBricks, { ...props })
+        ] })
       ] });
     }
 
@@ -11907,32 +12132,152 @@ window.__ModuleLoader__.load({
     // packages/plugin-workflows/src/client/styles.ts
     var FLOW_CSS = `
     .dsh-wf-page { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; height: 100%; min-height: 0; padding: 12px; overflow: auto; color: var(--dsw-alias-label-primary); }
-    .dsh-wf-design { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+    .dsh-wf-design { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
     .dsh-wf-design-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
     .dsh-wf-design-bar select { padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; cursor: pointer; }
-    .dsh-wf-design-body { display: flex; flex-direction: column; gap: 8px; min-height: 320px; }
-    .dsh-wf-properties h4 { margin: 0 0 4px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-canvas { position: relative; min-height: 420px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: hidden; }
-    .dsh-wf-summary { margin: 0; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    .dsh-wf-issue { color: var(--dsw-alias-state-error-primary); font: var(--dsw-font-xxs-12); }
+
+    /* Header: one title block, one state line, one action cluster. */
+    .dsh-wf-design-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-head-main { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
+    .dsh-wf-head-name { font: var(--dsw-font-s-strong-14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dsh-wf-head-state { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
+    .dsh-wf-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-warning-primary); }
+    .dsh-wf-dirty-dot[data-dirty="false"] { background: var(--dsw-alias-state-success-primary); }
+    .dsh-wf-head-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .dsh-wf-run { max-width: 220px; padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--dsw-alias-state-error-primary); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); font: var(--dsw-font-xxs-12); }
+
+    /* The three panes: blocks and library, canvas, inspector. */
+    .dsh-wf-workbench { position: relative; display: grid; grid-template-columns: minmax(220px, 256px) minmax(0, 1fr) minmax(280px, 320px); gap: 12px; flex: 1; min-height: 0; align-items: stretch; }
+    .dsh-wf-workbench[data-layout="drawer"] { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); }
+    .dsh-wf-workbench[data-mode="list"] { display: flex; flex-direction: column; min-height: 0; }
+    .dsh-wf-workbench-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+    .dsh-wf-workbench[data-mode="list"] .dsh-wf-workbench-main { overflow-y: auto; }
+
+    /* Left rail: the library on top, the building blocks below. */
+    .dsh-wf-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
+    .dsh-wf-rail-section { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .dsh-wf-rail-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .dsh-wf-library { display: flex; flex-direction: column; gap: 2px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+    .dsh-wf-lib-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; box-sizing: border-box; width: 100%; height: auto; min-height: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--dsw-radius-sm); background: transparent; text-align: left; line-height: 1.35; white-space: normal; }
+    .dsh-wf-lib-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
+    .dsh-wf-lib-row[data-selected="true"] { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); box-shadow: inset 2px 0 0 var(--dsw-alias-label-primary); }
+    .dsh-wf-lib-title { font: var(--dsw-font-xs-13); overflow-wrap: anywhere; }
+    .dsh-wf-lib-desc { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-lib-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-lib-run { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .dsh-wf-bricks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; list-style: none; margin: 0; padding: 0; }
+    .dsh-wf-bricks[data-bricks="triggers"] { grid-template-columns: minmax(0, 1fr); }
+    .dsh-wf-brick { display: flex; align-items: center; gap: 6px; box-sizing: border-box; width: 100%; height: auto; min-height: 0; justify-content: flex-start; padding: 5px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); text-align: left; }
+    .dsh-wf-brick:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .dsh-wf-brick[data-current="true"] { border-color: var(--dsw-alias-label-primary); color: var(--dsw-alias-label-primary); }
+    .dsh-wf-brick[data-brick-kind="trigger"] .dsh-wf-brick-label { font-family: var(--dsw-font-mono, monospace); font-size: 11px; }
+    .dsh-wf-brick-icon { display: inline-flex; flex: none; color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-brick-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Canvas surfaces. */
+    .dsh-wf-surface-canvas, .dsh-wf-surface-list { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; min-height: 0; }
+    .dsh-wf-list-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .dsh-wf-canvas { position: relative; display: flex; flex: 1; min-height: 280px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-base); overflow: hidden; }
+    .dsh-wf-flow { position: absolute; inset: 0; }
+    .dsh-wf-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; box-sizing: border-box; padding: 12px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
+    .dsh-wf-blank-canvas { display: flex; align-items: center; justify-content: center; min-height: 320px; }
+    .dsh-wf-blank-canvas .dsh-wf-empty { max-width: 360px; }
+    .dsh-wf-empty-title { margin: 0; font: var(--dsw-font-xs-13); color: var(--dsw-alias-label-secondary); }
+
+    /* Inspector. */
+    .dsh-wf-inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
+    .dsh-wf-workbench[data-layout="drawer"] .dsh-wf-inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: min(320px, 88%); }
+    .dsh-wf-inspector[data-open="false"] { display: none; }
+    .dsh-wf-inspector-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
+    .dsh-wf-inspector .dsh-wf-properties { border: none; border-radius: 0; flex: 1; min-height: 0; padding: 10px 12px; }
+    .dsh-wf-inspector-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-inspector-glyph { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-inspector-glyph[data-kind="trigger"] { color: var(--dsw-alias-state-success-primary); }
+    .dsh-wf-inspector-glyph[data-kind="branch"], .dsh-wf-inspector-glyph[data-kind="loop"] { color: var(--dsw-alias-state-warning-primary); }
+    .dsh-wf-inspector-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .dsh-wf-inspector-titles h4 { margin: 0; font: var(--dsw-font-s-strong-14); overflow-wrap: anywhere; }
+    .dsh-wf-inspector-titles .dsh-wf-muted { font-family: var(--dsw-font-mono, monospace); font-size: 11px; }
+    .dsh-wf-group { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-group:last-of-type { border-bottom: none; }
+    .dsh-wf-group-title { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
+
+    /* Property fields. */
     .dsh-wf-properties { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: auto; }
-    .dsh-wf-properties label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-properties input, .dsh-wf-properties select, .dsh-wf-properties textarea { padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
+    .dsh-wf-properties label { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-properties input, .dsh-wf-properties select, .dsh-wf-properties textarea { box-sizing: border-box; width: 100%; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
     .dsh-wf-properties .dsh-wf-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-    .dsh-wf-issue { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
-    .dsh-wf-node { min-width: 140px; max-width: 210px; padding: 6px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-l1, var(--dsw-alias-bg-base)); color: var(--dsw-alias-label-primary); font-size: 12px; text-align: left; }
+    .dsh-wf-properties fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px; margin: 0; padding: 0; border: none; }
+    .dsh-wf-properties legend { padding: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
+    .dsh-wf-properties fieldset > label:last-child { grid-column: 1 / -1; }
+
+    /* Canvas node cards. */
+    .dsh-wf-node { display: flex; flex-direction: column; gap: 4px; min-width: 170px; max-width: 220px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: var(--dsw-font-xxs-12); text-align: left; }
     .dsh-wf-node[data-kind="trigger"] { border-color: var(--dsw-alias-state-success-primary); }
+    .dsh-wf-node[data-kind="branch"], .dsh-wf-node[data-kind="loop"] { border-color: var(--dsw-alias-state-warning-primary); }
     .dsh-wf-node[data-state="running"] { border-color: var(--dsw-alias-state-warning-primary); }
     .dsh-wf-node[data-state="done"] { border-color: var(--dsw-alias-state-success-primary); }
     .dsh-wf-node[data-state="blocked"], .dsh-wf-node[data-state="failed"] { border-color: var(--dsw-alias-state-error-primary); }
-    .dsh-wf-node-title { font-weight: 600; }
+    .dsh-wf-canvas .react-flow__node.selected .dsh-wf-node { border-color: var(--dsw-alias-label-primary); box-shadow: 0 0 0 1px var(--dsw-alias-label-primary); }
+    .dsh-wf-node-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+    .dsh-wf-node-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-node[data-kind="trigger"] .dsh-wf-node-icon { color: var(--dsw-alias-state-success-primary); }
+    .dsh-wf-node-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .dsh-wf-node-title { font: var(--dsw-font-xs-13); font-weight: 600; overflow-wrap: anywhere; }
     .dsh-wf-node-meta { color: var(--dsw-alias-label-caption); font-size: 11px; }
-    .dsh-wf-node-badge { display: inline-block; margin-top: 2px; color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-node-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--dsw-alias-label-secondary); }
+    .dsh-wf-node-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .dsh-wf-node-badge[data-run-state="running"] { color: var(--dsw-alias-state-warning-primary); }
+    .dsh-wf-node-badge[data-run-state="done"] { color: var(--dsw-alias-state-success-primary); }
+    .dsh-wf-node-badge[data-run-state="blocked"], .dsh-wf-node-badge[data-run-state="failed"] { color: var(--dsw-alias-state-error-primary); }
     .dsh-wf-node-evidence, .dsh-wf-node-violation { display: block; margin-top: 2px; font-size: 11px; color: var(--dsw-alias-label-caption); overflow-wrap: anywhere; }
     .dsh-wf-node-violation { color: var(--dsw-alias-state-error-primary); }
     .dsh-wf-node-orphan { color: var(--dsw-alias-state-warning-primary); }
-    .dsh-wf-list { width: 100%; border-collapse: collapse; }
-    .dsh-wf-list th, .dsh-wf-list td { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); text-align: left; vertical-align: top; }
-    .dsh-wf-list input, .dsh-wf-list select, .dsh-wf-list textarea { width: 100%; padding: 2px 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
+    .dsh-wf-node-end { border-style: dashed; }
+
+    /* List editor. */
+    .dsh-wf-list-wrap { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .dsh-wf-list-trigger { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 12px; box-sizing: border-box; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-list-trigger h4 { grid-column: 1 / -1; margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-list-trigger label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-list-trigger input, .dsh-wf-list-trigger select, .dsh-wf-list-trigger textarea { box-sizing: border-box; width: 100%; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
+    .dsh-wf-list { width: 100%; table-layout: fixed; border-collapse: collapse; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-list th { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
+    .dsh-wf-list td { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); vertical-align: top; }
+    .dsh-wf-list input, .dsh-wf-list select, .dsh-wf-list textarea { box-sizing: border-box; width: 100%; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
+
+    /* Shared sections and tables. */
+    .dsh-wf-section { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-heading { margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
+    .dsh-wf-table { width: 100%; border-collapse: collapse; table-layout: fixed; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-table th { padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
+    .dsh-wf-table td { padding: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    .dsh-wf-table tr:last-child td { border-bottom: none; }
+    .dsh-wf-triggers th:nth-child(1) { width: 20%; }
+    .dsh-wf-triggers th:nth-child(2) { width: 13%; }
+    .dsh-wf-triggers th:nth-child(3) { width: 27%; }
+    .dsh-wf-triggers th:nth-child(4) { width: 10%; }
+    .dsh-wf-triggers th:nth-child(5) { width: 30%; }
+    .dsh-wf-definitions th:nth-child(1) { width: 18%; }
+    .dsh-wf-definitions th:nth-child(2) { width: 28%; }
+    .dsh-wf-definitions th:nth-child(3) { width: 14%; }
+    .dsh-wf-definitions th:nth-child(4) { width: 8%; }
+    .dsh-wf-definitions th:nth-child(5) { width: 32%; }
+    .dsh-wf-runs { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+    .dsh-wf-runs li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-kind { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
+    .dsh-wf-subject { font: var(--dsw-font-xs-13); overflow-wrap: anywhere; }
+    .dsh-wf-time { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .dsh-wf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
+    .dsh-wf-row-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+    .dsh-wf-row-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+    .dsh-wf-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+    .dsh-wf-def-row, .dsh-wf-trigger-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-def-row:last-child, .dsh-wf-trigger-row:last-child { border-bottom: none; }
+    .dsh-wf-mono { font-family: var(--dsw-font-mono, monospace); }
 
     /* The structural React Flow rules (copied from the pinned package's base.css). */
     .dsh-wf-canvas .react-flow { direction: ltr; --xy-background-color-default: transparent; --xy-edge-stroke-default: var(--dsw-alias-label-secondary); --xy-edge-stroke-width-default: 1.5; --xy-edge-stroke-selected-default: var(--dsw-alias-state-success-primary); --xy-connectionline-stroke-default: var(--dsw-alias-label-secondary); --xy-connectionline-stroke-width-default: 1.5; --xy-handle-background-color-default: var(--dsw-alias-label-secondary); --xy-node-border-default: 1px solid var(--dsw-alias-border-l2); --xy-node-border-selected-default: 2px solid var(--dsw-alias-state-success-primary); --xy-selection-background-color-default: var(--dsw-alias-border-l2); --xy-selection-border-default: 1px dashed var(--dsw-alias-label-secondary); background-color: var(--xy-background-color, var(--xy-background-color-default)); position: relative; width: 100%; height: 100%; overflow: hidden; }
@@ -11960,70 +12305,23 @@ window.__ModuleLoader__.load({
     .dsh-wf-canvas .react-flow__selection { background: var(--xy-selection-background-color, var(--xy-selection-background-color-default)); border: var(--xy-selection-border, var(--xy-selection-border-default)); }
     .dsh-wf-canvas .react-flow__attribution { position: absolute; bottom: 2px; right: 4px; font-size: 10px; color: var(--dsw-alias-label-caption); background: transparent; }
     .dsh-wf-canvas .react-flow__attribution a { color: inherit; }
-    .dsh-wf-section { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; min-width: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
-    .dsh-wf-heading { margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
-    .dsh-wf-table { width: 100%; border-collapse: collapse; table-layout: fixed; font: var(--dsw-font-xxs-12); }
-    .dsh-wf-table th { padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
-    .dsh-wf-table td { padding: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-    .dsh-wf-table tr:last-child td { border-bottom: none; }
-    .dsh-wf-triggers th:nth-child(1) { width: 20%; }
-    .dsh-wf-triggers th:nth-child(2) { width: 13%; }
-    .dsh-wf-triggers th:nth-child(3) { width: 27%; }
-    .dsh-wf-triggers th:nth-child(4) { width: 10%; }
-    .dsh-wf-triggers th:nth-child(5) { width: 30%; }
-    .dsh-wf-definitions th:nth-child(1) { width: 18%; }
-    .dsh-wf-definitions th:nth-child(2) { width: 28%; }
-    .dsh-wf-definitions th:nth-child(3) { width: 14%; }
-    .dsh-wf-definitions th:nth-child(4) { width: 8%; }
-    .dsh-wf-definitions th:nth-child(5) { width: 32%; }
-    .dsh-wf-runs { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; min-width: 0; }
-    .dsh-wf-runs li { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; font: var(--dsw-font-xxs-12); }
-    .dsh-wf-muted { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
-    .dsh-wf-kind { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
-    .dsh-wf-subject { font: var(--dsw-font-xs-13); overflow-wrap: anywhere; }
-    .dsh-wf-time { color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .dsh-wf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
-    .dsh-wf-list-wrap { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-    .dsh-wf-list-trigger { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 12px; box-sizing: border-box; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
-    .dsh-wf-list-trigger h4 { grid-column: 1 / -1; margin: 0; font: var(--dsw-font-xxxs-strong-11); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dsw-alias-label-tertiary); }
-    .dsh-wf-list-trigger label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
-    .dsh-wf-list-trigger input, .dsh-wf-list-trigger select, .dsh-wf-list-trigger textarea { box-sizing: border-box; width: 100%; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
-    .dsh-wf-list { width: 100%; table-layout: fixed; border-collapse: collapse; font: var(--dsw-font-xxs-12); }
-    .dsh-wf-list th { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; text-align: left; }
-    .dsh-wf-list td { padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l2); vertical-align: top; }
-    .dsh-wf-list input, .dsh-wf-list select, .dsh-wf-list textarea { box-sizing: border-box; width: 100%; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }.dsh-wf-design-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; box-sizing: border-box; margin: -12px -12px 0; padding: 12px; background: var(--dsw-alias-bg-base); border-bottom: 1px solid var(--dsw-alias-border-l2); }
-    .dsh-wf-design-head strong { font: var(--dsw-font-s-strong-14); }
-    .dsh-wf-more > summary { width: fit-content; cursor: pointer; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); user-select: none; }
-    .dsh-wf-more[open] > summary { color: var(--dsw-alias-label-primary); }
-    .dsh-wf-more > .dsh-wf-design-bar { margin-top: 8px; padding: 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); }
-    .dsh-wf-empty { display: flex; flex-direction: column; gap: 8px; box-sizing: border-box; padding: 12px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
-    .dsh-wf-blank-canvas { display: flex; align-items: center; justify-content: center; min-height: 420px; }
-    .dsh-wf-blank-canvas .dsh-wf-empty { max-width: 360px; }
-    .dsh-wf-empty-title { margin: 0; font: var(--dsw-font-xs-13); color: var(--dsw-alias-label-secondary); }
-    .dsh-wf-lib-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; box-sizing: border-box; width: 100%; height: auto; min-height: 0; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); text-align: left; line-height: 1.4; white-space: normal; }
-    .dsh-wf-lib-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
-    .dsh-wf-row-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
-    .dsh-wf-row-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
-    .dsh-wf-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
-    .dsh-wf-def-row, .dsh-wf-trigger-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
-    .dsh-wf-def-row:last-child, .dsh-wf-trigger-row:last-child { border-bottom: none; }
-    .dsh-wf-mono { font-family: var(--dsw-font-mono, monospace); }
-    .dsh-wf-workbench { display: grid; grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 12px; min-height: 0; align-items: start; }
-    .dsh-wf-workbench[data-mode="list"] { grid-template-columns: minmax(0, 1fr); }
-    .dsh-wf-workbench[data-mode="list"] .dsh-wf-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .dsh-wf-workbench-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
-    .dsh-wf-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-    .dsh-wf-rail-section { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-    .dsh-wf-block-rows { display: flex; flex-direction: column; gap: 2px; list-style: none; margin: 0; padding: 0; }
-    .dsh-wf-block-row { box-sizing: border-box; width: 100%; height: auto; min-height: 0; justify-content: flex-start; padding: 3px 6px; text-align: left; }
-    .dsh-wf-rail .dsh-wf-lib-row { padding: 6px 8px; }
+    .dsh-wf-canvas .react-flow__panel { position: absolute; z-index: 5; margin: 10px; }
+    .dsh-wf-canvas .react-flow__panel.bottom { bottom: 0; }
+    .dsh-wf-canvas .react-flow__panel.left { left: 0; }
+    .dsh-wf-canvas .react-flow__background { position: absolute; inset: 0; z-index: 0; pointer-events: none; background-color: var(--xy-background-color, var(--xy-background-color-default)); }
+    .dsh-wf-canvas .react-flow__background-pattern.dots { fill: var(--xy-background-pattern-color, var(--dsw-alias-border-l2)); }
+    .dsh-wf-canvas .react-flow__controls { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); }
+    .dsh-wf-canvas .react-flow__controls-button { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; border: none; border-bottom: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+    .dsh-wf-canvas .react-flow__controls-button:last-child { border-bottom: none; }
+    .dsh-wf-canvas .react-flow__controls-button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+    .dsh-wf-canvas .react-flow__controls-button svg { width: 100%; max-width: 12px; max-height: 12px; fill: currentColor; }
     .dsh-wf-canvas-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font: var(--dsw-font-xxs-12); }
     .dsh-wf-canvas-toolbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-secondary); }
     .dsh-wf-canvas-toolbar select { padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; }
     .dsh-wf-session-canvas { min-height: 320px; }`;
 
     // packages/plugin-workflows/src/client/design.tsx
-    var import_jsx_runtime7 = require("react/jsx-runtime");
+    var import_jsx_runtime8 = require("react/jsx-runtime");
     function windowWidth() {
       return typeof window === "undefined" ? 1024 : window.innerWidth;
     }
@@ -12055,10 +12353,9 @@ window.__ModuleLoader__.load({
       const [confirmDelete, setConfirmDelete] = (0, import_react6.useState)(false);
       const [loading, setLoading] = (0, import_react6.useState)(false);
       const [message, setMessage] = (0, import_react6.useState)();
-      const [templateName, setTemplateName] = (0, import_react6.useState)("");
-      const [draftName, setDraftName] = (0, import_react6.useState)("");
       const [paletteOpen, setPaletteOpen] = (0, import_react6.useState)(false);
-      const [propertiesOpen, setPropertiesOpen] = (0, import_react6.useState)(true);
+      const [menuOpen, setMenuOpen] = (0, import_react6.useState)(false);
+      const [detailsOpen, setDetailsOpen] = (0, import_react6.useState)(false);
       const dirty = editor?.dirty === true;
       (0, import_react6.useEffect)(() => {
         props.onDirtyChange?.(dirty);
@@ -12120,6 +12417,14 @@ window.__ModuleLoader__.load({
         setRuns([]);
         setRunId(void 0);
       };
+      const showDocument = (next, options = {}) => {
+        setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) });
+        setSelected(void 0);
+        setDetailsOpen(false);
+        setConfirmDelete(false);
+        setCanvasFailed(false);
+        if (options.keepRuns !== true) clearRuns();
+      };
       const open = async (id2) => {
         if (id2 === "") return;
         setLoading(true);
@@ -12127,10 +12432,7 @@ window.__ModuleLoader__.load({
         try {
           const [document2, layout] = await Promise.all([api.read(id2), api.readLayout(id2)]);
           const next = openDocument({ ...document2, layout });
-          setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) });
-          setSelected(void 0);
-          setConfirmDelete(false);
-          setCanvasFailed(false);
+          showDocument(next);
           await loadRuns(id2);
         } catch (error) {
           setMessage(error instanceof Error ? error.message : String(error));
@@ -12172,6 +12474,7 @@ window.__ModuleLoader__.load({
         setLoading(true);
         try {
           const result = await reload(editor, api);
+          if (editorRef.current !== editor) return;
           setEditor(result);
           await loadRuns(result.document.definition.id);
         } catch (error) {
@@ -12182,10 +12485,6 @@ window.__ModuleLoader__.load({
       };
       const removeCurrent = async () => {
         if (editor === void 0) return;
-        if (!confirmDelete) {
-          setConfirmDelete(true);
-          return;
-        }
         setLoading(true);
         try {
           const outcome = await deleteDefinition(editor, api);
@@ -12203,31 +12502,22 @@ window.__ModuleLoader__.load({
         }
       };
       const startBlank = () => {
-        const next = openNew(blankDefinition(taken));
-        setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) });
-        setSelected(void 0);
-        clearRuns();
-        setCanvasFailed(false);
+        showDocument(openNew(blankDefinition(taken)));
         setMessage(void 0);
       };
-      const takeTemplate = () => {
-        const template = library.templates.find((entry) => entry.id === templateName);
-        if (template === void 0) return;
+      const applyTemplate = (template) => {
         const copy = copyDefinition(template.definition, taken);
-        setEditor({ ...openNew(copy), mode: defaultSurface(props.surfaceWidth) });
-        setSelected(void 0);
-        clearRuns();
-        setCanvasFailed(false);
+        showDocument(openNew(copy));
+        setMessage(void 0);
       };
-      const startDraft = async () => {
-        if (draftName === "") return;
+      const startDraft = async (name) => {
+        if (name === "") return;
+        const before = editorRef.current;
         setLoading(true);
         try {
-          const definition = await api.readDraft(draftName);
-          setEditor({ ...openDraft(draftName, definition), mode: defaultSurface(props.surfaceWidth) });
-          setSelected(void 0);
-          clearRuns();
-          setCanvasFailed(false);
+          const definition = await api.readDraft(name);
+          if (editorRef.current !== before) return;
+          showDocument(openDraft(name, definition));
         } catch (error) {
           setMessage(error instanceof Error ? error.message : String(error));
         } finally {
@@ -12274,11 +12564,13 @@ window.__ModuleLoader__.load({
         if (!leaveEditor(editor, confirmed)) return;
         action();
       };
-      const addExecutor = (executor) => {
+      const addExecutor = (executor, position) => {
         if (editor === void 0) return;
-        const next = addStepForExecutor(editor, executor);
-        apply2(next);
-        setSelected(next.diagram.nodes.at(-1)?.id);
+        const added = addStepForExecutor(editor, executor);
+        const node = added.diagram.nodes.at(-1);
+        const placed = position === void 0 || node === void 0 ? added : moveStep(added, node.id, position);
+        apply2(placed);
+        setSelected(node?.id);
       };
       const chooseTrigger = (kind) => {
         if (editor === void 0) return;
@@ -12286,11 +12578,13 @@ window.__ModuleLoader__.load({
         setSelected(TRIGGER_NODE);
       };
       if (sessionId === void 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "dsh-wf-design", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
+        return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "dsh-wf-design", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
       }
       const active = activeRun(runs, runId);
       const overlay = editor === void 0 ? overlayFor(void 0, blankDefinition(/* @__PURE__ */ new Set())) : overlayFor(active, editor.document.definition);
       const surface = editor === void 0 ? defaultSurface(props.surfaceWidth) : resolveSurface(editor.mode, canvasFailed);
+      const placement = inspectorPlacement(props.surfaceWidth ?? windowWidth());
+      const inspectorOpen = placement === "column" || selected2 !== void 0 || detailsOpen;
       const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected2);
       const choices = editor === void 0 || selected2 === void 0 ? [] : connectChoices(editor.diagram.nodes, selected2).flatMap(
         (choice) => choice.targets.map((target) => ({
@@ -12301,94 +12595,361 @@ window.__ModuleLoader__.load({
       );
       const issues = editor?.issues ?? [];
       const conflict = editor?.conflict;
-      const editorBody = () => {
-        if (editor === void 0) {
-          return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("section", { className: "dsh-wf-canvas dsh-wf-blank-canvas", "data-section": "editor-start", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-empty", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-empty-title", children: t("design.intro") }),
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              import_dsh_client_ui_primitives5.Button,
-              {
-                type: "button",
-                variant: "primary",
-                size: "sm",
-                onClick: () => guard(startBlank),
-                disabled: loading,
-                children: t("design.new")
-              }
-            )
-          ] }) });
+      const currentTrigger = editor === void 0 ? void 0 : String(editor.document.definition.trigger.kind ?? "");
+      const menuItems = () => {
+        const items = [{ id: "new", label: t("design.new"), disabled: loading }];
+        if (library.templates.length > 0) {
+          items.push({
+            id: "templates",
+            label: t("design.template"),
+            disabled: loading,
+            submenu: library.templates.map((template) => ({
+              id: `template:${template.id}`,
+              label: `${template.name} \xB7 ${String(template.stepCount)} steps`,
+              disabled: loading
+            }))
+          });
         }
-        return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(import_jsx_runtime7.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-summary", "aria-live": "polite", children: summaryText(editor.document.definition, selectedNode?.title, overlay) }),
-          fallbackNotice(canvasFailed) === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-issue", role: "status", children: fallbackNotice(canvasFailed) }),
-          overlay.notices.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-issue", role: "status", children: overlay.notices.join(" ") }),
-          overlay.orphans.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { className: "dsh-wf-muted", "data-orphans": overlay.orphans.length, children: [
+        if (library.drafts.length > 0) {
+          items.push({
+            id: "drafts",
+            label: t("design.draft"),
+            disabled: loading,
+            submenu: library.drafts.map((draft) => ({
+              id: `draft:${draft.name}`,
+              label: `${draft.title} (${draft.name})`,
+              disabled: loading
+            }))
+          });
+        }
+        items.push({
+          id: "reload",
+          label: t("design.reload"),
+          disabled: editor === void 0 || loading
+        });
+        items.push({
+          id: "surface",
+          label: surface === "canvas" ? t("design.listView") : t("design.canvasView"),
+          disabled: loading
+        });
+        items.push({
+          id: "delete",
+          label: t("design.delete"),
+          danger: true,
+          disabled: editor?.document.revision === null || loading
+        });
+        return items;
+      };
+      const onMenuSelect = (id2) => {
+        setMenuOpen(false);
+        if (loading) return;
+        if (id2 === "new") {
+          guard(startBlank);
+          return;
+        }
+        if (id2 === "reload") {
+          guard(() => void reloadCurrent());
+          return;
+        }
+        if (id2 === "surface") {
+          if (editor !== void 0) setEditor(setMode(editor, surface === "canvas" ? "list" : "canvas"));
+          return;
+        }
+        if (id2 === "delete") {
+          setConfirmDelete(true);
+          return;
+        }
+        if (id2.startsWith("template:")) {
+          const template = library.templates.find((entry) => entry.id === id2.slice("template:".length));
+          if (template !== void 0) guard(() => applyTemplate(template));
+          return;
+        }
+        if (id2.startsWith("draft:")) {
+          guard(() => void startDraft(id2.slice("draft:".length)));
+        }
+      };
+      const emptyCanvas = () => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("section", { className: "dsh-wf-canvas dsh-wf-blank-canvas", "data-section": "editor-start", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-empty", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-empty-title", children: t("design.intro") }),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          import_dsh_client_ui_primitives6.Button,
+          {
+            type: "button",
+            variant: "primary",
+            size: "sm",
+            onClick: () => guard(startBlank),
+            disabled: loading,
+            children: t("design.new")
+          }
+        )
+      ] }) });
+      const listSurface = (state) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-surface-list", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "dsh-wf-list-bar", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          PaletteMenu,
+          {
+            open: paletteOpen,
+            onOpen: () => setPaletteOpen(true),
+            onClose: () => setPaletteOpen(false),
+            onAdd: (executor) => addExecutor(executor)
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          ListEditor,
+          {
+            state,
+            ...selected2 === void 0 ? {} : { selected: selected2 },
+            onSelect: setSelected,
+            onDefinitionPatch: (patch) => apply2(patchDefinition(state, patch)),
+            onPatch: (stepId, patch) => apply2(patchStep(state, stepId, patch)),
+            onConnect: (source, target, kind) => apply2(connectSteps(state, source, target, kind)),
+            onDelete: (stepId) => {
+              apply2(deleteStep(state, stepId));
+              setSelected(void 0);
+            }
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          PropertyPanel,
+          {
+            state,
+            ...selected2 === void 0 ? {} : { selected: selected2 },
+            onDefinitionPatch: (patch) => apply2(patchDefinition(state, patch)),
+            onPatch: (stepId, patch) => apply2(patchStep(state, stepId, patch)),
+            onConnect: (source, target, kind) => apply2(connectSteps(state, source, target, kind)),
+            onRename: (nodeId, nextId2) => apply2(renameStepId(state, nodeId, nextId2)),
+            onDelete: (stepId) => {
+              apply2(deleteStep(state, stepId));
+              setSelected(void 0);
+            }
+          }
+        )
+      ] });
+      const editorBody = () => {
+        if (editor === void 0) return emptyCanvas();
+        return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-sr-only", "aria-live": "polite", children: summaryText(editor.document.definition, selectedNode?.title, overlay) }),
+          fallbackNotice(canvasFailed) === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", role: "status", children: fallbackNotice(canvasFailed) }),
+          overlay.notices.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", role: "status", children: overlay.notices.join(" ") }),
+          overlay.orphans.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { className: "dsh-wf-muted", "data-orphans": overlay.orphans.length, children: [
             "Orphan run steps (not drawn):",
             " ",
             overlay.orphans.map((orphan) => `${orphan.id} (${orphan.state})`).join(", ")
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-body", "data-mode": surface, children: [
-            surface === "list" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              ListEditor,
-              {
-                state: editor,
-                ...selected2 === void 0 ? {} : { selected: selected2 },
-                onSelect: setSelected,
-                onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
-                onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
-                onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
-                onDelete: (stepId) => {
-                  apply2(deleteStep(editor, stepId));
-                  setSelected(void 0);
+          surface === "list" ? listSurface(editor) : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "dsh-wf-surface-canvas", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "dsh-wf-canvas", "data-tab-group": "canvas", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            CanvasBoundary,
+            {
+              fallback: listSurface(editor),
+              onError: () => {
+                const recovery = recoverCanvas(editor);
+                setCanvasFailed(recovery.failed);
+                setEditor(recovery.editor);
+              },
+              children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                DesignCanvas,
+                {
+                  nodes: withOverlay(editor.diagram.nodes, overlay),
+                  edges: editor.diagram.edges,
+                  ...selected2 === void 0 ? {} : { selected: selected2 },
+                  focusKey: `${editor.document.definition.id}:${String(editor.document.definition.version)}:${String(editor.diagram.nodes.length)}:${runId ?? ""}`,
+                  onSelect: setSelected,
+                  onMove: (nodeId, position) => apply2(moveStep(editor, nodeId, position)),
+                  onConnectNode: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
+                  onDropBrick: (executor, position) => addExecutor(executor, position)
                 }
-              }
-            ) : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "dsh-wf-canvas", "data-tab-group": "canvas", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              CanvasBoundary,
+              )
+            }
+          ) }) })
+        ] });
+      };
+      return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design", "data-state": loading ? "loading" : "ready", ref: root2, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("style", { children: FLOW_CSS }),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-head-main", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-head-name", children: editor === void 0 ? t("design.pageTitle") : editor.document.definition.name }),
+            editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "outline", children: currentTrigger === "" ? t("overview.unknownKind") : currentTrigger }),
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "quiet", children: editor.document.source })
+            ] })
+          ] }),
+          editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("span", { className: "dsh-wf-head-state", "data-status": editor.status, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-dirty-dot", "data-dirty": editor.dirty, "aria-hidden": "true" }),
+            editor.dirty ? t("design.dirty") : t("design.clean"),
+            " \xB7 v",
+            String(editor.document.definition.version),
+            editor.document.revision === null ? "" : ` \xB7 ${editor.document.revision.slice(0, 8)}`
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-head-actions", children: [
+            editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+              "select",
               {
-                fallback: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                  ListEditor,
+                className: "dsh-wf-run",
+                "aria-label": t("design.run"),
+                value: runId ?? "",
+                onChange: (event) => setRunId(event.currentTarget.value),
+                disabled: runs.length === 0,
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "", children: t("design.noRun") }),
+                  runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("option", { value: run.id, children: [
+                    run.id,
+                    " \xB7 ",
+                    run.status,
+                    run.definition === void 0 ? "" : ` \xB7 v${String(run.definition.version)}`
+                  ] }, run.id))
+                ]
+              }
+            ),
+            placement === "drawer" && editor !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              import_dsh_client_ui_primitives6.Button,
+              {
+                type: "button",
+                variant: "toolbar",
+                size: "sm",
+                icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.IconSlidersTwoOutlineRegular, {}),
+                "aria-label": t("design.details"),
+                title: t("design.details"),
+                "aria-pressed": detailsOpen,
+                onClick: () => setDetailsOpen((open2) => !open2)
+              }
+            ) : null,
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              import_dsh_client_ui_primitives6.Button,
+              {
+                type: "button",
+                variant: "primary",
+                size: "sm",
+                onClick: () => void saveCurrent(),
+                disabled: editor === void 0 || loading || editor.status === "saving",
+                children: t("design.save")
+              }
+            ),
+            editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              import_dsh_client_ui_primitives6.Menu,
+              {
+                open: menuOpen,
+                items: menuItems(),
+                align: "end",
+                onSelect: onMenuSelect,
+                onClose: () => setMenuOpen(false),
+                anchor: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  import_dsh_client_ui_primitives6.Button,
                   {
-                    state: editor,
-                    ...selected2 === void 0 ? {} : { selected: selected2 },
-                    onSelect: setSelected,
-                    onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
-                    onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
-                    onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
-                    onDelete: (stepId) => {
-                      apply2(deleteStep(editor, stepId));
-                      setSelected(void 0);
-                    }
-                  }
-                ),
-                onError: () => {
-                  const recovery = recoverCanvas(editor);
-                  setCanvasFailed(recovery.failed);
-                  setEditor(recovery.editor);
-                },
-                children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                  DesignCanvas,
-                  {
-                    nodes: withOverlay(editor.diagram.nodes, overlay),
-                    edges: editor.diagram.edges,
-                    ...selected2 === void 0 ? {} : { selected: selected2 },
-                    focusKey: `${editor.document.definition.id}:${String(editor.document.definition.version)}:${String(editor.diagram.nodes.length)}:${runId ?? ""}`,
-                    onSelect: setSelected,
-                    onMove: (nodeId, position) => apply2(moveStep(editor, nodeId, position)),
-                    onConnectNode: (source, target, kind) => apply2(connectSteps(editor, source, target, kind))
+                    type: "button",
+                    variant: "toolbar",
+                    size: "sm",
+                    icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.IconEllipsisOutlineRegular, {}),
+                    "aria-label": t("design.more"),
+                    title: t("design.more"),
+                    onClick: () => setMenuOpen(true)
                   }
                 )
               }
-            ) }),
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              import_dsh_client_ui_primitives5.DisclosureRow,
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              import_dsh_client_ui_primitives6.Button,
               {
-                icon: null,
-                title: t("design.properties"),
-                open: propertiesOpen,
-                expandable: true,
-                expandOnRowClick: true,
-                onToggle: () => setPropertiesOpen((current) => !current),
-                children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+                type: "button",
+                variant: "ghost",
+                size: "sm",
+                onClick: () => guard(() => props.onClose?.()),
+                children: t("design.close")
+              }
+            )
+          ] })
+        ] }),
+        confirmDelete && editor !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-confirm", role: "alert", "data-section": "confirm-delete", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("span", { children: [
+            t("design.deletePrompt"),
+            " \xAB",
+            editor.document.definition.name,
+            "\xBB?"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            import_dsh_client_ui_primitives6.Button,
+            {
+              type: "button",
+              variant: "outline",
+              size: "sm",
+              onClick: () => void removeCurrent(),
+              disabled: loading,
+              children: t("design.delete")
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setConfirmDelete(false), children: t("design.cancel") })
+        ] }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-workbench", "data-mode": surface, "data-layout": placement, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            WorkflowRail,
+            {
+              definitions: library.definitions,
+              ...editor === void 0 ? {} : { currentId: editor.document.definition.id },
+              ...currentTrigger === void 0 ? {} : { currentTrigger },
+              ...editor === void 0 || runs[0] === void 0 ? {} : { latestRun: runs[0] },
+              disabled: loading,
+              t,
+              onNew: () => guard(startBlank),
+              onOpen: (id2) => guard(() => void open(id2)),
+              onTrigger: chooseTrigger,
+              onExecutor: addExecutor
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-workbench-main", children: [
+            message === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", children: message }),
+            conflict === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design-bar", role: "alert", "data-conflict": conflict.kind, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { children: editor?.message ?? t("design.conflict") }),
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                import_dsh_client_ui_primitives6.Button,
+                {
+                  type: "button",
+                  variant: "outline",
+                  size: "sm",
+                  onClick: () => guard(() => void reloadCurrent()),
+                  children: t("design.reload")
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                import_dsh_client_ui_primitives6.Button,
+                {
+                  type: "button",
+                  variant: "outline",
+                  size: "sm",
+                  onClick: () => void copyCurrent(),
+                  disabled: loading,
+                  children: t("design.saveCopy")
+                }
+              ),
+              conflict.nextId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_dsh_client_ui_primitives6.Button, { type: "button", variant: "outline", size: "sm", onClick: useNextId, children: [
+                t("design.useId"),
+                " ",
+                conflict.nextId
+              ] })
+            ] }),
+            editor?.message === void 0 || conflict !== void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", children: editor.message }),
+            editorBody()
+          ] }),
+          surface === "canvas" ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+            "aside",
+            {
+              className: "dsh-wf-inspector",
+              "data-open": inspectorOpen ? "true" : "false",
+              "aria-label": t("design.inspector"),
+              children: [
+                placement === "drawer" ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-inspector-head", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { children: t("design.inspector") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                    import_dsh_client_ui_primitives6.Button,
+                    {
+                      type: "button",
+                      variant: "ghost",
+                      size: "sm",
+                      "aria-label": t("design.closeInspector"),
+                      onClick: () => {
+                        setDetailsOpen(false);
+                        setSelected(void 0);
+                      },
+                      children: "\xD7"
+                    }
+                  )
+                ] }) : null,
+                editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
                   PropertyPanel,
                   {
                     state: editor,
@@ -12403,289 +12964,69 @@ window.__ModuleLoader__.load({
                     }
                   }
                 )
-              }
-            )
-          ] }),
-          connectValue === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-              "select",
-              {
-                "aria-label": "Connection",
-                value: connectValue,
-                onChange: (event) => setConnectValue(event.currentTarget.value),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "", children: "Choose a connection" }),
-                  choices.map((choice) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                    "option",
-                    {
-                      value: `${choice.kind}:${choice.target}`,
-                      children: choice.label
-                    },
-                    `${choice.kind}:${choice.target}`
-                  ))
-                ]
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              import_dsh_client_ui_primitives5.Button,
-              {
-                type: "button",
-                variant: "outline",
-                size: "sm",
-                disabled: connectValue === "",
-                onClick: () => {
-                  if (selected2 === void 0) return;
-                  const separator = connectValue.indexOf(":");
-                  const kind = connectValue.slice(0, separator);
-                  const target = connectValue.slice(separator + 1);
-                  apply2(connectSteps(editor, selected2, target, kind));
-                  setConnectValue(void 0);
-                },
-                children: "Connect"
-              }
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              import_dsh_client_ui_primitives5.Button,
-              {
-                type: "button",
-                variant: "ghost",
-                size: "sm",
-                onClick: () => setConnectValue(void 0),
-                children: "Cancel"
-              }
-            )
-          ] }),
-          issues.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-issue", "data-issues": issues.length, children: issues.map((issue) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("li", { children: [
-            issueLabel(issue),
-            ": ",
-            issue.message
-          ] }, `${issue.path}:${issue.message}`)) })
-        ] });
-      };
-      return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design", "data-state": loading ? "loading" : "ready", ref: root2, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("style", { children: FLOW_CSS }),
-        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-head", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("strong", { children: t("design.title") }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-muted", "data-status": editor?.status ?? "none", children: editor === void 0 ? "" : `${editor.dirty ? t("design.dirty") : t("design.clean")} \xB7 v${String(editor.document.definition.version)}${editor.document.revision === null ? "" : ` \xB7 ${editor.document.revision.slice(0, 8)}`}` }),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-            import_dsh_client_ui_primitives5.Button,
+              ]
+            }
+          ) : null
+        ] }),
+        connectValue === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design-bar", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+            "select",
             {
-              type: "button",
-              variant: "primary",
-              size: "sm",
-              onClick: () => void saveCurrent(),
-              disabled: editor === void 0 || loading || editor.status === "saving",
-              children: t("design.save")
+              "aria-label": "Connection",
+              value: connectValue,
+              onChange: (event) => setConnectValue(event.currentTarget.value),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "", children: "Choose a connection" }),
+                choices.map((choice) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  "option",
+                  {
+                    value: `${choice.kind}:${choice.target}`,
+                    children: choice.label
+                  },
+                  `${choice.kind}:${choice.target}`
+                ))
+              ]
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-            import_dsh_client_ui_primitives5.Button,
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            import_dsh_client_ui_primitives6.Button,
             {
               type: "button",
-              variant: "toolbar",
+              variant: "outline",
               size: "sm",
-              onClick: () => guard(() => props.onClose?.()),
-              children: t("design.close")
+              disabled: connectValue === "",
+              onClick: () => {
+                if (selected2 === void 0 || editor === void 0) return;
+                const separator = connectValue.indexOf(":");
+                const kind = connectValue.slice(0, separator);
+                const target = connectValue.slice(separator + 1);
+                apply2(connectSteps(editor, selected2, target, kind));
+                setConnectValue(void 0);
+              },
+              children: "Connect"
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            import_dsh_client_ui_primitives6.Button,
+            {
+              type: "button",
+              variant: "ghost",
+              size: "sm",
+              onClick: () => setConnectValue(void 0),
+              children: "Cancel"
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-workbench", "data-mode": surface, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-            WorkflowRail,
-            {
-              definitions: library.definitions,
-              ...editor === void 0 ? {} : { currentId: editor.document.definition.id },
-              ...editor === void 0 || runs[0] === void 0 ? {} : { latestRun: runs[0] },
-              disabled: loading,
-              t,
-              onOpen: (id2) => guard(() => void open(id2)),
-              onTrigger: chooseTrigger,
-              onExecutor: addExecutor,
-              actions: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("details", { className: "dsh-wf-more", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("summary", { children: t("design.more") }),
-                /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", "data-group": "secondary", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                    import_dsh_client_ui_primitives5.Button,
-                    {
-                      type: "button",
-                      variant: "toolbar",
-                      size: "sm",
-                      onClick: () => guard(startBlank),
-                      disabled: loading,
-                      children: t("design.new")
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-                    "select",
-                    {
-                      "aria-label": t("design.template"),
-                      value: templateName,
-                      onChange: (event) => setTemplateName(event.currentTarget.value),
-                      disabled: loading,
-                      children: [
-                        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "", children: t("design.template") }),
-                        library.templates.map((template) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("option", { value: template.id, children: [
-                          template.name,
-                          " \xB7 ",
-                          String(template.stepCount),
-                          " steps"
-                        ] }, template.id))
-                      ]
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                    import_dsh_client_ui_primitives5.Button,
-                    {
-                      type: "button",
-                      variant: "toolbar",
-                      size: "sm",
-                      onClick: () => guard(takeTemplate),
-                      disabled: templateName === "" || loading,
-                      children: t("design.copyTemplate")
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-                    "select",
-                    {
-                      "aria-label": t("design.draft"),
-                      value: draftName,
-                      onChange: (event) => setDraftName(event.currentTarget.value),
-                      disabled: loading,
-                      children: [
-                        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "", children: t("design.draft") }),
-                        library.drafts.map((draft) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("option", { value: draft.name, children: [
-                          draft.title,
-                          " (",
-                          draft.name,
-                          ") \xB7 ",
-                          String(draft.stepCount),
-                          " steps"
-                        ] }, draft.name))
-                      ]
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                    import_dsh_client_ui_primitives5.Button,
-                    {
-                      type: "button",
-                      variant: "toolbar",
-                      size: "sm",
-                      onClick: () => guard(() => void startDraft()),
-                      disabled: draftName === "" || loading,
-                      children: t("design.openDraft")
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                    import_dsh_client_ui_primitives5.Button,
-                    {
-                      type: "button",
-                      variant: "toolbar",
-                      size: "sm",
-                      onClick: () => guard(() => void reloadCurrent()),
-                      disabled: editor === void 0 || loading,
-                      children: t("design.reload")
-                    }
-                  ),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                    import_dsh_client_ui_primitives5.Button,
-                    {
-                      type: "button",
-                      variant: "toolbar",
-                      size: "sm",
-                      onClick: () => guard(() => void removeCurrent()),
-                      disabled: editor === void 0 || editor.document.revision === null || loading,
-                      children: confirmDelete ? t("design.confirmDelete") : t("design.delete")
-                    }
-                  )
-                ] })
-              ] })
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-workbench-main", children: [
-            editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", "data-group": "editor", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                import_dsh_client_ui_primitives5.SegmentedControl,
-                {
-                  id: "dsh-wf-surface",
-                  value: surface,
-                  options: [
-                    { value: "list", label: t("design.listMode") },
-                    { value: "canvas", label: t("design.canvasMode") }
-                  ],
-                  onChange: (next) => {
-                    if (editor === void 0) return;
-                    setEditor(setMode(editor, next));
-                  },
-                  label: t("design.mode")
-                }
-              ),
-              surface === "list" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                PaletteMenu,
-                {
-                  open: paletteOpen,
-                  onOpen: () => setPaletteOpen(true),
-                  onClose: () => setPaletteOpen(false),
-                  onAdd: addExecutor
-                }
-              ) : null,
-              /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-                "select",
-                {
-                  "aria-label": t("design.run"),
-                  value: runId ?? "",
-                  onChange: (event) => setRunId(event.currentTarget.value),
-                  disabled: runs.length === 0,
-                  children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "", children: t("design.noRun") }),
-                    runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("option", { value: run.id, children: [
-                      run.id,
-                      " \xB7 ",
-                      run.status,
-                      run.definition === void 0 ? "" : ` \xB7 v${String(run.definition.version)}`
-                    ] }, run.id))
-                  ]
-                }
-              )
-            ] }),
-            message === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-issue", children: message }),
-            conflict === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-design-bar", role: "alert", "data-conflict": conflict.kind, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { children: editor?.message ?? t("design.conflict") }),
-              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                import_dsh_client_ui_primitives5.Button,
-                {
-                  type: "button",
-                  variant: "outline",
-                  size: "sm",
-                  onClick: () => guard(() => void reloadCurrent()),
-                  children: t("design.reload")
-                }
-              ),
-              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-                import_dsh_client_ui_primitives5.Button,
-                {
-                  type: "button",
-                  variant: "outline",
-                  size: "sm",
-                  onClick: () => void copyCurrent(),
-                  disabled: loading,
-                  children: t("design.saveCopy")
-                }
-              ),
-              conflict.nextId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(import_dsh_client_ui_primitives5.Button, { type: "button", variant: "outline", size: "sm", onClick: useNextId, children: [
-                t("design.useId"),
-                " ",
-                conflict.nextId
-              ] })
-            ] }),
-            editor?.message === void 0 || conflict !== void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-issue", children: editor.message }),
-            editorBody()
-          ] })
-        ] })
+        issues.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("ul", { className: "dsh-wf-issue", "data-issues": issues.length, children: issues.map((issue) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("li", { children: [
+          issueLabel(issue),
+          ": ",
+          issue.message
+        ] }, `${issue.path}:${issue.message}`)) })
       ] });
     }
 
     // packages/plugin-workflows/src/client/panel.tsx
-    var import_dsh_client_ui_primitives6 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives7 = require("@deepseek-ai/dsh-client-ui-primitives");
 
     // packages/plugin-workflows/src/client/locale.ts
     var EN = {
@@ -12845,6 +13186,31 @@ window.__ModuleLoader__.load({
       "design.blocksTriggers": "Trigger kinds",
       "design.blocksSteps": "Step executors",
       "design.diagnostics": "Diagnostics",
+      "design.inspector": "Inspector",
+      "design.closeInspector": "Close inspector",
+      "design.details": "Details",
+      "design.listView": "List view",
+      "design.canvasView": "Canvas view",
+      "design.cancel": "Cancel",
+      "design.deletePrompt": "Delete workflow",
+      "design.brick.agent": "Agent",
+      "design.brick.agent.hint": "The main agent does this step.",
+      "design.brick.tool": "Tool call",
+      "design.brick.tool.hint": "One allowlisted tool call.",
+      "design.brick.subagent": "Subagent",
+      "design.brick.subagent.hint": "Delegate this step to a child agent.",
+      "design.brick.human": "Ask user",
+      "design.brick.human.hint": "Wait for the user to answer.",
+      "design.brick.branch": "Branch",
+      "design.brick.branch.hint": "Choose one of two next steps.",
+      "design.brick.loop": "Loop",
+      "design.brick.loop.hint": "Repeat a step up to a cap.",
+      "design.brick.trigger.turnStopping": "Fires when the turn is about to close.",
+      "design.brick.trigger.toolPreExecute": "Fires before a tool call runs.",
+      "design.brick.trigger.toolResult": "Fires after a tool call returns.",
+      "design.brick.trigger.fsChange": "Fires after a file change.",
+      "design.brick.trigger.subagentEnd": "Fires when a subagent finishes.",
+      "design.brick.trigger.reviewRecord": "Fires when a review record is written.",
       "design.run": "Run overlay",
       "design.noRun": "No run",
       "design.dirty": "unsaved changes",
@@ -12862,7 +13228,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/panel.tsx
-    var import_jsx_runtime8 = require("react/jsx-runtime");
+    var import_jsx_runtime9 = require("react/jsx-runtime");
     function emptyPageStates() {
       return { runs: void 0, workflowRuns: void 0, history: void 0 };
     }
@@ -12945,36 +13311,36 @@ window.__ModuleLoader__.load({
     }
     function TriggersTable(props) {
       const { triggers, t } = props;
-      return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("section", { className: "dsh-wf-section", "data-section": "triggers", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h3", { className: "dsh-wf-heading", children: t("triggers.title") }),
-        triggers.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-muted", children: t("triggers.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("ul", { className: "dsh-wf-rows", children: triggers.map((trigger) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("li", { className: "dsh-wf-trigger-row", "data-trigger": trigger.id, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-row-head", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-subject", children: trigger.id }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-chip", children: trigger.event }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "quiet", children: trigger.mode }),
-            trigger.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-muted", "data-source": trigger.source, children: trigger.plugin === void 0 ? trigger.source : `${trigger.source}:${trigger.plugin}` }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-time", children: trigger.last === void 0 ? t("triggers.notEvaluated") : `${reasonLabel(trigger.last.reason, t)} \xB7 ${formatTime(trigger.last.at, t)}` })
+      return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { className: "dsh-wf-section", "data-section": "triggers", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h3", { className: "dsh-wf-heading", children: t("triggers.title") }),
+        triggers.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "dsh-wf-muted", children: t("triggers.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("ul", { className: "dsh-wf-rows", children: triggers.map((trigger) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("li", { className: "dsh-wf-trigger-row", "data-trigger": trigger.id, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "dsh-wf-row-head", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-subject", children: trigger.id }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-chip", children: trigger.event }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: trigger.mode }),
+            trigger.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-muted", "data-source": trigger.source, children: trigger.plugin === void 0 ? trigger.source : `${trigger.source}:${trigger.plugin}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-time", children: trigger.last === void 0 ? t("triggers.notEvaluated") : `${reasonLabel(trigger.last.reason, t)} \xB7 ${formatTime(trigger.last.at, t)}` })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "dsh-wf-row-meta", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-muted dsh-wf-mono", children: filterText(trigger) }) })
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("div", { className: "dsh-wf-row-meta", children: /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-muted dsh-wf-mono", children: filterText(trigger) }) })
         ] }, trigger.id)) })
       ] });
     }
     function LoadingLine(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-muted", role: "status", children: props.t("state.loading") });
+      return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "dsh-wf-muted", role: "status", children: props.t("state.loading") });
     }
     function ErrorLine(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-error-block", role: "alert", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: `${props.t("state.error")} ${props.message}` }),
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onRetry, children: props.t("state.retry") })
+      return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "dsh-wf-error-block", role: "alert", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: `${props.t("state.error")} ${props.message}` }),
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onRetry, children: props.t("state.retry") })
       ] });
     }
     function LoadMore(props) {
       if (props.next === void 0) return null;
       if (props.error !== void 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(ErrorLine, { message: props.error, t: props.t, onRetry: props.onLoad });
+        return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(ErrorLine, { message: props.error, t: props.t, onRetry: props.onLoad });
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-        import_dsh_client_ui_primitives6.Button,
+      return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
+        import_dsh_client_ui_primitives7.Button,
         {
           type: "button",
           variant: "ghost",
@@ -12988,28 +13354,28 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/workflows.tsx
-    var import_jsx_runtime9 = require("react/jsx-runtime");
+    var import_jsx_runtime10 = require("react/jsx-runtime");
     function receiptsUrl(sessionId) {
       return `/api/workflows/receipts?session=${encodeURIComponent(sessionId)}`;
     }
     function ReceiptsList(props) {
       const { receipts, t } = props;
-      return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { className: "dsh-wf-section", "data-section": "receipts", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h3", { className: "dsh-wf-heading", children: t("receipts.heading") }),
-        receipts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "dsh-wf-muted", children: t("receipts.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("ul", { className: "dsh-wf-runs", children: receipts.map((receipt) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("li", { "data-receipt": receipt.change, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-kind", children: receipt.kind }),
-          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-subject", children: receipt.change }),
-          /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("span", { className: "dsh-wf-summary", children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("section", { className: "dsh-wf-section", "data-section": "receipts", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("h3", { className: "dsh-wf-heading", children: t("receipts.heading") }),
+        receipts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { className: "dsh-wf-muted", children: t("receipts.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("ul", { className: "dsh-wf-runs", children: receipts.map((receipt) => /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("li", { "data-receipt": receipt.change, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-kind", children: receipt.kind }),
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-subject", children: receipt.change }),
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("span", { className: "dsh-wf-summary", children: [
             receipt.digest.slice(0, 8),
             "\u2026"
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-time", children: new Date(receipt.issuedAt).toLocaleString() })
+          /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("span", { className: "dsh-wf-time", children: new Date(receipt.issuedAt).toLocaleString() })
         ] }, `${receipt.kind}:${receipt.change}`)) })
       ] });
     }
 
     // packages/plugin-workflows/src/client/design-page.tsx
-    var import_jsx_runtime10 = require("react/jsx-runtime");
+    var import_jsx_runtime11 = require("react/jsx-runtime");
     var fallbackTranslate = (key) => EN[key] ?? key;
     var dirtyByTab = /* @__PURE__ */ new Map();
     function designTabKey(sessionId, tabId) {
@@ -13066,9 +13432,9 @@ window.__ModuleLoader__.load({
           current = false;
         };
       }, [sessionId]);
-      return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { className: "dsh-wf-page", ref: root2, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("style", { children: FLOW_CSS }),
-        /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-page", ref: root2, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("style", { children: FLOW_CSS }),
+        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
           DesignMode,
           {
             sessionId,
@@ -13080,9 +13446,9 @@ window.__ModuleLoader__.load({
             }
           }
         ),
-        error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { className: "dsh-wf-issue", role: "alert", children: error }),
-        /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(
-          import_dsh_client_ui_primitives7.DisclosureRow,
+        error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-issue", role: "alert", children: error }),
+        /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
+          import_dsh_client_ui_primitives8.DisclosureRow,
           {
             icon: null,
             title: t("design.diagnostics"),
@@ -13091,8 +13457,8 @@ window.__ModuleLoader__.load({
             expandOnRowClick: true,
             onToggle: () => setDiagnosticsOpen((current) => !current),
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(TriggersTable, { triggers: sections.triggers, t }),
-              /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(ReceiptsList, { receipts: sections.receipts, t })
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(TriggersTable, { triggers: sections.triggers, t }),
+              /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(ReceiptsList, { receipts: sections.receipts, t })
             ]
           }
         )
@@ -13106,20 +13472,20 @@ window.__ModuleLoader__.load({
         setDesignDirty(dirtyKey, false);
         tab.actions.close();
       };
-      return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(DesignPageBody, { sessionId: props.sessionId, t, dirtyKey, close });
+      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(DesignPageBody, { sessionId: props.sessionId, t, dirtyKey, close });
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives12 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react9 = require("react");
 
     // packages/plugin-workflows/src/client/overview.tsx
-    var import_dsh_client_ui_primitives9 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react8 = require("react");
 
     // packages/plugin-workflows/src/client/run-history.tsx
-    var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
-    var import_jsx_runtime11 = require("react/jsx-runtime");
+    var import_dsh_client_ui_primitives9 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_jsx_runtime12 = require("react/jsx-runtime");
     function runDot(status) {
       if (status === "running") return "ongoing";
       if (status === "done") return "done";
@@ -13159,12 +13525,12 @@ window.__ModuleLoader__.load({
     }
     function StatusLine(props) {
       const { health, t } = props;
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)("div", { className: "dsh-wf-status", "data-state": health.state, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives8.StateDot, { state: healthDot(health.state) }),
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-status-text", children: t(`health.${health.state}`) }),
-        /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives8.Tooltip, { label: statusDetails(health, t), children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives8.Button, { type: "button", variant: "ghost", size: "sm", children: t("status.details") }) }),
-        props.onRefresh === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-          import_dsh_client_ui_primitives8.Button,
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-status", "data-state": health.state, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.StateDot, { state: healthDot(health.state) }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-status-text", children: t(`health.${health.state}`) }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tooltip, { label: statusDetails(health, t), children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Button, { type: "button", variant: "ghost", size: "sm", children: t("status.details") }) }),
+        props.onRefresh === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+          import_dsh_client_ui_primitives9.Button,
           {
             type: "button",
             variant: "ghost",
@@ -13179,10 +13545,10 @@ window.__ModuleLoader__.load({
     function RunRow(props) {
       const { run, t } = props;
       const started = run.startedAt > 0 ? new Date(run.startedAt).toLocaleString() : t("time.unknown");
-      const relative = run.startedAt > 0 ? relativeLabel((0, import_dsh_client_ui_primitives8.relativeTime)(run.startedAt, props.now), t) : t("time.unknown");
+      const relative = run.startedAt > 0 ? relativeLabel((0, import_dsh_client_ui_primitives9.relativeTime)(run.startedAt, props.now), t) : t("time.unknown");
       const duration = durationText(run.startedAt, run.endedAt);
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("li", { className: "dsh-wf-row", "data-row-key": run.id, "data-status": run.status, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
-        import_dsh_client_ui_primitives8.Button,
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("li", { className: "dsh-wf-row", "data-row-key": run.id, "data-status": run.status, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+        import_dsh_client_ui_primitives9.Button,
         {
           type: "button",
           variant: "toolbar",
@@ -13191,12 +13557,12 @@ window.__ModuleLoader__.load({
           "data-run": run.id,
           onClick: props.onOpen,
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives8.StateDot, { state: runDot(run.status) }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-run-title", children: run.title }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives8.Tag, { tone: "quiet", children: run.trigger === void 0 ? t(`runs.source.${run.source}`) : `${t("runs.trigger")}: ${run.trigger}` }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-run-status", children: t(`runs.status.${run.status}`) }),
-            /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(import_dsh_client_ui_primitives8.Tooltip, { label: started, children: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-time", children: relative }) }),
-            duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("span", { className: "dsh-wf-time", "data-duration": duration, children: duration })
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.StateDot, { state: runDot(run.status) }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-run-title", children: run.title }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: run.trigger === void 0 ? t(`runs.source.${run.source}`) : `${t("runs.trigger")}: ${run.trigger}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-run-status", children: t(`runs.status.${run.status}`) }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tooltip, { label: started, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-time", children: relative }) }),
+            duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-time", "data-duration": duration, children: duration })
           ]
         }
       ) });
@@ -13204,11 +13570,11 @@ window.__ModuleLoader__.load({
     function RunList(props) {
       const { runs, t } = props;
       if (runs.length === 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-muted", "data-section": "runs", "data-state": "empty", children: t("runs.empty") });
+        return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", "data-section": "runs", "data-state": "empty", children: t("runs.empty") });
       }
       const now2 = props.now ?? Date.now();
-      return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
-        import_dsh_client_ui_primitives8.AnimatedRows,
+      return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        import_dsh_client_ui_primitives9.AnimatedRows,
         {
           className: "dsh-wf-rows",
           role: "list",
@@ -13216,13 +13582,13 @@ window.__ModuleLoader__.load({
           rowKeys: runs.map((run) => run.id),
           ready: true,
           resetKey: `runs:${String(runs.length)}`,
-          children: runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(RunRow, { run, t, now: now2, onOpen: () => props.onOpen?.(run.id) }, run.id))
+          children: runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(RunRow, { run, t, now: now2, onOpen: () => props.onOpen?.(run.id) }, run.id))
         }
       );
     }
 
     // packages/plugin-workflows/src/client/overview.tsx
-    var import_jsx_runtime12 = require("react/jsx-runtime");
+    var import_jsx_runtime13 = require("react/jsx-runtime");
     function definitionEvaluationId(definitionId) {
       return `definition:${definitionId}`;
     }
@@ -13366,31 +13732,31 @@ window.__ModuleLoader__.load({
         return evaluations.length === 0 ? [] : [{ event, evaluations }];
       });
       if (rows.length === 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-history", "data-state": "empty", children: t("workflow.noHistory") });
+        return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-history", "data-state": "empty", children: t("workflow.noHistory") });
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("ol", { className: "dsh-wf-events", "data-section": "workflow-history", children: rows.map(({ event, evaluations }, index2) => /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("li", { "data-kind": event.kind, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-event-head", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-time", children: formatTime(event.at, t) }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: event.kind }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-subject", children: event.subject }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-summary", children: event.summary }),
-          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "warning", children: t("events.truncated") }) : null
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ol", { className: "dsh-wf-events", "data-section": "workflow-history", children: rows.map(({ event, evaluations }, index2) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("li", { "data-kind": event.kind, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-event-head", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-time", children: formatTime(event.at, t) }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: event.kind }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-subject", children: event.subject }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", children: event.summary }),
+          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "warning", children: t("events.truncated") }) : null
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("ul", { className: "dsh-wf-evaluations", "aria-label": t("events.evaluations"), children: evaluations.map((evaluation) => {
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "dsh-wf-evaluations", "aria-label": t("events.evaluations"), children: evaluations.map((evaluation) => {
           const runId = evaluation.runId === void 0 ? void 0 : projectedRunId(evaluation.runId);
-          return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+          return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
             "li",
             {
               "data-trigger": evaluation.id,
               "data-matched": evaluation.matched ? "true" : "false",
               children: [
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-trigger", children: evaluation.id }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-reason", children: reasonLabel(evaluation.reason, t) }),
-                evaluation.path === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-muted", children: `${t("triggers.filter")}: ${evaluation.path}` }),
-                evaluation.filter === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-muted", children: evaluation.filter }),
-                evaluation.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-muted", children: evaluation.detail }),
-                runId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-                  import_dsh_client_ui_primitives9.Button,
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-trigger", children: evaluation.id }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-reason", children: reasonLabel(evaluation.reason, t) }),
+                evaluation.path === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: `${t("triggers.filter")}: ${evaluation.path}` }),
+                evaluation.filter === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: evaluation.filter }),
+                evaluation.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: evaluation.detail }),
+                runId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+                  import_dsh_client_ui_primitives10.Button,
                   {
                     type: "button",
                     variant: "ghost",
@@ -13410,8 +13776,8 @@ window.__ModuleLoader__.load({
     function WorkflowRow(props) {
       const { bucket, latest, now: now2, t } = props;
       const definition = bucket.definition;
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("li", { className: "dsh-wf-row", "data-row-key": definition.id, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
-        import_dsh_client_ui_primitives9.Button,
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("li", { className: "dsh-wf-row", "data-row-key": definition.id, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
+        import_dsh_client_ui_primitives10.Button,
         {
           type: "button",
           variant: "toolbar",
@@ -13420,15 +13786,15 @@ window.__ModuleLoader__.load({
           "data-workflow": definition.id,
           onClick: props.onOpen,
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { className: "dsh-wf-card-head", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
-              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
-              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
-              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-card-head", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
+              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
+              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
+              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-card-meta", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { className: "dsh-wf-card-stats", children: [
-              bucket.stats === void 0 || bucket.stats.total === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-progress", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-card-meta", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-card-stats", children: [
+              bucket.stats === void 0 || bucket.stats.total === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-progress", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
                 "span",
                 {
                   className: "dsh-wf-progress-fill",
@@ -13437,12 +13803,12 @@ window.__ModuleLoader__.load({
                   }
                 }
               ) }),
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) })
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.StateDot, { state: runDot(latest.status) }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: runDot(latest.status) }),
               " ",
-              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives9.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
+              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives10.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
             ] }) }) })
           ]
         }
@@ -13451,28 +13817,28 @@ window.__ModuleLoader__.load({
     function WorkflowOverview(props) {
       const { t } = props;
       if (props.definitions.length === 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-overview", "data-state": "empty", children: t("overview.empty") });
+        return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", "data-section": "workflow-overview", "data-state": "empty", children: t("overview.empty") });
       }
       const now2 = props.now ?? Date.now();
       const groups = groupByTrigger(props.definitions, props.triggers, props.stats);
       const bound = groups.filter((group) => group.workflows.length > 0);
       const unbound = groups.filter((group) => group.workflows.length === 0);
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-overview", "data-section": "workflow-overview", children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-overview", "data-section": "workflow-overview", children: [
         bound.map((group) => {
           const label = group.kind === "" ? t("overview.unknownKind") : group.kind;
-          return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+          return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
             "section",
             {
               className: "dsh-wf-group",
               "data-trigger-kind": group.kind,
               children: [
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-group-head", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
-                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-group-head", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
+                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
                 ] }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("ul", { className: "dsh-wf-rows", "aria-label": label, children: group.workflows.map((bucket) => {
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "dsh-wf-rows", "aria-label": label, children: group.workflows.map((bucket) => {
                   const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
-                  return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+                  return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
                     WorkflowRow,
                     {
                       bucket,
@@ -13489,16 +13855,16 @@ window.__ModuleLoader__.load({
             group.kind === "" ? "__unknown" : group.kind
           );
         }),
-        unbound.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-unbound", "data-section": "unbound-triggers", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-group-title", children: t("overview.unbound") }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("div", { className: "dsh-wf-unbound-list", children: unbound.map((group) => /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+        unbound.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-unbound", "data-section": "unbound-triggers", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-group-title", children: t("overview.unbound") }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf-unbound-list", children: unbound.map((group) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
             "span",
             {
               className: "dsh-wf-unbound-row",
               "data-trigger-empty": group.kind,
               children: [
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-summary", children: group.kind === "" ? t("overview.unknownKind") : group.kind }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noWorkflows") })
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", children: group.kind === "" ? t("overview.unknownKind") : group.kind }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noWorkflows") })
               ]
             },
             group.kind === "" ? "__unknown" : group.kind
@@ -13507,9 +13873,9 @@ window.__ModuleLoader__.load({
       ] });
     }
     function Fact(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("dt", { children: props.label }),
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("dd", { children: props.value })
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("dt", { children: props.label }),
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("dd", { children: props.value })
       ] });
     }
     function workflowCanvasModel(document2, runs, selectedRunId) {
@@ -13529,39 +13895,39 @@ window.__ModuleLoader__.load({
       const chain = architectureChain(document2?.steps, t);
       const pageRuns = props.runs?.items ?? [];
       const canvas = document2 === void 0 ? void 0 : workflowCanvasModel(document2, pageRuns, overlayRunId);
-      return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-detail", "data-workflow-page": definitionId, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h2", { className: "dsh-wf-detail-title", children: document2?.name ?? definitionId }),
-          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
+      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-detail", "data-workflow-page": definitionId, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h2", { className: "dsh-wf-detail-title", children: document2?.name ?? definitionId }),
+          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
         ] }),
-        props.phase === "loading" ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(LoadingLine, { t }) : props.phase === "error" || document2 === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(ErrorLine, { message: props.message ?? "", t, onRetry: props.onRetry }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-description", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("dl", { className: "dsh-wf-facts", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+        props.phase === "loading" ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t }) : props.phase === "error" || document2 === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ErrorLine, { message: props.message ?? "", t, onRetry: props.onRetry }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-description", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("dl", { className: "dsh-wf-facts", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               Fact,
               {
                 label: t("workflow.version"),
                 value: document2.version === void 0 ? "\u2014" : `v${String(document2.version)}`
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact, { label: t("definitions.risk"), value: risk ?? "\u2014" }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Fact, { label: t("workflow.gateOwnership"), value: gateOwnership ?? "\u2014" }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("definitions.risk"), value: risk ?? "\u2014" }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact, { label: t("workflow.gateOwnership"), value: gateOwnership ?? "\u2014" }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               Fact,
               {
                 label: t("definitions.source"),
                 value: document2.source === void 0 ? "\u2014" : document2.plugin === void 0 ? document2.source : `${document2.source}:${document2.plugin}`
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               Fact,
               {
                 label: t("workflow.trigger"),
                 value: document2.trigger === void 0 ? t("overview.unknownKind") : `${document2.trigger.kind} \xB7 ${t("definitions.mode")}: ${document2.trigger.mode ?? "\u2014"} \xB7 ${t("triggers.filter")}: ${matchText(document2.trigger.match)}`
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               Fact,
               {
                 label: t("workflow.firings"),
@@ -13569,14 +13935,14 @@ window.__ModuleLoader__.load({
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-architecture", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.architecture") }),
-            canvas === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(import_jsx_runtime12.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("style", { children: FLOW_CSS }),
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-canvas-toolbar", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-architecture", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.architecture") }),
+            canvas === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("style", { children: FLOW_CSS }),
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-canvas-toolbar", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("label", { children: [
                   t("workflow.overlayRun"),
-                  /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
+                  /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
                     "select",
                     {
                       "aria-label": t("workflow.overlayRun"),
@@ -13586,26 +13952,26 @@ window.__ModuleLoader__.load({
                       ),
                       disabled: pageRuns.length === 0,
                       children: [
-                        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("option", { value: "", children: t("workflow.overlayLatest") }),
-                        pageRuns.map((run) => /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("option", { value: run.id, children: `${run.id} \xB7 ${run.status}` }, run.id))
+                        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("option", { value: "", children: t("workflow.overlayLatest") }),
+                        pageRuns.map((run) => /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("option", { value: run.id, children: `${run.id} \xB7 ${run.status}` }, run.id))
                       ]
                     }
                   )
                 ] }),
-                canvas.overlay.versionsDiffer ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-muted", children: t("workflow.overlayDiffers") }) : null
+                canvas.overlay.versionsDiffer ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: t("workflow.overlayDiffers") }) : null
               ] }),
-              canvas.overlay.notices.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-issue", role: "status", children: canvas.overlay.notices.join(" ") }),
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+              canvas.overlay.notices.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-issue", role: "status", children: canvas.overlay.notices.join(" ") }),
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
                 "div",
                 {
                   className: "dsh-wf-canvas dsh-wf-session-canvas",
                   "data-readonly": "true",
                   "data-tab-group": "workflow-canvas",
-                  children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+                  children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
                     CanvasBoundary,
                     {
-                      fallback: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", children: t("workflow.canvasFallback") }),
-                      children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+                      fallback: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", children: t("workflow.canvasFallback") }),
+                      children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
                         DesignCanvas,
                         {
                           nodes: withOverlay(canvas.graph.nodes, canvas.overlay),
@@ -13621,23 +13987,23 @@ window.__ModuleLoader__.load({
                 }
               )
             ] }),
-            chain.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", children: t("workflow.noSteps") }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("table", { className: "dsh-wf-table", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("tr", { children: [
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("workflow.step") }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("workflow.executor") }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("th", { children: t("workflow.next") })
+            chain.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", children: t("workflow.noSteps") }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("table", { className: "dsh-wf-table", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("tr", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("workflow.step") }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("workflow.executor") }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("workflow.next") })
               ] }) }),
-              /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("tbody", { children: chain.map((row) => /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("tr", { "data-step": row.step.id, children: [
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { children: row.step.title }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-chip", children: row.step.executor }) }),
-                /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("td", { className: "dsh-wf-summary", children: chainTargetsText(row, t) })
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("tbody", { children: chain.map((row) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("tr", { "data-step": row.step.id, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { children: row.step.title }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-chip", children: row.step.executor }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { className: "dsh-wf-summary", children: chainTargetsText(row, t) })
               ] }, row.step.id)) })
             ] })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-runs", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.runs") }),
-            props.runs === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(LoadingLine, { t }) : props.runs.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("p", { className: "dsh-wf-muted", "data-state": "empty", children: t("workflow.noRuns") }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(RunList, { runs: props.runs.items, t, now: props.now, onOpen: props.onOpenRun }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-runs", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.runs") }),
+            props.runs === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t }) : props.runs.items.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", "data-state": "empty", children: t("workflow.noRuns") }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(RunList, { runs: props.runs.items, t, now: props.now, onOpen: props.onOpenRun }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               LoadMore,
               {
                 next: props.runs?.next,
@@ -13647,9 +14013,9 @@ window.__ModuleLoader__.load({
               }
             )
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-history", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.history") }),
-            props.events === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(LoadingLine, { t }) : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "workflow-history", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("workflow.history") }),
+            props.events === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               DefinitionHistory,
               {
                 events: props.events.items,
@@ -13658,7 +14024,7 @@ window.__ModuleLoader__.load({
                 onOpenRun: props.onOpenRun
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
               LoadMore,
               {
                 next: props.events?.next,
@@ -13673,17 +14039,17 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/run-detail.tsx
-    var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
-    var import_jsx_runtime13 = require("react/jsx-runtime");
+    var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_jsx_runtime14 = require("react/jsx-runtime");
     function evidenceCell(step, session) {
       const ref = step.evidenceRef;
       if (ref !== void 0) {
         const raw = ref.ref;
         const name = ref.kind;
-        if (raw === void 0) return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { "data-evidence-kind": name, children: name });
-        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { children: raw });
+        if (raw === void 0) return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { "data-evidence-kind": name, children: name });
+        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { children: raw });
         if (session !== void 0 && isRecordEvidence(raw)) {
-          return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
+          return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(
             "a",
             {
               href: evidenceUrl(session, raw),
@@ -13691,81 +14057,81 @@ window.__ModuleLoader__.load({
               rel: "noreferrer",
               "data-evidence-kind": name,
               children: [
-                /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
+                /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
                 " ",
                 label
               ]
             }
           );
         }
-        return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { "data-evidence-kind": name, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
+        return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { "data-evidence-kind": name, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { className: "dsh-wf-evidence-kind", children: name }),
           " ",
           label
         ] });
       }
       if (step.evidence === void 0) return "\u2014";
       if (session === void 0 || !isRecordEvidence(step.evidence)) return step.evidence;
-      return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.PathLabel, { path: step.evidence }) });
+      return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.PathLabel, { path: step.evidence }) });
     }
     function Fact2(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("dt", { children: props.label }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("dd", { children: props.value })
+      return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("dt", { children: props.label }),
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("dd", { children: props.value })
       ] });
     }
     function RunDetailPage(props) {
       const { run, t, session } = props;
       const identity4 = run.definition === void 0 ? t(`runs.source.${run.source}`) : `${run.definition.name} \xB7 v${String(run.definition.version)}`;
       const duration = durationText(run.startedAt, run.endedAt);
-      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-detail", "data-run-detail": run.id, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h2", { className: "dsh-wf-detail-title", children: run.title }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
-            import_dsh_client_ui_primitives10.Tag,
+      return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-detail", "data-run-detail": run.id, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h2", { className: "dsh-wf-detail-title", children: run.title }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+            import_dsh_client_ui_primitives11.Tag,
             {
               tone: run.status === "failed" ? "danger" : run.status === "done" ? "success" : "neutral",
               children: t(`runs.status.${run.status}`)
             }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("dl", { className: "dsh-wf-facts", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("dl", { className: "dsh-wf-facts", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
             Fact2,
             {
               label: t("runs.definition"),
-              value: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { "data-run-definition": run.definition?.id ?? run.source, children: identity4 })
+              value: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { "data-run-definition": run.definition?.id ?? run.source, children: identity4 })
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact2, { label: t("runs.trigger"), value: run.trigger ?? "\u2014" }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact2, { label: t("runs.started"), value: formatTime(run.startedAt, t) }),
-          run.endedAt === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact2, { label: t("runs.ended"), value: formatTime(run.endedAt, t) }),
-          duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Fact2, { label: t("runs.duration"), value: duration })
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Fact2, { label: t("runs.trigger"), value: run.trigger ?? "\u2014" }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Fact2, { label: t("runs.started"), value: formatTime(run.startedAt, t) }),
+          run.endedAt === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Fact2, { label: t("runs.ended"), value: formatTime(run.endedAt, t) }),
+          duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Fact2, { label: t("runs.duration"), value: duration })
         ] }),
-        run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("p", { className: "dsh-wf-muted", children: [
+        run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("p", { className: "dsh-wf-muted", children: [
           `${t("runs.record")}: `,
-          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.PathLabel, { path: run.record }) })
+          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.PathLabel, { path: run.record }) })
         ] }),
-        run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "steps", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.steps") }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("table", { className: "dsh-wf-table", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("runs.step") }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("runs.state") }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("runs.time") }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("runs.evidence") }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("th", { children: t("runs.issue") })
+        run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-section", "data-section": "steps", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.steps") }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("table", { className: "dsh-wf-table", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: t("runs.step") }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: t("runs.state") }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: t("runs.time") }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: t("runs.evidence") }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("th", { children: t("runs.issue") })
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("tbody", { children: run.steps.map((step) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("tr", { "data-step": step.id, "data-state": step.state, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { children: step.title }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { children: step.state }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("td", { children: evidenceCell(step, session) }),
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("td", { children: [
-                step.failureClass === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { "data-failure-class": step.failureClass, children: step.failureClass }),
-                step.reason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-error", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("tbody", { children: run.steps.map((step) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("tr", { "data-step": step.id, "data-state": step.state, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: step.title }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: step.state }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: step.at === void 0 ? "\u2014" : formatTime(step.at, t) }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("td", { children: evidenceCell(step, session) }),
+              /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("td", { children: [
+                step.failureClass === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { "data-failure-class": step.failureClass, children: step.failureClass }),
+                step.reason === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("span", { className: "dsh-wf-error", children: [
                   " ",
                   step.reason
                 ] }),
@@ -13774,9 +14140,9 @@ window.__ModuleLoader__.load({
             ] }, step.id)) })
           ] })
         ] }),
-        run.violations === void 0 || run.violations.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-section", "data-section": "violations", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.violations") }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "dsh-wf-violations", children: run.violations.map((violation, index2) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("li", { "data-step": violation.stepId, children: [
+        run.violations === void 0 || run.violations.length === 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-section", "data-section": "violations", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h3", { className: "dsh-wf-heading", children: t("runs.violations") }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("ul", { className: "dsh-wf-violations", children: run.violations.map((violation, index2) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("li", { "data-step": violation.stepId, children: [
             violation.stepId === void 0 ? "" : `${violation.stepId}: `,
             violation.reason
           ] }, `${String(violation.at)}:${String(index2)}`)) })
@@ -13784,21 +14150,21 @@ window.__ModuleLoader__.load({
       ] });
     }
     function MissingRunPage(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-detail", "data-state": "missing", role: "status", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-empty-title", children: props.t("runs.missing") }),
-        /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-muted", children: props.t("runs.missingBody") })
+      return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-detail", "data-state": "missing", role: "status", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-empty-title", children: props.t("runs.missing") }),
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-muted", children: props.t("runs.missingBody") })
       ] });
     }
     function RunLookupPage(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
+      return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(
         "section",
         {
           className: "dsh-wf-detail",
           "data-state": props.message === void 0 ? "loading" : "error",
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
-            props.message === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ErrorLine, { message: props.message, t: props.t, onRetry: props.onRetry ?? (() => {
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+            props.message === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(LoadingLine, { t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ErrorLine, { message: props.message, t: props.t, onRetry: props.onRetry ?? (() => {
             }) })
           ]
         }
@@ -13806,7 +14172,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_jsx_runtime14 = require("react/jsx-runtime");
+    var import_jsx_runtime15 = require("react/jsx-runtime");
     var VIEW_CSS = `
     .dsh-wf { display: flex; flex-direction: column; gap: 12px; box-sizing: border-box; height: 100%; min-height: 0; padding: 12px; overflow: hidden; color: var(--dsw-alias-label-primary); }
     .dsh-wf-body { display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1; }
@@ -14008,9 +14374,9 @@ window.__ModuleLoader__.load({
       let body;
       if (props.selected !== void 0) {
         if (props.missing === true) {
-          body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(MissingRunPage, { t, onBack: props.onBack ?? empty2 });
+          body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(MissingRunPage, { t, onBack: props.onBack ?? empty2 });
         } else if (props.detailError !== void 0) {
-          body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+          body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
             RunLookupPage,
             {
               t,
@@ -14020,9 +14386,9 @@ window.__ModuleLoader__.load({
             }
           );
         } else if (selectedRun === void 0) {
-          body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(RunLookupPage, { t, onBack: props.onBack ?? empty2 });
+          body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(RunLookupPage, { t, onBack: props.onBack ?? empty2 });
         } else {
-          body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+          body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
             RunDetailPage,
             {
               run: selectedRun,
@@ -14034,7 +14400,7 @@ window.__ModuleLoader__.load({
         }
       } else if (currentDefinition !== void 0) {
         const workflow = props.workflow ?? { phase: "loading" };
-        body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+        body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
           WorkflowPage,
           {
             definitionId: currentDefinition,
@@ -14055,7 +14421,7 @@ window.__ModuleLoader__.load({
           }
         );
       } else if (segment === "workflows") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+        body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
           WorkflowOverview,
           {
             definitions: loaded.definitions,
@@ -14069,8 +14435,8 @@ window.__ModuleLoader__.load({
           }
         );
       } else {
-        body = /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+        body = /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
             RunList,
             {
               runs: loaded.runs.items,
@@ -14079,7 +14445,7 @@ window.__ModuleLoader__.load({
               ...props.onSelect === void 0 ? {} : { onOpen: props.onSelect }
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
             LoadMore,
             {
               next: loaded.runs.next,
@@ -14092,14 +14458,14 @@ window.__ModuleLoader__.load({
         ] });
       }
       const detail = props.selected !== void 0 || currentDefinition !== void 0;
-      return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(
+      return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(
         "div",
         {
           className: "dsh-wf-body",
           "data-segment": segment,
           "data-view": props.selected !== void 0 ? "detail" : currentDefinition === void 0 ? "list" : "workflow",
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
               StatusLine,
               {
                 health: loaded.health,
@@ -14108,10 +14474,10 @@ window.__ModuleLoader__.load({
                 ...props.onRefresh === void 0 ? {} : { onRefresh: props.onRefresh }
               }
             ),
-            props.refreshError === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ErrorLine, { message: props.refreshError, t, onRetry: props.onRetryRefresh ?? empty2 }),
-            detail ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
-                import_dsh_client_ui_primitives11.SegmentedControl,
+            props.refreshError === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorLine, { message: props.refreshError, t, onRetry: props.onRetryRefresh ?? empty2 }),
+            detail ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+                import_dsh_client_ui_primitives12.SegmentedControl,
                 {
                   id: "dsh-wf-segments",
                   value: segment,
@@ -14121,7 +14487,7 @@ window.__ModuleLoader__.load({
                   className: "dsh-wf-segments"
                 }
               ),
-              /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body })
+              /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body })
             ] })
           ]
         }
@@ -14379,7 +14745,7 @@ window.__ModuleLoader__.load({
         restoreListPosition(container, target.id, target.scrollTop, "workflow");
       }, [definitionId, selected2]);
       if (sessionId === void 0) {
-        return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
+        return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf", "data-state": "no-session", children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "dsh-wf-muted", children: t("state.noSession") }) });
       }
       const openWorkflowPage = (id2) => {
         const container = scrollRef.current;
@@ -14607,11 +14973,11 @@ window.__ModuleLoader__.load({
       };
       let body;
       if (state.phase === "loading") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(LoadingLine, { t });
+        body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(LoadingLine, { t });
       } else if (state.phase === "error") {
-        body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ErrorLine, { message: state.message ?? "", t, onRetry: () => load("initial") });
+        body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorLine, { message: state.message ?? "", t, onRetry: () => load("initial") });
       } else {
-        body = /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
+        body = /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
           WorkflowsLoaded,
           {
             loaded: state.loaded,
@@ -14645,14 +15011,14 @@ window.__ModuleLoader__.load({
           }
         );
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf", "data-state": state.phase, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("style", { children: VIEW_CSS }),
+      return /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "dsh-wf", "data-state": state.phase, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("style", { children: VIEW_CSS }),
         body
       ] });
     }
 
     // packages/plugin-workflows/src/client/index.tsx
-    var import_jsx_runtime15 = require("react/jsx-runtime");
+    var import_jsx_runtime16 = require("react/jsx-runtime");
     var ENTRY_LIMITATION = "The host exposes no command that opens a conversation view; the Workflows tab is the entry.";
     var inject = ["slots", "locale", "resources"];
     var DESIGN_ID = "@dsh-setup/plugin-workflows/design";
@@ -14673,7 +15039,7 @@ window.__ModuleLoader__.load({
             "conversation.view",
             () => slots.register(
               { name: "conversation.view", id: "workflows", order: 30, label: () => t("view.label") },
-              (props) => /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+              (props) => /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
                 WorkflowsView,
                 {
                   t,
@@ -14727,7 +15093,7 @@ window.__ModuleLoader__.load({
             "sidebar.right.pane.tab",
             () => slots.register(
               { name: "sidebar.right.pane.tab", key: DESIGN_ID, locale: NS },
-              (props) => /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(DesignPage, { ...props })
+              (props) => /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(DesignPage, { ...props })
             )
           )
         );

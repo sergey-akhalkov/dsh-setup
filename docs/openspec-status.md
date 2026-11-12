@@ -782,3 +782,19 @@ pre-execute fallback now refuses a compound archive invocation or move with one 
 textual rule (no shell parser), quoted and commented mentions included, with a host test for each
 bypass form. Its 1.3/1.8 task reviews still returned FINDINGS when the owner force-released, so
 those two stay unchecked in the archived record; the shipped code carries their implementation.
+
+On 2026-11-12 `redesign-workflow-workbench` finished the right-sidebar Workflow design workbench: the
+installed workflows render as compact rail rows over the six trigger bricks and six executor bricks,
+each with its shipped icon; a step brick adds a step on click and drops at the canvas position, while
+a trigger brick sets the trigger kind as a single choice. The canvas fills its column with a dot grid
+and zoom/fit controls, draws executor-icon node cards with run-state decoration, labels only the
+branch and loop edges, and the property inspector moved beside the canvas: the third column at a
+pane width of at least 980 px, an overlay drawer from the shipped 720 px threshold to that width, and
+inline under the list below it. The header has one primary `Save`, the definition name with trigger
+and source tags, the dirty state and version, a compact run-overlay selector, and an overflow menu
+holding new, template, draft, reload, the list/canvas switch, and delete, which is confirmed in an
+in-page banner. The page keeps the editor state machine, the revision/approval save path, the layout
+sidecar, the diagnostics disclosure, the list fallback, and the accessibility contract; the client
+artifact grew to 647,594 esbuild bytes (708,752 shipped, 338,098 minified, 98,468 gzip), recorded in
+`test/canvas-budget.test.ts`. Open owner follow-up: install the build and check the workbench at wide
+and narrow sidebar widths, the same live visual check (4.5) the previous change left open.

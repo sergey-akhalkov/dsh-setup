@@ -1,9 +1,17 @@
-import { Button, DisclosureRow, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  Button,
+  IconEllipsisOutlineRegular,
+  IconSlidersTwoOutlineRegular,
+  Menu,
+  type MenuItem,
+  Tag,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   defaultMode,
   fallbackNotice,
+  inspectorPlacement,
   isConnectShortcut,
   resolveSurface,
   summaryText,
@@ -53,7 +61,7 @@ import { FLOW_CSS } from './styles.ts'
 
 /**
  * The Design mode container. It owns fetching, the editor state machine, the
- * run selector, and the error/list fallback; the palette, canvas, properties,
+ * run selector, and the error/list fallback; the palette, canvas, inspector,
  * and list are presentational pieces over the same state and save path.
  */
 
@@ -117,10 +125,9 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string>()
-  const [templateName, setTemplateName] = useState('')
-  const [draftName, setDraftName] = useState('')
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [propertiesOpen, setPropertiesOpen] = useState(true)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   const dirty = editor?.dirty === true
   useEffect(() => {
@@ -198,6 +205,16 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setRunId(undefined)
   }
 
+  /** A freshly opened document starts with no selection and no open drawer. */
+  const showDocument = (next: EditorState, options: { readonly keepRuns?: boolean } = {}): void => {
+    setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) })
+    setSelected(undefined)
+    setDetailsOpen(false)
+    setConfirmDelete(false)
+    setCanvasFailed(false)
+    if (options.keepRuns !== true) clearRuns()
+  }
+
   const open = async (id: string): Promise<void> => {
     if (id === '') return
     setLoading(true)
@@ -205,10 +222,7 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     try {
       const [document, layout] = await Promise.all([api.read(id), api.readLayout(id)])
       const next = openDocument({ ...document, layout })
-      setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) })
-      setSelected(undefined)
-      setConfirmDelete(false)
-      setCanvasFailed(false)
+      showDocument(next)
       await loadRuns(id)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
@@ -256,6 +270,8 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     setLoading(true)
     try {
       const result = await reload(editor, api)
+      // A newer edit or document landed while the reload was in flight: it wins.
+      if (editorRef.current !== editor) return
       setEditor(result)
       await loadRuns(result.document.definition.id)
     } catch (error) {
@@ -267,10 +283,6 @@ export function DesignMode(props: DesignModeProps): ReactNode {
 
   const removeCurrent = async (): Promise<void> => {
     if (editor === undefined) return
-    if (!confirmDelete) {
-      setConfirmDelete(true)
-      return
-    }
     setLoading(true)
     try {
       const outcome = await deleteDefinition(editor, api)
@@ -289,33 +301,25 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   }
 
   const startBlank = (): void => {
-    const next = openNew(blankDefinition(taken))
-    setEditor({ ...next, mode: defaultSurface(props.surfaceWidth) })
-    setSelected(undefined)
-    clearRuns()
-    setCanvasFailed(false)
+    showDocument(openNew(blankDefinition(taken)))
     setMessage(undefined)
   }
 
-  const takeTemplate = (): void => {
-    const template = library.templates.find((entry) => entry.id === templateName)
-    if (template === undefined) return
+  const applyTemplate = (template: TemplateEntry): void => {
     const copy = copyDefinition(template.definition, taken)
-    setEditor({ ...openNew(copy), mode: defaultSurface(props.surfaceWidth) })
-    setSelected(undefined)
-    clearRuns()
-    setCanvasFailed(false)
+    showDocument(openNew(copy))
+    setMessage(undefined)
   }
 
-  const startDraft = async (): Promise<void> => {
-    if (draftName === '') return
+  const startDraft = async (name: string): Promise<void> => {
+    if (name === '') return
+    const before = editorRef.current
     setLoading(true)
     try {
-      const definition = await api.readDraft(draftName)
-      setEditor({ ...openDraft(draftName, definition), mode: defaultSurface(props.surfaceWidth) })
-      setSelected(undefined)
-      clearRuns()
-      setCanvasFailed(false)
+      const definition = await api.readDraft(name)
+      // The user edited while the draft loaded: never discard that work.
+      if (editorRef.current !== before) return
+      showDocument(openDraft(name, definition))
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -372,12 +376,18 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     action()
   }
 
-  /** Add one step from the block palette; the editor builds its executor shape. */
-  const addExecutor = (executor: string): void => {
+  /**
+   * Add one step from the block palette; the editor builds its executor shape.
+   * A drop also carries the flow position, so the node lands where it was dropped.
+   */
+  const addExecutor = (executor: string, position?: { x: number; y: number }): void => {
     if (editor === undefined) return
-    const next = addStepForExecutor(editor, executor)
-    apply(next)
-    setSelected(next.diagram.nodes.at(-1)?.id)
+    const added = addStepForExecutor(editor, executor)
+    const node = added.diagram.nodes.at(-1)
+    const placed =
+      position === undefined || node === undefined ? added : moveStep(added, node.id, position)
+    apply(placed)
+    setSelected(node?.id)
   }
 
   /** A trigger block patches `trigger.kind` and selects the trigger node. */
@@ -404,6 +414,8 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     editor === undefined
       ? defaultSurface(props.surfaceWidth)
       : resolveSurface(editor.mode, canvasFailed)
+  const placement = inspectorPlacement(props.surfaceWidth ?? windowWidth())
+  const inspectorOpen = placement === 'column' || selected !== undefined || detailsOpen
   const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected)
   const choices =
     editor === undefined || selected === undefined
@@ -417,29 +429,146 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         )
   const issues = editor?.issues ?? []
   const conflict = editor?.conflict
+  const currentTrigger =
+    editor === undefined ? undefined : String(editor.document.definition.trigger.kind ?? '')
+
+  const menuItems = (): MenuItem[] => {
+    // Every item replaces or writes the document; a request already in flight
+    // would otherwise land on the document the user chose in the meantime.
+    const items: MenuItem[] = [{ id: 'new', label: t('design.new'), disabled: loading }]
+    if (library.templates.length > 0) {
+      items.push({
+        id: 'templates',
+        label: t('design.template'),
+        disabled: loading,
+        submenu: library.templates.map((template) => ({
+          id: `template:${template.id}`,
+          label: `${template.name} · ${String(template.stepCount)} steps`,
+          disabled: loading,
+        })),
+      })
+    }
+    if (library.drafts.length > 0) {
+      items.push({
+        id: 'drafts',
+        label: t('design.draft'),
+        disabled: loading,
+        submenu: library.drafts.map((draft) => ({
+          id: `draft:${draft.name}`,
+          label: `${draft.title} (${draft.name})`,
+          disabled: loading,
+        })),
+      })
+    }
+    items.push({
+      id: 'reload',
+      label: t('design.reload'),
+      disabled: editor === undefined || loading,
+    })
+    items.push({
+      id: 'surface',
+      label: surface === 'canvas' ? t('design.listView') : t('design.canvasView'),
+      disabled: loading,
+    })
+    items.push({
+      id: 'delete',
+      label: t('design.delete'),
+      danger: true,
+      disabled: editor?.document.revision === null || loading,
+    })
+    return items
+  }
+
+  const onMenuSelect = (id: string): void => {
+    setMenuOpen(false)
+    if (loading) return
+    if (id === 'new') {
+      guard(startBlank)
+      return
+    }
+    if (id === 'reload') {
+      guard(() => void reloadCurrent())
+      return
+    }
+    if (id === 'surface') {
+      if (editor !== undefined) setEditor(setMode(editor, surface === 'canvas' ? 'list' : 'canvas'))
+      return
+    }
+    if (id === 'delete') {
+      setConfirmDelete(true)
+      return
+    }
+    if (id.startsWith('template:')) {
+      const template = library.templates.find((entry) => entry.id === id.slice('template:'.length))
+      if (template !== undefined) guard(() => applyTemplate(template))
+      return
+    }
+    if (id.startsWith('draft:')) {
+      // Opening a draft replaces the open document, so it asks like every other
+      // replacement action before the draft is read.
+      guard(() => void startDraft(id.slice('draft:'.length)))
+    }
+  }
+
+  const emptyCanvas = (): ReactNode => (
+    <section className="dsh-wf-canvas dsh-wf-blank-canvas" data-section="editor-start">
+      <div className="dsh-wf-empty">
+        <p className="dsh-wf-empty-title">{t('design.intro')}</p>
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          onClick={() => guard(startBlank)}
+          disabled={loading}
+        >
+          {t('design.new')}
+        </Button>
+      </div>
+    </section>
+  )
+
+  const listSurface = (state: EditorState): ReactNode => (
+    <div className="dsh-wf-surface-list">
+      <div className="dsh-wf-list-bar">
+        <PaletteMenu
+          open={paletteOpen}
+          onOpen={() => setPaletteOpen(true)}
+          onClose={() => setPaletteOpen(false)}
+          onAdd={(executor) => addExecutor(executor)}
+        />
+      </div>
+      <ListEditor
+        state={state}
+        {...(selected === undefined ? {} : { selected })}
+        onSelect={setSelected}
+        onDefinitionPatch={(patch) => apply(patchDefinition(state, patch))}
+        onPatch={(stepId, patch) => apply(patchStep(state, stepId, patch))}
+        onConnect={(source, target, kind) => apply(connectSteps(state, source, target, kind))}
+        onDelete={(stepId) => {
+          apply(deleteStep(state, stepId))
+          setSelected(undefined)
+        }}
+      />
+      <PropertyPanel
+        state={state}
+        {...(selected === undefined ? {} : { selected })}
+        onDefinitionPatch={(patch) => apply(patchDefinition(state, patch))}
+        onPatch={(stepId, patch) => apply(patchStep(state, stepId, patch))}
+        onConnect={(source, target, kind) => apply(connectSteps(state, source, target, kind))}
+        onRename={(nodeId, nextId) => apply(renameStepId(state, nodeId, nextId))}
+        onDelete={(stepId) => {
+          apply(deleteStep(state, stepId))
+          setSelected(undefined)
+        }}
+      />
+    </div>
+  )
 
   const editorBody = (): ReactNode => {
-    if (editor === undefined) {
-      return (
-        <section className="dsh-wf-canvas dsh-wf-blank-canvas" data-section="editor-start">
-          <div className="dsh-wf-empty">
-            <p className="dsh-wf-empty-title">{t('design.intro')}</p>
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              onClick={() => guard(startBlank)}
-              disabled={loading}
-            >
-              {t('design.new')}
-            </Button>
-          </div>
-        </section>
-      )
-    }
+    if (editor === undefined) return emptyCanvas()
     return (
       <>
-        <p className="dsh-wf-summary" aria-live="polite">
+        <p className="dsh-wf-sr-only" aria-live="polite">
           {summaryText(editor.document.definition, selectedNode?.title, overlay)}
         </p>
         {fallbackNotice(canvasFailed) === undefined ? null : (
@@ -458,41 +587,13 @@ export function DesignMode(props: DesignModeProps): ReactNode {
             {overlay.orphans.map((orphan) => `${orphan.id} (${orphan.state})`).join(', ')}
           </p>
         )}
-        <div className="dsh-wf-design-body" data-mode={surface}>
-          {surface === 'list' ? (
-            <ListEditor
-              state={editor}
-              {...(selected === undefined ? {} : { selected })}
-              onSelect={setSelected}
-              onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
-              onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
-              onConnect={(source, target, kind) =>
-                apply(connectSteps(editor, source, target, kind))
-              }
-              onDelete={(stepId) => {
-                apply(deleteStep(editor, stepId))
-                setSelected(undefined)
-              }}
-            />
-          ) : (
+        {surface === 'list' ? (
+          listSurface(editor)
+        ) : (
+          <div className="dsh-wf-surface-canvas">
             <div className="dsh-wf-canvas" data-tab-group="canvas">
               <CanvasBoundary
-                fallback={
-                  <ListEditor
-                    state={editor}
-                    {...(selected === undefined ? {} : { selected })}
-                    onSelect={setSelected}
-                    onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
-                    onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
-                    onConnect={(source, target, kind) =>
-                      apply(connectSteps(editor, source, target, kind))
-                    }
-                    onDelete={(stepId) => {
-                      apply(deleteStep(editor, stepId))
-                      setSelected(undefined)
-                    }}
-                  />
-                }
+                fallback={listSurface(editor)}
                 onError={() => {
                   const recovery = recoverCanvas(editor)
                   setCanvasFailed(recovery.failed)
@@ -509,85 +610,11 @@ export function DesignMode(props: DesignModeProps): ReactNode {
                   onConnectNode={(source, target, kind) =>
                     apply(connectSteps(editor, source, target, kind))
                   }
+                  onDropBrick={(executor, position) => addExecutor(executor, position)}
                 />
               </CanvasBoundary>
             </div>
-          )}
-          <DisclosureRow
-            icon={null}
-            title={t('design.properties')}
-            open={propertiesOpen}
-            expandable
-            expandOnRowClick
-            onToggle={() => setPropertiesOpen((current) => !current)}
-          >
-            <PropertyPanel
-              state={editor}
-              {...(selected === undefined ? {} : { selected })}
-              onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
-              onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
-              onConnect={(source, target, kind) =>
-                apply(connectSteps(editor, source, target, kind))
-              }
-              onRename={(nodeId, nextId) => apply(renameStepId(editor, nodeId, nextId))}
-              onDelete={(stepId) => {
-                apply(deleteStep(editor, stepId))
-                setSelected(undefined)
-              }}
-            />
-          </DisclosureRow>
-        </div>
-        {connectValue === undefined ? null : (
-          <div className="dsh-wf-design-bar">
-            <select
-              aria-label="Connection"
-              value={connectValue}
-              onChange={(event) => setConnectValue(event.currentTarget.value)}
-            >
-              <option value="">Choose a connection</option>
-              {choices.map((choice) => (
-                <option
-                  key={`${choice.kind}:${choice.target}`}
-                  value={`${choice.kind}:${choice.target}`}
-                >
-                  {choice.label}
-                </option>
-              ))}
-            </select>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={connectValue === ''}
-              onClick={() => {
-                if (selected === undefined) return
-                const separator = connectValue.indexOf(':')
-                const kind = connectValue.slice(0, separator) as EdgeKind
-                const target = connectValue.slice(separator + 1)
-                apply(connectSteps(editor, selected, target, kind))
-                setConnectValue(undefined)
-              }}
-            >
-              Connect
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setConnectValue(undefined)}
-            >
-              Cancel
-            </Button>
           </div>
-        )}
-        {issues.length === 0 ? null : (
-          <ul className="dsh-wf-issue" data-issues={issues.length}>
-            {issues.map((issue) => (
-              <li key={`${issue.path}:${issue.message}`}>
-                {issueLabel(issue)}: {issue.message}
-              </li>
-            ))}
-          </ul>
         )}
       </>
     )
@@ -597,159 +624,129 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     <div className="dsh-wf-design" data-state={loading ? 'loading' : 'ready'} ref={root}>
       <style>{FLOW_CSS}</style>
       <div className="dsh-wf-design-head">
-        <strong>{t('design.title')}</strong>
-        <span className="dsh-wf-muted" data-status={editor?.status ?? 'none'}>
-          {editor === undefined
-            ? ''
-            : `${editor.dirty ? t('design.dirty') : t('design.clean')} · v${String(editor.document.definition.version)}${editor.document.revision === null ? '' : ` · ${editor.document.revision.slice(0, 8)}`}`}
-        </span>
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          onClick={() => void saveCurrent()}
-          disabled={editor === undefined || loading || editor.status === 'saving'}
-        >
-          {t('design.save')}
-        </Button>
-        <Button
-          type="button"
-          variant="toolbar"
-          size="sm"
-          onClick={() => guard(() => props.onClose?.())}
-        >
-          {t('design.close')}
-        </Button>
+        <div className="dsh-wf-head-main">
+          <span className="dsh-wf-head-name">
+            {editor === undefined ? t('design.pageTitle') : editor.document.definition.name}
+          </span>
+          {editor === undefined ? null : (
+            <>
+              <Tag tone="outline">
+                {currentTrigger === '' ? t('overview.unknownKind') : currentTrigger}
+              </Tag>
+              <Tag tone="quiet">{editor.document.source}</Tag>
+            </>
+          )}
+        </div>
+        {editor === undefined ? null : (
+          <span className="dsh-wf-head-state" data-status={editor.status}>
+            <span className="dsh-wf-dirty-dot" data-dirty={editor.dirty} aria-hidden="true" />
+            {editor.dirty ? t('design.dirty') : t('design.clean')} · v
+            {String(editor.document.definition.version)}
+            {editor.document.revision === null ? '' : ` · ${editor.document.revision.slice(0, 8)}`}
+          </span>
+        )}
+        <div className="dsh-wf-head-actions">
+          {editor === undefined ? null : (
+            <select
+              className="dsh-wf-run"
+              aria-label={t('design.run')}
+              value={runId ?? ''}
+              onChange={(event) => setRunId(event.currentTarget.value)}
+              disabled={runs.length === 0}
+            >
+              <option value="">{t('design.noRun')}</option>
+              {runs.map((run) => (
+                <option key={run.id} value={run.id}>
+                  {run.id} · {run.status}
+                  {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
+                </option>
+              ))}
+            </select>
+          )}
+          {placement === 'drawer' && editor !== undefined ? (
+            <Button
+              type="button"
+              variant="toolbar"
+              size="sm"
+              icon={<IconSlidersTwoOutlineRegular />}
+              aria-label={t('design.details')}
+              title={t('design.details')}
+              aria-pressed={detailsOpen}
+              onClick={() => setDetailsOpen((open) => !open)}
+            />
+          ) : null}
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => void saveCurrent()}
+            disabled={editor === undefined || loading || editor.status === 'saving'}
+          >
+            {t('design.save')}
+          </Button>
+          {editor === undefined ? null : (
+            <Menu
+              open={menuOpen}
+              items={menuItems()}
+              align="end"
+              onSelect={onMenuSelect}
+              onClose={() => setMenuOpen(false)}
+              anchor={
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  icon={<IconEllipsisOutlineRegular />}
+                  aria-label={t('design.more')}
+                  title={t('design.more')}
+                  onClick={() => setMenuOpen(true)}
+                />
+              }
+            />
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => guard(() => props.onClose?.())}
+          >
+            {t('design.close')}
+          </Button>
+        </div>
       </div>
-      <div className="dsh-wf-workbench" data-mode={surface}>
+      {confirmDelete && editor !== undefined ? (
+        <div className="dsh-wf-confirm" role="alert" data-section="confirm-delete">
+          <span>
+            {t('design.deletePrompt')} «{editor.document.definition.name}»?
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void removeCurrent()}
+            disabled={loading}
+          >
+            {t('design.delete')}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+            {t('design.cancel')}
+          </Button>
+        </div>
+      ) : null}
+      <div className="dsh-wf-workbench" data-mode={surface} data-layout={placement}>
         <WorkflowRail
           definitions={library.definitions}
           {...(editor === undefined ? {} : { currentId: editor.document.definition.id })}
+          {...(currentTrigger === undefined ? {} : { currentTrigger })}
           {...(editor === undefined || runs[0] === undefined ? {} : { latestRun: runs[0] })}
           disabled={loading}
           t={t}
+          onNew={() => guard(startBlank)}
           onOpen={(id) => guard(() => void open(id))}
           onTrigger={chooseTrigger}
           onExecutor={addExecutor}
-          actions={
-            <details className="dsh-wf-more">
-              <summary>{t('design.more')}</summary>
-              <div className="dsh-wf-design-bar" data-group="secondary">
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="sm"
-                  onClick={() => guard(startBlank)}
-                  disabled={loading}
-                >
-                  {t('design.new')}
-                </Button>
-                <select
-                  aria-label={t('design.template')}
-                  value={templateName}
-                  onChange={(event) => setTemplateName(event.currentTarget.value)}
-                  disabled={loading}
-                >
-                  <option value="">{t('design.template')}</option>
-                  {library.templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name} · {String(template.stepCount)} steps
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="sm"
-                  onClick={() => guard(takeTemplate)}
-                  disabled={templateName === '' || loading}
-                >
-                  {t('design.copyTemplate')}
-                </Button>
-                <select
-                  aria-label={t('design.draft')}
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.currentTarget.value)}
-                  disabled={loading}
-                >
-                  <option value="">{t('design.draft')}</option>
-                  {library.drafts.map((draft) => (
-                    <option key={draft.name} value={draft.name}>
-                      {draft.title} ({draft.name}) · {String(draft.stepCount)} steps
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="sm"
-                  onClick={() => guard(() => void startDraft())}
-                  disabled={draftName === '' || loading}
-                >
-                  {t('design.openDraft')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="sm"
-                  onClick={() => guard(() => void reloadCurrent())}
-                  disabled={editor === undefined || loading}
-                >
-                  {t('design.reload')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="toolbar"
-                  size="sm"
-                  onClick={() => guard(() => void removeCurrent())}
-                  disabled={editor === undefined || editor.document.revision === null || loading}
-                >
-                  {confirmDelete ? t('design.confirmDelete') : t('design.delete')}
-                </Button>
-              </div>
-            </details>
-          }
         />
         <div className="dsh-wf-workbench-main">
-          {editor === undefined ? null : (
-            <div className="dsh-wf-design-bar" data-group="editor">
-              <SegmentedControl
-                id="dsh-wf-surface"
-                value={surface}
-                options={[
-                  { value: 'list', label: t('design.listMode') },
-                  { value: 'canvas', label: t('design.canvasMode') },
-                ]}
-                onChange={(next) => {
-                  if (editor === undefined) return
-                  setEditor(setMode(editor, next))
-                }}
-                label={t('design.mode')}
-              />
-              {surface === 'list' ? (
-                <PaletteMenu
-                  open={paletteOpen}
-                  onOpen={() => setPaletteOpen(true)}
-                  onClose={() => setPaletteOpen(false)}
-                  onAdd={addExecutor}
-                />
-              ) : null}
-              <select
-                aria-label={t('design.run')}
-                value={runId ?? ''}
-                onChange={(event) => setRunId(event.currentTarget.value)}
-                disabled={runs.length === 0}
-              >
-                <option value="">{t('design.noRun')}</option>
-                {runs.map((run) => (
-                  <option key={run.id} value={run.id}>
-                    {run.id} · {run.status}
-                    {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           {message === undefined ? null : <p className="dsh-wf-issue">{message}</p>}
           {conflict === undefined ? null : (
             <div className="dsh-wf-design-bar" role="alert" data-conflict={conflict.kind}>
@@ -783,7 +780,100 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           )}
           {editorBody()}
         </div>
+        {surface === 'canvas' ? (
+          <aside
+            className="dsh-wf-inspector"
+            data-open={inspectorOpen ? 'true' : 'false'}
+            aria-label={t('design.inspector')}
+          >
+            {placement === 'drawer' ? (
+              <div className="dsh-wf-inspector-head">
+                <span>{t('design.inspector')}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t('design.closeInspector')}
+                  onClick={() => {
+                    setDetailsOpen(false)
+                    setSelected(undefined)
+                  }}
+                >
+                  ×
+                </Button>
+              </div>
+            ) : null}
+            {editor === undefined ? null : (
+              <PropertyPanel
+                state={editor}
+                {...(selected === undefined ? {} : { selected })}
+                onDefinitionPatch={(patch) => apply(patchDefinition(editor, patch))}
+                onPatch={(stepId, patch) => apply(patchStep(editor, stepId, patch))}
+                onConnect={(source, target, kind) =>
+                  apply(connectSteps(editor, source, target, kind))
+                }
+                onRename={(nodeId, nextId) => apply(renameStepId(editor, nodeId, nextId))}
+                onDelete={(stepId) => {
+                  apply(deleteStep(editor, stepId))
+                  setSelected(undefined)
+                }}
+              />
+            )}
+          </aside>
+        ) : null}
       </div>
+      {connectValue === undefined ? null : (
+        <div className="dsh-wf-design-bar">
+          <select
+            aria-label="Connection"
+            value={connectValue}
+            onChange={(event) => setConnectValue(event.currentTarget.value)}
+          >
+            <option value="">Choose a connection</option>
+            {choices.map((choice) => (
+              <option
+                key={`${choice.kind}:${choice.target}`}
+                value={`${choice.kind}:${choice.target}`}
+              >
+                {choice.label}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={connectValue === ''}
+            onClick={() => {
+              if (selected === undefined || editor === undefined) return
+              const separator = connectValue.indexOf(':')
+              const kind = connectValue.slice(0, separator) as EdgeKind
+              const target = connectValue.slice(separator + 1)
+              apply(connectSteps(editor, selected, target, kind))
+              setConnectValue(undefined)
+            }}
+          >
+            Connect
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setConnectValue(undefined)}
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
+      {issues.length === 0 ? null : (
+        <ul className="dsh-wf-issue" data-issues={issues.length}>
+          {issues.map((issue) => (
+            <li key={`${issue.path}:${issue.message}`}>
+              {issueLabel(issue)}: {issue.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

@@ -102,6 +102,7 @@ function loadModule(): Record<string, unknown> {
             typeof initial === 'function' ? (initial as () => unknown)() : initial,
             () => {},
           ],
+          useRef: (value: unknown) => ({ current: value }),
         }
       }
       if (id === '@xyflow/react') {
@@ -109,6 +110,9 @@ function loadModule(): Record<string, unknown> {
           ReactFlow: (props: Record<string, unknown>) => jsx('reactflow', props),
           Handle: (props: Record<string, unknown>) => jsx('handle', props),
           Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+          Background: (props: Record<string, unknown>) => jsx('background', props),
+          Controls: (props: Record<string, unknown>) => jsx('controls', props),
+          BackgroundVariant: { Lines: 'lines', Dots: 'dots', Cross: 'cross' },
         }
       }
       return {
@@ -117,6 +121,20 @@ function loadModule(): Record<string, unknown> {
         Tooltip: (props: Record<string, unknown>) => jsx('span', props),
         StateDot: (props: Record<string, unknown>) => jsx('span', props),
         AnimatedRows: (props: Record<string, unknown>) => jsx('div', props),
+        ...Object.fromEntries(
+          [
+            'IconPlayOutlineRegular',
+            'IconSparkleRegular',
+            'IconCodeOutlineRegular',
+            'IconUsersOutlineRegular',
+            'IconUserOutlineRegular',
+            'IconBranchOutlineRegular',
+            'IconRefreshOutlineRegular',
+          ].map((name) => [
+            name,
+            (props: Record<string, unknown>) => jsx('icon', { name, ...props }),
+          ]),
+        ),
         relativeTime: (at: number, now: number) => {
           const minutes = Math.floor(Math.max(0, now - at) / 60_000)
           return minutes > 0 ? { unit: 'minutes', n: minutes } : { unit: 'now', n: 0 }

@@ -82,18 +82,15 @@ describe('React Flow dependency', () => {
       gzipBytes: gzipped.length,
       artifactBytes: artifact?.size,
     }
-    // Recorded with the workflow overview in place: esbuild bundle 595,445
-    // bytes, the shipped lib/client.js 652,855 bytes (the loader wrapper indents
-    // every line), minified 300,729 bytes, gzip 90,906 bytes. The shared build
-    // does not minify client bundles, so the whole single artifact is over
-    // 500 KiB unminified and the original 250 KB design estimate is exceeded
-    // at the minified payload as well. The documented reason stays this
-    // feature's design: the workflow editor's React Flow and the run overview
-    // ship statically in the one client artifact (no lazy chunk or second
-    // artifact). Shortcut: revisit the 250 KB budget when scripts/build.ts
-    // minifies clients or permits a canvas chunk; the ceilings below keep a
-    // regression visible meanwhile.
-    expect(record.minifiedBytes).toBeLessThan(320 * 1024)
+    // Recorded with the three-pane workbench in place: esbuild bundle 647,594
+    // bytes, the shipped lib/client.js 708,752 bytes (the loader wrapper indents
+    // every line), minified 338,098 bytes, gzip 98,468 bytes. The redesign added
+    // React Flow's Background/Controls and the shipped brick icons to the one
+    // static client artifact; the shared build does not minify client bundles,
+    // so the whole artifact stays over the original 250 KB design estimate.
+    // Shortcut: revisit the 250 KB budget when scripts/build.ts minifies clients
+    // or permits a canvas chunk; the ceilings below keep a regression visible.
+    expect(record.minifiedBytes).toBeLessThan(352 * 1024)
     expect(record.bundleBytes).toBeLessThan(640 * 1024)
     expect(record.gzipBytes).toBeLessThan(128 * 1024)
     expect(record.minifiedBytes).toBeGreaterThan(100 * 1024)

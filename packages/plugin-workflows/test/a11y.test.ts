@@ -6,6 +6,7 @@ import {
   defaultMode,
   fallbackIsClientOnly,
   fallbackNotice,
+  inspectorPlacement,
   isAddKey,
   isConnectKey,
   isConnectShortcut,
@@ -14,6 +15,7 @@ import {
   resolveSurface,
   summaryText,
   TAB_ORDER,
+  WIDE_WIDTH,
 } from '../src/client/a11y.ts'
 import { connectChoices, EDGE_LABELS } from '../src/client/edges.ts'
 import { addStep, blankDefinition, connectSteps, openNew, save } from '../src/client/editor.ts'
@@ -50,6 +52,14 @@ describe('mode and fallback', () => {
     expect(resolveSurface('canvas', true)).toBe('list')
     expect(fallbackNotice(true)).toContain('list editor is showing')
     expect(fallbackNotice(false)).toBeUndefined()
+  })
+
+  it('places the inspector beside the canvas at the wide threshold', () => {
+    expect(WIDE_WIDTH).toBe(980)
+    expect(inspectorPlacement(720)).toBe('drawer')
+    expect(inspectorPlacement(979)).toBe('drawer')
+    expect(inspectorPlacement(980)).toBe('column')
+    expect(inspectorPlacement(1400)).toBe('column')
   })
 
   it('renders the list editor when a throwing canvas child is caught', () => {

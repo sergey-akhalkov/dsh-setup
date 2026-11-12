@@ -12,6 +12,28 @@ function jsx(type: unknown, props: Record<string, unknown> | null): Element {
   return { type, props: props ?? {} }
 }
 
+/** The shipped icons the workbench renders; the mounted tree only needs elements. */
+const iconStubs = Object.fromEntries(
+  [
+    'IconPlayOutlineRegular',
+    'IconSparkleRegular',
+    'IconCodeOutlineRegular',
+    'IconUsersOutlineRegular',
+    'IconUserOutlineRegular',
+    'IconBranchOutlineRegular',
+    'IconRefreshOutlineRegular',
+    'IconPlusOutlineRegular',
+    'IconEllipsisOutlineRegular',
+    'IconCloseOutlineRegular',
+    'IconSlidersTwoOutlineRegular',
+    'IconTrashOutlineRegular',
+    'IconListPenOutlineRegular',
+  ].map((name) => [
+    name,
+    (props: Record<string, unknown>) => ({ type: 'icon', props: { name, ...props } }),
+  ]),
+)
+
 /** Render one element type: a class component through `new`, a function by call. */
 function renderComponent(type: unknown, props: Record<string, unknown>): unknown {
   const prototype = (type as { prototype?: { render?: unknown } }).prototype
@@ -247,6 +269,9 @@ ${output.text}
         ReactFlow: (props: Record<string, unknown>) => ({ type: 'reactflow', props }),
         Handle: (props: Record<string, unknown>) => ({ type: 'handle', props }),
         Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+        Background: (props: Record<string, unknown>) => ({ type: 'background', props }),
+        Controls: (props: Record<string, unknown>) => ({ type: 'controls', props }),
+        BackgroundVariant: { Lines: 'lines', Dots: 'dots', Cross: 'cross' },
       }
     }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
@@ -264,6 +289,7 @@ ${output.text}
         DisclosureRow: (props: Record<string, unknown>) => ({ type: 'disclosure', props }),
         Pill: (props: Record<string, unknown>) => ({ type: 'span', props }),
         AnimatedRows: (props: Record<string, unknown>) => ({ type: 'div', props }),
+        ...iconStubs,
         relativeTime: (at: number, now: number) => {
           const minutes = Math.floor(Math.max(0, now - at) / 60_000)
           return minutes > 0 ? { unit: 'minutes', n: minutes } : { unit: 'now', n: 0 }
@@ -1453,7 +1479,8 @@ describe('Workflow design page', () => {
     const disclosure = elements(tree).find((element) => element.type === 'disclosure')
     expect(disclosure?.props.title).toBe('design.diagnostics')
     expect(disclosure?.props.open).toBe(false)
-    // The editor toolbar appears only once a definition is open.\n    expect(elements(tree).some((element) => element.type === 'menu')).toBe(false)
+    // The editor toolbar appears only once a definition is open.
+    expect(elements(tree).some((element) => element.type === 'menu')).toBe(false)
   })
 
   it('closes the tab from the page and asks only for a dirty draft', () => {

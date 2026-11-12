@@ -562,29 +562,36 @@ intake/adoption flow and migration are documented in [workflows](workflows.md).
 ### Editor and Workflow design page
 
 The editor lives in the right-sidebar **Workflow design** page, opened from its Start guide-card entry:
-a workbench with a left rail (the installed workflows, each with its description, trigger kind, source,
-step count and latest run, plus the trigger/executor blocks), a React Flow canvas bundled into the
-single client artifact, an equivalent List form editor (the narrow panel's default surface, below the
-shipped 720 px threshold, with the rail stacked above it), templates and
+a three-pane workbench with a left column (the installed workflows as compact rows with their
+description, trigger kind, source, step count and latest run, plus the trigger and executor bricks
+with their shipped icons), a React Flow canvas bundled into the single client artifact, an inspector
+beside the canvas, an equivalent List form editor (the narrow panel's default surface, below the
+shipped 720 px threshold, with the rail stacked above it and the inspector inline), templates and
 local definitions opened through the revision-checked host write API, a layout sidecar, and the run
 overlay (the latest run per definition with step state, structured evidence references, failure class,
 violations, and an orphan badge; the recorded definition name/version, evidence, failure class and
 violations stay readable after the definition changes or is deleted). The page opens the selected or
-first installed workflow, and shows a blank start surface with the rail when none is installed. The
-inspector is a collapsible section under the editor and edits the workflow-level name and description
-plus the selected node's fields; the rail's `More` menu holds the lifecycle actions. The trigger
-catalog and receipts are behind a closed-by-default `Diagnostics` disclosure, not on the default
-surface. The tab type is kept mounted, so hiding the sidebar or switching tabs does not discard a
-draft; an explicit tab close with unsaved edits asks first through the sidebar's close-handler seam,
-and a declined prompt keeps the tab open. The graph stays a projection of the definition: create is
-create-only, updates and deletes send the revision from the last read, a mismatch returns 409 and
-leaves the file unchanged (reload or save-as-copy), and every save goes through the host-signed
-install/approve path, so an editor save is an authorized install. The session workflow page renders
-the same canvas read-only with the deterministic auto-layout and the selected run's overlay, while the
-ordered step table remains the accessible fallback; opening that page writes no definition or layout.
-Keyboard editing, focus order, a screen-reader summary, and the List fallback cover the canvas; the
-editor is inert without the host write API, and the page is not registered when the right-sidebar
-services are absent.
+first installed workflow, and shows a blank start surface with the rail when none is installed. A
+step brick adds a step on click or drops it at the canvas position; a trigger brick sets the trigger
+kind as a single choice. The inspector follows the selection: the third column at a pane width of at
+least 980 px, an overlay drawer between the 720 px threshold and that width, and inline under the list
+below it. It edits the workflow-level name, description and settings plus the selected node's fields
+in identity, behavior, evidence, connections and danger groups. The header has one primary `Save`, the
+definition name with trigger and source tags, the dirty state and version, the run-overlay selector,
+and an overflow menu holding `New definition`, templates, drafts, reload, the list/canvas switch, and
+delete (confirmed in an in-page banner). The trigger catalog and receipts are behind a
+closed-by-default `Diagnostics` disclosure, not on the default surface. The tab type is kept mounted,
+so hiding the sidebar or switching tabs does not discard a draft; an explicit tab close with unsaved
+edits asks first through the sidebar's close-handler seam, and a declined prompt keeps the tab open.
+The graph stays a projection of the definition: create is create-only, updates and deletes send the
+revision from the last read, a mismatch returns 409 and leaves the file unchanged (reload or
+save-as-copy), and every save goes through the host-signed install/approve path, so an editor save is
+an authorized install. The session workflow page renders the same canvas read-only with the
+deterministic auto-layout and the selected run's overlay, while the ordered step table remains the
+accessible fallback; opening that page writes no definition or layout. Keyboard editing, the brick
+buttons, focus order, a screen-reader summary, and the List fallback cover the canvas; the editor is
+inert without the host write API, and the page is not registered when the right-sidebar services are
+absent.
 
 ## OpenSpec apply picker
 

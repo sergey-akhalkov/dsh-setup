@@ -12,6 +12,20 @@ export type Surface = 'canvas' | 'list'
 /** Below this width the view defaults to the list editor. */
 export const NARROW_WIDTH = 720
 
+/** At or above this width the inspector is a column beside the canvas. */
+export const WIDE_WIDTH = 980
+
+export type InspectorPlacement = 'column' | 'drawer'
+
+/**
+ * Where the inspector renders: a column beside the canvas on a wide pane, an
+ * overlay drawer above the narrow threshold. The list surface below the narrow
+ * threshold keeps its inline property form instead.
+ */
+export function inspectorPlacement(width: number): InspectorPlacement {
+  return width >= WIDE_WIDTH ? 'column' : 'drawer'
+}
+
 /** The tab order the view exposes: palette, canvas, then the property panel. */
 export const TAB_ORDER = ['palette', 'canvas', 'properties'] as const
 

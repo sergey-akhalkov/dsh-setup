@@ -161,8 +161,19 @@ describe('canvas node rendering', () => {
     )(graph.edges)
     for (const edge of graph.edges) {
       const converted = flow.find((entry) => entry.id === edge.id)
-      expect(converted?.label).toBe(edge.label)
       expect(converted?.sourceHandle).toBe(edge.kind)
+      // Only the branch and loop outputs need a label on the canvas; the
+      // start/next edges stay quiet so the default graph is readable.
+      if (
+        edge.kind === 'true' ||
+        edge.kind === 'false' ||
+        edge.kind === 'body' ||
+        edge.kind === 'exit'
+      ) {
+        expect(converted?.label).toBe(edge.label)
+      } else {
+        expect(converted?.label).toBeUndefined()
+      }
     }
     const converted = (ui.toFlowEdges as (edges: unknown) => { sourceHandle?: string }[])(
       ['start', 'next', 'true', 'false', 'body', 'exit'].map((kind) => ({
@@ -246,6 +257,78 @@ describe('canvas node rendering', () => {
     )
     expect(new Set(distinct.map((edge) => edge.ariaLabel)).size).toBe(3)
     expect(distinct[0]?.ariaLabel).toContain('Check')
+  })
+
+  it('drops a step brick on the canvas at the dropped flow position', () => {
+    const graph = definitionToGraph(DEFINITION)
+    const dropped: { executor: string; position: { x: number; y: number } }[] = []
+    const tree = call(ui, 'DesignCanvas', {
+      nodes: graph.nodes,
+      edges: graph.edges,
+      focusKey: 'drop',
+      onSelect: () => {},
+      onMove: () => {},
+      onConnectNode: () => {},
+      onDropBrick: (executor: string, position: { x: number; y: number }) =>
+        dropped.push({ executor, position }),
+    })
+    const flow = elements(tree).find((element) => element.type === 'reactflow')
+    const wrapper = elements(tree).find((element) => typeof element.props.onDrop === 'function')
+    // React Flow reports its live instance on init; the drop converts the screen
+    // point through it, so a non-identity transform proves the conversion is used.
+    const onInit = flow?.props.onInit as ((instance: unknown) => void) | undefined
+    expect(onInit).toBeDefined()
+    onInit?.({
+      screenToFlowPosition: (point: { x: number; y: number }) => ({
+        x: point.x * 2 + 5,
+        y: point.y - 3,
+      }),
+    })
+    const drop = wrapper?.props.onDrop as ((event: Record<string, unknown>) => void) | undefined
+    expect(drop).toBeDefined()
+    const event = (payload: string) => ({
+      clientX: 40,
+      clientY: 60,
+      preventDefault: () => {},
+      dataTransfer: { getData: () => payload },
+    })
+    drop?.(event('step:branch'))
+    expect(dropped).toEqual([{ executor: 'branch', position: { x: 85, y: 57 } }])
+    // A trigger payload, an unknown executor, and an empty payload are ignored.
+    drop?.(event('trigger:fs.change'))
+    drop?.(event('step:unknown'))
+    drop?.(event(''))
+    expect(dropped).toHaveLength(1)
+  })
+
+  it('starts a drag only from a step brick and writes the engine payload', () => {
+    const tree = call(ui, 'WorkflowRail', {
+      definitions: [],
+      currentId: 'alpha',
+      currentTrigger: 'fs.change',
+      t: (key: string) => key,
+      onOpen: () => {},
+      onTrigger: () => {},
+      onExecutor: () => {},
+    })
+    const found = elements(tree)
+    const branch = found.find((element) => element.props['data-block'] === 'branch')
+    const data: Record<string, string> = {}
+    const onDragStart = branch?.props.onDragStart as ((event: unknown) => void) | undefined
+    expect(onDragStart).toBeDefined()
+    onDragStart?.({
+      dataTransfer: {
+        setData: (kind: string, value: string) => {
+          data[kind] = value
+        },
+        effectAllowed: '',
+      },
+    })
+    expect(data['application/x-dsh-wf-brick']).toBe('step:branch')
+    // The trigger is a single choice, so it is not draggable.
+    const trigger = found.find((element) => element.props['data-block'] === 'fs.change')
+    expect(trigger?.props.draggable).not.toBe(true)
+    expect(trigger?.props['data-current']).toBe('true')
   })
 
   it('exposes tab stops on the palette, canvas, and properties in order', () => {
@@ -457,6 +540,35 @@ describe('palette and property panel', () => {
       'alpha',
     )
     expect((ui.defaultDefinitionId as (list: unknown[]) => string | undefined)([])).toBeUndefined()
+  })
+
+  it('renders the named inspector with the definition form when nothing is selected', () => {
+    const state = editor()
+    const patches: Record<string, unknown>[] = []
+    const tree = call(ui, 'PropertyPanel', {
+      state,
+      onDefinitionPatch: (patch: Record<string, unknown>) => patches.push(patch),
+      onPatch: () => {},
+      onConnect: () => {},
+      onDelete: () => {},
+    })
+    const found = elements(tree)
+    // The form stays a named Properties landmark for screen-reader navigation.
+    expect(found.find((element) => element.props['aria-label'] === 'Properties')?.type).toBe(
+      'section',
+    )
+    const name = found.find(
+      (element) => element.type === 'input' && element.props['aria-label'] === 'Definition name',
+    )
+    expect(name?.props.value).toBe(state.document.definition.name)
+    expect(
+      found.some(
+        (element) => element.type === 'input' && element.props['aria-label'] === 'Allowed tools',
+      ),
+    ).toBe(true)
+    expect(text(tree)).toContain('Select a node to edit it.')
+    fire(name, 'onChange', 'Renamed workflow')
+    expect(patches).toEqual([{ name: 'Renamed workflow' }])
   })
 
   it('adds every executor block as a definition the host validator accepts', async () => {

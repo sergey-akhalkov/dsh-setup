@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { buildSync } from 'esbuild'
 import { afterEach, describe, expect, it } from 'vitest'
+import { nodeIdOf } from '../src/client/graph.ts'
 
 /**
  * Interaction checks for the session view's own state: the list -> detail ->
@@ -16,6 +17,28 @@ const Fragment = Symbol('Fragment')
 function jsx(type: unknown, props: Record<string, unknown> | null): Element {
   return { type, props: props ?? {} }
 }
+
+/** The shipped icons the workbench renders; the test tree only needs elements. */
+const iconStubs = Object.fromEntries(
+  [
+    'IconPlayOutlineRegular',
+    'IconSparkleRegular',
+    'IconCodeOutlineRegular',
+    'IconUsersOutlineRegular',
+    'IconUserOutlineRegular',
+    'IconBranchOutlineRegular',
+    'IconRefreshOutlineRegular',
+    'IconPlusOutlineRegular',
+    'IconEllipsisOutlineRegular',
+    'IconCloseOutlineRegular',
+    'IconSlidersTwoOutlineRegular',
+    'IconTrashOutlineRegular',
+    'IconListPenOutlineRegular',
+  ].map((name) => [
+    name,
+    (props: Record<string, unknown>) => ({ type: 'icon', props: { name, ...props } }),
+  ]),
+)
 
 function sameDeps(
   left: readonly unknown[] | undefined,
@@ -128,6 +151,7 @@ function createRuntime(
     AnimatedRows: (props: Record<string, unknown>) => ({ type: 'div', props }),
     DisclosureRow: (props: Record<string, unknown>) => ({ type: 'disclosure', props }),
     Menu: (props: Record<string, unknown>) => ({ type: 'menu', props }),
+    ...iconStubs,
     relativeTime: (at: number, now: number) => {
       const minutes = Math.floor(Math.max(0, now - at) / 60_000)
       return minutes > 0 ? { unit: 'minutes', n: minutes } : { unit: 'now', n: 0 }
@@ -166,6 +190,9 @@ function createRuntime(
             ReactFlow: (props: Record<string, unknown>) => ({ type: 'reactflow', props }),
             Handle: (props: Record<string, unknown>) => ({ type: 'handle', props }),
             Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
+            Background: (props: Record<string, unknown>) => ({ type: 'background', props }),
+            Controls: (props: Record<string, unknown>) => ({ type: 'controls', props }),
+            BackgroundVariant: { Lines: 'lines', Dots: 'dots', Cross: 'cross' },
           }
         }
         return requireFallback(id)
@@ -1098,9 +1125,9 @@ describe('Workflows session view interaction', () => {
     const module = runtime.load() as { DesignMode?: (props: Record<string, unknown>) => unknown }
     const mode = module.DesignMode
     if (mode === undefined) throw new Error('DesignMode is not exported')
-    const tree = await runtime.settle(() =>
-      mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 }),
-    )
+    const render = (): unknown =>
+      mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 })
+    let tree = await runtime.settle(render)
     // The rail is the first installed workflow's code path.
     expect(
       findElement(
@@ -1112,11 +1139,326 @@ describe('Workflows session view interaction', () => {
           ),
       ),
     ).toBeDefined()
+    // The wide pane renders the inspector as the third column beside the canvas.
+    const workbench = findElement(tree, (element) => element.props.className === 'dsh-wf-workbench')
+    expect(workbench?.props['data-layout']).toBe('column')
+    expect(workbench?.props['data-mode']).toBe('canvas')
+    expect(
+      findElement(tree, (element) => element.props.className === 'dsh-wf-inspector'),
+    ).toBeDefined()
     // The page opened the definition on the read-only canvas, not a list.
     const boundary = findElement(tree, (element) => element.props.fallback !== undefined)
     const canvas = boundary?.props.children as Element | undefined
     const nodes = canvas?.props.nodes as { kind: string }[] | undefined
     expect(nodes?.map((node) => node.kind)).toEqual(['trigger', 'step', 'end'])
+    // The header has one primary Save and one lifecycle menu.
+    const save = findElement(
+      tree,
+      (element) =>
+        typeof element.type === 'function' &&
+        element.props.variant === 'primary' &&
+        element.props.children === 'design.save',
+    )
+    expect(save).toBeDefined()
+    const menu = findElement(tree, (element) => Array.isArray(element.props.items))
+    const itemIds = ((menu?.props.items as { id: string }[]) ?? []).map((item) => item.id)
+    expect(itemIds).toEqual(expect.arrayContaining(['new', 'reload', 'surface', 'delete']))
+    // Selecting a canvas node fills the inspector beside the canvas.
+    const canvasElement = findElement(
+      tree,
+      (element) =>
+        typeof element.props.onSelect === 'function' &&
+        typeof element.props.onDropBrick === 'function',
+    )
+    expect(canvasElement).toBeDefined()
+    const selectNode = canvasElement?.props.onSelect as ((id: string) => void) | undefined
+    selectNode?.(nodeIdOf('one'))
+    tree = await runtime.settle(render)
+    const inspector = findElement(tree, (element) => element.props.className === 'dsh-wf-inspector')
+    expect(inspector).toBeDefined()
+    expect(inspector?.props['data-open']).toBe('true')
+    // Search inside the inspector itself: the list fallback held by the canvas
+    // boundary also receives the selected node, so a whole-tree search would
+    // pass even if the inspector dropped its selection.
+    const inspectorPanel = findElement(
+      inspector,
+      (element) => element.props.state !== undefined && element.props.selected !== undefined,
+    )
+    expect(inspectorPanel?.props.selected).toBe(nodeIdOf('one'))
+    // A dropped step keeps the converted drop position and is selected.
+    const liveCanvas = findElement(
+      tree,
+      (element) =>
+        typeof element.props.onSelect === 'function' &&
+        typeof element.props.onDropBrick === 'function',
+    )
+    const dropBrick = liveCanvas?.props.onDropBrick as
+      | ((executor: string, position: { x: number; y: number }) => void)
+      | undefined
+    dropBrick?.('branch', { x: 12, y: 34 })
+    tree = await runtime.settle(render)
+    const afterDrop = findElement(
+      tree,
+      (element) =>
+        typeof element.props.onSelect === 'function' &&
+        typeof element.props.onDropBrick === 'function',
+    )
+    const droppedNodes = afterDrop?.props.nodes as
+      | { id: string; kind: string; position: { x: number; y: number } }[]
+      | undefined
+    const branchNode = droppedNodes?.find((node) => node.kind === 'branch')
+    expect(branchNode?.position).toEqual({ x: 12, y: 34 })
+    expect(afterDrop?.props.selected).toBe(branchNode?.id)
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('asks before a draft replaces a dirty document', async () => {
+    const runtime = createRuntime('./src/client/design.tsx')
+    const module = runtime.load() as { DesignMode?: (props: Record<string, unknown>) => unknown }
+    const mode = module.DesignMode
+    if (mode === undefined) throw new Error('DesignMode is not exported')
+    const definition = {
+      v: 1,
+      id: 'change-intake',
+      name: 'OpenSpec change intake',
+      description: 'Intake a new change.',
+      version: 1,
+      trigger: { kind: 'tool.pre-execute', match: {}, mode: 'active', dedupe: 'name' },
+      settings: { allowModelStart: false, risk: 'low', gateOwnership: 'own', maxBlocks: 3 },
+      steps: [{ id: 'one', title: 'One', executor: 'main', next: 'end' }],
+    }
+    const tracker = installFetch((url) => {
+      if (url.includes('/api/workflows/editor/definitions')) {
+        return json({
+          definitions: [
+            {
+              id: 'change-intake',
+              name: 'OpenSpec change intake',
+              version: 1,
+              stepCount: 1,
+              source: 'shipped',
+              revision: null,
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/editor/templates')) return json({ templates: [] })
+      if (url.includes('/api/workflows/editor/drafts')) {
+        return json({
+          drafts: [{ name: 'draft-a', id: 'draft-a', title: 'Draft A', stepCount: 1 }],
+        })
+      }
+      if (url.includes('/api/workflows/editor/draft?')) return json({ definition })
+      if (url.includes('/api/workflows/editor/definition')) {
+        return json({ definition, revision: null, source: 'shipped' })
+      }
+      if (url.includes('/api/workflows/editor/layout'))
+        return json({ layout: null, revision: null })
+      if (url.includes('/api/workflows/runs')) return json({ runs: [] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const originalWindow = (globalThis as { window?: unknown }).window
+    ;(globalThis as { window?: unknown }).window = { confirm: () => false }
+    try {
+      const render = (): unknown =>
+        mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 })
+      let tree = await runtime.settle(render)
+      // A dropped step makes the document dirty.
+      const canvas = findElement(
+        tree,
+        (element) =>
+          typeof element.props.onSelect === 'function' &&
+          typeof element.props.onDropBrick === 'function',
+      )
+      const dropBrick = canvas?.props.onDropBrick as
+        | ((executor: string, position: { x: number; y: number }) => void)
+        | undefined
+      dropBrick?.('branch', { x: 1, y: 2 })
+      tree = await runtime.settle(render)
+      const menu = findElement(tree, (element) => Array.isArray(element.props.items))
+      const select = menu?.props.onSelect as ((id: string) => void) | undefined
+      select?.('draft:draft-a')
+      tree = await runtime.settle(render)
+      // The declined confirmation keeps the document and never reads the draft.
+      expect(tracker.urls.some((url) => url.includes('/api/workflows/editor/draft?'))).toBe(false)
+      const stillCanvas = findElement(
+        tree,
+        (element) =>
+          typeof element.props.onDropBrick === 'function' &&
+          typeof element.props.onSelect === 'function',
+      )
+      expect(
+        (stillCanvas?.props.nodes as { kind: string }[] | undefined)?.some(
+          (node) => node.kind === 'branch',
+        ),
+      ).toBe(true)
+    } finally {
+      ;(globalThis as { window?: unknown }).window = originalWindow
+    }
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('keeps a newer edit when a reload answers after it', async () => {
+    const runtime = createRuntime('./src/client/design.tsx')
+    const module = runtime.load() as { DesignMode?: (props: Record<string, unknown>) => unknown }
+    const mode = module.DesignMode
+    if (mode === undefined) throw new Error('DesignMode is not exported')
+    const definition = {
+      v: 1,
+      id: 'change-intake',
+      name: 'OpenSpec change intake',
+      description: 'Intake a new change.',
+      version: 1,
+      trigger: { kind: 'tool.pre-execute', match: {}, mode: 'active', dedupe: 'name' },
+      settings: { allowModelStart: false, risk: 'low', gateOwnership: 'own', maxBlocks: 3 },
+      steps: [{ id: 'one', title: 'One', executor: 'main', next: 'end' }],
+    }
+    let resolveReload: (() => void) | undefined
+    let definitionReads = 0
+    const tracker = installFetch((url) => {
+      if (url.includes('/api/workflows/editor/definitions')) {
+        return json({
+          definitions: [
+            {
+              id: 'change-intake',
+              name: 'OpenSpec change intake',
+              version: 1,
+              stepCount: 1,
+              source: 'shipped',
+              revision: null,
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/editor/templates')) return json({ templates: [] })
+      if (url.includes('/api/workflows/editor/drafts')) return json({ drafts: [] })
+      if (url.includes('/api/workflows/editor/definition')) {
+        definitionReads += 1
+        if (definitionReads === 1) return json({ definition, revision: null, source: 'shipped' })
+        // The reload's read answers only after the test edits the document.
+        return new Promise<Response>((resolve) => {
+          resolveReload = () => resolve(json({ definition, revision: null, source: 'shipped' }))
+        })
+      }
+      if (url.includes('/api/workflows/editor/layout'))
+        return json({ layout: null, revision: null })
+      if (url.includes('/api/workflows/runs')) return json({ runs: [] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const render = (): unknown =>
+      mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 })
+    let tree = await runtime.settle(render)
+    const menu = findElement(tree, (element) => Array.isArray(element.props.items))
+    const selectReload = menu?.props.onSelect as ((id: string) => void) | undefined
+    selectReload?.('reload')
+    tree = await runtime.settle(render)
+    // The lifecycle menu refuses every action while the reload is pending.
+    const busyMenu = findElement(tree, (element) => Array.isArray(element.props.items))
+    const busyItems = busyMenu?.props.items as { disabled?: boolean }[] | undefined
+    expect(busyItems?.every((item) => item.disabled === true)).toBe(true)
+    // An edit lands while the request is in flight; the old response must not win.
+    const panel = findElement(
+      tree,
+      (element) => typeof element.props.onDefinitionPatch === 'function',
+    )
+    const patchDefinition = panel?.props.onDefinitionPatch as
+      | ((patch: Record<string, unknown>) => void)
+      | undefined
+    patchDefinition?.({ name: 'Edited while loading' })
+    tree = await runtime.settle(render)
+    resolveReload?.()
+    tree = await runtime.settle(render)
+    expect(
+      findElement(tree, (element) => element.props.className === 'dsh-wf-head-name')?.props
+        .children,
+    ).toBe('Edited while loading')
+    expect(tracker.violations).toEqual([])
+  })
+
+  it('opens and closes the inspector drawer between the narrow and wide thresholds', async () => {
+    const runtime = createRuntime('./src/client/design.tsx')
+    const module = runtime.load() as { DesignMode?: (props: Record<string, unknown>) => unknown }
+    const mode = module.DesignMode
+    if (mode === undefined) throw new Error('DesignMode is not exported')
+    const definition = {
+      v: 1,
+      id: 'change-intake',
+      name: 'OpenSpec change intake',
+      description: 'Intake a new change.',
+      version: 1,
+      trigger: { kind: 'tool.pre-execute', match: {}, mode: 'active', dedupe: 'name' },
+      settings: { allowModelStart: false, risk: 'low', gateOwnership: 'own', maxBlocks: 3 },
+      steps: [{ id: 'one', title: 'One', executor: 'main', next: 'end' }],
+    }
+    const tracker = installFetch((url) => {
+      if (url.includes('/api/workflows/editor/definitions')) {
+        return json({
+          definitions: [
+            {
+              id: 'change-intake',
+              name: 'OpenSpec change intake',
+              version: 1,
+              stepCount: 1,
+              source: 'shipped',
+              revision: null,
+            },
+          ],
+        })
+      }
+      if (url.includes('/api/workflows/editor/templates')) return json({ templates: [] })
+      if (url.includes('/api/workflows/editor/drafts')) return json({ drafts: [] })
+      if (url.includes('/api/workflows/editor/definition')) {
+        return json({ definition, revision: null, source: 'shipped' })
+      }
+      if (url.includes('/api/workflows/editor/layout'))
+        return json({ layout: null, revision: null })
+      if (url.includes('/api/workflows/runs')) return json({ runs: [] })
+      throw new Error(`unexpected request ${url}`)
+    })
+    const render = (): unknown =>
+      mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 800 })
+    let tree = await runtime.settle(render)
+    const inspectorOpen = (): unknown =>
+      findElement(tree, (element) => element.props.className === 'dsh-wf-inspector')?.props[
+        'data-open'
+      ]
+    // The medium pane keeps the drawer closed until a node or Details opens it.
+    expect(inspectorOpen()).toBe('false')
+    const canvas = findElement(
+      tree,
+      (element) =>
+        typeof element.props.onSelect === 'function' &&
+        typeof element.props.onDropBrick === 'function',
+    )
+    const selectNode = canvas?.props.onSelect as ((id: string) => void) | undefined
+    selectNode?.(nodeIdOf('one'))
+    tree = await runtime.settle(render)
+    expect(inspectorOpen()).toBe('true')
+    const inspector = findElement(tree, (element) => element.props.className === 'dsh-wf-inspector')
+    const selectedPanel = findElement(
+      inspector,
+      (element) => element.props.state !== undefined && element.props.selected !== undefined,
+    )
+    expect(selectedPanel?.props.selected).toBe(nodeIdOf('one'))
+    const close = findElement(
+      inspector,
+      (element) => element.props['aria-label'] === 'design.closeInspector',
+    )
+    const closeDrawer = close?.props.onClick as (() => void) | undefined
+    closeDrawer?.()
+    tree = await runtime.settle(render)
+    expect(inspectorOpen()).toBe('false')
+    // Details opens the definition form with no selection.
+    const details = findElement(tree, (element) => element.props['aria-label'] === 'design.details')
+    const openDetails = details?.props.onClick as (() => void) | undefined
+    openDetails?.()
+    tree = await runtime.settle(render)
+    expect(inspectorOpen()).toBe('true')
+    const definitionPanel = findElement(
+      findElement(tree, (element) => element.props.className === 'dsh-wf-inspector'),
+      (element) => element.props.state !== undefined,
+    )
+    expect(definitionPanel?.props.selected).toBeUndefined()
     expect(tracker.violations).toEqual([])
   })
 

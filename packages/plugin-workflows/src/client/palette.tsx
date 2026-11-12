@@ -1,7 +1,7 @@
 import { Button, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { paletteLabel } from './a11y.ts'
-import { EXECUTOR_BLOCKS } from './rail.tsx'
+import { STEP_BRICKS } from './bricks.ts'
 
 export interface PaletteMenuProps {
   /** Owner-controlled disclosure state; the page keeps the menu closed by default. */
@@ -18,9 +18,9 @@ export interface PaletteMenuProps {
  * executor blocks as the wide rail.
  */
 export function PaletteMenu(props: PaletteMenuProps): ReactNode {
-  const items: MenuEntry[] = EXECUTOR_BLOCKS.map((executor) => ({
-    id: executor,
-    label: paletteLabel(executor),
+  const items: MenuEntry[] = STEP_BRICKS.map((brick) => ({
+    id: brick.value,
+    label: paletteLabel(brick.value),
   }))
   return (
     <Menu

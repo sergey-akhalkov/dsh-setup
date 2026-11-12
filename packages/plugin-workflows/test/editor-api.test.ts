@@ -660,6 +660,7 @@ describe('editor layout writes', () => {
       .positions
     expect(positions.step_one).toEqual({ x: 10, y: 20 })
     expect(Object.hasOwn(positions, '__proto__')).toBe(true)
+    // biome-ignore lint/suspicious/noProto: the test asserts the host's prototype-pollution guard by reading that key.
     expect(positions['__proto__']).toEqual({ x: 30, y: 40 })
   })
 
