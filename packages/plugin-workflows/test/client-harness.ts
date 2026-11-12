@@ -116,6 +116,7 @@ ${output.text}
       return {
         Tag: (props: Record<string, unknown>) => jsx('tag', props),
         Button: (props: Record<string, unknown>) => jsx('button', props),
+        Checkbox: (props: Record<string, unknown>) => jsx('checkbox', props),
         Menu: (props: Record<string, unknown>) => jsx('menu', props),
         DisclosureRow: (props: Record<string, unknown>) => jsx('disclosure', props),
         SegmentedControl: (props: Record<string, unknown>) => jsx('segmented', props),

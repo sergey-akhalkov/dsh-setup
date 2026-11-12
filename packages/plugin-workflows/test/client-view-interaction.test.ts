@@ -144,6 +144,7 @@ function createRuntime(
     Tag: (props: Record<string, unknown>) => ({ type: 'span', props }),
     StateDot: (props: Record<string, unknown>) => ({ type: 'span', props }),
     Button: (props: Record<string, unknown>) => ({ type: 'button', props }),
+    Checkbox: (props: Record<string, unknown>) => ({ type: 'checkbox', props }),
     Tooltip: (props: Record<string, unknown>) => ({ type: 'span', props }),
     PathLabel: (props: Record<string, unknown>) => ({
       type: 'span',

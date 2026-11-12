@@ -11419,7 +11419,7 @@ window.__ModuleLoader__.load({
         setSeen(committed);
         setDraft(committed);
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { className: "dsh-wf-field", children: [
         props.label,
         /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
           "textarea",
@@ -11443,10 +11443,32 @@ window.__ModuleLoader__.load({
     }
     var EXECUTORS2 = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS2 = ["file", "record", "tool", "check", "human", "all", "declaration"];
-    function Group(props) {
-      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("section", { className: "dsh-wf-group", "data-group": props.id, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h5", { className: "dsh-wf-group-title", children: props.title }),
+    function Card(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+        "section",
+        {
+          className: `dsh-wf-card${props.className === void 0 ? "" : ` ${props.className}`}`,
+          "data-group": props.id,
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("header", { className: "dsh-wf-card-head", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h5", { className: "dsh-wf-card-title", children: props.title }),
+              props.hint === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-card-hint", children: props.hint })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-card-body", children: props.children })
+          ]
+        }
+      );
+    }
+    function Field(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-field", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-field-label", children: props.label }),
         props.children
+      ] });
+    }
+    function Advanced(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("details", { className: "dsh-wf-advanced", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("summary", { children: props.label }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-advanced-body", children: props.children })
       ] });
     }
     function selectTarget(props, node, kind) {
@@ -11454,38 +11476,34 @@ window.__ModuleLoader__.load({
       const choices = connectChoices(props.state.diagram.nodes, node.id).find(
         (choice) => choice.kind === kind
       );
-      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { "data-connection": kind, children: [
-        EDGE_LABELS[kind],
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-          "select",
-          {
-            value: current ?? "",
-            onChange: (event) => {
-              const target = event.currentTarget.value;
-              if (target !== "") props.onConnect(node.id, target, kind);
-            },
-            children: [
-              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(unconnected)" }),
-              (choices?.targets ?? []).map((target) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("option", { value: target.id, children: [
-                target.title,
-                " (",
-                target.id,
-                ")"
-              ] }, target.id))
-            ]
-          }
-        )
-      ] }, kind);
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: EDGE_LABELS[kind], children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+        "select",
+        {
+          value: current ?? "",
+          "aria-label": EDGE_LABELS[kind],
+          onChange: (event) => {
+            const target = event.currentTarget.value;
+            if (target !== "") props.onConnect(node.id, target, kind);
+          },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(unconnected)" }),
+            (choices?.targets ?? []).map((target) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("option", { value: target.id, children: [
+              target.title,
+              " (",
+              target.id,
+              ")"
+            ] }, target.id))
+          ]
+        }
+      ) }, kind);
     }
     function settingsFields(props) {
       const settings = props.state.document.definition.settings;
       const allowTools = Array.isArray(settings.allowTools) ? settings.allowTools.join(", ") : "";
       const patch = (value2) => props.onDefinitionPatch({ settings: value2 });
-      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("fieldset", { className: "dsh-wf-row-actions", "data-section": "settings", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("legend", { children: "Settings" }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Risk",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-settings", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-field-grid", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Risk", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "select",
             {
               value: typeof settings.risk === "string" ? settings.risk : "low",
@@ -11493,23 +11511,8 @@ window.__ModuleLoader__.load({
               onChange: (event) => patch({ ...settings, risk: event.currentTarget.value }),
               children: ["low", "medium", "high"].map((risk) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: risk, children: risk }, risk))
             }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
-            {
-              type: "checkbox",
-              checked: settings.allowModelStart === true,
-              "aria-label": "Allow model start",
-              onChange: (event) => patch({ ...settings, allowModelStart: event.currentTarget.checked })
-            }
-          ),
-          "model start"
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Max blocks",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Max blocks", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "input",
             {
               type: "number",
@@ -11518,23 +11521,8 @@ window.__ModuleLoader__.load({
               "aria-label": "Max blocks",
               onChange: (event) => patch({ ...settings, maxBlocks: Number(event.currentTarget.value) })
             }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            "input",
-            {
-              type: "checkbox",
-              checked: settings.allowIntent === true,
-              "aria-label": "Allow intent",
-              onChange: (event) => patch({ ...settings, allowIntent: event.currentTarget.checked })
-            }
-          ),
-          "intent"
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Gate ownership",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Gate ownership", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
             "select",
             {
               value: typeof settings.gateOwnership === "string" ? settings.gateOwnership : "own",
@@ -11545,15 +11533,13 @@ window.__ModuleLoader__.load({
                 /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
               ]
             }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-          "Allowed tools",
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Allowed tools", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "input",
             {
               value: allowTools,
               "aria-label": "Allowed tools",
+              placeholder: "shell, subagent",
               onChange: (event) => {
                 const names = event.currentTarget.value.split(",").map((name) => name.trim()).filter((name) => name !== "");
                 patch({
@@ -11563,9 +11549,27 @@ window.__ModuleLoader__.load({
                 });
               }
             }
+          ) })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-check-list", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            import_dsh_client_ui_primitives5.Checkbox,
+            {
+              checked: settings.allowModelStart === true,
+              onChange: (next) => patch({ ...settings, allowModelStart: next }),
+              label: "Allow model start"
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            import_dsh_client_ui_primitives5.Checkbox,
+            {
+              checked: settings.allowIntent === true,
+              onChange: (next) => patch({ ...settings, allowIntent: next }),
+              label: "Allow intent"
+            }
           )
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Advanced, { label: "Legacy settings (JSON)", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
           JsonField,
           {
             label: "Legacy (JSON)",
@@ -11575,7 +11579,48 @@ window.__ModuleLoader__.load({
             commit: (value2) => patch({ ...settings, legacy: value2 })
           },
           `settings-legacy:${props.state.document.definition.id}`
-        )
+        ) })
+      ] });
+    }
+    function workflowContent(props) {
+      const description = props.state.document.definition.description;
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Definition name", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "input",
+          {
+            value: props.state.document.definition.name,
+            "aria-label": "Definition name",
+            onChange: (event) => props.onDefinitionPatch({ name: event.currentTarget.value })
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Description", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "textarea",
+          {
+            value: typeof description === "string" ? description : "",
+            "aria-label": "Definition description",
+            rows: 3,
+            onChange: (event) => props.onDefinitionPatch({
+              // Empty sends undefined so a definition without one stays unchanged.
+              description: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
+            })
+          }
+        ) })
+      ] });
+    }
+    function workflowSection(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Card, { id: "workflow", title: "Workflow", hint: "Definition", children: workflowContent(props) });
+    }
+    function workflowDetails(props) {
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("details", { className: "dsh-wf-advanced", "data-group": "workflow", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("summary", { children: [
+          "Workflow \xB7 ",
+          props.state.document.definition.name
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-advanced-body", children: [
+          workflowContent(props),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h6", { className: "dsh-wf-subhead", children: "Settings" }),
+          settingsFields(props)
+        ] })
       ] });
     }
     function stepFields(props, node, step) {
@@ -11583,263 +11628,239 @@ window.__ModuleLoader__.load({
       const loop = step.loop;
       const regularConnections = branch === void 0 && loop === void 0;
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "step", title: "Step", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Step title",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                value: step.title,
-                "aria-label": "Step title",
-                onChange: (event) => props.onPatch(node.id, { title: event.currentTarget.value })
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Step id",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                defaultValue: step.id,
-                "aria-label": "Step id",
-                disabled: props.onRename === void 0,
-                onBlur: (event) => props.onRename?.(node.id, event.currentTarget.value)
-              },
-              `id:${step.id}`
-            )
-          ] })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "step", title: "Step", hint: "What it does", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Title", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              value: step.title,
+              "aria-label": "Step title",
+              onChange: (event) => props.onPatch(node.id, { title: event.currentTarget.value })
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Executor", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "select",
+            {
+              value: step.executor,
+              "aria-label": "Executor",
+              onChange: (event) => props.onPatch(node.id, { executor: event.currentTarget.value }),
+              children: EXECUTORS2.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: executor, children: executor }, executor))
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Prompt", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "textarea",
+            {
+              value: typeof step.prompt === "string" ? step.prompt : "",
+              "aria-label": "Prompt",
+              rows: 4,
+              onChange: (event) => props.onPatch(node.id, {
+                prompt: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
+              })
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Step id", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              className: "dsh-wf-mono",
+              defaultValue: step.id,
+              "aria-label": "Step id",
+              disabled: props.onRename === void 0,
+              onBlur: (event) => props.onRename?.(node.id, event.currentTarget.value)
+            },
+            `id:${step.id}`
+          ) })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "behavior", title: "Behavior", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { children: "Flags" }),
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-                "input",
-                {
-                  type: "checkbox",
-                  checked: step.nonCritical === true,
-                  "aria-label": "Non-critical step",
-                  onChange: (event) => props.onPatch(node.id, { nonCritical: event.currentTarget.checked })
-                }
-              ),
-              "non-critical"
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-                "input",
-                {
-                  type: "checkbox",
-                  checked: step.blockTurnClose === true,
-                  "aria-label": "Blocks turn close",
-                  onChange: (event) => props.onPatch(node.id, {
-                    ...event.currentTarget.checked ? { blockTurnClose: true } : { blockTurnClose: void 0 }
-                  })
-                }
-              ),
-              "blocks turn close"
-            ] })
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Ownership",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-              "select",
-              {
-                value: typeof step.ownership === "string" ? step.ownership : "",
-                "aria-label": "Step ownership",
-                onChange: (event) => props.onPatch(node.id, {
-                  ...event.currentTarget.value === "" ? { ownership: void 0 } : { ownership: event.currentTarget.value }
-                }),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(default)" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "own", children: "own" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
-                ]
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Executor",
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "behavior", title: "Behavior", hint: "Ownership and flags", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Ownership", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof step.ownership === "string" ? step.ownership : "",
+              "aria-label": "Step ownership",
+              onChange: (event) => props.onPatch(node.id, {
+                ...event.currentTarget.value === "" ? { ownership: void 0 } : { ownership: event.currentTarget.value }
+              }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(default)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "own", children: "own" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "defer", children: "defer" })
+              ]
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "dsh-wf-check-list", children: [
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "select",
+              import_dsh_client_ui_primitives5.Checkbox,
               {
-                value: step.executor,
-                "aria-label": "Executor",
-                onChange: (event) => props.onPatch(node.id, { executor: event.currentTarget.value }),
-                children: EXECUTORS2.map((executor) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: executor, children: executor }, executor))
+                checked: step.nonCritical === true,
+                onChange: (next) => props.onPatch(node.id, { nonCritical: next }),
+                label: "Non-critical step"
               }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Prompt",
+            ),
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "textarea",
+              import_dsh_client_ui_primitives5.Checkbox,
               {
-                value: typeof step.prompt === "string" ? step.prompt : "",
-                "aria-label": "Prompt",
-                rows: 3,
-                onChange: (event) => props.onPatch(node.id, {
-                  prompt: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
-                })
-              }
-            )
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "evidence", title: "Evidence", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            JsonField,
-            {
-              label: "Evidence (JSON)",
-              value: step.evidence,
-              ariaLabel: "Evidence JSON",
-              rows: 3,
-              allowEmpty: true,
-              commit: (value2) => props.onPatch(node.id, { evidence: value2 })
-            },
-            `evidence:${node.id}`
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Evidence kind",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-              "select",
-              {
-                value: typeof step.evidence?.kind === "string" ? String(step.evidence.kind) : "",
-                "aria-label": "Evidence kind",
-                onChange: (event) => props.onPatch(node.id, { evidence: { kind: event.currentTarget.value } }),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
-                  EVIDENCE_KINDS2.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: kind, children: kind }, kind))
-                ]
+                checked: step.blockTurnClose === true,
+                onChange: (next) => props.onPatch(node.id, { blockTurnClose: next ? true : void 0 }),
+                label: "Blocks turn close"
               }
             )
           ] }),
-          step.executor === "human" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Human timeout",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-              "select",
-              {
-                value: step.human?.timeoutAction ?? "block",
-                "aria-label": "Human timeout action",
-                onChange: (event) => props.onPatch(node.id, {
-                  human: { ...step.human ?? {}, timeoutAction: event.currentTarget.value }
-                }),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "block", children: "block" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "cancel", children: "cancel" })
-                ]
-              }
-            )
-          ] }) : null,
-          step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            JsonField,
+          step.executor === "human" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Human timeout", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
             {
-              label: "Tool config (JSON)",
-              value: step.tool,
-              ariaLabel: "Tool config JSON",
-              commit: (value2) => props.onPatch(node.id, { tool: value2 })
-            },
-            `tool:${node.id}`
-          ),
-          step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            JsonField,
-            {
-              label: "Subagent config (JSON)",
-              value: step.subagent,
-              ariaLabel: "Subagent config JSON",
-              commit: (value2) => props.onPatch(node.id, { subagent: value2 })
-            },
-            `subagent:${node.id}`
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-            JsonField,
-            {
-              label: "Legacy (JSON)",
-              value: step.legacy,
-              ariaLabel: "Step legacy JSON",
-              allowEmpty: true,
-              commit: (value2) => props.onPatch(node.id, { legacy: value2 })
-            },
-            `legacy:${node.id}`
-          )
+              value: step.human?.timeoutAction ?? "block",
+              "aria-label": "Human timeout action",
+              onChange: (event) => props.onPatch(node.id, {
+                human: { ...step.human ?? {}, timeoutAction: event.currentTarget.value }
+              }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "block", children: "block" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "cancel", children: "cancel" })
+              ]
+            }
+          ) }) : null
         ] }),
-        regularConnections ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "connections", title: "Connections", children: outputKinds(node.kind).map((kind) => selectTarget(props, node, kind)) }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "connections", title: "Connections", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "connections", title: "Connections", hint: "Where it goes next", children: [
+          regularConnections ? outputKinds(node.kind).map((kind) => selectTarget(props, node, kind)) : null,
           branch === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            selectTarget(props, node, "true"),
+            selectTarget(props, node, "false"),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Advanced, { label: "Branch predicate (JSON)", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
               JsonField,
               {
-                label: "Branch predicate (JSON)",
+                label: "Predicate",
                 value: branch.predicate,
                 ariaLabel: "Branch predicate JSON",
                 commit: (value2) => props.onPatch(node.id, { branch: { ...branch, predicate: value2 } })
               },
               `predicate:${node.id}`
-            ),
-            selectTarget(props, node, "true"),
-            selectTarget(props, node, "false")
+            ) })
           ] }),
           loop === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-              "Max iterations",
-              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-                "input",
-                {
-                  type: "number",
-                  min: 1,
-                  value: loop.maxIterations ?? 1,
-                  "aria-label": "Max iterations",
-                  onChange: (event) => props.onPatch(node.id, {
-                    loop: { ...loop, maxIterations: Number(event.currentTarget.value) }
-                  })
-                }
-              )
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Max iterations", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                type: "number",
+                min: 1,
+                value: loop.maxIterations ?? 1,
+                "aria-label": "Max iterations",
+                onChange: (event) => props.onPatch(node.id, {
+                  loop: { ...loop, maxIterations: Number(event.currentTarget.value) }
+                })
+              }
+            ) }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Loop list key", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              "input",
+              {
+                value: loop.list ?? "",
+                "aria-label": "Loop list key",
+                onChange: (event) => props.onPatch(node.id, {
+                  loop: {
+                    ...loop,
+                    // An empty list means "no list"; omit it rather than send "".
+                    ...event.currentTarget.value === "" ? { list: void 0 } : { list: event.currentTarget.value }
+                  }
+                })
+              }
+            ) }),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Loop cap", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+              "select",
+              {
+                value: loop.cap ?? "blocked",
+                "aria-label": "Loop cap",
+                onChange: (event) => props.onPatch(node.id, {
+                  loop: { ...loop, cap: event.currentTarget.value }
+                }),
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "blocked", children: "blocked" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "failed", children: "failed" })
+                ]
+              }
+            ) }),
+            selectTarget(props, node, "exit"),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Advanced, { label: "Loop stop (JSON)", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
               JsonField,
               {
-                label: "Loop stop (JSON)",
+                label: "Stop",
                 value: loop.stop,
                 ariaLabel: "Loop stop JSON",
                 commit: (value2) => props.onPatch(node.id, { loop: { ...loop, stop: value2 } })
               },
               `stop:${node.id}`
-            ),
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-              "Loop list key",
-              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-                "input",
-                {
-                  value: loop.list ?? "",
-                  "aria-label": "Loop list key",
-                  onChange: (event) => props.onPatch(node.id, {
-                    loop: {
-                      ...loop,
-                      // An empty list means "no list"; omit it rather than send "".
-                      ...event.currentTarget.value === "" ? { list: void 0 } : { list: event.currentTarget.value }
-                    }
-                  })
-                }
-              )
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-              "Loop cap",
-              /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-                "select",
-                {
-                  value: loop.cap ?? "blocked",
-                  "aria-label": "Loop cap",
-                  onChange: (event) => props.onPatch(node.id, {
-                    loop: { ...loop, cap: event.currentTarget.value }
-                  }),
-                  children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "blocked", children: "blocked" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "failed", children: "failed" })
-                  ]
-                }
-              )
-            ] }),
-            selectTarget(props, node, "exit")
+            ) })
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "danger", title: "Danger", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-row-actions", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(import_dsh_client_ui_primitives5.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => props.onDelete(node.id), children: "Delete step" }) }) })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "evidence", title: "Evidence", hint: "What proves it ran", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Evidence kind", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof step.evidence?.kind === "string" ? String(step.evidence.kind) : "",
+              "aria-label": "Evidence kind",
+              onChange: (event) => props.onPatch(node.id, { evidence: { kind: event.currentTarget.value } }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
+                EVIDENCE_KINDS2.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: kind, children: kind }, kind))
+              ]
+            }
+          ) }),
+          step.tool === void 0 && step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Advanced, { label: "Executor config (JSON)", children: [
+            step.tool === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              JsonField,
+              {
+                label: "Tool config",
+                value: step.tool,
+                ariaLabel: "Tool config JSON",
+                commit: (value2) => props.onPatch(node.id, { tool: value2 })
+              },
+              `tool:${node.id}`
+            ),
+            step.subagent === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              JsonField,
+              {
+                label: "Subagent config",
+                value: step.subagent,
+                ariaLabel: "Subagent config JSON",
+                commit: (value2) => props.onPatch(node.id, { subagent: value2 })
+              },
+              `subagent:${node.id}`
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Advanced, { label: "Raw records (JSON)", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              JsonField,
+              {
+                label: "Evidence",
+                value: step.evidence,
+                ariaLabel: "Evidence JSON",
+                rows: 3,
+                allowEmpty: true,
+                commit: (value2) => props.onPatch(node.id, { evidence: value2 })
+              },
+              `evidence:${node.id}`
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              JsonField,
+              {
+                label: "Legacy",
+                value: step.legacy,
+                ariaLabel: "Step legacy JSON",
+                allowEmpty: true,
+                commit: (value2) => props.onPatch(node.id, { legacy: value2 })
+              },
+              `legacy:${node.id}`
+            )
+          ] })
+        ] }),
+        workflowDetails(props),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Card, { id: "danger", title: "Danger", className: "dsh-wf-danger-card", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          import_dsh_client_ui_primitives5.Button,
+          {
+            type: "button",
+            variant: "ghost",
+            size: "sm",
+            className: "dsh-wf-danger",
+            onClick: () => props.onDelete(node.id),
+            children: "Delete step"
+          }
+        ) })
       ] });
     }
     function triggerFields(props) {
@@ -11847,129 +11868,78 @@ window.__ModuleLoader__.load({
       const match = trigger.match;
       const triggerNode = props.state.diagram.nodes.find((node) => node.kind === "trigger");
       return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "trigger", title: "Trigger", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Trigger kind",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                value: typeof trigger.kind === "string" ? trigger.kind : "",
-                "aria-label": "Trigger kind",
-                onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Trigger mode",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-              "select",
-              {
-                value: typeof trigger.mode === "string" ? trigger.mode : "shadow",
-                "aria-label": "Trigger mode",
-                onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } }),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "shadow", children: "shadow" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "active", children: "active" })
-                ]
-              }
-            )
-          ] })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "trigger", title: "Trigger", hint: "What starts the workflow", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Kind", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "input",
+            {
+              value: typeof trigger.kind === "string" ? trigger.kind : "",
+              "aria-label": "Trigger kind",
+              onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Mode", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof trigger.mode === "string" ? trigger.mode : "shadow",
+              "aria-label": "Trigger mode",
+              onChange: (event) => props.onDefinitionPatch({ trigger: { ...trigger, mode: event.currentTarget.value } }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "shadow", children: "shadow" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "active", children: "active" })
+              ]
+            }
+          ) })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "behavior", title: "Behavior", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Dedupe",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "select",
-              {
-                value: typeof trigger.dedupe === "string" ? trigger.dedupe : "turn",
-                "aria-label": "Dedupe policy",
-                onChange: (event) => props.onDefinitionPatch({
-                  trigger: { ...trigger, dedupe: event.currentTarget.value }
-                }),
-                children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: policy, children: policy }, policy))
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                type: "checkbox",
-                checked: trigger.repeat === true,
-                "aria-label": "Trigger repeat",
-                onChange: (event) => props.onDefinitionPatch({
-                  trigger: { ...trigger, repeat: event.currentTarget.checked }
-                })
-              }
-            ),
-            "repeat"
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Applicability",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-              "select",
-              {
-                value: typeof trigger.applicability === "string" ? trigger.applicability : "",
-                "aria-label": "Trigger applicability",
-                onChange: (event) => props.onDefinitionPatch({
-                  trigger: {
-                    ...trigger,
-                    ...event.currentTarget.value === "" ? { applicability: void 0 } : { applicability: event.currentTarget.value }
-                  }
-                }),
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
-                ]
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Card, { id: "behavior", title: "Behavior", hint: "Matching and dedupe", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Dedupe", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "select",
+            {
+              value: typeof trigger.dedupe === "string" ? trigger.dedupe : "turn",
+              "aria-label": "Dedupe policy",
+              onChange: (event) => props.onDefinitionPatch({
+                trigger: { ...trigger, dedupe: event.currentTarget.value }
+              }),
+              children: ["none", "turn", "path+content-hash", "callId", "name"].map((policy) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: policy, children: policy }, policy))
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Field, { label: "Applicability", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+            "select",
+            {
+              value: typeof trigger.applicability === "string" ? trigger.applicability : "",
+              "aria-label": "Trigger applicability",
+              onChange: (event) => props.onDefinitionPatch({
+                trigger: {
+                  ...trigger,
+                  ...event.currentTarget.value === "" ? { applicability: void 0 } : { applicability: event.currentTarget.value }
+                }
+              }),
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "", children: "(none)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "checkpoint-required", children: "checkpoint-required" })
+              ]
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-check-list", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            import_dsh_client_ui_primitives5.Checkbox,
+            {
+              checked: trigger.repeat === true,
+              onChange: (next) => props.onDefinitionPatch({ trigger: { ...trigger, repeat: next } }),
+              label: "Repeat on a matching event"
+            }
+          ) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Advanced, { label: "Match filters (JSON)", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             JsonField,
             {
-              label: "Trigger match (JSON)",
+              label: "Match",
               value: match ?? {},
               ariaLabel: "Trigger match JSON",
               commit: (value2) => props.onDefinitionPatch({ trigger: { ...trigger, match: value2 } })
             },
             `match:${props.state.document.definition.id}`
-          )
+          ) })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "connections", title: "Connections", children: triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind)) })
-      ] });
-    }
-    function workflowFields(props) {
-      const description = props.state.document.definition.description;
-      return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(Group, { id: "workflow", title: "Workflow", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Definition name",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "input",
-              {
-                value: props.state.document.definition.name,
-                "aria-label": "Definition name",
-                onChange: (event) => props.onDefinitionPatch({ name: event.currentTarget.value })
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
-            "Description",
-            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-              "textarea",
-              {
-                value: typeof description === "string" ? description : "",
-                "aria-label": "Definition description",
-                rows: 2,
-                onChange: (event) => props.onDefinitionPatch({
-                  // Empty sends undefined so a definition without one stays unchanged.
-                  description: event.currentTarget.value === "" ? void 0 : event.currentTarget.value
-                })
-              }
-            )
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-group", "data-group": "settings", children: settingsFields(props) })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Card, { id: "connections", title: "Connections", hint: "Where the first step is", children: triggerNode === void 0 ? null : outputKinds("trigger").map((kind) => selectTarget(props, triggerNode, kind)) }),
+        workflowDetails(props)
       ] });
     }
     function PropertyPanel(props) {
@@ -11990,8 +11960,14 @@ window.__ModuleLoader__.load({
             /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "dsh-wf-muted", children: node === void 0 ? "Definition and settings" : node.step?.id ?? node.kind })
           ] })
         ] }),
-        workflowFields(props),
-        node === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-muted", children: "Select a node to edit it." }) : node.kind === "trigger" ? triggerFields(props) : node.kind === "end" || node.step === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-muted", children: "The end node has no fields." }) : stepFields(props, node, node.step)
+        node === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+          workflowSection(props),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Card, { id: "settings", title: "Settings", hint: "Definition-level", children: settingsFields(props) }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-hint", children: "Select a node to edit it." })
+        ] }) : node.kind === "trigger" ? triggerFields(props) : node.kind === "end" || node.step === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Card, { id: "end", title: "End", hint: "Terminal node", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "dsh-wf-hint", children: "The end node has no fields." }) }),
+          workflowDetails(props)
+        ] }) : stepFields(props, node, node.step)
       ] });
     }
 
@@ -12248,13 +12224,26 @@ window.__ModuleLoader__.load({
 
     /* Property fields. */
     .dsh-wf-properties { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: auto; }
-    .dsh-wf-properties label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); line-height: 1.4; }
-    .dsh-wf-properties input, .dsh-wf-properties select, .dsh-wf-properties textarea { box-sizing: border-box; width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font-size: 13px; }
-    .dsh-wf-properties textarea { min-height: 64px; }
-    .dsh-wf-properties .dsh-wf-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-    .dsh-wf-properties fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px; margin: 0; padding: 0; border: none; }
-    .dsh-wf-properties legend { padding: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
-    .dsh-wf-properties fieldset > label:last-child { grid-column: 1 / -1; }
+    .dsh-wf-card { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-base); }
+    .dsh-wf-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .dsh-wf-card-title { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.06em; text-transform: uppercase; }
+    .dsh-wf-card-hint { color: var(--dsw-alias-label-caption); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-card-body { display: flex; flex-direction: column; gap: 8px; }
+    .dsh-wf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); line-height: 1.4; }
+    .dsh-wf-field input, .dsh-wf-field select, .dsh-wf-field textarea { box-sizing: border-box; width: 100%; min-height: 32px; padding: 6px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font-size: 13px; }
+    .dsh-wf-field textarea { min-height: 64px; }
+    .dsh-wf-field input:focus-visible, .dsh-wf-field select:focus-visible, .dsh-wf-field textarea:focus-visible { border-color: var(--dsw-alias-state-business-primary); }
+    .dsh-wf-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+    .dsh-wf-check-list { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
+    .dsh-wf-check-list .checkbox { font-size: 13px; }
+    .dsh-wf-advanced { border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); }
+    .dsh-wf-advanced > summary { padding: 7px 9px; cursor: pointer; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-advanced[open] > summary { border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-advanced-body { display: flex; flex-direction: column; gap: 8px; padding: 9px; }
+    .dsh-wf-subhead { margin: 4px 0 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.06em; text-transform: uppercase; }
+    .dsh-wf-hint { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-danger-card { border-color: var(--dsw-alias-border-l2); }
+    .dsh-wf-danger { color: var(--dsw-alias-state-error-primary); }
 
     /* Canvas node cards. */
     .dsh-wf-node { display: flex; flex-direction: column; gap: 6px; min-width: 200px; max-width: 240px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: var(--dsw-font-xxs-12); text-align: left; }

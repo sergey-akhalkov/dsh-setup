@@ -82,9 +82,9 @@ describe('React Flow dependency', () => {
       gzipBytes: gzipped.length,
       artifactBytes: artifact?.size,
     }
-    // Recorded with the resizable three-pane workbench: esbuild bundle 655,719
-    // bytes, the shipped lib/client.js 717,643 bytes (the loader wrapper indents
-    // every line), minified 341,780 bytes, gzip 99,732 bytes. The workbench added
+    // Recorded with the resizable three-pane workbench and the card inspector: esbuild bundle 658,731
+    // bytes, the shipped lib/client.js 720,611 bytes (the loader wrapper indents
+    // every line), minified 344,362 bytes, gzip 100,319 bytes. The workbench added
     // React Flow's Background/Controls, the shipped brick icons, the splitter and
     // the run menu to the one static client artifact; the shared build does not
     // minify client bundles, so the whole artifact stays over the original 250 KB

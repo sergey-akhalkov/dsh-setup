@@ -577,8 +577,11 @@ kind as a single choice. The rail and the inspector are resizable by dragging (o
 their splitters, with the widths remembered in browser storage and a double-click reset; the canvas
 keeps at least 360 px. The inspector follows the selection: the third column at a pane width of
 at least 980 px, an overlay drawer between the 720 px threshold and that width, and inline under the list
-below it. It edits the workflow-level name, description and settings plus the selected node's fields
-in identity, behavior, evidence, connections and danger groups. The header has one primary `Save`, the
+below it. It edits the workflow-level name, description and settings plus the selected node's fields,
+ordered by importance: title, executor, prompt and id first; ownership and flag checkboxes next;
+connections and evidence after that; the raw JSON records and the workflow-wide fields behind
+disclosures; delete last. Booleans use the shipped themed checkbox, and the definition view shows the
+workflow and its settings as separate cards. The header has one primary `Save`, the
 definition name with trigger and source tags, the dirty state and version, the run overlay as a popup
 menu (the latest runs with status and version, or an explicit no-run entry),
 and an overflow menu holding `New definition`, templates, drafts, reload, the list/canvas switch, and

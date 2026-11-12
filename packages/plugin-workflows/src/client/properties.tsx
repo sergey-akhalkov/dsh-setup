@@ -1,4 +1,4 @@
-import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Checkbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { type ReactNode, useState } from 'react'
 import { connectChoices, currentTarget, EDGE_LABELS, outputKinds } from './edges.ts'
 import type { EditorState } from './editor.ts'
@@ -9,6 +9,12 @@ import type { DiagramNode, EdgeKind, GraphStep } from './graph.ts'
  * The inspector. It edits the same definition the canvas and the list editor
  * share and never evaluates a value: JSONLogic predicates are edited as JSON
  * data, and every change goes back through the editor state machine.
+ *
+ * The layout is ordered by importance: the selected node's identity and prompt
+ * first, then behavior, connections, evidence, the workflow it belongs to (a
+ * collapsed disclosure while a node is selected), and the destructive action
+ * last. Raw JSON fields live inside their own disclosure so the common fields
+ * stay readable.
  */
 
 export function parseJsonField(
@@ -47,7 +53,7 @@ function JsonField(props: {
     setDraft(committed)
   }
   return (
-    <label>
+    <label className="dsh-wf-field">
       {props.label}
       <textarea
         value={draft}
@@ -81,17 +87,45 @@ export interface PropertiesProps {
   readonly onRename?: (nodeId: string, nextId: string) => void
 }
 
-/** One labeled inspector section; the heading names the group the fields edit. */
-function Group(props: {
+/** One titled card in the inspector. */
+function Card(props: {
   readonly id: string
   readonly title: string
+  readonly hint?: string
+  readonly className?: string
   readonly children?: ReactNode
 }): ReactNode {
   return (
-    <section className="dsh-wf-group" data-group={props.id}>
-      <h5 className="dsh-wf-group-title">{props.title}</h5>
-      {props.children}
+    <section
+      className={`dsh-wf-card${props.className === undefined ? '' : ` ${props.className}`}`}
+      data-group={props.id}
+    >
+      <header className="dsh-wf-card-head">
+        <h5 className="dsh-wf-card-title">{props.title}</h5>
+        {props.hint === undefined ? null : <span className="dsh-wf-card-hint">{props.hint}</span>}
+      </header>
+      <div className="dsh-wf-card-body">{props.children}</div>
     </section>
+  )
+}
+
+/** A labeled form control; the input keeps its own accessible name. */
+function Field(props: { readonly label: string; readonly children?: ReactNode }): ReactNode {
+  return (
+    <div className="dsh-wf-field">
+      <span className="dsh-wf-field-label">{props.label}</span>
+      {props.children}
+    </div>
+  )
+}
+
+/** A disclosure for the less common raw-data fields. */
+function Advanced(props: { readonly label: string; readonly children?: ReactNode }): ReactNode {
+  return (
+    <details className="dsh-wf-advanced">
+      <summary>{props.label}</summary>
+      <div className="dsh-wf-advanced-body">{props.children}</div>
+    </details>
   )
 }
 
@@ -101,10 +135,10 @@ function selectTarget(props: PropertiesProps, node: DiagramNode, kind: EdgeKind)
     (choice) => choice.kind === kind,
   )
   return (
-    <label key={kind} data-connection={kind}>
-      {EDGE_LABELS[kind]}
+    <Field key={kind} label={EDGE_LABELS[kind]}>
       <select
         value={current ?? ''}
+        aria-label={EDGE_LABELS[kind]}
         onChange={(event) => {
           const target = event.currentTarget.value
           if (target !== '') props.onConnect(node.id, target, kind)
@@ -117,7 +151,7 @@ function selectTarget(props: PropertiesProps, node: DiagramNode, kind: EdgeKind)
           </option>
         ))}
       </select>
-    </label>
+    </Field>
   )
 }
 
@@ -127,88 +161,134 @@ function settingsFields(props: PropertiesProps): ReactNode {
   const patch = (value: Record<string, unknown>): void =>
     props.onDefinitionPatch({ settings: value })
   return (
-    <fieldset className="dsh-wf-row-actions" data-section="settings">
-      <legend>Settings</legend>
-      <label>
-        Risk
-        <select
-          value={typeof settings.risk === 'string' ? settings.risk : 'low'}
-          aria-label="Risk"
-          onChange={(event) => patch({ ...settings, risk: event.currentTarget.value })}
-        >
-          {['low', 'medium', 'high'].map((risk) => (
-            <option key={risk} value={risk}>
-              {risk}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <input
-          type="checkbox"
+    <div className="dsh-wf-settings">
+      <div className="dsh-wf-field-grid">
+        <Field label="Risk">
+          <select
+            value={typeof settings.risk === 'string' ? settings.risk : 'low'}
+            aria-label="Risk"
+            onChange={(event) => patch({ ...settings, risk: event.currentTarget.value })}
+          >
+            {['low', 'medium', 'high'].map((risk) => (
+              <option key={risk} value={risk}>
+                {risk}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Max blocks">
+          <input
+            type="number"
+            min={1}
+            value={Number(settings.maxBlocks ?? 3)}
+            aria-label="Max blocks"
+            onChange={(event) =>
+              patch({ ...settings, maxBlocks: Number(event.currentTarget.value) })
+            }
+          />
+        </Field>
+        <Field label="Gate ownership">
+          <select
+            value={typeof settings.gateOwnership === 'string' ? settings.gateOwnership : 'own'}
+            aria-label="Gate ownership"
+            onChange={(event) => patch({ ...settings, gateOwnership: event.currentTarget.value })}
+          >
+            <option value="own">own</option>
+            <option value="defer">defer</option>
+          </select>
+        </Field>
+        <Field label="Allowed tools">
+          <input
+            value={allowTools}
+            aria-label="Allowed tools"
+            placeholder="shell, subagent"
+            onChange={(event) => {
+              const names = event.currentTarget.value
+                .split(',')
+                .map((name) => name.trim())
+                .filter((name) => name !== '')
+              patch({
+                ...settings,
+                // The host rejects an empty allowlist; omit it when unused.
+                ...(names.length === 0 ? { allowTools: undefined } : { allowTools: names }),
+              })
+            }}
+          />
+        </Field>
+      </div>
+      <div className="dsh-wf-check-list">
+        <Checkbox
           checked={settings.allowModelStart === true}
-          aria-label="Allow model start"
-          onChange={(event) => patch({ ...settings, allowModelStart: event.currentTarget.checked })}
+          onChange={(next) => patch({ ...settings, allowModelStart: next })}
+          label="Allow model start"
         />
-        model start
-      </label>
-      <label>
-        Max blocks
-        <input
-          type="number"
-          min={1}
-          value={Number(settings.maxBlocks ?? 3)}
-          aria-label="Max blocks"
-          onChange={(event) => patch({ ...settings, maxBlocks: Number(event.currentTarget.value) })}
-        />
-      </label>
-      <label>
-        <input
-          type="checkbox"
+        <Checkbox
           checked={settings.allowIntent === true}
-          aria-label="Allow intent"
-          onChange={(event) => patch({ ...settings, allowIntent: event.currentTarget.checked })}
+          onChange={(next) => patch({ ...settings, allowIntent: next })}
+          label="Allow intent"
         />
-        intent
-      </label>
-      <label>
-        Gate ownership
-        <select
-          value={typeof settings.gateOwnership === 'string' ? settings.gateOwnership : 'own'}
-          aria-label="Gate ownership"
-          onChange={(event) => patch({ ...settings, gateOwnership: event.currentTarget.value })}
-        >
-          <option value="own">own</option>
-          <option value="defer">defer</option>
-        </select>
-      </label>
-      <label>
-        Allowed tools
+      </div>
+      <Advanced label="Legacy settings (JSON)">
+        <JsonField
+          key={`settings-legacy:${props.state.document.definition.id}`}
+          label="Legacy (JSON)"
+          value={settings.legacy}
+          ariaLabel="Settings legacy JSON"
+          allowEmpty
+          commit={(value) => patch({ ...settings, legacy: value })}
+        />
+      </Advanced>
+    </div>
+  )
+}
+
+function workflowContent(props: PropertiesProps): ReactNode {
+  const description = props.state.document.definition.description
+  return (
+    <>
+      <Field label="Definition name">
         <input
-          value={allowTools}
-          aria-label="Allowed tools"
-          onChange={(event) => {
-            const names = event.currentTarget.value
-              .split(',')
-              .map((name) => name.trim())
-              .filter((name) => name !== '')
-            patch({
-              ...settings,
-              // The host rejects an empty allowlist; omit it when unused.
-              ...(names.length === 0 ? { allowTools: undefined } : { allowTools: names }),
-            })
-          }}
+          value={props.state.document.definition.name}
+          aria-label="Definition name"
+          onChange={(event) => props.onDefinitionPatch({ name: event.currentTarget.value })}
         />
-      </label>
-      <JsonField
-        key={`settings-legacy:${props.state.document.definition.id}`}
-        label="Legacy (JSON)"
-        value={settings.legacy}
-        ariaLabel="Settings legacy JSON"
-        allowEmpty
-        commit={(value) => patch({ ...settings, legacy: value })}
-      />
-    </fieldset>
+      </Field>
+      <Field label="Description">
+        <textarea
+          value={typeof description === 'string' ? description : ''}
+          aria-label="Definition description"
+          rows={3}
+          onChange={(event) =>
+            props.onDefinitionPatch({
+              // Empty sends undefined so a definition without one stays unchanged.
+              description: event.currentTarget.value === '' ? undefined : event.currentTarget.value,
+            })
+          }
+        />
+      </Field>
+    </>
+  )
+}
+
+function workflowSection(props: PropertiesProps): ReactNode {
+  return (
+    <Card id="workflow" title="Workflow" hint="Definition">
+      {workflowContent(props)}
+    </Card>
+  )
+}
+
+/** While a node is selected the workflow block stays one click away. */
+function workflowDetails(props: PropertiesProps): ReactNode {
+  return (
+    <details className="dsh-wf-advanced" data-group="workflow">
+      <summary>Workflow · {props.state.document.definition.name}</summary>
+      <div className="dsh-wf-advanced-body">
+        {workflowContent(props)}
+        <h6 className="dsh-wf-subhead">Settings</h6>
+        {settingsFields(props)}
+      </div>
+    </details>
   )
 }
 
@@ -218,58 +298,52 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
   const regularConnections = branch === undefined && loop === undefined
   return (
     <>
-      <Group id="step" title="Step">
-        <label>
-          Step title
+      <Card id="step" title="Step" hint="What it does">
+        <Field label="Title">
           <input
             value={step.title}
             aria-label="Step title"
             onChange={(event) => props.onPatch(node.id, { title: event.currentTarget.value })}
           />
-        </label>
-        <label>
-          Step id
+        </Field>
+        <Field label="Executor">
+          <select
+            value={step.executor}
+            aria-label="Executor"
+            onChange={(event) => props.onPatch(node.id, { executor: event.currentTarget.value })}
+          >
+            {EXECUTORS.map((executor) => (
+              <option key={executor} value={executor}>
+                {executor}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Prompt">
+          <textarea
+            value={typeof step.prompt === 'string' ? step.prompt : ''}
+            aria-label="Prompt"
+            rows={4}
+            onChange={(event) =>
+              props.onPatch(node.id, {
+                prompt: event.currentTarget.value === '' ? undefined : event.currentTarget.value,
+              })
+            }
+          />
+        </Field>
+        <Field label="Step id">
           <input
             key={`id:${step.id}`}
+            className="dsh-wf-mono"
             defaultValue={step.id}
             aria-label="Step id"
             disabled={props.onRename === undefined}
             onBlur={(event) => props.onRename?.(node.id, event.currentTarget.value)}
           />
-        </label>
-      </Group>
-      <Group id="behavior" title="Behavior">
-        <label>
-          <span>Flags</span>
-          <label>
-            <input
-              type="checkbox"
-              checked={step.nonCritical === true}
-              aria-label="Non-critical step"
-              onChange={(event) =>
-                props.onPatch(node.id, { nonCritical: event.currentTarget.checked })
-              }
-            />
-            non-critical
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={step.blockTurnClose === true}
-              aria-label="Blocks turn close"
-              onChange={(event) =>
-                props.onPatch(node.id, {
-                  ...(event.currentTarget.checked
-                    ? { blockTurnClose: true }
-                    : { blockTurnClose: undefined }),
-                })
-              }
-            />
-            blocks turn close
-          </label>
-        </label>
-        <label>
-          Ownership
+        </Field>
+      </Card>
+      <Card id="behavior" title="Behavior" hint="Ownership and flags">
+        <Field label="Ownership">
           <select
             value={typeof step.ownership === 'string' ? step.ownership : ''}
             aria-label="Step ownership"
@@ -285,47 +359,118 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
             <option value="own">own</option>
             <option value="defer">defer</option>
           </select>
-        </label>
-        <label>
-          Executor
-          <select
-            value={step.executor}
-            aria-label="Executor"
-            onChange={(event) => props.onPatch(node.id, { executor: event.currentTarget.value })}
-          >
-            {EXECUTORS.map((executor) => (
-              <option key={executor} value={executor}>
-                {executor}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Prompt
-          <textarea
-            value={typeof step.prompt === 'string' ? step.prompt : ''}
-            aria-label="Prompt"
-            rows={3}
-            onChange={(event) =>
-              props.onPatch(node.id, {
-                prompt: event.currentTarget.value === '' ? undefined : event.currentTarget.value,
-              })
-            }
+        </Field>
+        <div className="dsh-wf-check-list">
+          <Checkbox
+            checked={step.nonCritical === true}
+            onChange={(next) => props.onPatch(node.id, { nonCritical: next })}
+            label="Non-critical step"
           />
-        </label>
-      </Group>
-      <Group id="evidence" title="Evidence">
-        <JsonField
-          key={`evidence:${node.id}`}
-          label="Evidence (JSON)"
-          value={step.evidence}
-          ariaLabel="Evidence JSON"
-          rows={3}
-          allowEmpty
-          commit={(value) => props.onPatch(node.id, { evidence: value })}
-        />
-        <label>
-          Evidence kind
+          <Checkbox
+            checked={step.blockTurnClose === true}
+            onChange={(next) => props.onPatch(node.id, { blockTurnClose: next ? true : undefined })}
+            label="Blocks turn close"
+          />
+        </div>
+        {step.executor === 'human' ? (
+          <Field label="Human timeout">
+            <select
+              value={step.human?.timeoutAction ?? 'block'}
+              aria-label="Human timeout action"
+              onChange={(event) =>
+                props.onPatch(node.id, {
+                  human: { ...(step.human ?? {}), timeoutAction: event.currentTarget.value },
+                })
+              }
+            >
+              <option value="block">block</option>
+              <option value="cancel">cancel</option>
+            </select>
+          </Field>
+        ) : null}
+      </Card>
+      <Card id="connections" title="Connections" hint="Where it goes next">
+        {regularConnections
+          ? outputKinds(node.kind).map((kind) => selectTarget(props, node, kind))
+          : null}
+        {branch === undefined ? null : (
+          <>
+            {selectTarget(props, node, 'true')}
+            {selectTarget(props, node, 'false')}
+            <Advanced label="Branch predicate (JSON)">
+              <JsonField
+                key={`predicate:${node.id}`}
+                label="Predicate"
+                value={branch.predicate}
+                ariaLabel="Branch predicate JSON"
+                commit={(value) =>
+                  props.onPatch(node.id, { branch: { ...branch, predicate: value } })
+                }
+              />
+            </Advanced>
+          </>
+        )}
+        {loop === undefined ? null : (
+          <>
+            <Field label="Max iterations">
+              <input
+                type="number"
+                min={1}
+                value={loop.maxIterations ?? 1}
+                aria-label="Max iterations"
+                onChange={(event) =>
+                  props.onPatch(node.id, {
+                    loop: { ...loop, maxIterations: Number(event.currentTarget.value) },
+                  })
+                }
+              />
+            </Field>
+            <Field label="Loop list key">
+              <input
+                value={loop.list ?? ''}
+                aria-label="Loop list key"
+                onChange={(event) =>
+                  props.onPatch(node.id, {
+                    loop: {
+                      ...loop,
+                      // An empty list means "no list"; omit it rather than send "".
+                      ...(event.currentTarget.value === ''
+                        ? { list: undefined }
+                        : { list: event.currentTarget.value }),
+                    },
+                  })
+                }
+              />
+            </Field>
+            <Field label="Loop cap">
+              <select
+                value={loop.cap ?? 'blocked'}
+                aria-label="Loop cap"
+                onChange={(event) =>
+                  props.onPatch(node.id, {
+                    loop: { ...loop, cap: event.currentTarget.value as 'blocked' | 'failed' },
+                  })
+                }
+              >
+                <option value="blocked">blocked</option>
+                <option value="failed">failed</option>
+              </select>
+            </Field>
+            {selectTarget(props, node, 'exit')}
+            <Advanced label="Loop stop (JSON)">
+              <JsonField
+                key={`stop:${node.id}`}
+                label="Stop"
+                value={loop.stop}
+                ariaLabel="Loop stop JSON"
+                commit={(value) => props.onPatch(node.id, { loop: { ...loop, stop: value } })}
+              />
+            </Advanced>
+          </>
+        )}
+      </Card>
+      <Card id="evidence" title="Evidence" hint="What proves it ran">
+        <Field label="Evidence kind">
           <select
             value={
               typeof (step.evidence as { kind?: unknown } | undefined)?.kind === 'string'
@@ -344,140 +489,61 @@ function stepFields(props: PropertiesProps, node: DiagramNode, step: GraphStep):
               </option>
             ))}
           </select>
-        </label>
-        {step.executor === 'human' ? (
-          <label>
-            Human timeout
-            <select
-              value={step.human?.timeoutAction ?? 'block'}
-              aria-label="Human timeout action"
-              onChange={(event) =>
-                props.onPatch(node.id, {
-                  human: { ...(step.human ?? {}), timeoutAction: event.currentTarget.value },
-                })
-              }
-            >
-              <option value="block">block</option>
-              <option value="cancel">cancel</option>
-            </select>
-          </label>
-        ) : null}
-        {step.tool === undefined ? null : (
-          <JsonField
-            key={`tool:${node.id}`}
-            label="Tool config (JSON)"
-            value={step.tool}
-            ariaLabel="Tool config JSON"
-            commit={(value) => props.onPatch(node.id, { tool: value })}
-          />
-        )}
-        {step.subagent === undefined ? null : (
-          <JsonField
-            key={`subagent:${node.id}`}
-            label="Subagent config (JSON)"
-            value={step.subagent}
-            ariaLabel="Subagent config JSON"
-            commit={(value) => props.onPatch(node.id, { subagent: value })}
-          />
-        )}
-        <JsonField
-          key={`legacy:${node.id}`}
-          label="Legacy (JSON)"
-          value={step.legacy}
-          ariaLabel="Step legacy JSON"
-          allowEmpty
-          commit={(value) => props.onPatch(node.id, { legacy: value })}
-        />
-      </Group>
-      {regularConnections ? (
-        <Group id="connections" title="Connections">
-          {outputKinds(node.kind).map((kind) => selectTarget(props, node, kind))}
-        </Group>
-      ) : (
-        <Group id="connections" title="Connections">
-          {branch === undefined ? null : (
-            <>
+        </Field>
+        {step.tool === undefined && step.subagent === undefined ? null : (
+          <Advanced label="Executor config (JSON)">
+            {step.tool === undefined ? null : (
               <JsonField
-                key={`predicate:${node.id}`}
-                label="Branch predicate (JSON)"
-                value={branch.predicate}
-                ariaLabel="Branch predicate JSON"
-                commit={(value) =>
-                  props.onPatch(node.id, { branch: { ...branch, predicate: value } })
-                }
+                key={`tool:${node.id}`}
+                label="Tool config"
+                value={step.tool}
+                ariaLabel="Tool config JSON"
+                commit={(value) => props.onPatch(node.id, { tool: value })}
               />
-              {selectTarget(props, node, 'true')}
-              {selectTarget(props, node, 'false')}
-            </>
-          )}
-          {loop === undefined ? null : (
-            <>
-              <label>
-                Max iterations
-                <input
-                  type="number"
-                  min={1}
-                  value={loop.maxIterations ?? 1}
-                  aria-label="Max iterations"
-                  onChange={(event) =>
-                    props.onPatch(node.id, {
-                      loop: { ...loop, maxIterations: Number(event.currentTarget.value) },
-                    })
-                  }
-                />
-              </label>
+            )}
+            {step.subagent === undefined ? null : (
               <JsonField
-                key={`stop:${node.id}`}
-                label="Loop stop (JSON)"
-                value={loop.stop}
-                ariaLabel="Loop stop JSON"
-                commit={(value) => props.onPatch(node.id, { loop: { ...loop, stop: value } })}
+                key={`subagent:${node.id}`}
+                label="Subagent config"
+                value={step.subagent}
+                ariaLabel="Subagent config JSON"
+                commit={(value) => props.onPatch(node.id, { subagent: value })}
               />
-              <label>
-                Loop list key
-                <input
-                  value={loop.list ?? ''}
-                  aria-label="Loop list key"
-                  onChange={(event) =>
-                    props.onPatch(node.id, {
-                      loop: {
-                        ...loop,
-                        // An empty list means "no list"; omit it rather than send "".
-                        ...(event.currentTarget.value === ''
-                          ? { list: undefined }
-                          : { list: event.currentTarget.value }),
-                      },
-                    })
-                  }
-                />
-              </label>
-              <label>
-                Loop cap
-                <select
-                  value={loop.cap ?? 'blocked'}
-                  aria-label="Loop cap"
-                  onChange={(event) =>
-                    props.onPatch(node.id, {
-                      loop: { ...loop, cap: event.currentTarget.value as 'blocked' | 'failed' },
-                    })
-                  }
-                >
-                  <option value="blocked">blocked</option>
-                  <option value="failed">failed</option>
-                </select>
-              </label>
-              {selectTarget(props, node, 'exit')}
-            </>
-          )}
-        </Group>
-      )}
-      <Group id="danger" title="Danger">
-        <div className="dsh-wf-row-actions">
-          <Button type="button" variant="ghost" size="sm" onClick={() => props.onDelete(node.id)}>
-            Delete step
-          </Button>
-        </div>
-      </Group>
+            )}
+          </Advanced>
+        )}
+        <Advanced label="Raw records (JSON)">
+          <JsonField
+            key={`evidence:${node.id}`}
+            label="Evidence"
+            value={step.evidence}
+            ariaLabel="Evidence JSON"
+            rows={3}
+            allowEmpty
+            commit={(value) => props.onPatch(node.id, { evidence: value })}
+          />
+          <JsonField
+            key={`legacy:${node.id}`}
+            label="Legacy"
+            value={step.legacy}
+            ariaLabel="Step legacy JSON"
+            allowEmpty
+            commit={(value) => props.onPatch(node.id, { legacy: value })}
+          />
+        </Advanced>
+      </Card>
+      {workflowDetails(props)}
+      <Card id="danger" title="Danger" className="dsh-wf-danger-card">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="dsh-wf-danger"
+          onClick={() => props.onDelete(node.id)}
+        >
+          Delete step
+        </Button>
+      </Card>
     </>
   )
 }
@@ -488,9 +554,8 @@ function triggerFields(props: PropertiesProps): ReactNode {
   const triggerNode = props.state.diagram.nodes.find((node) => node.kind === 'trigger')
   return (
     <>
-      <Group id="trigger" title="Trigger">
-        <label>
-          Trigger kind
+      <Card id="trigger" title="Trigger" hint="What starts the workflow">
+        <Field label="Kind">
           <input
             value={typeof trigger.kind === 'string' ? trigger.kind : ''}
             aria-label="Trigger kind"
@@ -498,9 +563,8 @@ function triggerFields(props: PropertiesProps): ReactNode {
               props.onDefinitionPatch({ trigger: { ...trigger, kind: event.currentTarget.value } })
             }
           />
-        </label>
-        <label>
-          Trigger mode
+        </Field>
+        <Field label="Mode">
           <select
             value={typeof trigger.mode === 'string' ? trigger.mode : 'shadow'}
             aria-label="Trigger mode"
@@ -511,11 +575,10 @@ function triggerFields(props: PropertiesProps): ReactNode {
             <option value="shadow">shadow</option>
             <option value="active">active</option>
           </select>
-        </label>
-      </Group>
-      <Group id="behavior" title="Behavior">
-        <label>
-          Dedupe
+        </Field>
+      </Card>
+      <Card id="behavior" title="Behavior" hint="Matching and dedupe">
+        <Field label="Dedupe">
           <select
             value={typeof trigger.dedupe === 'string' ? trigger.dedupe : 'turn'}
             aria-label="Dedupe policy"
@@ -531,22 +594,8 @@ function triggerFields(props: PropertiesProps): ReactNode {
               </option>
             ))}
           </select>
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={trigger.repeat === true}
-            aria-label="Trigger repeat"
-            onChange={(event) =>
-              props.onDefinitionPatch({
-                trigger: { ...trigger, repeat: event.currentTarget.checked },
-              })
-            }
-          />
-          repeat
-        </label>
-        <label>
-          Applicability
+        </Field>
+        <Field label="Applicability">
           <select
             value={typeof trigger.applicability === 'string' ? trigger.applicability : ''}
             aria-label="Trigger applicability"
@@ -564,56 +613,30 @@ function triggerFields(props: PropertiesProps): ReactNode {
             <option value="">(none)</option>
             <option value="checkpoint-required">checkpoint-required</option>
           </select>
-        </label>
-        <JsonField
-          key={`match:${props.state.document.definition.id}`}
-          label="Trigger match (JSON)"
-          value={match ?? {}}
-          ariaLabel="Trigger match JSON"
-          commit={(value) => props.onDefinitionPatch({ trigger: { ...trigger, match: value } })}
-        />
-      </Group>
-      <Group id="connections" title="Connections">
+        </Field>
+        <div className="dsh-wf-check-list">
+          <Checkbox
+            checked={trigger.repeat === true}
+            onChange={(next) => props.onDefinitionPatch({ trigger: { ...trigger, repeat: next } })}
+            label="Repeat on a matching event"
+          />
+        </div>
+        <Advanced label="Match filters (JSON)">
+          <JsonField
+            key={`match:${props.state.document.definition.id}`}
+            label="Match"
+            value={match ?? {}}
+            ariaLabel="Trigger match JSON"
+            commit={(value) => props.onDefinitionPatch({ trigger: { ...trigger, match: value } })}
+          />
+        </Advanced>
+      </Card>
+      <Card id="connections" title="Connections" hint="Where the first step is">
         {triggerNode === undefined
           ? null
           : outputKinds('trigger').map((kind) => selectTarget(props, triggerNode, kind))}
-      </Group>
-    </>
-  )
-}
-
-function workflowFields(props: PropertiesProps): ReactNode {
-  const description = props.state.document.definition.description
-  return (
-    <>
-      <Group id="workflow" title="Workflow">
-        <label>
-          Definition name
-          <input
-            value={props.state.document.definition.name}
-            aria-label="Definition name"
-            onChange={(event) => props.onDefinitionPatch({ name: event.currentTarget.value })}
-          />
-        </label>
-        <label>
-          Description
-          <textarea
-            value={typeof description === 'string' ? description : ''}
-            aria-label="Definition description"
-            rows={2}
-            onChange={(event) =>
-              props.onDefinitionPatch({
-                // Empty sends undefined so a definition without one stays unchanged.
-                description:
-                  event.currentTarget.value === '' ? undefined : event.currentTarget.value,
-              })
-            }
-          />
-        </label>
-      </Group>
-      <div className="dsh-wf-group" data-group="settings">
-        {settingsFields(props)}
-      </div>
+      </Card>
+      {workflowDetails(props)}
     </>
   )
 }
@@ -637,13 +660,23 @@ export function PropertyPanel(props: PropertiesProps): ReactNode {
           </span>
         </div>
       </header>
-      {workflowFields(props)}
       {node === undefined ? (
-        <p className="dsh-wf-muted">Select a node to edit it.</p>
+        <>
+          {workflowSection(props)}
+          <Card id="settings" title="Settings" hint="Definition-level">
+            {settingsFields(props)}
+          </Card>
+          <p className="dsh-wf-hint">Select a node to edit it.</p>
+        </>
       ) : node.kind === 'trigger' ? (
         triggerFields(props)
       ) : node.kind === 'end' || node.step === undefined ? (
-        <p className="dsh-wf-muted">The end node has no fields.</p>
+        <>
+          <Card id="end" title="End" hint="Terminal node">
+            <p className="dsh-wf-hint">The end node has no fields.</p>
+          </Card>
+          {workflowDetails(props)}
+        </>
       ) : (
         stepFields(props, node, node.step)
       )}

@@ -736,9 +736,16 @@ describe('palette and property panel', () => {
       )
     // A declaration requires non-critical: turning that flag off must be
     // visible to the real validator, and turning it back on must pass.
-    fire(find(render(state, nodeIdOf('step-1')), 'Non-critical step'), 'onChange', false)
+    const setFlag = (label: string, value: boolean): void => {
+      const element = elements(render(state, nodeIdOf('step-1'))).find(
+        (entry) => entry.type === 'checkbox' && entry.props.label === label,
+      )
+      const onChange = element?.props.onChange as ((next: boolean) => void) | undefined
+      onChange?.(value)
+    }
+    setFlag('Non-critical step', false)
     expect(() => validateDefinition(state.document.definition)).toThrow(/nonCritical/u)
-    fire(find(render(state, nodeIdOf('step-1')), 'Non-critical step'), 'onChange', true)
+    setFlag('Non-critical step', true)
     expect(validateDefinition(state.document.definition).steps[0]?.nonCritical).toBe(true)
 
     // Renaming the id updates the node and keeps the definition valid.
@@ -855,7 +862,12 @@ describe('palette and property panel', () => {
           (element.type === 'input' || element.type === 'select') &&
           element.props['aria-label'] === label,
       )
-    fire(trigger('Trigger repeat'), 'onChange', true)
+    const repeatFlag = elements(renderTrigger()).find(
+      (element) =>
+        element.type === 'checkbox' && element.props.label === 'Repeat on a matching event',
+    )
+    const setRepeat = repeatFlag?.props.onChange as ((next: boolean) => void) | undefined
+    setRepeat?.(true)
     fire(trigger('Trigger applicability'), 'onChange', 'checkpoint-required')
     expect(state.document.definition.trigger).toMatchObject({
       repeat: true,
