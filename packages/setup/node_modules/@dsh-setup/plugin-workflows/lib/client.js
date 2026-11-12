@@ -208,11 +208,11 @@ window.__ModuleLoader__.load({
     module.exports = __toCommonJS(index_exports);
 
     // packages/plugin-workflows/src/client/design-page.tsx
-    var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives9 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react7 = require("react");
 
     // packages/plugin-workflows/src/client/design.tsx
-    var import_dsh_client_ui_primitives6 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives7 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react6 = require("react");
 
     // packages/plugin-workflows/src/client/a11y.ts
@@ -220,6 +220,35 @@ window.__ModuleLoader__.load({
     var WIDE_WIDTH = 980;
     function inspectorPlacement(width) {
       return width >= WIDE_WIDTH ? "column" : "drawer";
+    }
+    var RAIL_WIDTH = { min: 220, default: 280, max: 460 };
+    var INSPECTOR_WIDTH = { min: 300, default: 360, max: 560 };
+    var PANE_STORAGE_KEY = "dsh-workflows.panes";
+    function clampPaneWidth(value2, bounds) {
+      if (!Number.isFinite(value2)) return bounds.min;
+      return Math.min(bounds.max, Math.max(bounds.min, Math.round(value2)));
+    }
+    function parsePaneWidths(raw) {
+      const defaults = {
+        rail: RAIL_WIDTH.default,
+        inspector: INSPECTOR_WIDTH.default
+      };
+      if (raw === null || raw === "") return defaults;
+      try {
+        const parsed = JSON.parse(raw);
+        return {
+          rail: clampPaneWidth(
+            typeof parsed.rail === "number" ? parsed.rail : defaults.rail,
+            RAIL_WIDTH
+          ),
+          inspector: clampPaneWidth(
+            typeof parsed.inspector === "number" ? parsed.inspector : defaults.inspector,
+            INSPECTOR_WIDTH
+          )
+        };
+      } catch {
+        return defaults;
+      }
     }
     function defaultMode(width) {
       return width > 0 && width < NARROW_WIDTH ? "list" : "canvas";
@@ -252,6 +281,9 @@ window.__ModuleLoader__.load({
     function paletteLabel(kind) {
       return kind === "step" || kind === "main" ? "Add step" : `Add ${kind}`;
     }
+
+    // packages/plugin-workflows/src/client/canvas.tsx
+    var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
 
     // node_modules/.pnpm/@xyflow+react@12.12.1_@type_79c3edc1609b0dbde12434fc5353f6b8/node_modules/@xyflow/react/dist/esm/index.js
     var import_jsx_runtime = require("react/jsx-runtime");
@@ -9611,7 +9643,7 @@ window.__ModuleLoader__.load({
       const data = props.data;
       return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node dsh-wf-node-end", "data-kind": "end", children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-head", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-icon", "aria-hidden": "true", children: brickGlyph("agent") }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "dsh-wf-node-icon", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(import_dsh_client_ui_primitives2.IconCheckCircleOutlineRegular, {}) }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "dsh-wf-node-titles", children: [
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-title", children: data.title }),
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "dsh-wf-node-meta", children: "end" })
@@ -9708,7 +9740,7 @@ window.__ModuleLoader__.load({
             edges: flowEdges,
             nodeTypes: CANVAS_NODE_TYPES,
             fitView: true,
-            fitViewOptions: { padding: 0.2, maxZoom: 1.2 },
+            fitViewOptions: { padding: 0.25, maxZoom: 1.1 },
             nodesFocusable: true,
             edgesFocusable: true,
             nodesDraggable: !readOnly,
@@ -10107,7 +10139,7 @@ window.__ModuleLoader__.load({
           while (occupied.has(row)) row += 1;
           occupied.add(row);
           rows.set(id2, row);
-          positions[id2] = { x: column * 240, y: row * 120 };
+          positions[id2] = { x: column * 320, y: row * 150 };
         };
         for (const id2 of constrained) {
           place(id2, wantedRow(id2) ?? 0);
@@ -10929,7 +10961,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/list.tsx
-    var import_dsh_client_ui_primitives2 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives3 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime4 = require("react/jsx-runtime");
     var EXECUTORS = ["main", "subagent", "tool", "branch", "loop", "human"];
     var EVIDENCE_KINDS = ["file", "record", "tool", "check", "human", "all", "declaration"];
@@ -11232,7 +11264,7 @@ window.__ModuleLoader__.load({
                     )
                   ] }, choice.kind)) }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                    import_dsh_client_ui_primitives2.Button,
+                    import_dsh_client_ui_primitives3.Button,
                     {
                       type: "button",
                       variant: "ghost",
@@ -11333,7 +11365,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/palette.tsx
-    var import_dsh_client_ui_primitives3 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives4 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime5 = require("react/jsx-runtime");
     function PaletteMenu(props) {
       const items = STEP_BRICKS.map((brick) => ({
@@ -11341,7 +11373,7 @@ window.__ModuleLoader__.load({
         label: paletteLabel(brick.value)
       }));
       return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
-        import_dsh_client_ui_primitives3.Menu,
+        import_dsh_client_ui_primitives4.Menu,
         {
           open: props.open,
           onClose: props.onClose,
@@ -11351,7 +11383,7 @@ window.__ModuleLoader__.load({
             props.onAdd(id2);
           },
           anchor: /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
-            import_dsh_client_ui_primitives3.Button,
+            import_dsh_client_ui_primitives4.Button,
             {
               type: "button",
               variant: "outline",
@@ -11366,7 +11398,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/properties.tsx
-    var import_dsh_client_ui_primitives4 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives5 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react5 = require("react");
     var import_jsx_runtime6 = require("react/jsx-runtime");
     function parseJsonField(text2) {
@@ -11807,7 +11839,7 @@ window.__ModuleLoader__.load({
             selectTarget(props, node, "exit")
           ] })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "danger", title: "Danger", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-row-actions", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(import_dsh_client_ui_primitives4.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => props.onDelete(node.id), children: "Delete step" }) }) })
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Group, { id: "danger", title: "Danger", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "dsh-wf-row-actions", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(import_dsh_client_ui_primitives5.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => props.onDelete(node.id), children: "Delete step" }) }) })
       ] });
     }
     function triggerFields(props) {
@@ -11964,7 +11996,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/rail.tsx
-    var import_dsh_client_ui_primitives5 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives6 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime7 = require("react/jsx-runtime");
     function defaultDefinitionId(definitions) {
       return definitions[0]?.id;
@@ -11984,7 +12016,7 @@ window.__ModuleLoader__.load({
       return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-bricks", "data-bricks": "triggers", children: TRIGGER_BRICKS.map((brick) => {
         const current = props.currentTrigger === brick.value;
         return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-          import_dsh_client_ui_primitives5.Button,
+          import_dsh_client_ui_primitives6.Button,
           {
             type: "button",
             variant: "ghost",
@@ -12009,7 +12041,7 @@ window.__ModuleLoader__.load({
     function StepBricks(props) {
       const { t } = props;
       return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-bricks", "data-bricks": "steps", children: STEP_BRICKS.map((brick) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-        import_dsh_client_ui_primitives5.Button,
+        import_dsh_client_ui_primitives6.Button,
         {
           type: "button",
           variant: "ghost",
@@ -12040,14 +12072,14 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "dsh-wf-rail-head", children: [
             /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { className: "dsh-wf-heading", children: t("design.railWorkflows") }),
             props.onNew === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
-              import_dsh_client_ui_primitives5.Button,
+              import_dsh_client_ui_primitives6.Button,
               {
                 type: "button",
                 variant: "toolbar",
                 size: "sm",
                 "aria-label": t("design.new"),
                 title: t("design.new"),
-                icon: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { "aria-hidden": "true", children: "+" }),
+                icon: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(import_dsh_client_ui_primitives6.IconPlusOutlineRegular, {}),
                 disabled: props.disabled === true,
                 onClick: () => props.onNew?.()
               }
@@ -12056,7 +12088,7 @@ window.__ModuleLoader__.load({
           props.definitions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "dsh-wf-muted", children: t("definitions.empty") }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("ul", { className: "dsh-wf-library", children: props.definitions.map((entry) => {
             const current = entry.id === props.currentId;
             return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-              import_dsh_client_ui_primitives5.Button,
+              import_dsh_client_ui_primitives6.Button,
               {
                 type: "button",
                 variant: "toolbar",
@@ -12069,7 +12101,15 @@ window.__ModuleLoader__.load({
                 onClick: () => props.onOpen(entry.id),
                 children: [
                   /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-lib-title", children: entry.name }),
-                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-lib-desc", "data-description": entry.id, children: entry.description ?? t("design.noDescription") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+                    "span",
+                    {
+                      className: "dsh-wf-lib-desc",
+                      "data-description": entry.id,
+                      title: entry.description ?? t("design.noDescription"),
+                      children: entry.description ?? t("design.noDescription")
+                    }
+                  ),
                   /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "dsh-wf-lib-meta", children: [
                     /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "dsh-wf-chip", "data-trigger-kind": entry.trigger ?? "", children: entry.trigger === void 0 ? t("overview.unknownKind") : `${t("definitions.trigger")}: ${entry.trigger}` }),
                     /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "dsh-wf-muted", "data-source": entry.source, children: [
@@ -12083,7 +12123,7 @@ window.__ModuleLoader__.load({
                       "steps"
                     ] }),
                     current && props.latestRun !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("span", { className: "dsh-wf-lib-run", "data-latest-run": props.latestRun.id, children: [
-                      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(import_dsh_client_ui_primitives5.StateDot, { state: runDotState(props.latestRun.status) }),
+                      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(import_dsh_client_ui_primitives6.StateDot, { state: runDotState(props.latestRun.status) }),
                       `${t("overview.latestRun")}: ${props.latestRun.status}`
                     ] }) : null
                   ] })
@@ -12139,20 +12179,22 @@ window.__ModuleLoader__.load({
     .dsh-wf-issue { color: var(--dsw-alias-state-error-primary); font: var(--dsw-font-xxs-12); }
 
     /* Header: one title block, one state line, one action cluster. */
-    .dsh-wf-design-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-design-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding-bottom: 10px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
     .dsh-wf-head-main { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
     .dsh-wf-head-name { font: var(--dsw-font-s-strong-14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dsh-wf-head-state { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); white-space: nowrap; }
     .dsh-wf-dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-warning-primary); }
     .dsh-wf-dirty-dot[data-dirty="false"] { background: var(--dsw-alias-state-success-primary); }
     .dsh-wf-head-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-    .dsh-wf-run { max-width: 220px; padding: 3px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: var(--dsw-font-xxs-12); }
+    .dsh-wf-run { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dsh-wf-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--dsw-alias-state-error-primary); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); font: var(--dsw-font-xxs-12); }
 
     /* The three panes: blocks and library, canvas, inspector. */
-    .dsh-wf-workbench { position: relative; display: grid; grid-template-columns: minmax(220px, 256px) minmax(0, 1fr) minmax(280px, 320px); gap: 12px; flex: 1; min-height: 0; align-items: stretch; }
-    .dsh-wf-workbench[data-layout="drawer"] { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); }
-    .dsh-wf-workbench[data-mode="list"] { display: flex; flex-direction: column; min-height: 0; }
+    .dsh-wf-workbench { position: relative; display: grid; grid-template-columns: 280px 4px minmax(0, 1fr) 4px 360px; gap: 6px; flex: 1; min-height: 0; align-items: stretch; }
+    .dsh-wf-workbench[data-layout="drawer"] { grid-template-columns: 280px 4px minmax(0, 1fr); }
+    .dsh-wf-workbench[data-mode="list"] { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
+    .dsh-wf-splitter { align-self: stretch; border-radius: var(--dsw-radius-sm); cursor: col-resize; background: transparent; transition: background-color 120ms ease; }
+    .dsh-wf-splitter:hover, .dsh-wf-splitter:focus-visible { background: var(--dsw-alias-border-l2); }
     .dsh-wf-workbench-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
     .dsh-wf-workbench[data-mode="list"] .dsh-wf-workbench-main { overflow-y: auto; }
 
@@ -12160,19 +12202,19 @@ window.__ModuleLoader__.load({
     .dsh-wf-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
     .dsh-wf-rail-section { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
     .dsh-wf-rail-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-    .dsh-wf-library { display: flex; flex-direction: column; gap: 2px; list-style: none; margin: 0; padding: 0; min-width: 0; }
-    .dsh-wf-lib-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; box-sizing: border-box; width: 100%; height: auto; min-height: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--dsw-radius-sm); background: transparent; text-align: left; line-height: 1.35; white-space: normal; }
+    .dsh-wf-library { display: flex; flex-direction: column; gap: 6px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+    .dsh-wf-lib-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; box-sizing: border-box; width: 100%; height: auto; min-height: 0; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-base); text-align: left; line-height: 1.4; white-space: normal; }
     .dsh-wf-lib-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
-    .dsh-wf-lib-row[data-selected="true"] { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); box-shadow: inset 2px 0 0 var(--dsw-alias-label-primary); }
-    .dsh-wf-lib-title { font: var(--dsw-font-xs-13); overflow-wrap: anywhere; }
-    .dsh-wf-lib-desc { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
+    .dsh-wf-lib-row[data-selected="true"] { border-color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); box-shadow: inset 3px 0 0 var(--dsw-alias-label-primary); }
+    .dsh-wf-lib-title { font: var(--dsw-font-s-strong-14); overflow-wrap: anywhere; }
+    .dsh-wf-lib-desc { display: -webkit-box; max-width: 100%; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
     .dsh-wf-lib-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxs-12); }
     .dsh-wf-lib-run { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
     .dsh-wf-bricks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; list-style: none; margin: 0; padding: 0; }
     .dsh-wf-bricks[data-bricks="triggers"] { grid-template-columns: minmax(0, 1fr); }
     .dsh-wf-brick { display: flex; align-items: center; gap: 6px; box-sizing: border-box; width: 100%; height: auto; min-height: 0; justify-content: flex-start; padding: 5px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); text-align: left; }
     .dsh-wf-brick:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-    .dsh-wf-brick[data-current="true"] { border-color: var(--dsw-alias-label-primary); color: var(--dsw-alias-label-primary); }
+    .dsh-wf-brick[data-current="true"] { border-color: var(--dsw-alias-state-success-primary); color: var(--dsw-alias-label-primary); box-shadow: inset 2px 0 0 var(--dsw-alias-state-success-primary); }
     .dsh-wf-brick[data-brick-kind="trigger"] .dsh-wf-brick-label { font-family: var(--dsw-font-mono, monospace); font-size: 11px; }
     .dsh-wf-brick-icon { display: inline-flex; flex: none; color: var(--dsw-alias-label-tertiary); }
     .dsh-wf-brick-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -12192,29 +12234,30 @@ window.__ModuleLoader__.load({
     .dsh-wf-workbench[data-layout="drawer"] .dsh-wf-inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: min(320px, 88%); }
     .dsh-wf-inspector[data-open="false"] { display: none; }
     .dsh-wf-inspector-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
-    .dsh-wf-inspector .dsh-wf-properties { border: none; border-radius: 0; flex: 1; min-height: 0; padding: 10px 12px; }
-    .dsh-wf-inspector-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-inspector .dsh-wf-properties { border: none; border-radius: 0; flex: 1; min-height: 0; padding: 12px 14px; }
+    .dsh-wf-inspector-title { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding-bottom: 10px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
     .dsh-wf-inspector-glyph { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary); }
     .dsh-wf-inspector-glyph[data-kind="trigger"] { color: var(--dsw-alias-state-success-primary); }
     .dsh-wf-inspector-glyph[data-kind="branch"], .dsh-wf-inspector-glyph[data-kind="loop"] { color: var(--dsw-alias-state-warning-primary); }
     .dsh-wf-inspector-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-    .dsh-wf-inspector-titles h4 { margin: 0; font: var(--dsw-font-s-strong-14); overflow-wrap: anywhere; }
+    .dsh-wf-inspector-titles h4 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
     .dsh-wf-inspector-titles .dsh-wf-muted { font-family: var(--dsw-font-mono, monospace); font-size: 11px; }
-    .dsh-wf-group { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+    .dsh-wf-group { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
     .dsh-wf-group:last-of-type { border-bottom: none; }
     .dsh-wf-group-title { margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
 
     /* Property fields. */
-    .dsh-wf-properties { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: auto; }
-    .dsh-wf-properties label { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
-    .dsh-wf-properties input, .dsh-wf-properties select, .dsh-wf-properties textarea { box-sizing: border-box; width: 100%; padding: 3px 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; }
+    .dsh-wf-properties { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); overflow: auto; }
+    .dsh-wf-properties label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); line-height: 1.4; }
+    .dsh-wf-properties input, .dsh-wf-properties select, .dsh-wf-properties textarea { box-sizing: border-box; width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font-size: 13px; }
+    .dsh-wf-properties textarea { min-height: 64px; }
     .dsh-wf-properties .dsh-wf-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .dsh-wf-properties fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px; margin: 0; padding: 0; border: none; }
     .dsh-wf-properties legend { padding: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
     .dsh-wf-properties fieldset > label:last-child { grid-column: 1 / -1; }
 
     /* Canvas node cards. */
-    .dsh-wf-node { display: flex; flex-direction: column; gap: 4px; min-width: 170px; max-width: 220px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: var(--dsw-font-xxs-12); text-align: left; }
+    .dsh-wf-node { display: flex; flex-direction: column; gap: 6px; min-width: 200px; max-width: 240px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: var(--dsw-font-xxs-12); text-align: left; }
     .dsh-wf-node[data-kind="trigger"] { border-color: var(--dsw-alias-state-success-primary); }
     .dsh-wf-node[data-kind="branch"], .dsh-wf-node[data-kind="loop"] { border-color: var(--dsw-alias-state-warning-primary); }
     .dsh-wf-node[data-state="running"] { border-color: var(--dsw-alias-state-warning-primary); }
@@ -12233,6 +12276,7 @@ window.__ModuleLoader__.load({
     .dsh-wf-node-badge[data-run-state="done"] { color: var(--dsw-alias-state-success-primary); }
     .dsh-wf-node-badge[data-run-state="blocked"], .dsh-wf-node-badge[data-run-state="failed"] { color: var(--dsw-alias-state-error-primary); }
     .dsh-wf-node-evidence, .dsh-wf-node-violation { display: block; margin-top: 2px; font-size: 11px; color: var(--dsw-alias-label-caption); overflow-wrap: anywhere; }
+    .dsh-wf-node-evidence { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .dsh-wf-node-violation { color: var(--dsw-alias-state-error-primary); }
     .dsh-wf-node-orphan { color: var(--dsw-alias-state-warning-primary); }
     .dsh-wf-node-end { border-style: dashed; }
@@ -12356,6 +12400,18 @@ window.__ModuleLoader__.load({
       const [paletteOpen, setPaletteOpen] = (0, import_react6.useState)(false);
       const [menuOpen, setMenuOpen] = (0, import_react6.useState)(false);
       const [detailsOpen, setDetailsOpen] = (0, import_react6.useState)(false);
+      const [runMenuOpen, setRunMenuOpen] = (0, import_react6.useState)(false);
+      const [paneWidths, setPaneWidths] = (0, import_react6.useState)(() => {
+        try {
+          return parsePaneWidths(
+            typeof window === "undefined" ? null : window.localStorage.getItem(PANE_STORAGE_KEY)
+          );
+        } catch {
+          return { rail: RAIL_WIDTH.default, inspector: INSPECTOR_WIDTH.default };
+        }
+      });
+      const paneWidthsRef = (0, import_react6.useRef)(paneWidths);
+      paneWidthsRef.current = paneWidths;
       const dirty = editor?.dirty === true;
       (0, import_react6.useEffect)(() => {
         props.onDirtyChange?.(dirty);
@@ -12402,6 +12458,56 @@ window.__ModuleLoader__.load({
         element.addEventListener("keydown", onKeyDown);
         return () => element.removeEventListener("keydown", onKeyDown);
       }, [selected2]);
+      const persistPaneWidths = () => {
+        try {
+          window.localStorage.setItem(PANE_STORAGE_KEY, JSON.stringify(paneWidthsRef.current));
+        } catch {
+        }
+      };
+      const paneBounds = (side) => {
+        const bounds = side === "rail" ? RAIL_WIDTH : INSPECTOR_WIDTH;
+        const total = root2.current?.clientWidth ?? 0;
+        const other = side === "rail" ? paneWidthsRef.current.inspector : paneWidthsRef.current.rail;
+        const available = total <= 0 ? bounds.max : Math.max(bounds.min, total - other - 360 - 40);
+        return { min: bounds.min, max: Math.min(bounds.max, available) };
+      };
+      const applyPaneWidth = (side, value2) => {
+        const next = { ...paneWidthsRef.current, [side]: clampPaneWidth(value2, paneBounds(side)) };
+        paneWidthsRef.current = next;
+        setPaneWidths(next);
+      };
+      const dragSplitter = (side) => (event) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const start2 = paneWidthsRef.current[side];
+        const move = (moveEvent) => {
+          const delta = moveEvent.clientX - startX;
+          applyPaneWidth(side, side === "rail" ? start2 + delta : start2 - delta);
+        };
+        const finish = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", finish);
+          persistPaneWidths();
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", finish, { once: true });
+      };
+      const keySplitter = (side) => (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const step = event.shiftKey ? 48 : 16;
+        const direction = event.key === "ArrowRight" ? 1 : -1;
+        const current = paneWidthsRef.current[side];
+        applyPaneWidth(
+          side,
+          side === "rail" ? current + direction * step : current - direction * step
+        );
+        persistPaneWidths();
+      };
+      const resetSplitter = (side) => () => {
+        applyPaneWidth(side, side === "rail" ? RAIL_WIDTH.default : INSPECTOR_WIDTH.default);
+        persistPaneWidths();
+      };
       const runSelection = (0, import_react6.useMemo)(
         () => createRunSelection((definitionId) => api.runs(definitionId)),
         [api]
@@ -12584,6 +12690,9 @@ window.__ModuleLoader__.load({
       const overlay = editor === void 0 ? overlayFor(void 0, blankDefinition(/* @__PURE__ */ new Set())) : overlayFor(active, editor.document.definition);
       const surface = editor === void 0 ? defaultSurface(props.surfaceWidth) : resolveSurface(editor.mode, canvasFailed);
       const placement = inspectorPlacement(props.surfaceWidth ?? windowWidth());
+      const workbenchStyle = surface === "list" ? {} : {
+        gridTemplateColumns: placement === "column" ? `${String(paneWidths.rail)}px 4px minmax(0, 1fr) 4px ${String(paneWidths.inspector)}px` : `${String(paneWidths.rail)}px 4px minmax(0, 1fr)`
+      };
       const inspectorOpen = placement === "column" || selected2 !== void 0 || detailsOpen;
       const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected2);
       const choices = editor === void 0 || selected2 === void 0 ? [] : connectChoices(editor.diagram.nodes, selected2).flatMap(
@@ -12596,6 +12705,19 @@ window.__ModuleLoader__.load({
       const issues = editor?.issues ?? [];
       const conflict = editor?.conflict;
       const currentTrigger = editor === void 0 ? void 0 : String(editor.document.definition.trigger.kind ?? "");
+      const activeRunEntry = runs.find((run) => run.id === runId);
+      const shortRunId = (id2) => {
+        const clean = id2.replace(/^workflow:/u, "");
+        return clean.length > 22 ? `${clean.slice(0, 12)}\u2026${clean.slice(-6)}` : clean;
+      };
+      const runLabel = () => activeRunEntry === void 0 ? t("design.noRun") : `${shortRunId(activeRunEntry.id)} \xB7 ${activeRunEntry.status}`;
+      const runItems = () => [
+        { id: "", label: t("design.noRun") },
+        ...runs.map((run) => ({
+          id: run.id,
+          label: `${shortRunId(run.id)} \xB7 ${run.status}${run.definition === void 0 ? "" : ` \xB7 v${String(run.definition.version)}`}`
+        }))
+      ];
       const menuItems = () => {
         const items = [{ id: "new", label: t("design.new"), disabled: loading }];
         if (library.templates.length > 0) {
@@ -12671,7 +12793,7 @@ window.__ModuleLoader__.load({
       const emptyCanvas = () => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("section", { className: "dsh-wf-canvas dsh-wf-blank-canvas", "data-section": "editor-start", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-empty", children: [
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-empty-title", children: t("design.intro") }),
         /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-          import_dsh_client_ui_primitives6.Button,
+          import_dsh_client_ui_primitives7.Button,
           {
             type: "button",
             variant: "primary",
@@ -12766,8 +12888,8 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-head-main", children: [
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "dsh-wf-head-name", children: editor === void 0 ? t("design.pageTitle") : editor.document.definition.name }),
             editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "outline", children: currentTrigger === "" ? t("overview.unknownKind") : currentTrigger }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Tag, { tone: "quiet", children: editor.document.source })
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "outline", children: currentTrigger === "" ? t("overview.unknownKind") : currentTrigger }),
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: editor.document.source })
             ] })
           ] }),
           editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("span", { className: "dsh-wf-head-state", "data-status": editor.status, children: [
@@ -12778,32 +12900,43 @@ window.__ModuleLoader__.load({
             editor.document.revision === null ? "" : ` \xB7 ${editor.document.revision.slice(0, 8)}`
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-head-actions", children: [
-            editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
-              "select",
+            editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              import_dsh_client_ui_primitives7.Menu,
               {
-                className: "dsh-wf-run",
-                "aria-label": t("design.run"),
-                value: runId ?? "",
-                onChange: (event) => setRunId(event.currentTarget.value),
-                disabled: runs.length === 0,
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "", children: t("design.noRun") }),
-                  runs.map((run) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("option", { value: run.id, children: [
-                    run.id,
-                    " \xB7 ",
-                    run.status,
-                    run.definition === void 0 ? "" : ` \xB7 v${String(run.definition.version)}`
-                  ] }, run.id))
-                ]
+                open: runMenuOpen,
+                items: runItems(),
+                align: "end",
+                selectedId: runId ?? "",
+                onSelect: (id2) => {
+                  setRunMenuOpen(false);
+                  setRunId(id2 === "" ? void 0 : id2);
+                },
+                onClose: () => setRunMenuOpen(false),
+                anchor: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  import_dsh_client_ui_primitives7.Button,
+                  {
+                    type: "button",
+                    variant: "toolbar",
+                    size: "sm",
+                    className: "dsh-wf-run",
+                    icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives7.IconChevronDownOutlineRegular, {}),
+                    "aria-label": t("design.run"),
+                    "aria-haspopup": "menu",
+                    title: runId === void 0 ? t("design.noRun") : `${runId} \xB7 ${String(activeRunEntry?.status ?? "")}`,
+                    disabled: runs.length === 0,
+                    onClick: () => setRunMenuOpen(true),
+                    children: runLabel()
+                  }
+                )
               }
             ),
             placement === "drawer" && editor !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-              import_dsh_client_ui_primitives6.Button,
+              import_dsh_client_ui_primitives7.Button,
               {
                 type: "button",
                 variant: "toolbar",
                 size: "sm",
-                icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.IconSlidersTwoOutlineRegular, {}),
+                icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives7.IconSlidersTwoOutlineRegular, {}),
                 "aria-label": t("design.details"),
                 title: t("design.details"),
                 "aria-pressed": detailsOpen,
@@ -12811,7 +12944,7 @@ window.__ModuleLoader__.load({
               }
             ) : null,
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-              import_dsh_client_ui_primitives6.Button,
+              import_dsh_client_ui_primitives7.Button,
               {
                 type: "button",
                 variant: "primary",
@@ -12822,7 +12955,7 @@ window.__ModuleLoader__.load({
               }
             ),
             editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-              import_dsh_client_ui_primitives6.Menu,
+              import_dsh_client_ui_primitives7.Menu,
               {
                 open: menuOpen,
                 items: menuItems(),
@@ -12830,12 +12963,12 @@ window.__ModuleLoader__.load({
                 onSelect: onMenuSelect,
                 onClose: () => setMenuOpen(false),
                 anchor: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-                  import_dsh_client_ui_primitives6.Button,
+                  import_dsh_client_ui_primitives7.Button,
                   {
                     type: "button",
                     variant: "toolbar",
                     size: "sm",
-                    icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.IconEllipsisOutlineRegular, {}),
+                    icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives7.IconEllipsisOutlineRegular, {}),
                     "aria-label": t("design.more"),
                     title: t("design.more"),
                     onClick: () => setMenuOpen(true)
@@ -12844,7 +12977,7 @@ window.__ModuleLoader__.load({
               }
             ),
             /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-              import_dsh_client_ui_primitives6.Button,
+              import_dsh_client_ui_primitives7.Button,
               {
                 type: "button",
                 variant: "ghost",
@@ -12863,7 +12996,7 @@ window.__ModuleLoader__.load({
             "\xBB?"
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-            import_dsh_client_ui_primitives6.Button,
+            import_dsh_client_ui_primitives7.Button,
             {
               type: "button",
               variant: "outline",
@@ -12873,101 +13006,152 @@ window.__ModuleLoader__.load({
               children: t("design.delete")
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives6.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setConfirmDelete(false), children: t("design.cancel") })
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "ghost", size: "sm", onClick: () => setConfirmDelete(false), children: t("design.cancel") })
         ] }) : null,
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-workbench", "data-mode": surface, "data-layout": placement, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-            WorkflowRail,
-            {
-              definitions: library.definitions,
-              ...editor === void 0 ? {} : { currentId: editor.document.definition.id },
-              ...currentTrigger === void 0 ? {} : { currentTrigger },
-              ...editor === void 0 || runs[0] === void 0 ? {} : { latestRun: runs[0] },
-              disabled: loading,
-              t,
-              onNew: () => guard(startBlank),
-              onOpen: (id2) => guard(() => void open(id2)),
-              onTrigger: chooseTrigger,
-              onExecutor: addExecutor
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-workbench-main", children: [
-            message === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", children: message }),
-            conflict === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design-bar", role: "alert", "data-conflict": conflict.kind, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { children: editor?.message ?? t("design.conflict") }),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+          "div",
+          {
+            className: "dsh-wf-workbench",
+            "data-mode": surface,
+            "data-layout": placement,
+            style: workbenchStyle,
+            children: [
               /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-                import_dsh_client_ui_primitives6.Button,
+                WorkflowRail,
                 {
-                  type: "button",
-                  variant: "outline",
-                  size: "sm",
-                  onClick: () => guard(() => void reloadCurrent()),
-                  children: t("design.reload")
-                }
-              ),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-                import_dsh_client_ui_primitives6.Button,
-                {
-                  type: "button",
-                  variant: "outline",
-                  size: "sm",
-                  onClick: () => void copyCurrent(),
+                  definitions: library.definitions,
+                  ...editor === void 0 ? {} : { currentId: editor.document.definition.id },
+                  ...currentTrigger === void 0 ? {} : { currentTrigger },
+                  ...editor === void 0 || runs[0] === void 0 ? {} : { latestRun: runs[0] },
                   disabled: loading,
-                  children: t("design.saveCopy")
+                  t,
+                  onNew: () => guard(startBlank),
+                  onOpen: (id2) => guard(() => void open(id2)),
+                  onTrigger: chooseTrigger,
+                  onExecutor: addExecutor
                 }
               ),
-              conflict.nextId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_dsh_client_ui_primitives6.Button, { type: "button", variant: "outline", size: "sm", onClick: useNextId, children: [
-                t("design.useId"),
-                " ",
-                conflict.nextId
-              ] })
-            ] }),
-            editor?.message === void 0 || conflict !== void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", children: editor.message }),
-            editorBody()
-          ] }),
-          surface === "canvas" ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
-            "aside",
-            {
-              className: "dsh-wf-inspector",
-              "data-open": inspectorOpen ? "true" : "false",
-              "aria-label": t("design.inspector"),
-              children: [
-                placement === "drawer" ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-inspector-head", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { children: t("design.inspector") }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-                    import_dsh_client_ui_primitives6.Button,
-                    {
-                      type: "button",
-                      variant: "ghost",
-                      size: "sm",
-                      "aria-label": t("design.closeInspector"),
-                      onClick: () => {
-                        setDetailsOpen(false);
-                        setSelected(void 0);
-                      },
-                      children: "\xD7"
-                    }
-                  )
-                ] }) : null,
-                editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-                  PropertyPanel,
+              surface === "canvas" ? (
+                // biome-ignore lint/a11y/useSemanticElements: a resizable splitter has no semantic element; role="separator" with aria-value* is the ARIA pattern.
+                /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  "div",
                   {
-                    state: editor,
-                    ...selected2 === void 0 ? {} : { selected: selected2 },
-                    onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
-                    onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
-                    onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
-                    onRename: (nodeId, nextId2) => apply2(renameStepId(editor, nodeId, nextId2)),
-                    onDelete: (stepId) => {
-                      apply2(deleteStep(editor, stepId));
-                      setSelected(void 0);
-                    }
+                    className: "dsh-wf-splitter",
+                    role: "separator",
+                    "aria-orientation": "vertical",
+                    "aria-label": t("design.resizeRail"),
+                    "aria-valuemin": RAIL_WIDTH.min,
+                    "aria-valuemax": RAIL_WIDTH.max,
+                    "aria-valuenow": paneWidths.rail,
+                    title: t("design.resizeRail"),
+                    tabIndex: 0,
+                    "data-splitter": "rail",
+                    onPointerDown: dragSplitter("rail"),
+                    onKeyDown: keySplitter("rail"),
+                    onDoubleClick: resetSplitter("rail")
                   }
                 )
-              ]
-            }
-          ) : null
-        ] }),
+              ) : null,
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-workbench-main", children: [
+                message === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", children: message }),
+                conflict === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design-bar", role: "alert", "data-conflict": conflict.kind, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { children: editor?.message ?? t("design.conflict") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                    import_dsh_client_ui_primitives7.Button,
+                    {
+                      type: "button",
+                      variant: "outline",
+                      size: "sm",
+                      onClick: () => guard(() => void reloadCurrent()),
+                      children: t("design.reload")
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                    import_dsh_client_ui_primitives7.Button,
+                    {
+                      type: "button",
+                      variant: "outline",
+                      size: "sm",
+                      onClick: () => void copyCurrent(),
+                      disabled: loading,
+                      children: t("design.saveCopy")
+                    }
+                  ),
+                  conflict.nextId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "outline", size: "sm", onClick: useNextId, children: [
+                    t("design.useId"),
+                    " ",
+                    conflict.nextId
+                  ] })
+                ] }),
+                editor?.message === void 0 || conflict !== void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "dsh-wf-issue", children: editor.message }),
+                editorBody()
+              ] }),
+              surface === "canvas" && placement === "column" ? (
+                // biome-ignore lint/a11y/useSemanticElements: a resizable splitter has no semantic element; role="separator" with aria-value* is the ARIA pattern.
+                /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  "div",
+                  {
+                    className: "dsh-wf-splitter",
+                    role: "separator",
+                    "aria-orientation": "vertical",
+                    "aria-label": t("design.resizeInspector"),
+                    "aria-valuemin": INSPECTOR_WIDTH.min,
+                    "aria-valuemax": INSPECTOR_WIDTH.max,
+                    "aria-valuenow": paneWidths.inspector,
+                    title: t("design.resizeInspector"),
+                    tabIndex: 0,
+                    "data-splitter": "inspector",
+                    onPointerDown: dragSplitter("inspector"),
+                    onKeyDown: keySplitter("inspector"),
+                    onDoubleClick: resetSplitter("inspector")
+                  }
+                )
+              ) : null,
+              surface === "canvas" ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+                "aside",
+                {
+                  className: "dsh-wf-inspector",
+                  "data-open": inspectorOpen ? "true" : "false",
+                  "aria-label": t("design.inspector"),
+                  children: [
+                    placement === "drawer" ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-inspector-head", children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { children: t("design.inspector") }),
+                      /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                        import_dsh_client_ui_primitives7.Button,
+                        {
+                          type: "button",
+                          variant: "ghost",
+                          size: "sm",
+                          "aria-label": t("design.closeInspector"),
+                          onClick: () => {
+                            setDetailsOpen(false);
+                            setSelected(void 0);
+                          },
+                          children: "\xD7"
+                        }
+                      )
+                    ] }) : null,
+                    editor === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                      PropertyPanel,
+                      {
+                        state: editor,
+                        ...selected2 === void 0 ? {} : { selected: selected2 },
+                        onDefinitionPatch: (patch) => apply2(patchDefinition(editor, patch)),
+                        onPatch: (stepId, patch) => apply2(patchStep(editor, stepId, patch)),
+                        onConnect: (source, target, kind) => apply2(connectSteps(editor, source, target, kind)),
+                        onRename: (nodeId, nextId2) => apply2(renameStepId(editor, nodeId, nextId2)),
+                        onDelete: (stepId) => {
+                          apply2(deleteStep(editor, stepId));
+                          setSelected(void 0);
+                        }
+                      }
+                    )
+                  ]
+                }
+              ) : null
+            ]
+          }
+        ),
         connectValue === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "dsh-wf-design-bar", children: [
           /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
             "select",
@@ -12989,7 +13173,7 @@ window.__ModuleLoader__.load({
             }
           ),
           /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-            import_dsh_client_ui_primitives6.Button,
+            import_dsh_client_ui_primitives7.Button,
             {
               type: "button",
               variant: "outline",
@@ -13007,7 +13191,7 @@ window.__ModuleLoader__.load({
             }
           ),
           /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
-            import_dsh_client_ui_primitives6.Button,
+            import_dsh_client_ui_primitives7.Button,
             {
               type: "button",
               variant: "ghost",
@@ -13026,7 +13210,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/panel.tsx
-    var import_dsh_client_ui_primitives7 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives8 = require("@deepseek-ai/dsh-client-ui-primitives");
 
     // packages/plugin-workflows/src/client/locale.ts
     var EN = {
@@ -13188,6 +13372,8 @@ window.__ModuleLoader__.load({
       "design.diagnostics": "Diagnostics",
       "design.inspector": "Inspector",
       "design.closeInspector": "Close inspector",
+      "design.resizeRail": "Resize workflow rail",
+      "design.resizeInspector": "Resize inspector",
       "design.details": "Details",
       "design.listView": "List view",
       "design.canvasView": "Canvas view",
@@ -13317,7 +13503,7 @@ window.__ModuleLoader__.load({
           /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "dsh-wf-row-head", children: [
             /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-subject", children: trigger.id }),
             /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-chip", children: trigger.event }),
-            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(import_dsh_client_ui_primitives7.Tag, { tone: "quiet", children: trigger.mode }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(import_dsh_client_ui_primitives8.Tag, { tone: "quiet", children: trigger.mode }),
             trigger.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-muted", "data-source": trigger.source, children: trigger.plugin === void 0 ? trigger.source : `${trigger.source}:${trigger.plugin}` }),
             /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "dsh-wf-time", children: trigger.last === void 0 ? t("triggers.notEvaluated") : `${reasonLabel(trigger.last.reason, t)} \xB7 ${formatTime(trigger.last.at, t)}` })
           ] }),
@@ -13331,7 +13517,7 @@ window.__ModuleLoader__.load({
     function ErrorLine(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "dsh-wf-error-block", role: "alert", children: [
         /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: `${props.t("state.error")} ${props.message}` }),
-        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(import_dsh_client_ui_primitives7.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onRetry, children: props.t("state.retry") })
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(import_dsh_client_ui_primitives8.Button, { type: "button", variant: "outline", size: "sm", onClick: props.onRetry, children: props.t("state.retry") })
       ] });
     }
     function LoadMore(props) {
@@ -13340,7 +13526,7 @@ window.__ModuleLoader__.load({
         return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(ErrorLine, { message: props.error, t: props.t, onRetry: props.onLoad });
       }
       return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
-        import_dsh_client_ui_primitives7.Button,
+        import_dsh_client_ui_primitives8.Button,
         {
           type: "button",
           variant: "ghost",
@@ -13448,7 +13634,7 @@ window.__ModuleLoader__.load({
         ),
         error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime11.jsx)("p", { className: "dsh-wf-issue", role: "alert", children: error }),
         /* @__PURE__ */ (0, import_jsx_runtime11.jsxs)(
-          import_dsh_client_ui_primitives8.DisclosureRow,
+          import_dsh_client_ui_primitives9.DisclosureRow,
           {
             icon: null,
             title: t("design.diagnostics"),
@@ -13476,15 +13662,15 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/view.tsx
-    var import_dsh_client_ui_primitives12 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives13 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react9 = require("react");
 
     // packages/plugin-workflows/src/client/overview.tsx
-    var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_react8 = require("react");
 
     // packages/plugin-workflows/src/client/run-history.tsx
-    var import_dsh_client_ui_primitives9 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives10 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime12 = require("react/jsx-runtime");
     function runDot(status) {
       if (status === "running") return "ongoing";
@@ -13526,11 +13712,11 @@ window.__ModuleLoader__.load({
     function StatusLine(props) {
       const { health, t } = props;
       return /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)("div", { className: "dsh-wf-status", "data-state": health.state, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.StateDot, { state: healthDot(health.state) }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: healthDot(health.state) }),
         /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-status-text", children: t(`health.${health.state}`) }),
-        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tooltip, { label: statusDetails(health, t), children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Button, { type: "button", variant: "ghost", size: "sm", children: t("status.details") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.Tooltip, { label: statusDetails(health, t), children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", children: t("status.details") }) }),
         props.onRefresh === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-          import_dsh_client_ui_primitives9.Button,
+          import_dsh_client_ui_primitives10.Button,
           {
             type: "button",
             variant: "ghost",
@@ -13545,10 +13731,10 @@ window.__ModuleLoader__.load({
     function RunRow(props) {
       const { run, t } = props;
       const started = run.startedAt > 0 ? new Date(run.startedAt).toLocaleString() : t("time.unknown");
-      const relative = run.startedAt > 0 ? relativeLabel((0, import_dsh_client_ui_primitives9.relativeTime)(run.startedAt, props.now), t) : t("time.unknown");
+      const relative = run.startedAt > 0 ? relativeLabel((0, import_dsh_client_ui_primitives10.relativeTime)(run.startedAt, props.now), t) : t("time.unknown");
       const duration = durationText(run.startedAt, run.endedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("li", { className: "dsh-wf-row", "data-row-key": run.id, "data-status": run.status, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsxs)(
-        import_dsh_client_ui_primitives9.Button,
+        import_dsh_client_ui_primitives10.Button,
         {
           type: "button",
           variant: "toolbar",
@@ -13557,11 +13743,11 @@ window.__ModuleLoader__.load({
           "data-run": run.id,
           onClick: props.onOpen,
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.StateDot, { state: runDot(run.status) }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: runDot(run.status) }),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-run-title", children: run.title }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tag, { tone: "quiet", children: run.trigger === void 0 ? t(`runs.source.${run.source}`) : `${t("runs.trigger")}: ${run.trigger}` }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: run.trigger === void 0 ? t(`runs.source.${run.source}`) : `${t("runs.trigger")}: ${run.trigger}` }),
             /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-run-status", children: t(`runs.status.${run.status}`) }),
-            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives9.Tooltip, { label: started, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-time", children: relative }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(import_dsh_client_ui_primitives10.Tooltip, { label: started, children: /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-time", children: relative }) }),
             duration === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("span", { className: "dsh-wf-time", "data-duration": duration, children: duration })
           ]
         }
@@ -13574,7 +13760,7 @@ window.__ModuleLoader__.load({
       }
       const now2 = props.now ?? Date.now();
       return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
-        import_dsh_client_ui_primitives9.AnimatedRows,
+        import_dsh_client_ui_primitives10.AnimatedRows,
         {
           className: "dsh-wf-rows",
           role: "list",
@@ -13737,10 +13923,10 @@ window.__ModuleLoader__.load({
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ol", { className: "dsh-wf-events", "data-section": "workflow-history", children: rows.map(({ event, evaluations }, index2) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("li", { "data-kind": event.kind, children: [
         /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-event-head", children: [
           /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-time", children: formatTime(event.at, t) }),
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: event.kind }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: event.kind }),
           /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-subject", children: event.subject }),
           /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", children: event.summary }),
-          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "warning", children: t("events.truncated") }) : null
+          event.truncated ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "warning", children: t("events.truncated") }) : null
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "dsh-wf-evaluations", "aria-label": t("events.evaluations"), children: evaluations.map((evaluation) => {
           const runId = evaluation.runId === void 0 ? void 0 : projectedRunId(evaluation.runId);
@@ -13756,7 +13942,7 @@ window.__ModuleLoader__.load({
                 evaluation.filter === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: evaluation.filter }),
                 evaluation.detail === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: evaluation.detail }),
                 runId === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
-                  import_dsh_client_ui_primitives10.Button,
+                  import_dsh_client_ui_primitives11.Button,
                   {
                     type: "button",
                     variant: "ghost",
@@ -13777,7 +13963,7 @@ window.__ModuleLoader__.load({
       const { bucket, latest, now: now2, t } = props;
       const definition = bucket.definition;
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("li", { className: "dsh-wf-row", "data-row-key": definition.id, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
-        import_dsh_client_ui_primitives10.Button,
+        import_dsh_client_ui_primitives11.Button,
         {
           type: "button",
           variant: "toolbar",
@@ -13788,9 +13974,9 @@ window.__ModuleLoader__.load({
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-card-head", children: [
               /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-run-title", children: definition.name }),
-              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
-              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
-              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
+              definition.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `v${String(definition.version)}` }),
+              definition.risk === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `${t("definitions.risk")}: ${definition.risk}` }),
+              definition.source === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", "data-source": definition.source, children: `${t("definitions.source")}: ${definition.plugin === void 0 ? definition.source : `${definition.source}:${definition.plugin}`}` })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-card-meta", children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", children: triggerText(definition.trigger, t) }) }),
             /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-card-stats", children: [
@@ -13805,10 +13991,10 @@ window.__ModuleLoader__.load({
               ) }),
               /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-summary", "data-workflow-stats": definition.id, children: runStatsLabel(bucket.stats, t) })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.StateDot, { state: runDot(latest.status) }),
+            /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-card-foot", children: latest === void 0 ? bucket.stats === void 0 || bucket.stats.total === 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("span", { className: "dsh-wf-muted", children: t("overview.noRuns") }) : null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tooltip, { label: `${latest.title} \xB7 ${new Date(latest.startedAt).toLocaleString()}`, children: /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("span", { className: "dsh-wf-time", "data-latest-run": latest.id, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.StateDot, { state: runDot(latest.status) }),
               " ",
-              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives10.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
+              `${t("overview.latestRun")}: ${relativeLabel((0, import_dsh_client_ui_primitives11.relativeTime)(latest.startedAt, now2), t)} \xB7 ${runStatusLabel(latest, t)}`
             ] }) }) })
           ]
         }
@@ -13834,7 +14020,7 @@ window.__ModuleLoader__.load({
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-group-head", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h3", { className: "dsh-wf-group-title", children: label }),
-                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
+                  group.firings === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `${String(group.firings.matched)} / ${String(group.firings.total)} ${t("overview.firings")}` })
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("ul", { className: "dsh-wf-rows", "aria-label": label, children: group.workflows.map((bucket) => {
                   const latest = props.latestRuns === void 0 ? latestRunFor(props.runs, bucket.definition.id) : Object.hasOwn(props.latestRuns, bucket.definition.id) ? props.latestRuns[bucket.definition.id] : void 0;
@@ -13897,9 +14083,9 @@ window.__ModuleLoader__.load({
       const canvas = document2 === void 0 ? void 0 : workflowCanvasModel(document2, pageRuns, overlayRunId);
       return /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("section", { className: "dsh-wf-detail", "data-workflow-page": definitionId, children: [
         /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("workflow.back") }),
           /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("h2", { className: "dsh-wf-detail-title", children: document2?.name ?? definitionId }),
-          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives10.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
+          document2?.version === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(import_dsh_client_ui_primitives11.Tag, { tone: "quiet", children: `v${String(document2.version)}` })
         ] }),
         props.phase === "loading" ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(LoadingLine, { t }) : props.phase === "error" || document2 === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(ErrorLine, { message: props.message ?? "", t, onRetry: props.onRetry }) : /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(import_jsx_runtime13.Fragment, { children: [
           /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { className: "dsh-wf-description", "data-section": "workflow-description", children: document2.description === void 0 || document2.description.trim() === "" ? t("workflow.noDescription") : document2.description }),
@@ -14039,7 +14225,7 @@ window.__ModuleLoader__.load({
     }
 
     // packages/plugin-workflows/src/client/run-detail.tsx
-    var import_dsh_client_ui_primitives11 = require("@deepseek-ai/dsh-client-ui-primitives");
+    var import_dsh_client_ui_primitives12 = require("@deepseek-ai/dsh-client-ui-primitives");
     var import_jsx_runtime14 = require("react/jsx-runtime");
     function evidenceCell(step, session) {
       const ref = step.evidenceRef;
@@ -14047,7 +14233,7 @@ window.__ModuleLoader__.load({
         const raw = ref.ref;
         const name = ref.kind;
         if (raw === void 0) return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { "data-evidence-kind": name, children: name });
-        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { children: raw });
+        const label = raw.includes("/") ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.PathLabel, { path: raw }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("span", { children: raw });
         if (session !== void 0 && isRecordEvidence(raw)) {
           return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(
             "a",
@@ -14072,7 +14258,7 @@ window.__ModuleLoader__.load({
       }
       if (step.evidence === void 0) return "\u2014";
       if (session === void 0 || !isRecordEvidence(step.evidence)) return step.evidence;
-      return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.PathLabel, { path: step.evidence }) });
+      return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("a", { href: evidenceUrl(session, step.evidence), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.PathLabel, { path: step.evidence }) });
     }
     function Fact2(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
@@ -14086,10 +14272,10 @@ window.__ModuleLoader__.load({
       const duration = durationText(run.startedAt, run.endedAt);
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-detail", "data-run-detail": run.id, children: [
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "dsh-wf-detail-bar", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
+          /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: t("runs.back") }),
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("h2", { className: "dsh-wf-detail-title", children: run.title }),
           /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
-            import_dsh_client_ui_primitives11.Tag,
+            import_dsh_client_ui_primitives12.Tag,
             {
               tone: run.status === "failed" ? "danger" : run.status === "done" ? "success" : "neutral",
               children: t(`runs.status.${run.status}`)
@@ -14111,7 +14297,7 @@ window.__ModuleLoader__.load({
         ] }),
         run.record === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("p", { className: "dsh-wf-muted", children: [
           `${t("runs.record")}: `,
-          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.PathLabel, { path: run.record }) })
+          session === void 0 ? run.record : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("a", { href: evidenceUrl(session, run.record), target: "_blank", rel: "noreferrer", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.PathLabel, { path: run.record }) })
         ] }),
         run.error === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-error", role: "alert", children: run.error }),
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-section", "data-section": "steps", children: [
@@ -14151,7 +14337,7 @@ window.__ModuleLoader__.load({
     }
     function MissingRunPage(props) {
       return /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("section", { className: "dsh-wf-detail", "data-state": "missing", role: "status", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
         /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-empty-title", children: props.t("runs.missing") }),
         /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "dsh-wf-muted", children: props.t("runs.missingBody") })
       ] });
@@ -14163,7 +14349,7 @@ window.__ModuleLoader__.load({
           className: "dsh-wf-detail",
           "data-state": props.message === void 0 ? "loading" : "error",
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives11.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("div", { className: "dsh-wf-detail-bar", children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(import_dsh_client_ui_primitives12.Button, { type: "button", variant: "ghost", size: "sm", onClick: props.onBack, children: props.t("runs.back") }) }),
             props.message === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(LoadingLine, { t: props.t }) : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(ErrorLine, { message: props.message, t: props.t, onRetry: props.onRetry ?? (() => {
             }) })
           ]
@@ -14477,7 +14663,7 @@ window.__ModuleLoader__.load({
             props.refreshError === void 0 ? null : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(ErrorLine, { message: props.refreshError, t, onRetry: props.onRetryRefresh ?? empty2 }),
             detail ? /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("div", { className: "dsh-wf-scroll", ref: props.scrollRef, children: body }) : /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
               /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
-                import_dsh_client_ui_primitives12.SegmentedControl,
+                import_dsh_client_ui_primitives13.SegmentedControl,
                 {
                   id: "dsh-wf-segments",
                   value: segment,
