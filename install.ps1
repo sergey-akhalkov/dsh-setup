@@ -384,6 +384,19 @@ function Invoke-DshPlugin([string[]]$Arguments) {
   if ($code -ne 0) { throw "dsh plugin --profile $Profile $($Arguments -join ' ') failed with exit code $code" }
 }
 
+function Test-ShippedBundleAvailable([string]$Name, [string]$Version) {
+  # The profile resolves a shipped bundle from the installed DSH runtime, not
+  # from the registry, so a DSH release inside the supported range can drop one.
+  # Ask the registry for the bundle at the CLI's own version: only a package that
+  # version publishes can be selected (a 404 means the release no longer ships it).
+  $spec = "$Name@$Version"
+  $output = (& npm view $spec version 2>&1 | Out-String)
+  $code = $LASTEXITCODE
+  if ($code -eq 0) { return $true }
+  if ($output -match 'E404|404 Not Found') { return $false }
+  throw "could not check the shipped bundle ${spec}: $($output.Trim())"
+}
+
 function Get-LatestReleaseTag {
   # The index is the preferred pin, but the release tags are the fallback when
   # Pages has no published index yet.
@@ -2015,14 +2028,36 @@ try {
 
   $manifest = Read-JsonFile $profileManifestPath
   $bundles = @(Get-ProfileBundles $manifest)
-  $missing = @($ShippedBundles | Where-Object { $bundles -notcontains $_ })
-  if ($missing.Count -gt 0) {
-    foreach ($name in $missing) { $bundles += $name }
+  $skippedShipped = @()
+  $availableShipped = @()
+  $added = @()
+  $removed = @()
+  foreach ($name in $ShippedBundles) {
+    # The profile template can select a shipped bundle this DSH version no
+    # longer ships. Probing each shipped bundle keeps the selection honest: a
+    # dropped one is pruned (the CLI would ignore it anyway) and a missing
+    # available one is appended, so a second installer run changes nothing.
+    if (-not (Test-ShippedBundleAvailable $name $dshVersion)) {
+      $skippedShipped += $name
+      if ($bundles -contains $name) { $removed += $name }
+      continue
+    }
+    $availableShipped += $name
+    if ($bundles -notcontains $name) { $added += $name }
+  }
+  if ($removed.Count -gt 0) {
+    $bundles = @($bundles | Where-Object { $removed -notcontains $_ })
+  }
+  foreach ($name in $added) { $bundles += $name }
+  if ($added.Count -gt 0 -or $removed.Count -gt 0) {
     $manifest = Set-ProfileBundles $manifest $bundles
     Save-JsonFile $profileManifestPath $manifest
-    Write-Ok "enabled $($missing.Count) shipped bundle(s)"
+    Write-Ok "shipped bundles: added $($added.Count), removed $($removed.Count)"
   } else {
     Write-Ok "shipped bundles already enabled"
+  }
+  foreach ($name in $skippedShipped) {
+    Write-Warn "this DSH version does not provide $name; skipping it"
   }
 
   Write-Step "Installing the setup bundle"
@@ -2040,6 +2075,28 @@ try {
     $manifest = Set-ProfileBundles $manifest $reordered
     Save-JsonFile $profileManifestPath $manifest
     Write-Ok 'selected the setup bundle last so its defaults win'
+  }
+
+  # The setup install can recompose the profile (dropping a not-yet-installed
+  # selection). Re-assert the intended selection afterwards without reordering
+  # the owner's own bundles: keep the current order, drop an unavailable shipped
+  # bundle, append a missing available one, and keep the setup last.
+  $manifest = Read-JsonFile $profileManifestPath
+  $bundles = @(Get-ProfileBundles $manifest)
+  $desired = @()
+  foreach ($name in $bundles) {
+    if ($name -eq $SetupPackage) { continue }
+    if ($ShippedBundles -contains $name -and $skippedShipped -contains $name) { continue }
+    $desired += $name
+  }
+  foreach ($name in $availableShipped) {
+    if ($desired -notcontains $name) { $desired += $name }
+  }
+  $desired += $SetupPackage
+  if ((@($bundles) -join '|') -ne (@($desired) -join '|')) {
+    $manifest = Set-ProfileBundles $manifest $desired
+    Save-JsonFile $profileManifestPath $manifest
+    Write-Ok 'reasserted the shipped bundle selection'
   }
 
   if ($NoDesktopShortcut) {
@@ -2074,6 +2131,9 @@ try {
     $problems += "the setup bundle is not last in dsh.profile.bundles, so its defaults could lose precedence"
   }
   foreach ($name in @($ShippedBundles + $RegistryBundles)) {
+    # A bundle this DSH version does not provide was skipped above; it must not
+    # be reported as missing from the selection.
+    if ($skippedShipped -contains $name) { continue }
     if ($bundles -notcontains $name) { $problems += "bundle $name is not selected" }
   }
   $installedVersion = Get-InstalledSetupVersion $profileDirectory

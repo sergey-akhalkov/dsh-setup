@@ -314,7 +314,11 @@ Update all of these together:
 
 The CI matrix follows `dsh.json` -> `enginesDsh` at run time: `scripts/ci-versions.ts` resolves the
 range floor, the runtime, and the newest published DSH version satisfying the range. A DSH update
-inside the range needs no workflow, `dsh.json`, or `install.ps1` edit. The **installer gate is the
+inside the range needs no workflow edit. A release that drops a shipped optional bundle inside the
+range needs no `dsh.json`/`install.ps1` list edit either: the installer keeps the union and warns when
+the installed DSH no longer provides one, while `pnpm validate:installer` queries the registry for
+each shipped bundle at `DSH_VERSION` (a 404 means "not shipped"; any other lookup failure stops the
+check). Adding a new shipped bundle still updates both lists. The **installer gate is the
 `enginesDsh` range**, not an exact-version list.
 
 ## Release

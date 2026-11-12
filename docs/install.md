@@ -65,7 +65,9 @@ The script:
 2. Closes DeepSeek Harness (profile writes need the app fully quit) and saves copies of the profile
    manifest, patch, and composed root under `$DSH_HOME/.dsh-setup-backups/` before anything changes.
 3. Enables the shipped bundles the setup expects by appending their names to `dsh.profile.bundles` —
-   exactly the operation behind the **Plugins** toggles. The profile patch is not touched.
+   exactly the operation behind the **Plugins** toggles. A shipped bundle the installed DSH version no
+   longer provides is dropped by the CLI's compose step; the installer warns and continues without it.
+   The profile patch is not touched.
 4. Installs the setup bundle from the pinned release commit.
 5. Creates the administrator desktop shortcut unless `-NoDesktopShortcut` is set; a missing Desktop
    app is a warning rather than a failed install.

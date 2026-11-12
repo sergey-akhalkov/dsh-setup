@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import { availableBundles, probeNpmBundle } from './lib/install-bundles.ts'
 import { readDshVersions, readJson, rootDir, setupDir } from './lib/workspace.ts'
 
 /**
@@ -150,6 +151,18 @@ function main(): number {
   const pwsh = process.env.PWSH ?? 'pwsh'
   const versions = readDshVersions()
   const dshVersion = process.env.DSH_VERSION ?? versions.runtime
+  // A DSH release inside the supported range can drop a shipped optional
+  // bundle; expect only what this DSH version actually provides.
+  const shippedBundles = availableBundles(
+    versions.installBundles.shipped,
+    dshVersion,
+    probeNpmBundle,
+  )
+  if (shippedBundles.length !== versions.installBundles.shipped.length) {
+    console.log(
+      `validate-installer: DSH ${dshVersion} ships ${String(shippedBundles.length)} of ${String(versions.installBundles.shipped.length)} selected bundle(s)`,
+    )
+  }
   const tmpRoot = join(rootDir, '.tmp')
   mkdirSync(tmpRoot, { recursive: true })
   const home = mkdtempSync(join(tmpRoot, 'installer-home-'))
@@ -778,7 +791,7 @@ function main(): number {
       }
     }
 
-    stageManifestChecks(manifestPath, versions, failures)
+    stageManifestChecks(manifestPath, versions, shippedBundles, failures)
     step('the installer leaves the profile patch untouched', () => {
       if (hashFile(patchPath) !== patchBefore) throw new Error('cordis.patch.yml changed')
     })
@@ -789,7 +802,7 @@ function main(): number {
       const composed = shell(cliBase, ['--profile', 'ci', '--dump-config'], env, 600_000)
       if (composed.status !== 0) throw fail(composed)
       const markers = [
-        ...versions.installBundles.shipped,
+        ...shippedBundles,
         ...versions.installBundles.registry,
         'dsh-setup-ponytail',
         'reasoningEffort: high',
@@ -807,6 +820,8 @@ function main(): number {
       if (second.status !== 0) throw fail(second)
       const bundlesAfter = readBundles(manifestPath)
       if (JSON.stringify(bundlesAfter) !== JSON.stringify(bundlesBefore)) {
+        console.error(`  before: ${JSON.stringify(bundlesBefore)}`)
+        console.error(`  after:  ${JSON.stringify(bundlesAfter)}`)
         throw new Error('the bundle selection changed on the second run')
       }
       if (hashFile(patchPath) !== patchBefore) throw new Error('cordis.patch.yml changed')
@@ -1102,6 +1117,7 @@ function readBundles(path: string): string[] {
 function stageManifestChecks(
   manifestPath: string,
   versions: ReturnType<typeof readDshVersions>,
+  shippedBundles: readonly string[],
   problems: string[],
 ): void {
   const check = (name: string, body: () => void): void => {
@@ -1116,11 +1132,7 @@ function stageManifestChecks(
   check('the profile selects every documented bundle and the setup bundle last', () => {
     const manifest = readJson<ProfileManifest>(manifestPath)
     const bundles = manifest.dsh?.profile?.bundles ?? []
-    const expected = [
-      ...versions.installBundles.shipped,
-      ...versions.installBundles.registry,
-      '@dsh-setup/setup',
-    ]
+    const expected = [...shippedBundles, ...versions.installBundles.registry, '@dsh-setup/setup']
     for (const name of expected) {
       if (!bundles.includes(name)) throw new Error(`"${name}" is not selected`)
     }
