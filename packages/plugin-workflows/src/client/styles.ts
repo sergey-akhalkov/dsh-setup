@@ -64,8 +64,8 @@ export const FLOW_CSS = `
 .dsh-wf-empty-title { margin: 0; font: var(--dsw-font-xs-13); color: var(--dsw-alias-label-secondary); }
 
 /* Inspector. */
-.dsh-wf-inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); overflow: hidden; }
-.dsh-wf-workbench[data-layout="drawer"] .dsh-wf-inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: min(320px, 88%); }
+.dsh-wf-inspector { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.dsh-wf-workbench[data-layout="drawer"] .dsh-wf-inspector { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: min(320px, 88%); background: var(--dsw-alias-bg-overlay); border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
 .dsh-wf-inspector[data-open="false"] { display: none; }
 .dsh-wf-inspector-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xxxs-strong-11); letter-spacing: 0.04em; text-transform: uppercase; }
 .dsh-wf-inspector .dsh-wf-properties { border: none; border-radius: 0; flex: 1; min-height: 0; padding: 12px 14px; }
@@ -88,7 +88,7 @@ export const FLOW_CSS = `
 .dsh-wf-card-hint { color: var(--dsw-alias-label-caption); font: var(--dsw-font-xxs-12); }
 .dsh-wf-card-body { display: flex; flex-direction: column; gap: 8px; }
 .dsh-wf-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); line-height: 1.4; }
-.dsh-wf-field input, .dsh-wf-field select, .dsh-wf-field textarea { box-sizing: border-box; width: 100%; min-height: 32px; padding: 6px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font-size: 13px; }
+.dsh-wf-field input, .dsh-wf-field select, .dsh-wf-field textarea { box-sizing: border-box; width: 100%; min-height: 32px; padding: 6px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); color: inherit; font-size: 13px; }
 .dsh-wf-field textarea { min-height: 64px; }
 .dsh-wf-field input:focus-visible, .dsh-wf-field select:focus-visible, .dsh-wf-field textarea:focus-visible { border-color: var(--dsw-alias-state-business-primary); }
 .dsh-wf-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
