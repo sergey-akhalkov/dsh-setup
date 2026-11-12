@@ -863,7 +863,7 @@ An authoritative run file SHALL carry a host HMAC signature over its persisted s
 
 ### Requirement: Visual canvas
 
-The plugin SHALL provide a Design page in the right sidebar, opened from the guide card, as a workbench with a left rail, a center node canvas, and an inspector. The left rail SHALL list the installed workflows and the building blocks (trigger kinds and step executors). The page SHALL open on the canvas of the selected workflow or, when none is selected, the first installed workflow, and SHALL show a blank canvas with the rail and a start affordance when none is installed. In a panel narrower than the shipped narrow-width threshold the page SHALL open in list mode, and the canvas SHALL remain reachable there. The canvas SHALL support pan, zoom, selection, and keyboard focus, and MUST NOT be the only way to inspect or edit a definition.
+The plugin SHALL provide a Design page in the right sidebar, opened from the guide card, as a workbench with a left rail, a center node canvas, and an inspector. The left rail SHALL list the installed workflows and the building blocks (trigger kinds and step executors). The page SHALL open on the canvas of the selected workflow or, when none is selected, the first installed workflow, and SHALL show a blank canvas with the rail and a start affordance when none is installed. In a panel narrower than the shipped narrow-width threshold the page SHALL open in list mode, and the canvas SHALL remain reachable there. The canvas SHALL support pan, zoom, selection, and keyboard focus, and MUST NOT be the only way to inspect or edit a definition. At a pane width of at least 980 px the inspector SHALL render beside the canvas; between the narrow threshold and that width the inspector SHALL open as an overlay drawer. A step block SHALL be addable by choosing it or by dropping it on the canvas, and a dropped step SHALL keep the drop position.
 
 #### Scenario: Canvas renders a definition
 
@@ -885,6 +885,11 @@ The plugin SHALL provide a Design page in the right sidebar, opened from the gui
 - **WHEN** the user chooses a step type from the building blocks
 - **THEN** a new unconnected node appears and can be connected
 
+#### Scenario: Dropped block keeps its position
+
+- **WHEN** the user drops a step block on the canvas
+- **THEN** a new unconnected node appears at the drop position and can be connected
+
 #### Scenario: Trigger block sets the trigger
 
 - **WHEN** the user chooses a trigger kind from the building blocks
@@ -904,6 +909,16 @@ The plugin SHALL provide a Design page in the right sidebar, opened from the gui
 
 - **WHEN** the design page opens in a panel narrower than the shipped narrow-width threshold
 - **THEN** the list surface renders first, and the canvas remains one control away
+
+#### Scenario: Inspector follows the selection
+
+- **WHEN** the user selects a node in the canvas at a pane width of at least 980 px
+- **THEN** the node's fields render in the inspector beside the canvas without the page scrolling
+
+#### Scenario: Inspector becomes a drawer
+
+- **WHEN** the user selects a node in a pane between the narrow threshold and 980 px
+- **THEN** the inspector opens as an overlay drawer and closes without changing the selected workflow
 
 ### Requirement: Definition editing
 

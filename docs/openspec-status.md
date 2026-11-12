@@ -796,5 +796,7 @@ holding new, template, draft, reload, the list/canvas switch, and delete, which 
 in-page banner. The page keeps the editor state machine, the revision/approval save path, the layout
 sidecar, the diagnostics disclosure, the list fallback, and the accessibility contract; the client
 artifact grew to 647,594 esbuild bytes (708,752 shipped, 338,098 minified, 98,468 gzip), recorded in
-`test/canvas-budget.test.ts`. Open owner follow-up: install the build and check the workbench at wide
-and narrow sidebar widths, the same live visual check (4.5) the previous change left open.
+`test/canvas-budget.test.ts`. All 17 tasks passed their five section task-reviews (portable PASS
+records), the whole-spec review passed, and the change archived 17/17 with its delta spec synced
+into `workflows`. Open owner follow-up: install the build and check the workbench at wide and narrow
+sidebar widths, the same live visual check (4.5) the previous change left open.
