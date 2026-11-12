@@ -573,11 +573,14 @@ violations, and an orphan badge; the recorded definition name/version, evidence,
 violations stay readable after the definition changes or is deleted). The page opens the selected or
 first installed workflow, and shows a blank start surface with the rail when none is installed. A
 step brick adds a step on click or drops it at the canvas position; a trigger brick sets the trigger
-kind as a single choice. The inspector follows the selection: the third column at a pane width of at
-least 980 px, an overlay drawer between the 720 px threshold and that width, and inline under the list
+kind as a single choice. The rail and the inspector are resizable by dragging (or with the arrow keys)
+their splitters, with the widths remembered in browser storage and a double-click reset; the canvas
+keeps at least 360 px. The inspector follows the selection: the third column at a pane width of
+at least 980 px, an overlay drawer between the 720 px threshold and that width, and inline under the list
 below it. It edits the workflow-level name, description and settings plus the selected node's fields
 in identity, behavior, evidence, connections and danger groups. The header has one primary `Save`, the
-definition name with trigger and source tags, the dirty state and version, the run-overlay selector,
+definition name with trigger and source tags, the dirty state and version, the run overlay as a popup
+menu (the latest runs with status and version, or an explicit no-run entry),
 and an overflow menu holding `New definition`, templates, drafts, reload, the list/canvas switch, and
 delete (confirmed in an in-page banner). The trigger catalog and receipts are behind a
 closed-by-default `Diagnostics` disclosure, not on the default surface. The tab type is kept mounted,

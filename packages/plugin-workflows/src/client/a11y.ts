@@ -26,6 +26,53 @@ export function inspectorPlacement(width: number): InspectorPlacement {
   return width >= WIDE_WIDTH ? 'column' : 'drawer'
 }
 
+/** Pane sizing bounds for the workbench splitters. */
+export const RAIL_WIDTH = { min: 220, default: 280, max: 460 } as const
+export const INSPECTOR_WIDTH = { min: 300, default: 360, max: 560 } as const
+
+export interface PaneWidths {
+  readonly rail: number
+  readonly inspector: number
+}
+
+/** The localStorage key the workbench pane widths are remembered under. */
+export const PANE_STORAGE_KEY = 'dsh-workflows.panes'
+
+export function clampPaneWidth(
+  value: number,
+  bounds: { readonly min: number; readonly max: number },
+): number {
+  if (!Number.isFinite(value)) return bounds.min
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(value)))
+}
+
+/**
+ * Parse remembered pane widths. A missing, malformed, or out-of-range value
+ * falls back to the default rather than breaking the page.
+ */
+export function parsePaneWidths(raw: string | null): PaneWidths {
+  const defaults: PaneWidths = {
+    rail: RAIL_WIDTH.default,
+    inspector: INSPECTOR_WIDTH.default,
+  }
+  if (raw === null || raw === '') return defaults
+  try {
+    const parsed = JSON.parse(raw) as { rail?: unknown; inspector?: unknown }
+    return {
+      rail: clampPaneWidth(
+        typeof parsed.rail === 'number' ? parsed.rail : defaults.rail,
+        RAIL_WIDTH,
+      ),
+      inspector: clampPaneWidth(
+        typeof parsed.inspector === 'number' ? parsed.inspector : defaults.inspector,
+        INSPECTOR_WIDTH,
+      ),
+    }
+  } catch {
+    return defaults
+  }
+}
+
 /** The tab order the view exposes: palette, canvas, then the property panel. */
 export const TAB_ORDER = ['palette', 'canvas', 'properties'] as const
 

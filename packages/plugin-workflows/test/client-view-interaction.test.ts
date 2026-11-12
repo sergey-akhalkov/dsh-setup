@@ -32,6 +32,8 @@ const iconStubs = Object.fromEntries(
     'IconEllipsisOutlineRegular',
     'IconCloseOutlineRegular',
     'IconSlidersTwoOutlineRegular',
+    'IconChevronDownOutlineRegular',
+    'IconCheckCircleOutlineRegular',
     'IconTrashOutlineRegular',
     'IconListPenOutlineRegular',
   ].map((name) => [
@@ -292,6 +294,16 @@ function findElement(node: unknown, predicate: (element: Element) => boolean): E
     if (found !== undefined) return found
   }
   return undefined
+}
+
+/** The header's lifecycle menu; the run-overlay menu is another `Menu` before it. */
+function lifecycleMenu(tree: unknown): Element | undefined {
+  return findElement(
+    tree,
+    (element) =>
+      Array.isArray(element.props.items) &&
+      (element.props.items as { id?: string }[]).some((item) => item.id === 'new'),
+  )
 }
 
 const NOW = 1_762_500_300_000
@@ -1160,9 +1172,33 @@ describe('Workflows session view interaction', () => {
         element.props.children === 'design.save',
     )
     expect(save).toBeDefined()
-    const menu = findElement(tree, (element) => Array.isArray(element.props.items))
+    const menu = lifecycleMenu(tree)
     const itemIds = ((menu?.props.items as { id: string }[]) ?? []).map((item) => item.id)
     expect(itemIds).toEqual(expect.arrayContaining(['new', 'reload', 'surface', 'delete']))
+    // The run overlay is a native-style popup menu, not a browser select.
+    const runMenu = findElement(
+      tree,
+      (element) =>
+        Array.isArray(element.props.items) &&
+        (element.props.items as { id?: string }[]).some((item) => item.id === ''),
+    )
+    expect(runMenu).toBeDefined()
+    // Both side panes expose a keyboard-resizable splitter.
+    const railSplitter = findElement(tree, (element) => element.props['data-splitter'] === 'rail')
+    expect(railSplitter?.props['aria-valuenow']).toBe(280)
+    expect(
+      findElement(tree, (element) => element.props['data-splitter'] === 'inspector')?.props[
+        'aria-valuenow'
+      ],
+    ).toBe(360)
+    const resizeRail = railSplitter?.props.onKeyDown as ((event: unknown) => void) | undefined
+    resizeRail?.({ key: 'ArrowRight', shiftKey: false, preventDefault: () => {} })
+    tree = await runtime.settle(render)
+    expect(
+      findElement(tree, (element) => element.props['data-splitter'] === 'rail')?.props[
+        'aria-valuenow'
+      ],
+    ).toBe(296)
     // Selecting a canvas node fills the inspector beside the canvas.
     const canvasElement = findElement(
       tree,
@@ -1275,7 +1311,7 @@ describe('Workflows session view interaction', () => {
         | undefined
       dropBrick?.('branch', { x: 1, y: 2 })
       tree = await runtime.settle(render)
-      const menu = findElement(tree, (element) => Array.isArray(element.props.items))
+      const menu = lifecycleMenu(tree)
       const select = menu?.props.onSelect as ((id: string) => void) | undefined
       select?.('draft:draft-a')
       tree = await runtime.settle(render)
@@ -1348,12 +1384,12 @@ describe('Workflows session view interaction', () => {
     const render = (): unknown =>
       mode({ sessionId: 'session-1', t: (key: string) => key, surfaceWidth: 1024 })
     let tree = await runtime.settle(render)
-    const menu = findElement(tree, (element) => Array.isArray(element.props.items))
+    const menu = lifecycleMenu(tree)
     const selectReload = menu?.props.onSelect as ((id: string) => void) | undefined
     selectReload?.('reload')
     tree = await runtime.settle(render)
     // The lifecycle menu refuses every action while the reload is pending.
-    const busyMenu = findElement(tree, (element) => Array.isArray(element.props.items))
+    const busyMenu = lifecycleMenu(tree)
     const busyItems = busyMenu?.props.items as { disabled?: boolean }[] | undefined
     expect(busyItems?.every((item) => item.disabled === true)).toBe(true)
     // An edit lands while the request is in flight; the old response must not win.

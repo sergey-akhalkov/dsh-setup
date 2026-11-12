@@ -26,6 +26,8 @@ const iconStubs = Object.fromEntries(
     'IconEllipsisOutlineRegular',
     'IconCloseOutlineRegular',
     'IconSlidersTwoOutlineRegular',
+    'IconChevronDownOutlineRegular',
+    'IconCheckCircleOutlineRegular',
     'IconTrashOutlineRegular',
     'IconListPenOutlineRegular',
   ].map((name) => [

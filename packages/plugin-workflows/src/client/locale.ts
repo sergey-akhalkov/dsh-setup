@@ -162,6 +162,8 @@ export const EN: Record<string, string> = {
   'design.diagnostics': 'Diagnostics',
   'design.inspector': 'Inspector',
   'design.closeInspector': 'Close inspector',
+  'design.resizeRail': 'Resize workflow rail',
+  'design.resizeInspector': 'Resize inspector',
   'design.details': 'Details',
   'design.listView': 'List view',
   'design.canvasView': 'Canvas view',

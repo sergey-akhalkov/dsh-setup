@@ -145,6 +145,8 @@ export const ICON_STUBS: Record<string, unknown> = Object.fromEntries(
     'IconEllipsisOutlineRegular',
     'IconCloseOutlineRegular',
     'IconSlidersTwoOutlineRegular',
+    'IconChevronDownOutlineRegular',
+    'IconCheckCircleOutlineRegular',
     'IconTrashOutlineRegular',
     'IconListPenOutlineRegular',
   ].map((name) => [name, (props: Record<string, unknown>) => jsx('icon', { name, ...props })]),

@@ -130,6 +130,7 @@ function loadModule(): Record<string, unknown> {
             'IconUserOutlineRegular',
             'IconBranchOutlineRegular',
             'IconRefreshOutlineRegular',
+            'IconCheckCircleOutlineRegular',
           ].map((name) => [
             name,
             (props: Record<string, unknown>) => jsx('icon', { name, ...props }),

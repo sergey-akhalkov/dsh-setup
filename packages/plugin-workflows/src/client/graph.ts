@@ -477,7 +477,7 @@ export function autoPositions(
       while (occupied.has(row)) row += 1
       occupied.add(row)
       rows.set(id, row)
-      positions[id] = { x: column * 240, y: row * 120 }
+      positions[id] = { x: column * 320, y: row * 150 }
     }
     for (const id of constrained) {
       place(id, wantedRow(id) ?? 0)

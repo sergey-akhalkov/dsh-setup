@@ -1,4 +1,4 @@
-import { Button, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconPlusOutlineRegular, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ReactNode } from 'react'
 import { paletteLabel } from './a11y.ts'
 import { BRICK_MIME, type Brick, brickPayload, STEP_BRICKS, TRIGGER_BRICKS } from './bricks.ts'
@@ -130,7 +130,7 @@ export function WorkflowRail(props: WorkflowRailProps): ReactNode {
               size="sm"
               aria-label={t('design.new')}
               title={t('design.new')}
-              icon={<span aria-hidden="true">+</span>}
+              icon={<IconPlusOutlineRegular />}
               disabled={props.disabled === true}
               onClick={() => props.onNew?.()}
             />
@@ -156,7 +156,11 @@ export function WorkflowRail(props: WorkflowRailProps): ReactNode {
                     onClick={() => props.onOpen(entry.id)}
                   >
                     <span className="dsh-wf-lib-title">{entry.name}</span>
-                    <span className="dsh-wf-lib-desc" data-description={entry.id}>
+                    <span
+                      className="dsh-wf-lib-desc"
+                      data-description={entry.id}
+                      title={entry.description ?? t('design.noDescription')}
+                    >
                       {entry.description ?? t('design.noDescription')}
                     </span>
                     <span className="dsh-wf-lib-meta">

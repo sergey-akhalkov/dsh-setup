@@ -1,18 +1,30 @@
 import {
   Button,
+  IconChevronDownOutlineRegular,
   IconEllipsisOutlineRegular,
   IconSlidersTwoOutlineRegular,
   Menu,
   type MenuItem,
   Tag,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ReactNode } from 'react'
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
+  PointerEvent as ReactPointerEvent,
+} from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  clampPaneWidth,
   defaultMode,
   fallbackNotice,
+  INSPECTOR_WIDTH,
   inspectorPlacement,
   isConnectShortcut,
+  PANE_STORAGE_KEY,
+  type PaneWidths,
+  parsePaneWidths,
+  RAIL_WIDTH,
   resolveSurface,
   summaryText,
 } from './a11y.ts'
@@ -128,6 +140,18 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [runMenuOpen, setRunMenuOpen] = useState(false)
+  const [paneWidths, setPaneWidths] = useState<PaneWidths>(() => {
+    try {
+      return parsePaneWidths(
+        typeof window === 'undefined' ? null : window.localStorage.getItem(PANE_STORAGE_KEY),
+      )
+    } catch {
+      return { rail: RAIL_WIDTH.default, inspector: INSPECTOR_WIDTH.default }
+    }
+  })
+  const paneWidthsRef = useRef(paneWidths)
+  paneWidthsRef.current = paneWidths
 
   const dirty = editor?.dirty === true
   useEffect(() => {
@@ -185,6 +209,71 @@ export function DesignMode(props: DesignModeProps): ReactNode {
     element.addEventListener('keydown', onKeyDown)
     return () => element.removeEventListener('keydown', onKeyDown)
   }, [selected])
+
+  /** Remembered pane widths; a blocked storage keeps the in-memory value. */
+  const persistPaneWidths = (): void => {
+    try {
+      window.localStorage.setItem(PANE_STORAGE_KEY, JSON.stringify(paneWidthsRef.current))
+    } catch {
+      // Remembering the widths is optional; the page still resizes in memory.
+    }
+  }
+
+  /** A splitter keeps at least 360 px for the canvas column. */
+  const paneBounds = (
+    side: 'rail' | 'inspector',
+  ): { readonly min: number; readonly max: number } => {
+    const bounds = side === 'rail' ? RAIL_WIDTH : INSPECTOR_WIDTH
+    const total = root.current?.clientWidth ?? 0
+    const other = side === 'rail' ? paneWidthsRef.current.inspector : paneWidthsRef.current.rail
+    const available = total <= 0 ? bounds.max : Math.max(bounds.min, total - other - 360 - 40)
+    return { min: bounds.min, max: Math.min(bounds.max, available) }
+  }
+
+  const applyPaneWidth = (side: 'rail' | 'inspector', value: number): void => {
+    const next = { ...paneWidthsRef.current, [side]: clampPaneWidth(value, paneBounds(side)) }
+    paneWidthsRef.current = next
+    setPaneWidths(next)
+  }
+
+  const dragSplitter =
+    (side: 'rail' | 'inspector') =>
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      event.preventDefault()
+      const startX = event.clientX
+      const start = paneWidthsRef.current[side]
+      const move = (moveEvent: PointerEvent): void => {
+        const delta = moveEvent.clientX - startX
+        applyPaneWidth(side, side === 'rail' ? start + delta : start - delta)
+      }
+      const finish = (): void => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', finish)
+        persistPaneWidths()
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', finish, { once: true })
+    }
+
+  const keySplitter =
+    (side: 'rail' | 'inspector') =>
+    (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      event.preventDefault()
+      const step = event.shiftKey ? 48 : 16
+      const direction = event.key === 'ArrowRight' ? 1 : -1
+      const current = paneWidthsRef.current[side]
+      applyPaneWidth(
+        side,
+        side === 'rail' ? current + direction * step : current - direction * step,
+      )
+      persistPaneWidths()
+    }
+
+  const resetSplitter = (side: 'rail' | 'inspector') => (): void => {
+    applyPaneWidth(side, side === 'rail' ? RAIL_WIDTH.default : INSPECTOR_WIDTH.default)
+    persistPaneWidths()
+  }
 
   const runSelection = useMemo(
     () => createRunSelection((definitionId: string) => api.runs(definitionId)),
@@ -415,6 +504,15 @@ export function DesignMode(props: DesignModeProps): ReactNode {
       ? defaultSurface(props.surfaceWidth)
       : resolveSurface(editor.mode, canvasFailed)
   const placement = inspectorPlacement(props.surfaceWidth ?? windowWidth())
+  const workbenchStyle: CSSProperties =
+    surface === 'list'
+      ? {}
+      : {
+          gridTemplateColumns:
+            placement === 'column'
+              ? `${String(paneWidths.rail)}px 4px minmax(0, 1fr) 4px ${String(paneWidths.inspector)}px`
+              : `${String(paneWidths.rail)}px 4px minmax(0, 1fr)`,
+        }
   const inspectorOpen = placement === 'column' || selected !== undefined || detailsOpen
   const selectedNode = editor?.diagram.nodes.find((node) => node.id === selected)
   const choices =
@@ -431,6 +529,25 @@ export function DesignMode(props: DesignModeProps): ReactNode {
   const conflict = editor?.conflict
   const currentTrigger =
     editor === undefined ? undefined : String(editor.document.definition.trigger.kind ?? '')
+
+  const activeRunEntry = runs.find((run) => run.id === runId)
+  const shortRunId = (id: string): string => {
+    const clean = id.replace(/^workflow:/u, '')
+    return clean.length > 22 ? `${clean.slice(0, 12)}…${clean.slice(-6)}` : clean
+  }
+  const runLabel = (): string =>
+    activeRunEntry === undefined
+      ? t('design.noRun')
+      : `${shortRunId(activeRunEntry.id)} · ${activeRunEntry.status}`
+  const runItems = (): MenuItem[] => [
+    { id: '', label: t('design.noRun') },
+    ...runs.map((run) => ({
+      id: run.id,
+      label: `${shortRunId(run.id)} · ${run.status}${
+        run.definition === undefined ? '' : ` · v${String(run.definition.version)}`
+      }`,
+    })),
+  ]
 
   const menuItems = (): MenuItem[] => {
     // Every item replaces or writes the document; a request already in flight
@@ -647,21 +764,37 @@ export function DesignMode(props: DesignModeProps): ReactNode {
         )}
         <div className="dsh-wf-head-actions">
           {editor === undefined ? null : (
-            <select
-              className="dsh-wf-run"
-              aria-label={t('design.run')}
-              value={runId ?? ''}
-              onChange={(event) => setRunId(event.currentTarget.value)}
-              disabled={runs.length === 0}
-            >
-              <option value="">{t('design.noRun')}</option>
-              {runs.map((run) => (
-                <option key={run.id} value={run.id}>
-                  {run.id} · {run.status}
-                  {run.definition === undefined ? '' : ` · v${String(run.definition.version)}`}
-                </option>
-              ))}
-            </select>
+            <Menu
+              open={runMenuOpen}
+              items={runItems()}
+              align="end"
+              selectedId={runId ?? ''}
+              onSelect={(id) => {
+                setRunMenuOpen(false)
+                setRunId(id === '' ? undefined : id)
+              }}
+              onClose={() => setRunMenuOpen(false)}
+              anchor={
+                <Button
+                  type="button"
+                  variant="toolbar"
+                  size="sm"
+                  className="dsh-wf-run"
+                  icon={<IconChevronDownOutlineRegular />}
+                  aria-label={t('design.run')}
+                  aria-haspopup="menu"
+                  title={
+                    runId === undefined
+                      ? t('design.noRun')
+                      : `${runId} · ${String(activeRunEntry?.status ?? '')}`
+                  }
+                  disabled={runs.length === 0}
+                  onClick={() => setRunMenuOpen(true)}
+                >
+                  {runLabel()}
+                </Button>
+              }
+            />
           )}
           {placement === 'drawer' && editor !== undefined ? (
             <Button
@@ -733,7 +866,12 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           </Button>
         </div>
       ) : null}
-      <div className="dsh-wf-workbench" data-mode={surface} data-layout={placement}>
+      <div
+        className="dsh-wf-workbench"
+        data-mode={surface}
+        data-layout={placement}
+        style={workbenchStyle}
+      >
         <WorkflowRail
           definitions={library.definitions}
           {...(editor === undefined ? {} : { currentId: editor.document.definition.id })}
@@ -746,6 +884,24 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           onTrigger={chooseTrigger}
           onExecutor={addExecutor}
         />
+        {surface === 'canvas' ? (
+          // biome-ignore lint/a11y/useSemanticElements: a resizable splitter has no semantic element; role="separator" with aria-value* is the ARIA pattern.
+          <div
+            className="dsh-wf-splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t('design.resizeRail')}
+            aria-valuemin={RAIL_WIDTH.min}
+            aria-valuemax={RAIL_WIDTH.max}
+            aria-valuenow={paneWidths.rail}
+            title={t('design.resizeRail')}
+            tabIndex={0}
+            data-splitter="rail"
+            onPointerDown={dragSplitter('rail')}
+            onKeyDown={keySplitter('rail')}
+            onDoubleClick={resetSplitter('rail')}
+          />
+        ) : null}
         <div className="dsh-wf-workbench-main">
           {message === undefined ? null : <p className="dsh-wf-issue">{message}</p>}
           {conflict === undefined ? null : (
@@ -780,6 +936,24 @@ export function DesignMode(props: DesignModeProps): ReactNode {
           )}
           {editorBody()}
         </div>
+        {surface === 'canvas' && placement === 'column' ? (
+          // biome-ignore lint/a11y/useSemanticElements: a resizable splitter has no semantic element; role="separator" with aria-value* is the ARIA pattern.
+          <div
+            className="dsh-wf-splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t('design.resizeInspector')}
+            aria-valuemin={INSPECTOR_WIDTH.min}
+            aria-valuemax={INSPECTOR_WIDTH.max}
+            aria-valuenow={paneWidths.inspector}
+            title={t('design.resizeInspector')}
+            tabIndex={0}
+            data-splitter="inspector"
+            onPointerDown={dragSplitter('inspector')}
+            onKeyDown={keySplitter('inspector')}
+            onDoubleClick={resetSplitter('inspector')}
+          />
+        ) : null}
         {surface === 'canvas' ? (
           <aside
             className="dsh-wf-inspector"

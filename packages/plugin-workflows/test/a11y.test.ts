@@ -3,15 +3,19 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   CLIENT_MODULE_FAILURE_NOTE,
+  clampPaneWidth,
   defaultMode,
   fallbackIsClientOnly,
   fallbackNotice,
+  INSPECTOR_WIDTH,
   inspectorPlacement,
   isAddKey,
   isConnectKey,
   isConnectShortcut,
   NARROW_WIDTH,
   paletteLabel,
+  parsePaneWidths,
+  RAIL_WIDTH,
   resolveSurface,
   summaryText,
   TAB_ORDER,
@@ -60,6 +64,23 @@ describe('mode and fallback', () => {
     expect(inspectorPlacement(979)).toBe('drawer')
     expect(inspectorPlacement(980)).toBe('column')
     expect(inspectorPlacement(1400)).toBe('column')
+  })
+
+  it('clamps and parses the remembered pane widths', () => {
+    expect(clampPaneWidth(100, RAIL_WIDTH)).toBe(RAIL_WIDTH.min)
+    expect(clampPaneWidth(999, INSPECTOR_WIDTH)).toBe(INSPECTOR_WIDTH.max)
+    expect(clampPaneWidth(301.6, INSPECTOR_WIDTH)).toBe(302)
+    expect(parsePaneWidths(null)).toEqual({ rail: 280, inspector: 360 })
+    expect(parsePaneWidths('{"rail":300,"inspector":400}')).toEqual({
+      rail: 300,
+      inspector: 400,
+    })
+    // Out-of-range and non-numeric values fall back to the pane's bound/default.
+    expect(parsePaneWidths('{"rail":20,"inspector":9999}')).toEqual({
+      rail: RAIL_WIDTH.min,
+      inspector: INSPECTOR_WIDTH.max,
+    })
+    expect(parsePaneWidths('not json')).toEqual({ rail: 280, inspector: 360 })
   })
 
   it('renders the list editor when a throwing canvas child is caught', () => {

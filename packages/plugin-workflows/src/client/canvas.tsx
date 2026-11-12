@@ -1,3 +1,4 @@
+import { IconCheckCircleOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   Background,
   BackgroundVariant,
@@ -164,7 +165,7 @@ export function EndNodeView(props: NodeProps): ReactNode {
     <div className="dsh-wf-node dsh-wf-node-end" data-kind="end">
       <div className="dsh-wf-node-head">
         <span className="dsh-wf-node-icon" aria-hidden="true">
-          {brickGlyph('agent')}
+          <IconCheckCircleOutlineRegular />
         </span>
         <div className="dsh-wf-node-titles">
           <div className="dsh-wf-node-title">{data.title}</div>
@@ -338,7 +339,7 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
         edges={flowEdges}
         nodeTypes={CANVAS_NODE_TYPES as never}
         fitView
-        fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
+        fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
         nodesFocusable
         edgesFocusable
         nodesDraggable={!readOnly}
