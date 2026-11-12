@@ -1984,3 +1984,61 @@ describe('Workflows overview isolation and latest runs', () => {
     expect(tracker.violations).toEqual([])
   })
 })
+
+describe('canvas node dragging', () => {
+  it('follows the pointer while dragging and commits the position on release', () => {
+    const runtime = createRuntime('./src/client/canvas.tsx')
+    const module = runtime.load() as {
+      DesignCanvas?: (props: Record<string, unknown>) => unknown
+    }
+    if (module.DesignCanvas === undefined) throw new Error('DesignCanvas is not exported')
+    const nodes = [
+      {
+        id: 'step-a',
+        kind: 'step',
+        title: 'A',
+        position: { x: 10, y: 20 },
+        step: { id: 'a', executor: 'main' },
+      },
+    ]
+    const moves: { id: string; position: { x: number; y: number } }[] = []
+    const render = (): unknown =>
+      module.DesignCanvas?.({
+        nodes,
+        edges: [],
+        focusKey: 'drag',
+        onSelect: () => {},
+        onMove: (id: string, position: { x: number; y: number }) => moves.push({ id, position }),
+        onConnectNode: () => {},
+      })
+    let tree = runtime.commit(render)
+    const flow = (): Element | undefined =>
+      renderElements(tree).find((element) => element.type === 'reactflow')
+    const nodeAt = (): { id: string; position: { x: number; y: number } } | undefined => {
+      const current = flow()
+      if (current === undefined) return undefined
+      return (current.props.nodes as { id: string; position: { x: number; y: number } }[]).find(
+        (node) => node.id === 'step-a',
+      )
+    }
+    const onNodesChange = flow()?.props.onNodesChange as
+      | ((changes: readonly unknown[]) => void)
+      | undefined
+    onNodesChange?.([
+      { type: 'position', id: 'step-a', position: { x: 300, y: 120 }, dragging: true },
+    ])
+    tree = runtime.commit(render)
+    // The controlled node follows the pointer instead of waiting for the drop.
+    expect(nodeAt()?.position).toEqual({ x: 300, y: 120 })
+    // Nothing is committed to the editor until the drag ends.
+    expect(moves).toEqual([])
+    const onDragStop = flow()?.props.onNodeDragStop as
+      | ((event: unknown, node: { id: string; position: { x: number; y: number } }) => void)
+      | undefined
+    onDragStop?.({}, { id: 'step-a', position: { x: 300, y: 120 } })
+    tree = runtime.commit(render)
+    expect(moves).toEqual([{ id: 'step-a', position: { x: 300, y: 120 } }])
+    // The overlay is cleared; a parent that keeps the old position sees it again.
+    expect(nodeAt()?.position).toEqual({ x: 10, y: 20 })
+  })
+})

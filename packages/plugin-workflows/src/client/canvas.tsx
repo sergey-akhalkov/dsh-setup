@@ -12,7 +12,7 @@ import {
   ReactFlow,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import { Component, type DragEvent, type ReactNode, useRef } from 'react'
+import { Component, type DragEvent, type ReactNode, useRef, useState } from 'react'
 import { BRICK_MIME, parseBrickPayload } from './bricks.ts'
 import { brickGlyph, executorIcon } from './glyphs.tsx'
 import type { DiagramEdge, DiagramNode, EdgeKind } from './graph.ts'
@@ -245,11 +245,12 @@ export function toFlowNodes(
     readonly violations?: readonly string[]
   }[],
   selected?: string,
+  positions?: Readonly<Record<string, { readonly x: number; readonly y: number }>>,
 ): FlowNode[] {
   return nodes.map((node) => ({
     id: node.id,
     type: node.kind,
-    position: node.position,
+    position: positions?.[node.id] ?? node.position,
     // React Flow takes its accessible name from ariaLabel, not data.
     ariaLabel: node.title,
     ...(selected === undefined ? {} : { selected: selected === node.id }),
@@ -316,7 +317,14 @@ const KNOWN_KINDS = new Set<string>(['start', 'next', 'true', 'false', 'body', '
 
 /** The canvas; the container remounts it when the definition or overlay changes. */
 export function DesignCanvas(props: DesignCanvasProps): ReactNode {
-  const flowNodes = toFlowNodes(props.nodes, props.selected) as unknown as Node[]
+  // React Flow is controlled: during a drag its position changes must come back
+  // through the node props, or the card stays put and jumps on release. Keep the
+  // live drag positions here so only this canvas re-renders, not the editor; the
+  // layout is committed once on drag stop.
+  const [dragPositions, setDragPositions] = useState<
+    Readonly<Record<string, { readonly x: number; readonly y: number }>>
+  >({})
+  const flowNodes = toFlowNodes(props.nodes, props.selected, dragPositions) as unknown as Node[]
   const flowEdges = toFlowEdges(props.edges, props.nodes) as unknown as Edge[]
   const readOnly = props.readOnly === true
   const instance = useRef<ReactFlowInstance | undefined>(undefined)
@@ -351,7 +359,32 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
         onPaneClick={() => props.onSelect(undefined)}
         // Controlled nodes only change selection through onNodesChange; the
         // bundled keyboard handler reports Enter/Space that way, not as a click.
-        onNodesChange={(changes: readonly { type: string; id?: string; selected?: boolean }[]) => {
+        onNodesChange={(
+          changes: readonly {
+            type: string
+            id?: string
+            selected?: boolean
+            dragging?: boolean
+            position?: { readonly x: number; readonly y: number }
+          }[],
+        ) => {
+          const moves = changes.filter(
+            (change) =>
+              change.type === 'position' &&
+              change.dragging === true &&
+              change.id !== undefined &&
+              change.position !== undefined,
+          )
+          if (moves.length > 0) {
+            setDragPositions((current) => {
+              const next = { ...current }
+              for (const change of moves) {
+                if (change.id === undefined || change.position === undefined) continue
+                next[change.id] = change.position
+              }
+              return next
+            })
+          }
           const selects = changes.filter(
             (change) => change.type === 'select' && change.id !== undefined,
           )
@@ -368,7 +401,17 @@ export function DesignCanvas(props: DesignCanvasProps): ReactNode {
           props.onSelect(first?.id)
         }}
         onNodeDragStop={
-          readOnly ? undefined : (_event, node) => props.onMove?.(node.id, node.position)
+          readOnly
+            ? undefined
+            : (_event, node) => {
+                props.onMove?.(node.id, node.position)
+                setDragPositions((current) => {
+                  if (current[node.id] === undefined) return current
+                  const next = { ...current }
+                  delete next[node.id]
+                  return next
+                })
+              }
         }
         onConnect={
           readOnly

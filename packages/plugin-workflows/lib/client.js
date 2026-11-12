@@ -58,7 +58,7 @@ window.__ModuleLoader__.load({
                 "The result of getSnapshot should be cached to avoid an infinite loop"
               ), didWarnUncachedGetSnapshot = true);
             }
-            cachedValue = useState7({
+            cachedValue = useState8({
               inst: { value: value2, getSnapshot }
             });
             var inst = cachedValue[0].inst, forceUpdate = cachedValue[1];
@@ -96,7 +96,7 @@ window.__ModuleLoader__.load({
             return getSnapshot();
           }
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-          var React = require("react"), objectIs = "function" === typeof Object.is ? Object.is : is, useState7 = React.useState, useEffect5 = React.useEffect, useLayoutEffect3 = React.useLayoutEffect, useDebugValue2 = React.useDebugValue, didWarnOld18Alpha = false, didWarnUncachedGetSnapshot = false, shim = "undefined" === typeof window || "undefined" === typeof window.document || "undefined" === typeof window.document.createElement ? useSyncExternalStore$1 : useSyncExternalStore$2;
+          var React = require("react"), objectIs = "function" === typeof Object.is ? Object.is : is, useState8 = React.useState, useEffect5 = React.useEffect, useLayoutEffect3 = React.useLayoutEffect, useDebugValue2 = React.useDebugValue, didWarnOld18Alpha = false, didWarnUncachedGetSnapshot = false, shim = "undefined" === typeof window || "undefined" === typeof window.document || "undefined" === typeof window.document.createElement ? useSyncExternalStore$1 : useSyncExternalStore$2;
           exports.useSyncExternalStore = void 0 !== React.useSyncExternalStore ? React.useSyncExternalStore : shim;
           "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop(Error());
         })();
@@ -9675,11 +9675,11 @@ window.__ModuleLoader__.load({
         return this.state.failed ? this.props.fallback : this.props.children;
       }
     };
-    function toFlowNodes(nodes, selected2) {
+    function toFlowNodes(nodes, selected2, positions) {
       return nodes.map((node) => ({
         id: node.id,
         type: node.kind,
-        position: node.position,
+        position: positions?.[node.id] ?? node.position,
         // React Flow takes its accessible name from ariaLabel, not data.
         ariaLabel: node.title,
         ...selected2 === void 0 ? {} : { selected: selected2 === node.id },
@@ -9717,7 +9717,8 @@ window.__ModuleLoader__.load({
     }
     var KNOWN_KINDS = /* @__PURE__ */ new Set(["start", "next", "true", "false", "body", "exit"]);
     function DesignCanvas(props) {
-      const flowNodes = toFlowNodes(props.nodes, props.selected);
+      const [dragPositions, setDragPositions] = (0, import_react4.useState)({});
+      const flowNodes = toFlowNodes(props.nodes, props.selected, dragPositions);
       const flowEdges = toFlowEdges(props.edges, props.nodes);
       const readOnly = props.readOnly === true;
       const instance = (0, import_react4.useRef)(void 0);
@@ -9751,6 +9752,19 @@ window.__ModuleLoader__.load({
             onNodeClick: (_event, node) => props.onSelect(node.id),
             onPaneClick: () => props.onSelect(void 0),
             onNodesChange: (changes) => {
+              const moves = changes.filter(
+                (change) => change.type === "position" && change.dragging === true && change.id !== void 0 && change.position !== void 0
+              );
+              if (moves.length > 0) {
+                setDragPositions((current) => {
+                  const next = { ...current };
+                  for (const change of moves) {
+                    if (change.id === void 0 || change.position === void 0) continue;
+                    next[change.id] = change.position;
+                  }
+                  return next;
+                });
+              }
               const selects = changes.filter(
                 (change) => change.type === "select" && change.id !== void 0
               );
@@ -9762,7 +9776,15 @@ window.__ModuleLoader__.load({
               const first = selection2.nodes?.[0];
               props.onSelect(first?.id);
             },
-            onNodeDragStop: readOnly ? void 0 : (_event, node) => props.onMove?.(node.id, node.position),
+            onNodeDragStop: readOnly ? void 0 : (_event, node) => {
+              props.onMove?.(node.id, node.position);
+              setDragPositions((current) => {
+                if (current[node.id] === void 0) return current;
+                const next = { ...current };
+                delete next[node.id];
+                return next;
+              });
+            },
             onConnect: readOnly ? void 0 : (connection) => {
               if (connection.source === null || connection.target === null) return;
               const handle = connection.sourceHandle;
