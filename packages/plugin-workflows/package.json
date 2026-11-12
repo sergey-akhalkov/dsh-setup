@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-workflows",
-  "version": "0.35.1",
+  "version": "0.35.2",
   "description": "Workflow observability: a read-only Workflows view over shadow triggers, a bounded per-session event journal, and runs projected from existing local records",
   "license": "MIT",
   "icon": "./icon.svg",
