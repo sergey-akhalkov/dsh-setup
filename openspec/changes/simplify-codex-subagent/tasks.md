@@ -19,7 +19,7 @@
 - [x] 3.2 Run `pnpm gen` and commit the regenerated `packages/setup` manifest, patch, and vendored tree. Verify `pnpm gen:check` passes.
 - [x] 3.3 Run `pnpm build && git diff --exit-code` and `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, `pnpm validate:installer`. Verify every command exits 0.
 - [x] 3.4 Run the live acceptance with the owner's existing `~/.codex` login: `codex_subagent_status` reports the `0.169.0` bundled binary and login command; one authenticated delegation completes (`initialize`/`initialized`, `thread/start`, `turn/start`, final answer, `turn/completed`); a signed-out run still reports the login next action. Record the observed result in the change's review evidence.
-- [ ] 3.5 In the installed profile, call `codex_subagent` once and verify the delegating Session's subagent list shows the run as an external entry with the task description and child name, and the answer arrives as a settlement notice.
+- [x] 3.5 In the installed profile, call `codex_subagent` once and verify the delegating Session's subagent list shows the run as an external entry with the task description and child name, and the answer arrives as a settlement notice.
 - [x] 3.6 Re-run `openspec validate simplify-codex-subagent --strict` after the edits and verify it exits 0.
 
 ## Workflow follow-up
