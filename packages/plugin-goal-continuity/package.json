@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-goal-continuity",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Goal continuity: re-arms a disarmed active goal after recoverable harness stops, resumes after a loop-guard reset, extends the round cap within bounds, and reviews every proposed block with an independent read-only subagent before it can end the run",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -28,20 +28,20 @@
     "cordis.fragment.yml"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-goal": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-working-directory": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-goal": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-working-directory": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

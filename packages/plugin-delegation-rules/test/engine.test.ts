@@ -201,7 +201,7 @@ describe('target resolution', () => {
     expect(text(answer)).toContain('Use the shared helper')
     expect(subagents.runs[0]?.provider).toBe('spawn')
     expect(subagents.runs[0]?.agentOptions).toEqual({ model: 'deepseek-flash' })
-    expect(subagents.list()).not.toContain('codex-subagent')
+    expect(subagents.getProvider('codex-subagent')).toBeUndefined()
     const source = await readFile(join(packageDir, 'lib', 'index.js'), 'utf8')
     expect(source).not.toMatch(/codex/i)
   })
@@ -1112,8 +1112,7 @@ describe('tools and status', () => {
       subagents,
     )
     const status = text(await harness.callTool('delegation_status', {}))
-    expect(status).toContain('Registered subagent providers:')
-    expect(status).toContain('- spawn: agentOptions')
+    expect(status).toContain('Configured targets:')
     expect(status).toContain(
       '- dsh: provider=spawn model=deepseek-flash reasoningEffort=max (available)',
     )

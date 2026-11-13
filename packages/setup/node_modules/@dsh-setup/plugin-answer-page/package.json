@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-answer-page",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "On-demand answer-page skill from a pinned answer-me-with-html release: writes a compact Markdown draft and renders one self-contained HTML page inside the workspace, offline",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -34,14 +34,14 @@
     "answer-page.lock.json"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

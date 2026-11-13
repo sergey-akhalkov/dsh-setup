@@ -2074,11 +2074,9 @@ export function apply(ctx: Context, config: WorkflowsConfig = {}): void {
         const activation = await subagentRuntime.startActivation({
           provider: request.provider,
           label: `workflows ${request.provider}`.slice(0, 120),
-          request: {
-            parent: agent,
-            prompt: [{ type: 'text', text: request.prompt }],
-            ...(request.schema === undefined ? {} : { outputSchema: request.schema as never }),
-          },
+          parent: agent,
+          prompt: [{ type: 'text', text: request.prompt }],
+          ...(request.schema === undefined ? {} : { outputSchema: request.schema as never }),
           signal: controller,
           delivery: 'caller',
         })

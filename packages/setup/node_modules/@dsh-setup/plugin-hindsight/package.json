@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-hindsight",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Hindsight long-term memory: the official native DSH plugin with a local-only default endpoint",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -29,7 +29,7 @@
     "cordis.fragment.yml"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "dependencies": {
     "@vectorize-io/hindsight-coding-agents": "0.8.2",
@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

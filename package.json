@@ -1,6 +1,6 @@
 {
   "name": "dsh-setup",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "private": true,
   "type": "module",
   "description": "A portable, installable DeepSeek Harness setup: plugin bundles, agent presets, and a static plugin market index",
@@ -40,7 +40,8 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.3",
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-plugin-market-index": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-error": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-plugin-market-index": "0.2.2-rc.2",
     "@modelcontextprotocol/client": "2.2.0",
     "@types/node": "24.19.2",
     "@types/react": "19.3.0",

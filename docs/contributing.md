@@ -93,10 +93,10 @@ Checklist:
      bundle vendors; a declared file that does not exist fails generation. Additional exact asset
      paths (for example a vendored upstream prompt) are allowed and vendored the same way.
    - `engines.dsh` must be **byte-identical** to `dsh.json` -> `enginesDsh`
-     (`>=0.2.2-rc.1 <0.3.0` today). `validate:repo` rejects any mismatch.
+     (`>=0.2.2-rc.2 <0.3.0` today). `validate:repo` rejects any mismatch.
    - `peerDependencies` pin shared DSH packages (`@deepseek-ai/cordis: "~4.1.0"`); repeat the same
      versions in `devDependencies` for type checking. Add the DSH client packages you import as
-     devDependencies pinned to `0.2.2-rc.1`. After adding or changing dependencies, run
+     devDependencies pinned to `0.2.2-rc.2`. After adding or changing dependencies, run
      `pnpm install` and commit the updated `pnpm-lock.yaml`.
    - `dsh.bundle.patch: "./cordis.patch.yml"`.
    - `dsh.client` only for a Client half: `{ "platform": "web", "immediately": true, "inject": ["<client package that declares the slot>"], "external": ["<non-baseline imports>"] }`.

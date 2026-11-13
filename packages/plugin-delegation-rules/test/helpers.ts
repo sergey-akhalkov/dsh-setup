@@ -150,10 +150,6 @@ export class FakeSubagents {
     if (respond !== undefined) this.responders.set(name, respond)
   }
 
-  list(): string[] {
-    return [...this.providers.keys()]
-  }
-
   getProvider(name: string): SubagentProvider | undefined {
     return this.providers.get(name)
   }
@@ -170,11 +166,9 @@ export class FakeSubagents {
     const run: RunRecord = {
       provider: spec.provider,
       label: spec.label,
-      prompt: textOf(spec.request.prompt),
-      ...(spec.request.cwd === undefined ? {} : { cwd: spec.request.cwd }),
-      ...(spec.request.agentOptions === undefined
-        ? {}
-        : { agentOptions: spec.request.agentOptions }),
+      prompt: textOf(spec.prompt),
+      ...(spec.cwd === undefined ? {} : { cwd: spec.cwd }),
+      ...(spec.agentOptions === undefined ? {} : { agentOptions: spec.agentOptions }),
     }
     this.runs.push(run)
     const responder = this.responders.get(spec.provider) ?? this.respond
@@ -189,6 +183,7 @@ export class FakeSubagents {
     }
     return {
       childId: 'child-1' as never,
+      name: 'agent-1',
       result,
       dispose: async () => undefined,
     }

@@ -309,7 +309,7 @@ record-shaped file.
 ## Troubleshooting
 
 - **"target ... is not registered"** — install/enable that provider, or repoint the rule in the
-  profile config; `delegation_status` lists the registered providers.
+  profile config; `delegation_status` reports each configured target as available or MISSING.
 - **"does not support model/agent options"** — remove `model`/`reasoningEffort`/`agentOptions`
   from the target or use a provider with `agentOptions` capability.
 - **"verdict digest does not match"** — the target answered about a different revision; re-run

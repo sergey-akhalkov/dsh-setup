@@ -1,6 +1,6 @@
 {
-  "runtime": "0.2.2-rc.1",
-  "enginesDsh": ">=0.2.2-rc.1 <0.3.0",
+  "runtime": "0.2.2-rc.2",
+  "enginesDsh": ">=0.2.2-rc.2 <0.3.0",
   "repository": "https://github.com/sergey-akhalkov/dsh-setup",
   "installBundles": {
     "shipped": [

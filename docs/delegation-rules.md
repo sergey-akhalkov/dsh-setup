@@ -888,7 +888,7 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
   bytes (~759 estimated tokens at bytes / 4), against the 900 estimated tokens budget. The
   `delegate` description may append at most 400 bytes of discovered section labels; the total
   stays inside the same budget.
-- Measured: the skill body is 21323 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
+- Measured: the skill body is 21347 UTF-8 bytes, against the 24,000 UTF-8 bytes budget.
 - Reviews and answers consume the target's tokens/subscription; the progress note is free.
   Per-task reviews multiply runs, so keep tasks sized for one review; a section review covers a
   related group in one run; set the optional integration review to `soft` or `none` if it adds
@@ -903,8 +903,8 @@ plus the skill catalog line, and the full workflow is loaded only when the skill
 ## Troubleshooting
 
 - **"target ... names provider ..., which is not registered"** — install or enable that provider,
-  or repoint the rule in the profile config. `delegation_status` lists the registered providers
-  and missing-target diagnostics.
+  or repoint the rule in the profile config. `delegation_status` reports each configured target as
+  `available` or `MISSING` with the provider it names.
 - **"does not support model/agent options"** — remove `model`, `reasoningEffort`, or
   `agentOptions` from that target, or use a provider with `agentOptions` capability.
 - **"verdict digest does not match"** — the target answered about a different revision; re-run on

@@ -4162,7 +4162,7 @@ describe('retry wait visibility', () => {
     const originalStart = subagents.startActivation.bind(subagents)
     let aStarts = 0
     subagents.startActivation = async (spec) => {
-      const promptText = spec.request.prompt
+      const promptText = spec.prompt
         .map((block) => (block.type === 'text' ? block.text : ''))
         .join('')
       if (promptText.includes('change-a') && aStarts === 0) {

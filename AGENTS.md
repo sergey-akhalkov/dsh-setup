@@ -30,7 +30,7 @@ the shipped-bundle selections a third-party bundle cannot do and installs the se
 workflow generates the static format-1 market index pinned to the tagged commit and deploys it to
 GitHub Pages.
 
-Supported DSH today: the `enginesDsh` range **>=0.2.2-rc.1 <0.3.0** (`dsh.json`); anything
+Supported DSH today: the `enginesDsh` range **>=0.2.2-rc.2 <0.3.0** (`dsh.json`); anything
 outside it is refused. Toolchain: Node **>=24.18.0 <25**, pnpm **11.28.5**.
 Repo package version: one version for all packages; `pnpm release:prepare` sets it and
 `package.json` is authoritative.

@@ -1,7 +1,7 @@
 # dsh-setup
 
 [![validate](https://github.com/sergey-akhalkov/dsh-setup/actions/workflows/validate.yml/badge.svg)](https://github.com/sergey-akhalkov/dsh-setup/actions/workflows/validate.yml)
-![DeepSeek Harness 0.2.2-rc.1](https://img.shields.io/badge/DeepSeek%20Harness-0.2.2--rc.1-blue)
+![DeepSeek Harness 0.2.2-rc.2](https://img.shields.io/badge/DeepSeek%20Harness-0.2.2--rc.2-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A portable setup for [DeepSeek Harness](https://www.deepseek.com/en/harness/) (DSH). Sixteen plugin
@@ -76,7 +76,7 @@ working. Install the runtimes for the plugins you want.
 
 | Dependency                          | Needed for                                                              | Install                                                                                                                    |
 | ----------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| DeepSeek Harness Desktop 0.2.2-rc.1 | Running any plugin; the installer refuses an unsupported version        | [Download DeepSeek Harness](https://www.deepseek.com/en/harness/)                                                          |
+| DeepSeek Harness Desktop 0.2.2-rc.2 | Running any plugin; the installer refuses an unsupported version        | [Download DeepSeek Harness](https://www.deepseek.com/en/harness/)                                                          |
 | PowerShell 5.1+ (7 recommended)     | The one-command installer                                               | [Install PowerShell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)                       |
 | Git                                 | The installer fetches the setup through a commit-pinned git spec        | [Download Git](https://git-scm.com/downloads)                                                                              |
 | Node.js with npm                    | Installing the two global CLI prerequisites below                       | [Download Node.js](https://nodejs.org/en/download)                                                                         |

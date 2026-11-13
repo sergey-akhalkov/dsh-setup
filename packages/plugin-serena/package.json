@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-serena",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Serena MCP guidance: an always-on large-file/cross-file refactor trigger and the serena-discipline skill; the setup configures serena through the lazy MCP row (mcp_tools/mcp_call), not a static adapter row",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -29,15 +29,15 @@
     "assets/serena-discipline/rules.md"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

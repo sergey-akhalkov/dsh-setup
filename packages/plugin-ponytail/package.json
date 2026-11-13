@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-ponytail",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Ponytail lazy-senior-dev skill and default-on ruleset delivered from a pinned upstream prompt (MIT, by Dietrich Gebert)",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -31,15 +31,15 @@
     "ponytail.lock.json"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

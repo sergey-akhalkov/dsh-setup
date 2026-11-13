@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-nuphus-mcp",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Nuphus MCP guidance: the nuphus-discipline skill for desktop automation (screen, windows, mouse and keyboard, Chrome); the setup configures nuphus-mcp through the lazy MCP row (mcp_tools/mcp_call), not a static adapter row",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -28,14 +28,14 @@
     "assets/nuphus-discipline/SKILL.md"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

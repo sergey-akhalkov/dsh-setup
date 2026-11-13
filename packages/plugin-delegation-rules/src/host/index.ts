@@ -3574,7 +3574,7 @@ class DelegationState {
 }
 
 interface EngineServices {
-  subagents: Pick<SubagentRuntime, 'list' | 'getProvider' | 'startActivation'>
+  subagents: Pick<SubagentRuntime, 'getProvider' | 'startActivation'>
   workingDirectory: Pick<WorkingDirectoryService, 'get'>
   state: DelegationState
   git: GitServices
@@ -3699,9 +3699,8 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
   const { rule, target, agent, signal } = request
   const provider: SubagentProvider | undefined = services.subagents.getProvider(target.provider)
   if (provider === undefined) {
-    const registered = services.subagents.list()
     throw new ConfigError(
-      `rule "${rule.id}": target "${rule.to}" names provider "${target.provider}", which is not registered; install or enable that provider, or point the rule's target at one of: ${registered.join(', ') || '(none registered)'}`,
+      `rule "${rule.id}": target "${rule.to}" names provider "${target.provider}", which is not registered; install or enable that provider, or repoint the rule's target`,
     )
   }
   const agentOptions = resolveAgentOptions(target)
@@ -3716,12 +3715,10 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
     activation = await services.subagents.startActivation({
       provider: provider.name,
       label: `delegation:${rule.id}`,
-      request: {
-        prompt,
-        parent: agent,
-        cwd: request.cwd,
-        ...(agentOptions === undefined ? {} : { agentOptions }),
-      },
+      prompt,
+      parent: agent,
+      cwd: request.cwd,
+      ...(agentOptions === undefined ? {} : { agentOptions }),
       signal,
       delivery: 'caller',
     })
@@ -5773,24 +5770,7 @@ class DelegationEngine {
     const agent = this.requireAgent(context)
     const cwd = this.services.workingDirectory.get(agent.session)
     const thread = currentThread(agent)
-    const providers = this.services.subagents.list()
-    const lines: string[] = ['Delegation status', '', 'Registered subagent providers:']
-    if (providers.length === 0) lines.push('- (none)')
-    for (const providerName of providers) {
-      const provider = this.services.subagents.getProvider(providerName)
-      if (provider === undefined) continue
-      const capabilities = provider.capabilities
-      const flags = [
-        capabilities.agentOptions ? 'agentOptions' : '',
-        capabilities.outputSchema ? 'outputSchema' : '',
-        capabilities.depthLimit ? 'depthLimit' : '',
-        capabilities.agentPreset ? 'agentPreset' : '',
-      ].filter((flag) => flag !== '')
-      lines.push(
-        `- ${provider.name}: ${flags.join(', ') || 'no optional capabilities'}; inheritsParentContext=${provider.inheritsParentContext}`,
-      )
-    }
-    lines.push('', 'Configured targets:')
+    const lines: string[] = ['Delegation status', '', 'Configured targets:']
     if (this.config.targets.size === 0) lines.push('- (none configured)')
     for (const [id, target] of this.config.targets) {
       const provider = this.services.subagents.getProvider(target.provider)

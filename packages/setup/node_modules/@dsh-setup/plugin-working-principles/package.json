@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-working-principles",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "First-party working contract, on by default, plus the working-principles, verify-change, instruction-budget, and interface-design skills",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -37,15 +37,15 @@
     "assets/interface-design/references/sources.md"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

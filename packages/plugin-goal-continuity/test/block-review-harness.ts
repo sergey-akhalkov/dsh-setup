@@ -132,17 +132,13 @@ export class BlockReviewHarness {
         const run: ReviewRun = {
           provider: spec.provider,
           label: spec.label,
-          prompt: spec.request.prompt
-            .map((block) => (block.type === 'text' ? block.text : ''))
-            .join('\n'),
-          parentId: spec.request.parent.id,
-          ...(spec.request.cwd === undefined ? {} : { cwd: spec.request.cwd }),
-          ...(spec.request.agentPreset === undefined
+          prompt: spec.prompt.map((block) => (block.type === 'text' ? block.text : '')).join('\n'),
+          parentId: spec.parent.id,
+          ...(spec.cwd === undefined ? {} : { cwd: spec.cwd }),
+          ...(spec.agentPreset === undefined ? {} : { agentPreset: spec.agentPreset }),
+          ...(spec.agentOptions === undefined
             ? {}
-            : { agentPreset: spec.request.agentPreset }),
-          ...(spec.request.agentOptions === undefined
-            ? {}
-            : { agentOptions: spec.request.agentOptions as ReviewRun['agentOptions'] }),
+            : { agentOptions: spec.agentOptions as ReviewRun['agentOptions'] }),
         }
         runs.push(run)
         const child = this.createReviewerChild(spec)
@@ -153,7 +149,7 @@ export class BlockReviewHarness {
         const result = this.resultFor(run)
         const dispose = vi.fn(async () => undefined)
         disposals.push(dispose)
-        return { childId: child.agent.id, result, dispose }
+        return { childId: child.agent.id, name: 'agent-1', result, dispose }
       },
     }
     this.ctx.provide('agents', {
@@ -243,8 +239,8 @@ export class BlockReviewHarness {
       cwd: this.workspaceDirectory,
       origin: 'subagent',
       delegationDepth: 1,
-      parentSession: spec.request.parent.id,
-      agentPreset: spec.request.agentPreset,
+      parentSession: spec.parent.id,
+      agentPreset: spec.agentPreset,
     }
     const agent = {
       id: header.id,

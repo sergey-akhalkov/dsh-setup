@@ -800,3 +800,27 @@ artifact grew to 647,594 esbuild bytes (708,752 shipped, 338,098 minified, 98,46
 records), the whole-spec review passed, and the change archived 17/17 with its delta spec synced
 into `workflows`. Open owner follow-up: install the build and check the workbench at wide and narrow
 sidebar widths, the same live visual check (4.5) the previous change left open.
+
+On 2026-11-13 v0.36.0 fixed issue #5: DSH 0.2.2-rc.2 flattened `SubagentActivationSpec` (the nested
+`request` field is gone, so `prompt`, `parent`, `cwd`, `agentPreset`, `agentOptions`, and
+`outputSchema` travel on the spec itself) and removed `SubagentService.list()`. Every delegation
+call failed before its provider started, because all three Host call sites still passed the nested
+shape: the delegation-rules `startTarget`, the goal-continuity `runReviewChild`, and the workflows
+host subagent runner. All three now pass the flat spec, and `delegation_status` no longer lists
+known providers (the API cannot enumerate them any more): it reports each configured target as
+`available` or `MISSING` with the provider it names, and the missing-provider error names the
+target instead of a provider list. The supported floor moved to `0.2.2-rc.2` in `dsh.json`,
+`install.ps1`, every plugin manifest, and the client devDependencies together, so the code is now
+typed against the flat API and `pnpm typecheck` fails on the next signature removal instead of the
+runtime failing in the user's profile; DSH 0.2.2-rc.1 is refused with the update message. The root
+devDependencies gained `@deepseek-ai/dsh-error`, which 0.2.2-rc.2 makes a peer of
+`@deepseek-ai/dsh-llm`, because the loop-guard test loads the real Session store. `pnpm dogfood`
+now probes the shipped bundles at the runtime version, because 0.2.2-rc.2 no longer publishes
+`@deepseek-ai/dsh-experimental-agent-team-profile`; the installer keeps the union and skips it as
+documented, and the check stopped expecting it. The gate was green before the release: `pnpm
+typecheck` against the 0.2.2-rc.2 types, 161 test files / 3039 tests, `pnpm build` with no diff,
+`pnpm gen:check` (430 files), `pnpm validate:repo`, `pnpm validate:composition` and `pnpm
+validate:installer` on DSH 0.2.2-rc.2 (7 of 8 shipped bundles), and `pnpm dogfood`. Open owner
+follow-up: install 0.36.0 into the desktop profile from an external PowerShell with the app closed
+and run one real delegation (for example the `spec-review` rule or `delegation_status`) on
+0.2.2-rc.2, because this checkout cannot replace the engine the running profile mounts.

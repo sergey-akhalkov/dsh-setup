@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-openspec",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "OpenSpec spec-driven workflow: the six core OpenSpec skills packaged on demand from a pinned upstream release, plus a read-only right-sidebar panel for the workspace's active and archived changes, capability specs, specification history and git provenance, with the openspec CLI as a documented prerequisite",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -45,15 +45,15 @@
     "openspec.lock.json"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-skill": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.2"
   },
   "dsh": {
     "bundle": {

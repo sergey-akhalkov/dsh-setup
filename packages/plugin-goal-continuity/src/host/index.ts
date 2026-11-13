@@ -1455,15 +1455,9 @@ async function runReviewChild(
     }
   }
   if (provider === undefined) {
-    let registered: string[] = []
-    try {
-      registered = subagents.list()
-    } catch {
-      // Keep the diagnostic after the provider lookup.
-    }
     return {
       kind: 'unavailable',
-      detail: `provider "${policy.provider}" is not registered (registered: ${registered.join(', ') || 'none'})`,
+      detail: `provider "${policy.provider}" is not registered`,
     }
   }
   if (provider.capabilities?.agentPreset !== true) {
@@ -1501,13 +1495,11 @@ async function runReviewChild(
     const starting = subagents.startActivation({
       provider: provider.name,
       label: policy.label,
-      request: {
-        prompt: [{ type: 'text', text: prompt }],
-        parent: agent,
-        cwd: workspace,
-        agentPreset: policy.reviewerPreset,
-        ...(Object.keys(agentOptions).length === 0 ? {} : { agentOptions }),
-      },
+      prompt: [{ type: 'text', text: prompt }],
+      parent: agent,
+      cwd: workspace,
+      agentPreset: policy.reviewerPreset,
+      ...(Object.keys(agentOptions).length === 0 ? {} : { agentOptions }),
       signal: controller.signal,
       delivery: 'caller',
     })

@@ -28,6 +28,7 @@ import {
   SETUP_BUNDLE,
 } from './lib/dogfood.ts'
 import { parseDefaults } from './lib/generate.ts'
+import { availableBundles, probeNpmBundle } from './lib/install-bundles.ts'
 import {
   type PackageManifest,
   readDshVersions,
@@ -358,10 +359,13 @@ function main(): number {
     const selectedBundles = readBundles(installedManifest)
 
     step('the installer appends only the setup bundle and keeps it last', () => {
-      const problems = checkBundleSelection(ownerBundles, selectedBundles, [
-        ...versions.installBundles.shipped,
-        ...versions.installBundles.registry,
-      ])
+      // The installer selects only the shipped bundles this DSH version provides.
+      const expected = availableBundles(
+        [...versions.installBundles.shipped, ...versions.installBundles.registry],
+        versions.runtime,
+        probeNpmBundle,
+      )
+      const problems = checkBundleSelection(ownerBundles, selectedBundles, expected)
       if (installedManifest.dependencies?.[SETUP_BUNDLE] === undefined) {
         problems.push(`${SETUP_BUNDLE} is missing from the profile dependencies`)
       }

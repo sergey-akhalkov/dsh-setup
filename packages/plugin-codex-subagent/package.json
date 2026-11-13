@@ -1,6 +1,6 @@
 {
   "name": "@dsh-setup/plugin-codex-subagent",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "MIT-attributed fork of the Codex subagent provider that runs a bundled pinned Codex CLI (codexPath override, then bundled @openai/codex, then PATH), with read-only and workspace-write providers and a codex_subagent_status tool",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -33,31 +33,31 @@
     "LICENSE"
   ],
   "engines": {
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.2 <0.3.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1"
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.2"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-brand": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.2",
     "@deepseek-ai/schemastery": "~3.18.5",
     "@openai/codex": "0.164.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/dsh-brand": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-subagent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-timeout": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-brand": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-timeout": "0.2.2-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.2",
     "@deepseek-ai/schemastery": "~3.18.5"
   },
   "dsh": {
