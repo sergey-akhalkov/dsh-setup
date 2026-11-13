@@ -19,7 +19,7 @@ It MUST NOT depend on the official Codex provider package at runtime.
 #### Scenario: Local patch record
 
 - **WHEN** a maintainer compares the fork with upstream
-- **THEN** the README names the bundled-binary resolution, the `-c` config patch, and the rebase procedure
+- **THEN** the README names the bundled-binary resolution, the read-only/workspace-write provider wiring, and the rebase procedure
 
 #### Scenario: No official dependency
 
@@ -52,26 +52,33 @@ app-server stdin rather than a shell. The resolved path and version MUST be avai
 
 The fork SHALL register a read-only `codex-subagent` provider and a workspace-write
 `codex-subagent-write` provider, and a `codex_subagent_status` tool that reports the resolved path,
-version, source (`config`, `bundled`, or `PATH`), bundled version, Serena configuration, login
-command, and a paste-ready `codexPath` snippet. It MUST NOT write the profile patch or `~/.codex`
-automatically.
+version, source (`config`, `bundled`, or `PATH`), bundled version, login command, and a paste-ready
+`codexPath` snippet. It MUST NOT write the profile patch or `~/.codex` automatically.
 
 #### Scenario: Read-only instance
 
 - **WHEN** a review or answer rule targets `codex-subagent`
-- **THEN** the run uses the read-only instance with the mutating Serena tools disabled
+- **THEN** the run uses the read-only instance with `sandbox: read-only`
 
 #### Scenario: Write instance
 
 - **WHEN** a patch rule targets `codex-subagent-write`
-- **THEN** the run uses the workspace-write instance in the rule's isolated worktree with the mutating
-  Serena tools and `activate_project` disabled; edits go through the Codex sandbox, so the session
-  checkout outside the worktree is never touched
+- **THEN** the run uses the workspace-write instance in the rule's isolated worktree; edits made
+  through the Codex tools go through the Codex sandbox, and the worktree-confinement guarantee
+  covers only those operations
+
+#### Scenario: Inherited MCP boundary
+
+- **WHEN** the user's `~/.codex` configuration starts an MCP server (for example Serena) with
+  approved mutation tools or a trusted activation hook
+- **THEN** the provider adds no `mcp_servers.*` app-server override and the child runs that server
+  with the user's own approvals, outside the Codex sandbox and outside the worktree-confinement
+  guarantee
 
 #### Scenario: Status
 
 - **WHEN** `codex_subagent_status` is called
-- **THEN** it reports the path, version, source, bundled version, Serena config, login command, and a snippet for pinning `codexPath`
+- **THEN** it reports the path, version, source, bundled version, login command, and a snippet for pinning `codexPath`
 
 #### Scenario: No profile write
 
@@ -81,9 +88,9 @@ automatically.
 ### Requirement: App-server execution
 
 The provider SHALL start the bundled (or selected) Codex with the official `app-server --stdio`
-protocol adapter retained from upstream and the Serena `-c` overrides, and MUST surface protocol
-startup failures, non-completed runs, cancellation, and timeouts as explicit errors. The bundled
-`0.164.0` handshake and a completed authenticated turn are required acceptance checks.
+protocol adapter retained from upstream and MUST surface protocol startup failures, non-completed
+runs, cancellation, and timeouts as explicit errors. The bundled `0.169.0` handshake and a completed
+authenticated turn are required acceptance checks.
 
 #### Scenario: Successful run
 
@@ -110,7 +117,7 @@ startup failures, non-completed runs, cancellation, and timeouts as explicit err
 The setup SHALL deliver the fork and install its `@openai/codex` dependency closure. Disable/removal
 SHALL unregister the providers and status tool without deleting records or worktrees. The
 documentation and market card MUST name the bundled version and `codexPath`/PATH overrides, the
-Serena config, the login step, the cost, the provider names, and the MIT attribution.
+login step, the cost, the provider names, and the MIT attribution.
 
 #### Scenario: Setup delivery
 
@@ -125,7 +132,9 @@ Serena config, the login step, the cost, the provider names, and the MIT attribu
 #### Scenario: Documentation
 
 - **WHEN** a user reads the documentation or market card
-- **THEN** it names the bundled version, overrides, Serena config, login, cost, provider names, and MIT notice
+- **THEN** it names the bundled version, overrides, login, cost, provider names, and MIT notice, and
+  states that user-configured `~/.codex` MCP servers run with their own approvals outside the Codex
+  sandbox and outside the worktree-confinement guarantee
 
 ### Requirement: Maintenance and DSH support
 
@@ -165,7 +174,10 @@ The Codex provider SHALL reuse one app-server conversation per review key (chang
 
 ### Requirement: Review conversation confinement
 
-A reused review thread MUST remain confined to the run's working directory, sandbox, Serena home, and disabled-tool policy. The persisted thread id MUST stay local scratch and MUST be removed with the delegation state; the user's Codex config MUST NOT be used or rewritten for the reuse. A provider restart MUST resume from the persisted thread id or report the missing thread and start a new one.
+A reused review thread MUST remain confined to the run's working directory and sandbox. The
+persisted thread id MUST stay local scratch and MUST be removed with the delegation state; the
+user's Codex config MUST NOT be used or rewritten for the reuse. A provider restart MUST resume from
+the persisted thread id or report the missing thread and start a new one.
 
 #### Scenario: Persisted state
 
@@ -175,11 +187,11 @@ A reused review thread MUST remain confined to the run's working directory, sand
 #### Scenario: Confinement
 
 - **WHEN** a reused thread runs a review
-- **THEN** the run's cwd, sandbox, Serena restrictions, and disabled tools still apply
+- **THEN** the run's cwd and sandbox still apply
 
 ### Requirement: Bundled Codex binary
 
-The fork SHALL declare the current latest stable `@openai/codex` npm release (`0.164.0`) as a
+The fork SHALL declare the current latest stable `@openai/codex` npm release (`0.169.0`) as a
 runtime dependency, so a profile install fetches the platform binary. It MUST NOT commit a Codex
 binary or a platform-specific executable to the repository, and the status MUST report the bundled
 path and version.
@@ -233,72 +245,6 @@ error. It MUST report the path and source when none resolves.
 - **THEN** the provider reports the path and command failure instead of falling back to `PATH` or
   starting an app-server
 
-### Requirement: Serena app-server configuration
-
-The provider SHALL pass the Serena MCP server configuration to the bundled Codex through `-c`
-`mcp_servers.serena...` overrides on the app-server command. It MUST force Serena enabled and
-required in the child (overriding an inherited `enabled=false`) so a missing runtime fails the run,
-MUST pin `mcp_servers.serena.cwd` to the run's working directory (the isolated worktree for the write
-instance) instead of accepting an inherited cwd, use the existing `~/.codex` login, and MUST NOT
-create, copy, or write credentials or rewrite the user's config; Codex-managed token refresh is
-allowed.
-
-#### Scenario: Serena configured
-
-- **WHEN** the provider starts the app-server
-- **THEN** the child argument list contains the Serena `-c` overrides (`command`, `args`, `cwd`,
-  `enabled=true`, `required=true`), the `SERENA_HOME` is a precreated per-run directory with empty
-  project trust and a run-scoped project data folder whose resolved directory is also precreated, and
-  the Serena MCP tools are exposed
-
-#### Scenario: User config untouched
-
-- **WHEN** the provider starts or the status tool runs
-- **THEN** the provider creates, copies, or writes no credentials and leaves `~/.codex/config.toml`
-  byte-identical; Codex-managed token refresh and runtime state are allowed, and the user's Serena
-  config is neither used nor rewritten
-
-#### Scenario: Serena runtime missing
-
-- **WHEN** the Serena server command is not available
-- **THEN** the required Serena startup makes the Codex run fail visibly with a next action, and the
-  user's config is unchanged
-
-### Requirement: Serena tool restrictions
-
-The provider SHALL disable every mutating Serena tool and `activate_project` in BOTH the read-only
-`codex-subagent` and the workspace-write `codex-subagent-write` instances (overriding an inherited
-per-tool approval and project trust), because Serena's local MCP tools and project-activation hooks
-run outside the Codex sandbox; the write instance edits only through the Codex sandbox in its
-isolated worktree.
-
-#### Scenario: Read-only Serena tools
-
-- **WHEN** the read-only `codex-subagent` instance starts the app-server, even with an inherited
-  `mcp_servers.serena.tools.replace_symbol_body.approval_mode = "approve"` or a trusted project
-  activation hook
-- **THEN** the child overrides disable every mutating Serena tool and `activate_project`, so a
-  review cannot create, edit, rename, or delete repository files through Serena or its hooks
-
-### Requirement: Serena run isolation
-
-The provider SHALL start Serena with an explicit `--project=<run working directory>` and a run-scoped
-`SERENA_HOME` whose precreated config has empty project trust and a run-scoped
-`project_serena_folder_location` for that exact directory, with that resolved project data directory
-precreated as well. The exact run working directory (not the nearest ancestor) MUST be the active
-project, activation hooks MUST NOT run, and Serena's startup project files MUST stay out of the
-checkout even when the working directory is nested beneath an ancestor project; the user's Serena
-config MUST NOT be used or rewritten.
-
-#### Scenario: Serena symbol read
-
-- **WHEN** a run targets either provider
-- **THEN** a project-dependent Serena symbol read succeeds in the run's working directory (for the
-  write instance, in its isolated worktree), no activation hook runs, and the session checkout is
-  unchanged even when it already contains `.serena` project files, including an incomplete
-  `project.yml` and a missing `.gitignore`, and even when the working directory is nested beneath an
-  ancestor project with an existing `.serena`
-
 ### Requirement: Codex login
 
 The user SHALL authenticate the bundled Codex once, and the provider MUST use that login without
@@ -335,3 +281,39 @@ document that the user's Codex sandbox and config govern the target.
 
 - **WHEN** a record or log is written
 - **THEN** it contains no credentials or tokens
+
+### Requirement: Visible Codex subagent
+
+The fork SHALL register a `codex_subagent` tool that starts a parent-delivered activation on the
+read-only `codex-subagent` provider and returns the child's name, so the run is cataloged as an
+external child in the delegating Session's subagent list; the child's answer MUST arrive as a
+settlement notice. The tool MUST NOT start a local DSH Session or accept follow-up input.
+
+#### Scenario: Cataloged run
+
+- **WHEN** an Agent calls `codex_subagent` with a task description, a prompt, and an optional child name
+- **THEN** the tool starts a parent-delivered activation on `codex-subagent` and returns the child's
+  name, and the Session's subagent list shows the run as an external entry with the task description
+  and the child name
+
+#### Scenario: Notice delivery
+
+- **WHEN** the external child completes
+- **THEN** the parent Agent receives the settlement notice containing the answer, and the entry stays
+  a leaf
+
+#### Scenario: No follow-up
+
+- **WHEN** a message targets the external child
+- **THEN** delivery is refused because the backend is not continuable
+
+#### Scenario: Read-only
+
+- **WHEN** the tool runs
+- **THEN** it uses the read-only `codex-subagent` provider and its `read-only` sandbox; write work
+  stays on the `delegate` patch rule
+
+#### Scenario: No calling agent
+
+- **WHEN** the tool is invoked without a calling Agent
+- **THEN** it fails and starts no activation

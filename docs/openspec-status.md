@@ -225,6 +225,7 @@ was written (2026-11-10). Read the entry's `proposal.md` and `design.md` for wha
 | `2026-11-09-add-section-scoped-task-review`              | 10/10          |
 | `2026-11-09-add-workflow-editor`                         | 24/27          |
 | `2026-11-10-retire-legacy-gates`                         | 17/21          |
+| `2026-11-13-simplify-codex-subagent`                     | 13/13          |
 
 ## Review approval: the v0.12.0 exception and the pre-cutoff baseline
 
@@ -824,3 +825,26 @@ validate:installer` on DSH 0.2.2-rc.2 (7 of 8 shipped bundles), and `pnpm dogfoo
 follow-up: install 0.36.0 into the desktop profile from an external PowerShell with the app closed
 and run one real delegation (for example the `spec-review` rule or `delegation_status`) on
 0.2.2-rc.2, because this checkout cannot replace the engine the running profile mounts.
+
+On 2026-11-13 `simplify-codex-subagent` archived with 13 of 13 tasks and 13/13 portable task
+approvals (the last one recorded for the owner's live check). It removed the Serena integration from
+the forked provider — the `-c mcp_servers.serena...` overrides, the throwaway `SERENA_HOME`, the
+disabled-tool and `activate_project` policy, the failure path, and the status `serena` field — and
+narrowed the worktree-confinement guarantee to operations inside the Codex sandbox, because MCP
+servers the user configures in `~/.codex` run with their own approvals outside it. The fork also
+registers a `codex_subagent` tool: it starts a parent-delivered activation on the read-only
+`codex-subagent` provider and returns the child name, so the run is cataloged as an external leaf in
+the delegating Session's subagent list with the task description and the answer arrives as a
+settlement notice; it starts no local Session and accepts no follow-up, and `delegate` gate reviews
+stay out of the list by design. The bundled CLI moved to `@openai/codex` `0.169.0`, and the delta spec
+synced into `codex-subagent` (1 added requirement, 6 modified, 3 removed). The gate was green before
+archiving: `pnpm typecheck`, `pnpm build` with no diff, `pnpm gen:check`, `pnpm check` (161 files /
+3035 tests after a clean repeat of two flaky journal tests), `pnpm validate:repo`, `pnpm
+validate:composition`, `pnpm validate:installer`, `openspec validate --strict`, and `pnpm
+reviews:check --change simplify-codex-subagent` (13/13 PASS, archive-ready). The live acceptance ran
+the manual harness with the owner's real login: the status tool resolved the bundled `0.169.0` binary,
+one authenticated turn completed the app-server sequence, and a signed-out run with an isolated Codex
+home still reported the login next action. The owner installed the regenerated setup into the desktop
+profile and confirmed the visible `codex_subagent` row, which closed the last task. It shipped in
+v0.37.0 (tag on commit `1c9678f`; the published index lists the setup and plugin bundles at 0.37.0
+pinned to it).
