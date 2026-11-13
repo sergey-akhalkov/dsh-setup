@@ -146,7 +146,6 @@ $ErrorActionPreference = 'Stop'
 # this script has no repository to read these from.
 $DshEngineRange = '>=0.2.2-rc.2 <0.3.0'
 $ShippedBundles = @(
-  '@deepseek-ai/dsh-experimental-agent-team-profile',
   '@deepseek-ai/dsh-experimental-tool-worktree',
   '@deepseek-ai/dsh-experimental-ralph-bundle',
   '@deepseek-ai/dsh-experimental-plugin-market-bundle',

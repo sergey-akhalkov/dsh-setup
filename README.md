@@ -37,8 +37,8 @@ setup or individual plugins for a given plugin, never both, because both mount t
 [Manual install](docs/install.md#manual-install) for the full steps.
 
 Installing the **dsh-setup** entry from Discover mounts the setup and its plugin rows, but it does
-not enable the other shipped DSH bundles (Agent Teams, tool worktree, Ralph, session search,
-terminal). Enable them in **Plugins**, or use the full-setup command below. See
+not enable the other shipped DSH bundles (tool worktree, Ralph, session search, terminal). Enable
+them in **Plugins**, or use the full-setup command below. See
 [Shipped DSH bundles](#shipped-dsh-bundles).
 
 ### Install the full setup with PowerShell
@@ -125,11 +125,12 @@ step.
 
 ### Shipped DSH bundles
 
+Agent Teams is part of DSH 0.2.2-rc.2 and later (standard subagent tools and Session ids), so there
+is no bundle to enable.
+
 The installer also enables the optional DSH bundles the setup expects; the setup bundle does not
 duplicate their rows:
 
-- **Agent Teams** (`@deepseek-ai/dsh-experimental-agent-team-profile`) — durable teammates, a shared
-  task board, and isolated write scopes for parallel work.
 - **Tool worktree** (`@deepseek-ai/dsh-experimental-tool-worktree`) — per-agent git worktrees, so
   separate agents write without touching the same checkout.
 - **Ralph** (`@deepseek-ai/dsh-experimental-ralph-bundle`) — fresh-agent iteration rounds toward one

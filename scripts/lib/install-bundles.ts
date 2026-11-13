@@ -3,10 +3,10 @@ import { spawnSync } from 'node:child_process'
 /**
  * Shipped optional bundles are enabled by adding their names to the profile
  * selection, and the profile resolves them from the installed DSH runtime. A
- * DSH release inside the supported range can drop one (0.2.2-rc.2 moved the
- * agent team into the runtime and removed
- * `@deepseek-ai/dsh-experimental-agent-team-profile`), so the installer and its
- * validation must expect only what the resolved DSH version actually ships.
+ * DSH release can drop one (0.2.2-rc.2 moved the agent team into the runtime and
+ * stopped publishing `@deepseek-ai/dsh-experimental-agent-team-profile`), so the
+ * installer and its validation must expect only what the resolved DSH version
+ * actually ships. A bundle no version in the range provides leaves the lists.
  */
 
 export type BundleAvailability = 'available' | 'missing'

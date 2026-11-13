@@ -4,7 +4,6 @@
   "repository": "https://github.com/sergey-akhalkov/dsh-setup",
   "installBundles": {
     "shipped": [
-      "@deepseek-ai/dsh-experimental-agent-team-profile",
       "@deepseek-ai/dsh-experimental-tool-worktree",
       "@deepseek-ai/dsh-experimental-ralph-bundle",
       "@deepseek-ai/dsh-experimental-plugin-market-bundle",

@@ -141,10 +141,12 @@ force-closes the remaining processes after a short grace, and starts the new ins
 
 ## Bundles the setup enables
 
+Agent Teams is part of DSH 0.2.2-rc.2 and later (standard subagent tools and Session ids), so there
+is no bundle to enable.
+
 These are optional bundles shipped with DSH versions inside the supported `enginesDsh` range. The
 installer selects them; the setup bundle does not duplicate their rows or add them itself.
 
-- **Agent Teams** — `@deepseek-ai/dsh-experimental-agent-team-profile`
 - **Tool worktree** — `@deepseek-ai/dsh-experimental-tool-worktree`
 - **Ralph** — `@deepseek-ai/dsh-experimental-ralph-bundle`
 - **Custom plugin markets** — `@deepseek-ai/dsh-experimental-plugin-market-bundle`
