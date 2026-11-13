@@ -11,9 +11,9 @@
 
 ## 3. Serial release (serial, owns `package.json`, `packages/*/package.json`, `packages/setup/**`)
 
-- [x] 3.1 Run `pnpm release:prepare --version 0.38.0`, then `pnpm build`, `pnpm validate` (or the individual gates plus a green test run), `pnpm gen:check`, and `git diff --exit-code` from the committed tree; commit the version bump and regenerated setup.
-- [x] 3.2 Tag `v0.38.0`, push `main` and the tag, watch the release workflow, and verify the published index lists 0.38.0 over HTTPS.
-- [ ] 3.3 Owner installs 0.38.0 from an external PowerShell and runs one review; verify the Session's subagent list shows a `delegation:<rule>` external entry and its settlement notice, and that an answer run creates no entry.
+- [x] 3.1 Run `pnpm release:prepare --version 0.38.1`, then `pnpm build`, `pnpm validate` (or the individual gates plus a green test run), `pnpm gen:check`, and `git diff --exit-code` from the committed tree; commit the version bump and regenerated setup.
+- [x] 3.2 Tag `v0.38.1`, push `main` and the tag, watch the release workflow, and verify the published index lists 0.38.1 over HTTPS.
+- [ ] 3.3 Owner installs 0.38.1 from an external PowerShell and runs one review; verify the Session's subagent list shows a `delegation:<rule>` external entry and its settlement notice, and that an answer run creates no entry.
 
 ## Workflow follow-up
 
