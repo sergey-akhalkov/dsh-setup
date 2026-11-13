@@ -208,6 +208,8 @@ describe('answer-page plugin', () => {
       resourceBase: { kind: 'directory' },
     })
     expect(candidate?.description).toContain('Prefer it proactively')
+    expect(candidate?.description).toContain('one-line facts')
+    expect(candidate?.description).toContain('pure code answers')
     expect(candidate?.description).toContain('delegated reports')
     expect(candidate?.description).toContain('No always-on mode')
     expect(candidate?.description).not.toContain('No always-on use')
@@ -261,7 +263,9 @@ describe('answer-page plugin', () => {
     expect(suffix).toContain('--no-open')
     expect(suffix).toContain('prefer a page when the explanation is complex enough')
     expect(suffix).toContain('even when the user did not ask for one')
-    expect(suffix).toContain('delegated report returned to a parent agent')
+    expect(suffix).toContain(
+      'Do not attach a page to every answer: render none for small talk, a one-line fact, a pure code answer, a delegated report returned to a parent agent, or a request for plain text.',
+    )
     expect(suffix).toContain(
       'Do not enable the upstream `[answer-me-with-html always-on]` reminder',
     )
