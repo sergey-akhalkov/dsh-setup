@@ -188,7 +188,7 @@ describe('answer-page plugin', () => {
     expect(plugin.inject).toEqual(['skills'])
   })
 
-  it('lists one catalog candidate with our narrow description and bundled rank', async () => {
+  it('lists one catalog candidate with our proactive description and bundled rank', async () => {
     const plugin = await loadPlugin()
     const { ctx, providers } = createContext()
     plugin.apply(ctx)
@@ -207,8 +207,11 @@ describe('answer-page plugin', () => {
       rank: 600,
       resourceBase: { kind: 'directory' },
     })
-    expect(candidate?.description).toContain('never for a code answer')
-    expect(candidate?.description).toContain('No always-on use')
+    expect(candidate?.description).toContain('Prefer it proactively')
+    expect(candidate?.description).toContain('delegated reports')
+    expect(candidate?.description).toContain('No always-on mode')
+    expect(candidate?.description).not.toContain('No always-on use')
+    expect(candidate?.description).not.toContain('Use only when the user asks')
     expect(candidate?.description).not.toContain('Use it proactively and liberally')
     expect(candidate?.resourceBase?.path.replaceAll('\\', '/')).toMatch(
       /assets\/answer-me-with-html$/,
@@ -256,7 +259,15 @@ describe('answer-page plugin', () => {
     expect(suffix).toContain('AM_HOME=<workspace>/.tmp/answers/.am')
     expect(suffix).toContain('AM_NO_UPDATE_CHECK=1')
     expect(suffix).toContain('--no-open')
-    expect(suffix).toContain('neither asked for one nor meets the diagram-shaped bar above')
+    expect(suffix).toContain('prefer a page when the explanation is complex enough')
+    expect(suffix).toContain('even when the user did not ask for one')
+    expect(suffix).toContain('delegated report returned to a parent agent')
+    expect(suffix).toContain(
+      'Do not enable the upstream `[answer-me-with-html always-on]` reminder',
+    )
+    expect(suffix).toContain('The render flow in the upstream body is host-generic')
+    expect(suffix).toContain('this adapter wins')
+    expect(suffix).not.toContain('neither asked for one nor meets the diagram-shaped bar above')
     expect(suffix).not.toContain('never attach a page to an answer that did not ask for one')
     expect(suffix).toContain('requires Node.js 20 or newer')
     expect(suffix).toContain('cap the fixes at two')

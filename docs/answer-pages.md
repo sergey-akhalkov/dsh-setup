@@ -31,13 +31,15 @@ installation; the CLI runs only when the skill is invoked.
 
 ## When a page is produced
 
-The upstream prompt invites liberal use. In this deployment the adapter note narrows that policy:
+The upstream prompt invites liberal use. In this deployment the adapter note sets the policy:
 
-- produce a page when the user asks for one or for a visual explanation, or when the explanation is
-  genuinely diagram-shaped (a flow, comparison, hierarchy, or state machine that a diagram carries);
-- produce no page for a code answer, a delegated report, a one-line answer, small talk, or a request
+- produce a page proactively when the explanation is complex enough that a flow, comparison,
+  hierarchy, ranked list, or state machine carries it — without waiting to be asked — and when the
+  user asks for one or for a visual explanation;
+- produce no page for a code answer, a delegated report, a one-line fact, small talk, or a request
   for plain text;
-- there is no always-on mode, and a video is rendered only when the user explicitly asks for one.
+- there is no always-on mode: not every answer gets a page, and a video is rendered only when the
+  user explicitly asks for one.
 
 The page is for a reply to the user. A delegated report returned to a parent agent stays text unless
 the delegated task explicitly asks for a page.
@@ -50,6 +52,9 @@ Every render stays inside the session workspace:
 - page: `<workspace>/.tmp/answers/<slug>.html`;
 - CLI data directory: `AM_HOME=<workspace>/.tmp/answers/.am`;
 - `AM_NO_UPDATE_CHECK=1`, `-o <workspace>/.tmp/answers/<slug>.html`, and `--no-open` on every call.
+
+The loaded adapter text makes this flow authoritative over the vendored body, which documents a
+stdin heredoc and a `~/.answer-me-with-html` default for other hosts.
 
 The draft is rendered by its file path, never through stdin. The CLI copies a stdin draft into its
 data directory when the render has warnings; a draft passed as a file is never copied, so nothing can

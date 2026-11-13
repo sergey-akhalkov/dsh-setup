@@ -33,11 +33,11 @@ const BUNDLED_SKILL_RANK = 600
 
 /**
  * Catalog description owned by this repository. The upstream prompt tells the
- * model to use the skill liberally, so the description carries the narrow bar
- * instead of advertising a default.
+ * model to use the skill liberally; this line advertises the proactive bar
+ * while keeping the simple-answer exclusions and the no-always-on boundary.
  */
 const SKILL_DESCRIPTION =
-  'Render an answer as one self-contained HTML page with the bundled offline renderer. Use only when the user asks for a page or a visual explanation, or the answer is genuinely diagram-shaped; never for a code answer, a delegated report, or a one-line answer. No always-on use.'
+  'Render an answer as one self-contained HTML page with the bundled offline renderer. Prefer it proactively, without being asked, when the explanation is complex enough that a diagram, flow, or comparison carries the answer; skip one-line facts, pure code answers, and delegated reports. No always-on mode.'
 
 /** Package-relative record paths the runtime needs from the provenance lock. */
 const SKILL_RECORD = 'assets/answer-me-with-html/SKILL.md'
@@ -183,7 +183,9 @@ function skillAdapterNote(lock: AnswerPageLock): string {
     '',
     `DeepSeek Harness adapter: this skill is packaged from answer-me-with-html ${upstream.version} (${upstream.repository}, MIT, by QingYunA), pinned at ${upstream.tag} (${upstream.commit}). The skill's base directory is the vendored skill directory; \`am\` means \`node "<base directory>/scripts/am.mjs"\` and needs Node.js 20 or newer.`,
     '',
-    'Narrow the policy in this deployment: render a page only when the user asks for a page or a visual explanation, or the explanation is genuinely diagram-shaped (a flow, comparison, hierarchy, or state machine that a diagram carries). Render no page for a code answer, a delegated report, a one-line answer, small talk, or a request for plain text. There is no always-on mode: attach no page to an answer that neither asked for one nor meets the diagram-shaped bar above.',
+    'Policy for this deployment: prefer a page when the explanation is complex enough that a diagram, comparison, hierarchy, or ranked list carries it — even when the user did not ask for one. Do not attach a page to every answer: render none for small talk, a one-line fact, a pure code answer, a delegated report returned to a parent agent, or a request for plain text. Do not enable the upstream `[answer-me-with-html always-on]` reminder.',
+    '',
+    'The render flow in the upstream body is host-generic. If the body and this adapter disagree, this adapter wins; never pass the draft through stdin and never use the default `~/.answer-me-with-html` directory.',
     '',
     'Every render stays offline and inside the workspace:',
     '- Write the draft to `<workspace>/.tmp/answers/<slug>.md` and render that file path. Never pass the draft through stdin: the CLI copies a stdin draft into its data directory when the render has warnings.',

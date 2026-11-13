@@ -152,9 +152,10 @@ and carries its documented defaults in the fragment row. Its behavior is documen
 ## Answer pages
 
 [`packages/plugin-answer-page`](../packages/plugin-answer-page) is the skill-only shape: it registers
-one on-demand skill from a pinned upstream release, with its vendored skill directory as the resource
-base so the skill's own `scripts/am.mjs` resolves. It ships no always-on section, no tool, no Client
-half, and no configuration. The upstream renderer, prompt, references, and licenses are vendored
+one model-invoked skill from a pinned upstream release, with its vendored skill directory as the
+resource base so the skill's own `scripts/am.mjs` resolves. Its loaded policy prefers a page for a
+complex explanation and keeps the no-always-on boundary. It ships no always-on section, no tool, no
+Client half, and no configuration. The upstream renderer, prompt, references, and licenses are vendored
 byte-identically under `assets/answer-me-with-html/` and pinned by `answer-page.lock.json`. Because
 the vendored prompt carries one upstream example Windows path, `scripts/lib/scan.ts` exempts exactly
 the lock-listed files from the machine-path check while secret scanning still runs. Usage, policy, and
