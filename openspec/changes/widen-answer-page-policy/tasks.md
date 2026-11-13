@@ -29,10 +29,10 @@ generated `packages/setup/**` form one serial dependency chain; no independent l
 - [x] 3.1 Run `pnpm build`, then `pnpm gen`; commit `packages/plugin-answer-page/lib/**` and the
       regenerated `packages/setup/**`. Verify `pnpm build && git diff --exit-code` and `pnpm gen:check`
       exit 0.
-- [ ] 3.2 Run `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, and
+- [x] 3.2 Run `pnpm check`, `pnpm validate:repo`, `pnpm validate:composition`, and
       `pnpm validate:installer`; all exit 0.
 - [x] 3.3 Re-run `openspec validate widen-answer-page-policy --strict` after the edits; it exits 0.
-- [ ] 3.4 Owner step: install the built candidate into a throwaway `DSH_HOME` dev profile through the
+- [x] 3.4 Owner step: install the built candidate into a throwaway `DSH_HOME` dev profile through the
       documented external install-and-restart procedure (never the live desktop profile), and confirm
       its catalog description and loaded adapter text show the new proactive policy and precedence
       before the smoke. Then ask an unrequested complex explanation; confirm a page renders under
