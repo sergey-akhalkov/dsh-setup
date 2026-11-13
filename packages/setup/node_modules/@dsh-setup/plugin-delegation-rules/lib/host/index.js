@@ -2818,6 +2818,9 @@ async function startTarget(services, request) {
         throw new ConfigError(`rule "${rule.id}": target "${rule.to}" requests model/agent options, but provider "${provider.name}" does not support them; remove model/reasoningEffort/agentOptions from the target or choose a provider with agentOptions support`);
     }
     const prompt = [{ type: 'text', text: request.prompt }];
+    // External review runs are cataloged for visibility; synchronous answer/patch
+    // results stay with the caller and are not re-delivered as settlement notices.
+    const delivery = rule.contract === 'review' ? 'parent' : 'caller';
     let activation;
     try {
         activation = await services.subagents.startActivation({
@@ -2828,7 +2831,7 @@ async function startTarget(services, request) {
             cwd: request.cwd,
             ...(agentOptions === undefined ? {} : { agentOptions }),
             signal,
-            delivery: 'caller',
+            delivery,
         });
     }
     catch (error) {
