@@ -3710,6 +3710,9 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
     )
   }
   const prompt: ContentBlock[] = [{ type: 'text', text: request.prompt }]
+  // External review runs are cataloged for visibility; synchronous answer/patch
+  // results stay with the caller and are not re-delivered as settlement notices.
+  const delivery: 'parent' | 'caller' = rule.contract === 'review' ? 'parent' : 'caller'
   let activation: SubagentActivation
   try {
     activation = await services.subagents.startActivation({
@@ -3720,7 +3723,7 @@ async function startTarget(services: EngineServices, request: RunRequest): Promi
       cwd: request.cwd,
       ...(agentOptions === undefined ? {} : { agentOptions }),
       signal,
-      delivery: 'caller',
+      delivery,
     })
   } catch (error) {
     // Classify the untruncated cause; expose only the bounded, redacted text.

@@ -97,9 +97,10 @@ diagnostic carries the same login command as the next action.
 ## Visible subagent tool
 
 `codex_subagent` starts a Codex delegation that appears in the delegating
-Session's subagent list as an **external** entry. It is the explicit-request
-path: the `delegate` engine keeps its own runs caller-delivered and invisible,
-so review verdicts never arrive as conversation messages.
+Session's subagent list as an **external** entry. Rule-driven reviews on the
+same external provider also appear there (`delegation:<rule>`) and deliver their
+verdict as a settlement notice; the manual tool remains the explicit-run path for
+work outside a delegation rule.
 
 The tool accepts `prompt` (required), `description` (required, the task label in
 the list), `name` (optional child name), and `cwd` (optional). It returns the

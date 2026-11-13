@@ -32,6 +32,8 @@ export interface RunRecord {
   prompt: string
   cwd?: string
   agentOptions?: unknown
+  delivery?: 'parent' | 'caller'
+  name?: string
 }
 
 /** Programmable fixed-argument git for digest, worktree, and status paths. */
@@ -169,6 +171,8 @@ export class FakeSubagents {
       prompt: textOf(spec.prompt),
       ...(spec.cwd === undefined ? {} : { cwd: spec.cwd }),
       ...(spec.agentOptions === undefined ? {} : { agentOptions: spec.agentOptions }),
+      ...(spec.delivery === undefined ? {} : { delivery: spec.delivery }),
+      ...(spec.name === undefined ? {} : { name: spec.name }),
     }
     this.runs.push(run)
     const responder = this.responders.get(spec.provider) ?? this.respond

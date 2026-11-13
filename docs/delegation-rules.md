@@ -180,6 +180,14 @@ the target to start, and returns a run id, state, and record path while the verd
 the background. Use `delegation_status` (or the record path) for completion; the gate points a
 pending review at its run instead of starting another. Answer and patch stay synchronous.
 
+A review started on an **external** provider is also cataloged in the Session's subagent list as an
+external child labelled `delegation:<rule>`; the service assigns the child name. The entry is a leaf
+— not openable, no token or duration metrics, no follow-up input — and the verdict arrives as a
+settlement notice that starts a new turn. The record, the gates, and the queue are unchanged. Answer
+and patch stay caller-delivered, so an external answer/patch run is neither cataloged nor announced;
+in-process providers keep the service's existing local-child catalog behavior (their local children
+are always cataloged and continuable where supported).
+
 A target run is bounded by the per-contract timeout: 20 minutes for `review`, 5 minutes for
 `answer`, and 30 minutes for `patch`. A profile overrides them through `timeouts`; a timed-out
 review writes an `ERROR` record and the error names the contract to widen.

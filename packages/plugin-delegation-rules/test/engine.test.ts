@@ -201,6 +201,7 @@ describe('target resolution', () => {
     expect(text(answer)).toContain('Use the shared helper')
     expect(subagents.runs[0]?.provider).toBe('spawn')
     expect(subagents.runs[0]?.agentOptions).toEqual({ model: 'deepseek-flash' })
+    expect(subagents.runs[0]?.delivery).toBe('caller')
     expect(subagents.getProvider('codex-subagent')).toBeUndefined()
     const source = await readFile(join(packageDir, 'lib', 'index.js'), 'utf8')
     expect(source).not.toMatch(/codex/i)
@@ -826,6 +827,8 @@ describe('task-scoped reviews', () => {
     })
     const harness = harnessFor(root, taskConfig, subagents)
     const firstRun = await harness.startReview({ rule: 'task-review', change: 'change-a' })
+    expect(subagents.runs[0]?.delivery).toBe('parent')
+    expect(subagents.runs[0]?.name).toBeUndefined()
     expect(await harness.waitForRun(firstRun)).toContain('state=completed')
     expect(await readdir(join(root, '.dsh', 'delegation', 'snapshots'))).toEqual([])
     expect(await readdir(join(root, '.dsh', 'delegation', 'scratch'))).toEqual([])
@@ -1003,6 +1006,7 @@ describe('patch contract', () => {
     const result = text(
       await harness.callTool('delegate', { rule: 'bug-fix', objective: 'fix the crash' }),
     )
+    expect(subagents.runs[0]?.delivery).toBe('caller')
     expect(result).toContain('isolated worktree .dsh/delegation/worktrees/')
     expect(result).toContain('packages/engine.ts')
     expect(result).toContain('12 passed')
